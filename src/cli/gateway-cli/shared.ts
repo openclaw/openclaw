@@ -1,3 +1,4 @@
+// Shared gateway CLI helpers for supervised-service stop guidance.
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -7,106 +8,29 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 
-export function parsePort(raw: unknown): number | null {
-  if (raw === undefined || raw === null) {
-    return null;
-  }
-  const value =
-    typeof raw === "string"
-      ? raw
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? raw.toString()
-        : null;
-  if (value === null) {
-    return null;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
-
-export const toOptionString = (value: unknown): string | undefined => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return value.toString();
-  }
-  return undefined;
-};
-
-export function describeUnknownError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "bigint") {
-    return err.toString();
-  }
-  if (typeof err === "boolean") {
-    return err ? "true" : "false";
-  }
-  if (err && typeof err === "object") {
-    if ("message" in err && typeof err.message === "string") {
-      return err.message;
-    }
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return "Unknown error";
-    }
-  }
-  return "Unknown error";
-}
-
-export function extractGatewayMiskeys(parsed: unknown): {
-  hasGatewayToken: boolean;
-  hasRemoteToken: boolean;
-} {
-  if (!parsed || typeof parsed !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const gateway = (parsed as Record<string, unknown>).gateway;
-  if (!gateway || typeof gateway !== "object") {
-    return { hasGatewayToken: false, hasRemoteToken: false };
-  }
-  const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
-  const remote = (gateway as Record<string, unknown>).remote;
-  const hasRemoteToken =
-    remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
-  return { hasGatewayToken, hasRemoteToken };
-}
-
-export function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
+function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
+  const hints = [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
   switch (process.platform) {
     case "darwin":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
-      ];
+      hints.push(`Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`);
+      break;
     case "linux":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`,
-      ];
+      hints.push(`Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`);
+      break;
     case "win32":
-      return [
-        `Tip: ${formatCliCommand("openclaw gateway stop")}`,
-        `Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`,
-      ];
+      hints.push(`Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`);
+      break;
     default:
-      return [`Tip: ${formatCliCommand("openclaw gateway stop")}`];
+      break;
   }
+  return hints;
 }
 
 export async function maybeExplainGatewayServiceStop() {
+  // Direct `gateway run` should not race a managed service on the same port.
   const service = resolveGatewayService();
-  let loaded: boolean | null = null;
+  let loaded: boolean | null;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {

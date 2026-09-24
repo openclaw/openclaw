@@ -1,171 +1,51 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  MarkdownConfig,
-} from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
-import type { DmConfig } from "./types.messages.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+// Defines WhatsApp channel configuration types from the canonical schema.
+import type { z } from "zod";
+import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { GroupToolPolicyBySenderConfig } from "./types.tools.js";
+import type { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
-export type WhatsAppActionConfig = {
-  reactions?: boolean;
-  sendMessage?: boolean;
-  polls?: boolean;
-};
-
-export type WhatsAppConfig = {
-  /** Optional per-account WhatsApp configuration (multi-account). */
-  accounts?: Record<string, WhatsAppAccountConfig>;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** Send read receipts for incoming messages (default true). */
-  sendReadReceipts?: boolean;
-  /**
-   * Inbound message prefix (WhatsApp only).
-   * Default: `[{agents.list[].identity.name}]` (or `[openclaw]`) when allowFrom is empty, else `""`.
-   */
+type WhatsAppSchemaInput = z.input<typeof WhatsAppConfigSchema>;
+type WhatsAppSchemaAccountConfig = NonNullable<
+  NonNullable<WhatsAppSchemaInput["accounts"]>[string]
+>;
+type LegacyWhatsAppConfig = Pick<CommonChannelMessagingConfig, "dms" | "heartbeat"> & {
+  /** @deprecated Doctor-only legacy input. */
   messagePrefix?: string;
-  /**
-   * Per-channel outbound response prefix override.
-   *
-   * When set, this takes precedence over the global `messages.responsePrefix`.
-   * Use `""` to explicitly disable a global prefix for this channel.
-   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
-   */
-  responsePrefix?: string;
-  /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  /**
-   * Same-phone setup (bot uses your personal WhatsApp number).
-   */
-  selfChatMode?: boolean;
-  /** Optional allowlist for WhatsApp direct chats (E.164). */
-  allowFrom?: string[];
-  /** Optional allowlist for WhatsApp group senders (E.164). */
-  groupAllowFrom?: string[];
-  /**
-   * Controls how group messages are handled:
-   * - "open": groups bypass allowFrom, only mention-gating applies
-   * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-   */
-  groupPolicy?: GroupPolicy;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  /** Outbound text chunk size (chars). Default: 4000. */
-  textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Maximum media file size in MB. Default: 50. */
-  mediaMaxMb?: number;
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Per-action tool gating (default: true for all). */
-  actions?: WhatsAppActionConfig;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-      tools?: GroupToolPolicyConfig;
-      toolsBySender?: GroupToolPolicyBySenderConfig;
-    }
-  >;
-  /** Acknowledgment reaction sent immediately upon message receipt. */
-  ackReaction?: {
-    /** Emoji to use for acknowledgment (e.g., "👀"). Empty = disabled. */
-    emoji?: string;
-    /** Send reactions in direct chats. Default: true. */
-    direct?: boolean;
-    /**
-     * Send reactions in group chats:
-     * - "always": react to all group messages
-     * - "mentions": react only when bot is mentioned
-     * - "never": never react in groups
-     * Default: "mentions"
-     */
-    group?: "always" | "mentions" | "never";
-  };
-  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
-  debounceMs?: number;
-  /** Heartbeat visibility settings for this channel. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
-export type WhatsAppAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** If false, do not start this WhatsApp account provider. Default: true. */
-  enabled?: boolean;
-  /** Send read receipts for incoming messages (default true). */
-  sendReadReceipts?: boolean;
-  /** Inbound message prefix override for this account (WhatsApp only). */
-  messagePrefix?: string;
-  /** Per-account outbound response prefix override (takes precedence over channel and global). */
-  responsePrefix?: string;
-  /** Override auth directory (Baileys multi-file auth state). */
-  authDir?: string;
-  /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
-  selfChatMode?: boolean;
-  allowFrom?: string[];
-  groupAllowFrom?: string[];
-  groupPolicy?: GroupPolicy;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
-  textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  mediaMaxMb?: number;
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-      tools?: GroupToolPolicyConfig;
-      toolsBySender?: GroupToolPolicyBySenderConfig;
-    }
-  >;
-  /** Acknowledgment reaction sent immediately upon message receipt. */
-  ackReaction?: {
-    /** Emoji to use for acknowledgment (e.g., "👀"). Empty = disabled. */
-    emoji?: string;
-    /** Send reactions in direct chats. Default: true. */
-    direct?: boolean;
-    /**
-     * Send reactions in group chats:
-     * - "always": react to all group messages
-     * - "mentions": react only when bot is mentioned
-     * - "never": never react in groups
-     * Default: "mentions"
-     */
-    group?: "always" | "mentions" | "never";
-  };
-  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
-  debounceMs?: number;
-  /** Heartbeat visibility settings for this account. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
+type WhatsAppGroupSchemaInput = NonNullable<NonNullable<WhatsAppSchemaInput["groups"]>[string]>;
+export type WhatsAppGroupConfig = Omit<WhatsAppGroupSchemaInput, "toolsBySender"> & {
+  systemPrompt?: string;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
 };
+export type WhatsAppDirectConfig = NonNullable<NonNullable<WhatsAppSchemaInput["direct"]>[string]>;
+export type WhatsAppAckReactionConfig = {
+  emoji?: string;
+  direct?: boolean;
+  group?: "always" | "mentions" | "never";
+};
+
+type WhatsAppNarrowedConfig = {
+  groups?: Record<string, WhatsAppGroupConfig>;
+  direct?: Record<string, WhatsAppDirectConfig>;
+  ackReaction?: WhatsAppAckReactionConfig;
+};
+
+export type WhatsAppAccountConfig = Omit<
+  WhatsAppSchemaAccountConfig,
+  keyof WhatsAppNarrowedConfig | keyof LegacyWhatsAppConfig
+> &
+  WhatsAppNarrowedConfig &
+  LegacyWhatsAppConfig;
+
+export type WhatsAppConfig = Omit<
+  WhatsAppSchemaInput,
+  "accounts" | keyof WhatsAppNarrowedConfig | keyof LegacyWhatsAppConfig
+> &
+  WhatsAppNarrowedConfig &
+  LegacyWhatsAppConfig & {
+    accounts?: Record<string, WhatsAppAccountConfig>;
+  };
+
+export type WhatsAppActionConfig = NonNullable<WhatsAppConfig["actions"]>;
+export type WhatsAppReactionLevel = NonNullable<WhatsAppConfig["reactionLevel"]>;

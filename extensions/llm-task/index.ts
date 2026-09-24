@@ -1,6 +1,29 @@
-import type { AnyAgentTool, OpenClawPluginApi } from "../../src/plugins/types.js";
-import { createLlmTaskTool } from "./src/llm-task-tool.js";
+// Llm Task plugin entrypoint registers its OpenClaw integration.
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
+import type { AnyAgentTool } from "./api.js";
+import { createLlmTaskTool, llmTaskToolDefinition } from "./src/llm-task-tool.js";
 
-export default function register(api: OpenClawPluginApi) {
-  api.registerTool(createLlmTaskTool(api) as unknown as AnyAgentTool, { optional: true });
-}
+export default defineToolPlugin({
+  id: "llm-task",
+  name: "LLM Task",
+  description: "Generic JSON-only LLM tool for structured tasks callable from workflows.",
+  configSchema: Type.Object(
+    {
+      defaultProvider: Type.Optional(Type.String()),
+      defaultModel: Type.Optional(Type.String()),
+      defaultAuthProfileId: Type.Optional(Type.String()),
+      maxTokens: optionalPositiveIntegerSchema(),
+      timeoutMs: optionalPositiveIntegerSchema(),
+    },
+    { additionalProperties: false },
+  ),
+  tools: (tool) => [
+    tool({
+      ...llmTaskToolDefinition,
+      optional: true,
+      factory: ({ api }) => createLlmTaskTool(api) as unknown as AnyAgentTool,
+    }),
+  ],
+});

@@ -1,4 +1,12 @@
+// Stores and broadcasts heartbeat status events for UI surfaces.
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
+
+const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
+const NO_ROUTE_MESSAGE =
+  "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.";
 
 export type HeartbeatEventPayload = {
   ts: number;
@@ -9,6 +17,8 @@ export type HeartbeatEventPayload = {
   durationMs?: number;
   hasMedia?: boolean;
   reason?: string;
+  /** Operator-facing companion to the machine-stable reason code. */
+  message?: string;
   /** The channel this heartbeat was sent to. */
   channel?: string;
   /** Whether the message was silently suppressed (showOk: false). */
@@ -31,28 +41,44 @@ export function resolveIndicatorType(
     case "skipped":
       return undefined;
   }
+  throw new Error("Unsupported heartbeat status");
 }
 
-let lastHeartbeat: HeartbeatEventPayload | null = null;
-const listeners = new Set<(evt: HeartbeatEventPayload) => void>();
+type HeartbeatEventState = {
+  lastHeartbeat: HeartbeatEventPayload | null;
+  listeners: Set<(evt: HeartbeatEventPayload) => void>;
+};
+
+const HEARTBEAT_EVENT_STATE_KEY = Symbol.for("openclaw.heartbeatEvents.state");
+
+const state = resolveGlobalSingleton<HeartbeatEventState>(HEARTBEAT_EVENT_STATE_KEY, () => ({
+  lastHeartbeat: null,
+  listeners: new Set<(evt: HeartbeatEventPayload) => void>(),
+}));
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
-  const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
-  lastHeartbeat = enriched;
-  for (const listener of listeners) {
-    try {
-      listener(enriched);
-    } catch {
-      /* ignore */
-    }
-  }
+  const enriched: HeartbeatEventPayload = {
+    ts: Date.now(),
+    ...evt,
+    ...(evt.message === undefined && evt.reason === "target-none"
+      ? { message: TARGET_NONE_MESSAGE }
+      : evt.message === undefined && evt.reason === "no-route"
+        ? { message: NO_ROUTE_MESSAGE }
+        : {}),
+  };
+  state.lastHeartbeat = enriched;
+  notifyListeners(state.listeners, enriched);
 }
 
 export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return registerListener(state.listeners, listener);
 }
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {
-  return lastHeartbeat;
+  return state.lastHeartbeat;
+}
+
+export function resetHeartbeatEventsForTest(): void {
+  state.lastHeartbeat = null;
+  state.listeners.clear();
 }

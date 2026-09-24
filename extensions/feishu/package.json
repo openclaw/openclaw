@@ -1,19 +1,51 @@
 {
   "name": "@openclaw/feishu",
-  "version": "2026.2.10",
-  "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
+  "version": "2026.9.6",
+  "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.58.0",
-    "@sinclair/typebox": "0.34.48",
-    "zod": "^4.3.6"
+    "@larksuiteoapi/node-sdk": "1.74.0",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm-table": "2.0.0",
+    "micromark-extension-gfm-table": "2.1.2",
+    "typebox": "1.3.32",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "feishu",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "FEISHU_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_VERIFICATION_TOKEN",
+            "FEISHU_ENCRYPT_KEY"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredFeishuChannelState"
+      },
       "label": "Feishu",
       "selectionLabel": "Feishu/Lark (飞书)",
       "docsPath": "/channels/feishu",
@@ -23,12 +55,27 @@
         "lark"
       ],
       "order": 35,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": []
+      }
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/feishu",
       "npmSpec": "@openclaw/feishu",
-      "localPath": "extensions/feishu",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.29"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "build": {
+      "bundledDist": false,
+      "openclawVersion": "2026.9.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

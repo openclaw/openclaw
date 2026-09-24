@@ -1,0 +1,74 @@
+{
+  "base": "codex-dynamic-tools.telegram-direct.json",
+  "replace": {
+    "openclaw_direct": {
+      "description": "",
+      "name": "openclaw_direct",
+      "tools": [
+        {
+          "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "nextCheck": {
+                "type": "string"
+              },
+              "notificationText": {
+                "type": "string"
+              },
+              "notify": {
+                "type": "boolean"
+              },
+              "outcome": {
+                "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+                "type": "string"
+              },
+              "priority": {
+                "enum": ["low", "normal", "high"],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "scratch": {
+                "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": ["outcome", "notify", "summary"],
+            "type": "object"
+          },
+          "name": "heartbeat_respond",
+          "type": "function"
+        },
+        {
+          "description": "End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
+          "inputSchema": {
+            "properties": {
+              "acknowledgment": {
+                "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+                "type": "string"
+              },
+              "message": {
+                "description": "Private context for the resumed turn; not sent to the user.",
+                "type": "string"
+              },
+              "waitFor": {
+                "const": "message",
+                "description": "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "name": "sessions_yield",
+          "type": "function"
+        }
+      ],
+      "type": "namespace"
+    }
+  }
+}

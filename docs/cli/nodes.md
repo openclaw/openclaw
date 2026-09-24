@@ -1,73 +1,111 @@
 ---
-summary: "CLI reference for `openclaw nodes` (list/status/approve/invoke, camera/canvas/screen)"
+summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/screen/location/notify and the macOS widget panel)"
 read_when:
-  - You’re managing paired nodes (cameras, screen, canvas)
+  - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
-title: "nodes"
+title: "Nodes CLI"
 ---
 
 # `openclaw nodes`
 
 Manage paired nodes (devices) and invoke node capabilities.
 
-Related:
+Related: [Nodes overview](/nodes) - [Active computer presence](/nodes/presence) - [Camera nodes](/nodes/camera) - [Image nodes](/nodes/images)
 
-- Nodes overview: [Nodes](/nodes)
-- Camera: [Camera nodes](/nodes/camera)
-- Images: [Image nodes](/nodes/images)
+Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default varies by command), `--json`.
 
-Common options:
+For numeric options such as `--location-timeout`, `--max-age`, and `--quality`, omit
+the flag to use its default. An explicit empty or whitespace-only value is invalid
+and fails before node lookup or Gateway requests.
 
-- `--url`, `--token`, `--timeout`, `--json`
-
-## Common commands
+## Status
 
 ```bash
-openclaw nodes list
-openclaw nodes list --connected
-openclaw nodes list --last-connected 24h
-openclaw nodes pending
-openclaw nodes approve <requestId>
 openclaw nodes status
 openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
+openclaw nodes list
+openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
-Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
-filter to nodes that connected within a duration (e.g. `24h`, `7d`).
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports activity from interaction with OpenClaw without extra permissions. Optional **System-wide presence detection** also reports physical activity in other apps and requires Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
 
-## Invoke / run
+When host stats are available, `status` includes a detail fragment such as
+`load 3.2/24 · mem 151/192 GB · disk 1.2 TB free`. `describe` shows the same
+summary in its `Stats` row. Load is the 1-minute average followed by CPU count,
+memory is used/total, and byte values use binary scaling with GB/TB labels.
+Unavailable load or disk readings are omitted. Offline nodes show the saved
+snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
+original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
+
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate. Client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
+
+## Pairing
 
 ```bash
-openclaw nodes invoke --node <id|name|ip> --command <command> --params <json>
-openclaw nodes run --node <id|name|ip> <command...>
-openclaw nodes run --raw "git status"
-openclaw nodes run --agent main --node <id|name|ip> --raw "git status"
+openclaw nodes pending
+openclaw nodes approve <requestId>
+openclaw nodes reject <requestId>
+openclaw nodes remove --node <id|name|ip>
+openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
-Invoke flags:
+These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
 
-- `--params <json>`: JSON object string (default `{}`).
-- `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
-- `--idempotency-key <key>`: optional idempotency key.
+For manual enrollment, first approve the device request, then restart or rerun
+a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request
+shown by `nodes pending`. Approve that node request, whose ID differs from the
+device request ID. See [Node pairing and status](/nodes/pairing-and-status#pairing-+-status)
+for the complete sequence.
 
-### Exec-style defaults
+- `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles. A node-only device record is deleted.
+- Removal stays effective even if worker cleanup reports an error: revoked node connections still close.
+- `pending` only needs `operator.pairing` scope.
+- `gateway.nodes.pairing.autoApproveCidrs` can approve explicitly trusted, first-time `role: node` device pairing. It is off by default and does not approve role upgrades or the separate command surface. That request still appears in `nodes pending`.
+- `gateway.nodes.pairing.sshVerify` is on by default. It auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host. The first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
+- `approve` scope requirements follow the pending request's declared commands:
+  - commandless request: `operator.pairing`
+  - ordinary node commands: `operator.pairing` + `operator.write`
+  - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
+- These requirements classify node commands relayed through `node.invoke`. The top-level Gateway `fs.listDir` RPC needs `operator.write` for workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+- `remove` scope: `operator.pairing` can remove non-operator node rows. A device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
-`nodes run` mirrors the model’s exec behavior (defaults + approvals):
+## Invoke
 
-- Reads `tools.exec.*` (plus `agents.list[].tools.exec.*` overrides).
-- Uses exec approvals (`exec.approval.request`) before invoking `system.run`.
-- `--node` can be omitted when `tools.exec.node` is set.
-- Requires a node that advertises `system.run` (macOS companion app or headless node host).
+```bash
+openclaw nodes invoke --node <id> --command system.which --params '{"bins":["uname"]}'
+```
 
 Flags:
 
-- `--cwd <path>`: working directory.
-- `--env <key=val>`: env override (repeatable).
-- `--command-timeout <ms>`: command timeout.
-- `--invoke-timeout <ms>`: node invoke timeout (default `30000`).
-- `--needs-screen-recording`: require screen recording permission.
-- `--raw <command>`: run a shell string (`/bin/sh -lc` or `cmd.exe /c`).
-- `--agent <id>`: agent-scoped approvals/allowlists (defaults to configured agent).
-- `--ask <off|on-miss|always>`, `--security <deny|allowlist|full>`: overrides.
+- `--command <command>` (required): e.g. `device.info`.
+- `--params <json>`: JSON object string (default `{}`).
+- `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
+- `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
+- `--idempotency-key <key>`: optional nonempty idempotency key. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
+
+The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
+
+`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
+
+## Notify, push, location, screen
+
+```bash
+openclaw nodes notify --node <id> --title "Build" --body "Done" --priority timeSensitive
+openclaw nodes push --node <id> --title "OpenClaw" --environment sandbox
+openclaw nodes location get --node <id> --accuracy precise
+openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp4
+```
+
+- `notify` sends a local notification on a node that declares `system.notify`, including macOS, iOS, Android, and direct watchOS nodes. Direct watchOS delivery requires OpenClaw to be active. Requires `--title` or `--body`. Options: `--sound <name>`, `--priority <passive|active|timeSensitive>`, `--delivery <system|overlay|auto>` (default `system`), `--invoke-timeout <ms>` (default `15000`).
+- `push` sends an APNs test push to an iOS node. Options: `--title <text>` (default `OpenClaw`), `--body <text>`, `--environment <sandbox|production>` to override the detected APNs environment. Accepted delivery exits `0`. A typed APNs rejection preserves the complete text or JSON diagnostic and exits non-zero.
+- `location get` fetches the node's current location. Options: `--max-age <ms>` (reuse a cached fix), `--accuracy <coarse|balanced|precise>`, `--location-timeout <ms>` (default `10000`), `--invoke-timeout <ms>` (default `20000`).
+- `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
+- Explicit screen output paths are staged beside the destination. They replace it only after a complete write. A failed write leaves an existing file unchanged.
+
+Camera and macOS widget-panel commands have their own docs: [Camera nodes](/nodes/camera), [Widget panel](/platforms/mac/canvas). The bundled experimental Canvas plugin registers `openclaw nodes canvas` with the surviving `present`, `hide`, and `navigate` subcommands.
+
+## Related
+
+- [CLI reference](/cli)
+- [Nodes](/nodes)

@@ -1,191 +1,63 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
+/**
+ * Interactive custom provider onboarding prompts and endpoint verification.
+ *
+ * The pure config helpers are re-exported from here because setup and configure
+ * flows import this command module as their custom API entrypoint.
+ */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-import { applyPrimaryModel } from "./model-picker.js";
-import { normalizeAlias } from "./models/shared.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { t } from "../wizard/i18n/index.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
+import {
+  applyCustomApiConfig,
+  buildAnthropicVerificationProbeRequest,
+  buildEndpointIdFromUrl,
+  buildOpenAiVerificationProbeRequest,
+  normalizeEndpointId,
+  normalizeOptionalProviderApiKey,
+  resolveCustomModelAliasError,
+  resolveCustomModelImageInputInference,
+  resolveCustomProviderId,
+  type CustomApiCompatibility,
+  type CustomApiResult,
+} from "./onboard-custom-config.js";
+import type { SecretInputMode } from "./onboard-types.js";
 
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_CONTEXT_WINDOW = 4096;
-const DEFAULT_MAX_TOKENS = 4096;
-const VERIFY_TIMEOUT_MS = 10000;
-
-export type CustomApiCompatibility = "openai" | "anthropic";
+const VERIFY_TIMEOUT_MS = 30_000;
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
-export type CustomApiResult = {
-  config: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
-  providerIdRenamedFrom?: string;
-};
-
-export type ApplyCustomApiConfigParams = {
-  config: OpenClawConfig;
-  baseUrl: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-  apiKey?: string;
-  providerId?: string;
-  alias?: string;
-};
-
-export type ParseNonInteractiveCustomApiFlagsParams = {
-  baseUrl?: string;
-  modelId?: string;
-  compatibility?: string;
-  apiKey?: string;
-  providerId?: string;
-};
-
-export type ParsedNonInteractiveCustomApiFlags = {
-  baseUrl: string;
-  modelId: string;
-  compatibility: CustomApiCompatibility;
-  apiKey?: string;
-  providerId?: string;
-};
-
-export type CustomApiErrorCode =
-  | "missing_required"
-  | "invalid_compatibility"
-  | "invalid_base_url"
-  | "invalid_model_id"
-  | "invalid_provider_id"
-  | "invalid_alias";
-
-export class CustomApiError extends Error {
-  readonly code: CustomApiErrorCode;
-
-  constructor(code: CustomApiErrorCode, message: string) {
-    super(message);
-    this.name = "CustomApiError";
-    this.code = code;
-  }
-}
-
-export type ResolveCustomProviderIdParams = {
-  config: OpenClawConfig;
-  baseUrl: string;
-  providerId?: string;
-};
-
-export type ResolvedCustomProviderId = {
-  providerId: string;
-  providerIdRenamedFrom?: string;
-};
 
 const COMPATIBILITY_OPTIONS: Array<{
   value: CustomApiCompatibilityChoice;
-  label: string;
-  hint: string;
+  labelKey: string;
+  hintKey: string;
 }> = [
   {
     value: "openai",
-    label: "OpenAI-compatible",
-    hint: "Uses /chat/completions",
+    labelKey: "wizard.customProvider.compatibilityOpenAi",
+    hintKey: "wizard.customProvider.compatibilityOpenAiHint",
+  },
+  {
+    value: "openai-responses",
+    labelKey: "wizard.customProvider.compatibilityOpenAiResponses",
+    hintKey: "wizard.customProvider.compatibilityOpenAiResponsesHint",
   },
   {
     value: "anthropic",
-    label: "Anthropic-compatible",
-    hint: "Uses /messages",
+    labelKey: "wizard.customProvider.compatibilityAnthropic",
+    hintKey: "wizard.customProvider.compatibilityAnthropicHint",
   },
   {
     value: "unknown",
-    label: "Unknown (detect automatically)",
-    hint: "Probes OpenAI then Anthropic endpoints",
+    labelKey: "wizard.customProvider.compatibilityUnknown",
+    hintKey: "wizard.customProvider.compatibilityUnknownHint",
   },
 ];
-
-function normalizeEndpointId(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-function buildEndpointIdFromUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-    const port = url.port ? `-${url.port}` : "";
-    const candidate = `custom-${host}${port}`;
-    return normalizeEndpointId(candidate) || "custom";
-  } catch {
-    return "custom";
-  }
-}
-
-function resolveUniqueEndpointId(params: {
-  requestedId: string;
-  baseUrl: string;
-  providers: Record<string, ModelProviderConfig | undefined>;
-}) {
-  const normalized = normalizeEndpointId(params.requestedId) || "custom";
-  const existing = params.providers[normalized];
-  if (!existing?.baseUrl || existing.baseUrl === params.baseUrl) {
-    return { providerId: normalized, renamed: false };
-  }
-  let suffix = 2;
-  let candidate = `${normalized}-${suffix}`;
-  while (params.providers[candidate]) {
-    suffix += 1;
-    candidate = `${normalized}-${suffix}`;
-  }
-  return { providerId: candidate, renamed: true };
-}
-
-function resolveAliasError(params: {
-  raw: string;
-  cfg: OpenClawConfig;
-  modelRef: string;
-}): string | undefined {
-  const trimmed = params.raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  let normalized: string;
-  try {
-    normalized = normalizeAlias(trimmed);
-  } catch (err) {
-    return err instanceof Error ? err.message : "Alias is invalid.";
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
-  const aliasKey = normalized.toLowerCase();
-  const existing = aliasIndex.byAlias.get(aliasKey);
-  if (!existing) {
-    return undefined;
-  }
-  const existingKey = modelKey(existing.ref.provider, existing.ref.model);
-  if (existingKey === params.modelRef) {
-    return undefined;
-  }
-  return `Alias ${normalized} already points to ${existingKey}.`;
-}
-
-function buildOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
-  }
-  return headers;
-}
-
-function buildAnthropicHeaders(apiKey: string) {
-  const headers: Record<string, string> = {
-    "anthropic-version": "2023-06-01",
-  };
-  if (apiKey) {
-    headers["x-api-key"] = apiKey;
-  }
-  return headers;
-}
 
 function formatVerificationError(error: unknown): string {
   if (!error) {
@@ -210,439 +82,312 @@ type VerificationResult = {
   error?: unknown;
 };
 
-async function requestOpenAiVerification(params: {
-  baseUrl: string;
-  apiKey: string;
-  modelId: string;
+function isJsonVerificationResponse(res: Response): boolean {
+  const contentType =
+    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  if (!contentType.trim()) {
+    return true;
+  }
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mediaType === "application/json" || (mediaType !== undefined && mediaType.endsWith("+json"))
+  );
+}
+
+async function requestVerification(params: {
+  endpoint: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
 }): Promise<VerificationResult> {
-  const endpoint = new URL(
-    "chat/completions",
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  ).href;
+  let res: Response | undefined;
   try {
-    const res = await fetchWithTimeout(
-      endpoint,
+    res = await fetchWithTimeout(
+      params.endpoint,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...buildOpenAiHeaders(params.apiKey),
+          ...params.headers,
         },
-        body: JSON.stringify({
-          model: params.modelId,
-          messages: [{ role: "user", content: "Hi" }],
-          max_tokens: 5,
-        }),
+        body: JSON.stringify(params.body),
       },
       VERIFY_TIMEOUT_MS,
     );
+    if (res.ok && !isJsonVerificationResponse(res)) {
+      const contentType = res.headers.get("content-type") || "missing content-type";
+      // HTML success often means the user pasted a dashboard/root URL instead
+      // of the API base path; fail before storing a config that cannot run.
+      return {
+        ok: false,
+        error: `Verification returned ${contentType} instead of JSON. Check the provider base URL; OpenAI-compatible endpoints usually need a /v1 path prefix.`,
+      };
+    }
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
+  } finally {
+    await res?.body?.cancel().catch(() => undefined);
   }
 }
 
-async function requestAnthropicVerification(params: {
+async function verifyCustomApiCompatibility(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  compatibility: CustomApiCompatibility;
 }): Promise<VerificationResult> {
-  const endpoint = new URL(
-    "messages",
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  ).href;
-  try {
-    const res = await fetchWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAnthropicHeaders(params.apiKey),
-        },
-        body: JSON.stringify({
-          model: params.modelId,
-          max_tokens: 16,
-          messages: [{ role: "user", content: "Hi" }],
+  return await requestVerification(
+    params.compatibility === "anthropic"
+      ? buildAnthropicVerificationProbeRequest(params)
+      : buildOpenAiVerificationProbeRequest({
+          ...params,
+          responsesApi: params.compatibility === "openai-responses",
         }),
-      },
-      VERIFY_TIMEOUT_MS,
-    );
-    return { ok: res.ok, status: res.status };
-  } catch (error) {
-    return { ok: false, error };
-  }
+  );
 }
 
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
+  config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
-}): Promise<{ baseUrl: string; apiKey: string }> {
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
-    message: "API Base URL",
-    initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+    message: t("wizard.customProvider.apiBaseUrl"),
+    initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      try {
-        new URL(val);
-        return undefined;
-      } catch {
-        return "Please enter a valid URL (e.g. http://...)";
-      }
+      return URL.canParse(val) ? undefined : t("wizard.customProvider.validUrl");
     },
   });
-  const apiKeyInput = await params.prompter.text({
-    message: "API Key (leave blank if not required)",
-    placeholder: "sk-...",
-    initialValue: "",
-  });
-  return { baseUrl: baseUrlInput.trim(), apiKey: apiKeyInput.trim() };
-}
-
-function resolveProviderApi(
-  compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
-}
-
-function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
-  const compatibilityRaw = raw?.trim().toLowerCase();
-  if (!compatibilityRaw) {
-    return "openai";
-  }
-  if (compatibilityRaw !== "openai" && compatibilityRaw !== "anthropic") {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Invalid --custom-compatibility (use "openai" or "anthropic").',
-    );
-  }
-  return compatibilityRaw;
-}
-
-export function resolveCustomProviderId(
-  params: ResolveCustomProviderIdParams,
-): ResolvedCustomProviderId {
-  const providers = params.config.models?.providers ?? {};
-  const baseUrl = params.baseUrl.trim();
-  const explicitProviderId = params.providerId?.trim();
-  if (explicitProviderId && !normalizeEndpointId(explicitProviderId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
-  const requestedProviderId = explicitProviderId || buildEndpointIdFromUrl(baseUrl);
-  const providerIdResult = resolveUniqueEndpointId({
-    requestedId: requestedProviderId,
-    baseUrl,
-    providers,
-  });
-
-  return {
-    providerId: providerIdResult.providerId,
-    ...(providerIdResult.renamed
-      ? {
-          providerIdRenamedFrom: normalizeEndpointId(requestedProviderId) || "custom",
-        }
-      : {}),
-  };
-}
-
-export function parseNonInteractiveCustomApiFlags(
-  params: ParseNonInteractiveCustomApiFlagsParams,
-): ParsedNonInteractiveCustomApiFlags {
-  const baseUrl = params.baseUrl?.trim() ?? "";
-  const modelId = params.modelId?.trim() ?? "";
-  if (!baseUrl || !modelId) {
-    throw new CustomApiError(
-      "missing_required",
-      [
-        'Auth choice "custom-api-key" requires a base URL and model ID.',
-        "Use --custom-base-url and --custom-model-id.",
-      ].join("\n"),
-    );
-  }
-
-  const apiKey = params.apiKey?.trim();
-  const providerId = params.providerId?.trim();
-  if (providerId && !normalizeEndpointId(providerId)) {
-    throw new CustomApiError(
-      "invalid_provider_id",
-      "Custom provider ID must include letters, numbers, or hyphens.",
-    );
-  }
-  return {
-    baseUrl,
-    modelId,
-    compatibility: parseCustomApiCompatibility(params.compatibility),
-    ...(apiKey ? { apiKey } : {}),
-    ...(providerId ? { providerId } : {}),
-  };
-}
-
-export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
-  const baseUrl = params.baseUrl.trim();
-  try {
-    new URL(baseUrl);
-  } catch {
-    throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
-  }
-
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Custom provider compatibility must be "openai" or "anthropic".',
-    );
-  }
-
-  const modelId = params.modelId.trim();
-  if (!modelId) {
-    throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
-  }
-
-  const providerIdResult = resolveCustomProviderId({
+  const baseUrl = baseUrlInput.trim();
+  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  let apiKeyInput: SecretInput | undefined;
+  // Keep the persisted key shape from the credential helper while also keeping
+  // the resolved plaintext only for the immediate verification probe.
+  const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
-    baseUrl,
-    providerId: params.providerId,
-  });
-  const providerId = providerIdResult.providerId;
-  const providers = params.config.models?.providers ?? {};
-
-  const modelRef = modelKey(providerId, modelId);
-  const alias = params.alias?.trim() ?? "";
-  const aliasError = resolveAliasError({
-    raw: alias,
-    cfg: params.config,
-    modelRef,
-  });
-  if (aliasError) {
-    throw new CustomApiError("invalid_alias", aliasError);
-  }
-
-  const existingProvider = providers[providerId];
-  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
-  const hasModel = existingModels.some((model) => model.id === modelId);
-  const nextModel = {
-    id: modelId,
-    name: `${modelId} (Custom Provider)`,
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-    input: ["text"] as ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: false,
-  };
-  const mergedModels = hasModel ? existingModels : [...existingModels, nextModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
-  const normalizedApiKey =
-    params.apiKey?.trim() || (existingApiKey ? existingApiKey.trim() : undefined);
-
-  let config: OpenClawConfig = {
-    ...params.config,
-    models: {
-      ...params.config.models,
-      mode: params.config.models?.mode ?? "merge",
-      providers: {
-        ...providers,
-        [providerId]: {
-          ...existingProviderRest,
-          baseUrl,
-          api: resolveProviderApi(params.compatibility),
-          ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-          models: mergedModels.length > 0 ? mergedModels : [nextModel],
-        },
-      },
+    provider: providerHint,
+    envLabel: "CUSTOM_API_KEY",
+    promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+    normalize: normalizeSecretInput,
+    validate: () => undefined,
+    prompter: params.prompter,
+    secretInputMode: params.secretInputMode,
+    setCredential: async (apiKey) => {
+      apiKeyInput = apiKey;
     },
-  };
-
-  config = applyPrimaryModel(config, modelRef);
-  if (alias) {
-    config = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          models: {
-            ...config.agents?.defaults?.models,
-            [modelRef]: {
-              ...config.agents?.defaults?.models?.[modelRef],
-              alias,
-            },
-          },
-        },
-      },
-    };
-  }
-
+  });
   return {
-    config,
-    providerId,
-    modelId,
-    ...(providerIdResult.providerIdRenamedFrom
-      ? { providerIdRenamedFrom: providerIdResult.providerIdRenamedFrom }
-      : {}),
+    baseUrl,
+    apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
+    resolvedApiKey: normalizeSecretInput(resolvedApiKey),
   };
 }
 
+type CustomApiRetryChoice = "baseUrl" | "model" | "both";
+
+async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
+  return await prompter.select({
+    message: t("wizard.customProvider.retryChoice"),
+    options: [
+      { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+      { value: "model", label: t("wizard.customProvider.changeModel") },
+      { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
+    ],
+  });
+}
+
+async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
+  return (
+    await prompter.text({
+      message: t("wizard.customProvider.modelId"),
+      placeholder: t("wizard.customProvider.modelIdPlaceholder"),
+      validate: (val) => (val.trim() ? undefined : t("wizard.customProvider.modelIdRequired")),
+    })
+  ).trim();
+}
+
+async function applyCustomApiRetryChoice(params: {
+  prompter: WizardPrompter;
+  config: OpenClawConfig;
+  secretInputMode?: SecretInputMode;
+  retryChoice: CustomApiRetryChoice;
+  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
+  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
+  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
+    const retryInput = await promptBaseUrlAndKey({
+      prompter: params.prompter,
+      config: params.config,
+      secretInputMode: params.secretInputMode,
+      initialBaseUrl: baseUrl,
+    });
+    baseUrl = retryInput.baseUrl;
+    apiKey = retryInput.apiKey;
+    resolvedApiKey = retryInput.resolvedApiKey;
+  }
+  if (params.retryChoice === "model" || params.retryChoice === "both") {
+    modelId = await promptCustomApiModelId(params.prompter);
+  }
+  return { baseUrl, apiKey, resolvedApiKey, modelId };
+}
+
+/** Prompts for a custom API provider and prepares its endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: OpenClawConfig;
+  target?: OnboardingAgentTarget;
+  secretInputMode?: SecretInputMode;
+  setAsPrimary?: boolean;
+  /** Setup owns its single confirmation turn after saving the credential. */
+  verification?: "immediate" | "deferred";
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
+  const manifestPlugins = loadManifestMetadataSnapshot({
+    config,
+    workspaceDir: params.target?.workspaceDir,
+    env: process.env,
+  }).plugins;
 
-  const baseInput = await promptBaseUrlAndKey({ prompter });
+  const baseInput = await promptBaseUrlAndKey({
+    prompter,
+    config,
+    secretInputMode: params.secretInputMode,
+  });
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
+  let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
-    message: "Endpoint compatibility",
-    options: COMPATIBILITY_OPTIONS.map((option) => ({
+    message: t("wizard.customProvider.compatibility"),
+    options: COMPATIBILITY_OPTIONS.filter(
+      (option) => params.verification !== "deferred" || option.value !== "unknown",
+    ).map((option) => ({
       value: option.value,
-      label: option.label,
-      hint: option.hint,
+      label: t(option.labelKey),
+      hint: t(option.hintKey),
     })),
   });
 
-  let modelId = (
-    await prompter.text({
-      message: "Model ID",
-      placeholder: "e.g. llama3, claude-3-7-sonnet",
-      validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-    })
-  ).trim();
+  let modelId = await promptCustomApiModelId(prompter);
 
   let compatibility: CustomApiCompatibility | null =
     compatibilityChoice === "unknown" ? null : compatibilityChoice;
 
-  while (true) {
-    let verifiedFromProbe = false;
+  while (params.verification !== "deferred") {
     if (!compatibility) {
-      const probeSpinner = prompter.progress("Detecting endpoint type...");
-      const openaiProbe = await requestOpenAiVerification({ baseUrl, apiKey, modelId });
-      if (openaiProbe.ok) {
-        probeSpinner.stop("Detected OpenAI-compatible endpoint.");
-        compatibility = "openai";
-        verifiedFromProbe = true;
-      } else {
-        const anthropicProbe = await requestAnthropicVerification({ baseUrl, apiKey, modelId });
-        if (anthropicProbe.ok) {
-          probeSpinner.stop("Detected Anthropic-compatible endpoint.");
-          compatibility = "anthropic";
-          verifiedFromProbe = true;
-        } else {
-          probeSpinner.stop("Could not detect endpoint type.");
-          await prompter.note(
-            "This endpoint did not respond to OpenAI or Anthropic style requests.",
-            "Endpoint detection",
-          );
-          const retryChoice = await prompter.select({
-            message: "What would you like to change?",
-            options: [
-              { value: "baseUrl", label: "Change base URL" },
-              { value: "model", label: "Change model" },
-              { value: "both", label: "Change base URL and model" },
-            ],
-          });
-          if (retryChoice === "baseUrl" || retryChoice === "both") {
-            const retryInput = await promptBaseUrlAndKey({
-              prompter,
-              initialBaseUrl: baseUrl,
-            });
-            baseUrl = retryInput.baseUrl;
-            apiKey = retryInput.apiKey;
-          }
-          if (retryChoice === "model" || retryChoice === "both") {
-            modelId = (
-              await prompter.text({
-                message: "Model ID",
-                placeholder: "e.g. llama3, claude-3-7-sonnet",
-                validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-              })
-            ).trim();
-          }
-          continue;
+      // Probe in a fixed order so unknown endpoints converge to a concrete
+      // config API value before we write provider metadata.
+      const probeSpinner = prompter.progress(t("wizard.customProvider.detectionProgress"));
+      const detectionMessages = {
+        openai: "wizard.customProvider.detectedOpenAi",
+        "openai-responses": "wizard.customProvider.detectedOpenAiResponses",
+        anthropic: "wizard.customProvider.detectedAnthropic",
+      };
+      for (const candidate of ["openai", "openai-responses", "anthropic"] as const) {
+        const result = await verifyCustomApiCompatibility({
+          baseUrl,
+          apiKey: resolvedApiKey,
+          modelId,
+          compatibility: candidate,
+        });
+        if (result.ok) {
+          probeSpinner.stop(t(detectionMessages[candidate]));
+          compatibility = candidate;
+          break;
         }
       }
-    }
-
-    if (verifiedFromProbe) {
-      break;
-    }
-
-    const verifySpinner = prompter.progress("Verifying...");
-    const result =
-      compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey, modelId });
-    if (result.ok) {
-      verifySpinner.stop("Verification successful.");
-      break;
-    }
-    if (result.status !== undefined) {
-      verifySpinner.stop(`Verification failed: status ${result.status}`);
+      if (compatibility) {
+        break;
+      }
+      probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
+      await prompter.note(
+        t("wizard.customProvider.detectionFailedNote"),
+        t("wizard.customProvider.detectionNoteTitle"),
+      );
     } else {
-      verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
-    }
-    const retryChoice = await prompter.select({
-      message: "What would you like to change?",
-      options: [
-        { value: "baseUrl", label: "Change base URL" },
-        { value: "model", label: "Change model" },
-        { value: "both", label: "Change base URL and model" },
-      ],
-    });
-    if (retryChoice === "baseUrl" || retryChoice === "both") {
-      const retryInput = await promptBaseUrlAndKey({
-        prompter,
-        initialBaseUrl: baseUrl,
+      // Explicit compatibility choices still get a live probe so setup does not
+      // persist endpoints or models that fail the selected protocol.
+      const verifySpinner = prompter.progress(t("wizard.customProvider.verifying"));
+      const result = await verifyCustomApiCompatibility({
+        baseUrl,
+        apiKey: resolvedApiKey,
+        modelId,
+        compatibility,
       });
-      baseUrl = retryInput.baseUrl;
-      apiKey = retryInput.apiKey;
+      if (result.ok) {
+        verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
+        break;
+      }
+      if (result.error !== undefined) {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedError", {
+            error: formatVerificationError(result.error),
+          }),
+        );
+      } else {
+        verifySpinner.stop(
+          t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
+        );
+      }
     }
-    if (retryChoice === "model" || retryChoice === "both") {
-      modelId = (
-        await prompter.text({
-          message: "Model ID",
-          placeholder: "e.g. llama3, claude-3-7-sonnet",
-          validate: (val) => (val.trim() ? undefined : "Model ID is required"),
-        })
-      ).trim();
-    }
+    const retryChoice = await promptCustomApiRetryChoice(prompter);
+    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+      prompter,
+      config,
+      secretInputMode: params.secretInputMode,
+      retryChoice,
+      current: { baseUrl, apiKey, resolvedApiKey, modelId },
+    }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }
   }
 
-  const providers = config.models?.providers ?? {};
   const suggestedId = buildEndpointIdFromUrl(baseUrl);
   const providerIdInput = await prompter.text({
-    message: "Endpoint ID",
+    message: t("wizard.customProvider.endpointId"),
     initialValue: suggestedId,
     placeholder: "custom",
     validate: (value) => {
       const normalized = normalizeEndpointId(value);
       if (!normalized) {
-        return "Endpoint ID is required.";
+        return t("wizard.customProvider.endpointIdRequired");
       }
       return undefined;
     },
   });
   const aliasInput = await prompter.text({
-    message: "Model alias (optional)",
-    placeholder: "e.g. local, ollama",
+    message: t("wizard.customProvider.modelAlias"),
+    placeholder: t("wizard.customProvider.modelAliasPlaceholder"),
     initialValue: "",
     validate: (value) => {
-      const requestedId = normalizeEndpointId(providerIdInput) || "custom";
-      const providerIdResult = resolveUniqueEndpointId({
-        requestedId,
+      const resolvedProvider = resolveCustomProviderId({
+        config,
         baseUrl,
-        providers,
+        providerId: providerIdInput,
       });
-      const modelRef = modelKey(providerIdResult.providerId, modelId);
-      return resolveAliasError({ raw: value, cfg: config, modelRef });
+      // Alias validation must use the post-collision provider id, otherwise a
+      // renamed endpoint could incorrectly collide with the requested id.
+      return resolveCustomModelAliasError({
+        raw: value,
+        cfg: config,
+        modelRef: { provider: resolvedProvider.providerId, model: modelId },
+        manifestPlugins,
+        agentId: params.target?.agentId,
+      });
     },
   });
+  const imageInputInference = resolveCustomModelImageInputInference(modelId);
+  const supportsImageInput =
+    imageInputInference.confidence === "known"
+      ? imageInputInference.supportsImageInput
+      : await prompter.confirm({
+          message: t("wizard.customProvider.imageInput"),
+          initialValue: imageInputInference.supportsImageInput,
+        });
   const resolvedCompatibility = compatibility ?? "openai";
   const result = applyCustomApiConfig({
     config,
@@ -652,15 +397,22 @@ export async function promptCustomApiConfig(params: {
     apiKey,
     providerId: providerIdInput,
     alias: aliasInput,
+    manifestPlugins,
+    supportsImageInput,
+    ...(params.target ? { target: params.target } : {}),
+    ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
-  if (result.providerIdRenamedFrom && result.providerId) {
+  if (result.providerIdRenamedFrom) {
     await prompter.note(
-      `Endpoint ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
-      "Endpoint ID",
+      t("wizard.customProvider.endpointIdRenamed", {
+        from: result.providerIdRenamedFrom,
+        to: result.providerId,
+      }),
+      t("wizard.customProvider.endpointIdTitle"),
     );
   }
 
-  runtime.log(`Configured custom provider: ${result.providerId}/${result.modelId}`);
+  runtime.log(`Prepared custom provider: ${result.providerId}/${result.modelId}`);
   return result;
 }

@@ -1,0 +1,202 @@
+// Channel setup discovery tests cover visible setup choices from bundled, installed, and trusted catalog sources.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
+import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+
+const listPluginContributionIds = vi.hoisted(() =>
+  vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
+);
+const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
+const listChatChannels = vi.hoisted(() =>
+  vi.fn<typeof import("../../channels/chat-meta.js").listChatChannels>(() => []),
+);
+const applyPluginAutoEnable = vi.hoisted(() =>
+  vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
+    ({ config }) => ({
+      config: config as never,
+      changes: [] as string[],
+      autoEnabledReasons: {},
+    }),
+  ),
+);
+
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
+  listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (args: unknown) =>
+    applyPluginAutoEnable(args as { config: unknown; env?: NodeJS.ProcessEnv }),
+}));
+
+vi.mock("../../channels/plugins/catalog.js", () => ({
+  listRawChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
+}));
+
+vi.mock("../../channels/chat-meta.js", () => ({
+  listChatChannels: () => listChatChannels(),
+}));
+
+vi.mock("../../secrets/channel-env-vars.js", () => ({
+  getChannelEnvVars: () => [],
+}));
+
+import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./discovery.js";
+
+describe("listManifestInstalledChannelIds", () => {
+  beforeEach(() => {
+    listPluginContributionIds.mockReset().mockReturnValue([]);
+    listChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
+    listChatChannels.mockReset().mockReturnValue([]);
+    applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({
+      config: config as never,
+      changes: [] as string[],
+      autoEnabledReasons: {},
+    }));
+  });
+
+  it.each([false, true])("uses the auto-enabled config with a provided index: %s", (provided) => {
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    const autoEnabledConfig = {
+      channels: { slack: { enabled: true } },
+      plugins: { allow: ["slack"] },
+      autoEnabled: true,
+    } as never;
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: ["slack"] as string[],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
+    listPluginContributionIds.mockReturnValue(["slack"]);
+
+    const installedIds = listManifestInstalledChannelIds({
+      cfg: {} as never,
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+      ...(provided ? { index } : {}),
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: {},
+      env: { OPENCLAW_HOME: "/tmp/home" },
+    });
+    expect(listPluginContributionIds).toHaveBeenCalledWith({
+      contribution: "channels",
+      ...(provided ? { index } : {}),
+      config: autoEnabledConfig,
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" },
+    });
+    expect(installedIds).toEqual(new Set(["slack"]));
+  });
+
+  it("filters channels hidden from setup out of interactive entries", () => {
+    listChatChannels.mockReturnValue([
+      {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "bot token",
+      },
+    ]);
+
+    const resolved = resolveChannelSetupEntries({
+      cfg: {} as never,
+      installedPlugins: [
+        {
+          id: "qa-channel",
+          meta: {
+            id: "qa-channel",
+            label: "QA Channel",
+            selectionLabel: "QA Channel",
+            docsPath: "/channels/qa-channel",
+            blurb: "synthetic",
+            exposure: { setup: false },
+          },
+        } as never,
+      ],
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(resolved.entries.map((entry) => entry.id)).toEqual(["telegram"]);
+  });
+
+  it("preserves source precedence and catalog metadata across setup views", () => {
+    listChatChannels.mockReturnValue([
+      makeMeta("telegram", "Telegram", { blurb: "bot token" }),
+      makeMeta("matrix", "Matrix"),
+    ]);
+    const bundledCatalog = makeCatalogEntry("matrix", "Catalog Matrix");
+    const installedCatalog = makeCatalogEntry("installed-chat", "Installed Chat", {
+      meta: makeMeta("installed-chat", "Installed Chat", {
+        aliases: ["installed"],
+        detailLabel: "Installed Chat Bot",
+        selectionDocsPrefix: "",
+      }),
+    });
+    const installableCatalog = makeCatalogEntry("installable-chat", "Installable Chat");
+    listPluginContributionIds.mockReturnValue(["matrix", "installed-chat"]);
+    listChannelPluginCatalogEntries.mockReturnValue([
+      makeCatalogEntry("telegram", "Catalog Telegram"),
+      bundledCatalog,
+      installedCatalog,
+      installableCatalog,
+    ]);
+
+    const resolved = resolveChannelSetupEntries({
+      cfg: {},
+      installedPlugins: [
+        {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            selectionLabel: "Telegram setup",
+          },
+        } as never,
+      ],
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" },
+    });
+
+    expect(resolved).toStrictEqual({
+      entries: [
+        {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram setup",
+            blurb: "bot token",
+            docsPath: "/channels/telegram",
+          },
+        },
+        { id: "matrix", meta: makeMeta("matrix", "Matrix") },
+        { id: "installed-chat", meta: installedCatalog.meta },
+        { id: "installable-chat", meta: installableCatalog.meta },
+      ],
+      installedCatalogEntries: [bundledCatalog, installedCatalog],
+      installableCatalogEntries: [installableCatalog],
+      installedCatalogById: new Map([
+        ["matrix", bundledCatalog],
+        ["installed-chat", installedCatalog],
+      ]),
+      installableCatalogById: new Map([["installable-chat", installableCatalog]]),
+    });
+  });
+});

@@ -1,12 +1,90 @@
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAgentEnvelope,
+  implicitMentionKindWhen,
+  resolveEnvelopeFormatOptions,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
+  type ChannelIngressContextBinding,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip } from "../targets.js";
+
+export interface ParsedCite {
+  type: "chan" | "group" | "desk" | "bait";
+  nest?: string;
+  author?: string;
+  postId?: string;
+  group?: string;
+  flag?: string;
+  where?: string;
+}
+
+export function extractCites(content: unknown): ParsedCite[] {
+  if (!content || !Array.isArray(content)) {
+    return [];
+  }
+
+  const cites: ParsedCite[] = [];
+
+  for (const verse of content) {
+    const verseRecord = asNullableRecord(verse);
+    const block = asNullableRecord(verseRecord?.block);
+    const cite = asNullableRecord(block?.cite);
+    if (cite) {
+      const chan = asNullableRecord(cite.chan);
+      const group = readStringField(cite, "group");
+      const desk = asNullableRecord(cite.desk);
+      const bait = asNullableRecord(cite.bait);
+
+      if (chan) {
+        const nest = readStringField(chan, "nest");
+        const where = readStringField(chan, "where");
+        const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
+        cites.push({
+          type: "chan",
+          nest,
+          where,
+          author: whereMatch?.[1],
+          postId: whereMatch?.[2],
+        });
+      } else if (group) {
+        cites.push({ type: "group", group });
+      } else if (desk) {
+        cites.push({
+          type: "desk",
+          flag: readStringField(desk, "flag"),
+          where: readStringField(desk, "where"),
+        });
+      } else if (bait) {
+        cites.push({
+          type: "bait",
+          group: readStringField(bait, "group"),
+          nest: readStringField(bait, "graph"),
+          where: readStringField(bait, "where"),
+        });
+      }
+    }
+  }
+
+  return cites;
+}
 
 export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
   }
-  const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
   const modelMappings: Record<string, string> = {
-    "claude-opus-4-6": "Claude Opus 4.6",
     "claude-opus-4-5": "Claude Opus 4.5",
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
     "claude-sonnet-3-5": "Claude Sonnet 3.5",
@@ -17,8 +95,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) {
-    return modelMappings[modelName];
+  const mappedName = modelMappings[modelName];
+  if (mappedName !== undefined) {
+    return mappedName;
   }
   return modelName
     .replace(/-/g, " ")
@@ -27,22 +106,234 @@ export function formatModelName(modelString?: string | null): string {
     .join(" ");
 }
 
-export function isBotMentioned(messageText: string, botShipName: string): boolean {
+export function isBotMentioned(
+  messageText: string,
+  botShipName: string,
+  nickname?: string,
+): boolean {
   if (!messageText || !botShipName) {
     return false;
   }
+
+  if (/@all\b/i.test(messageText)) {
+    return true;
+  }
+
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
-  return mentionPattern.test(messageText);
-}
-
-export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) {
+  if (mentionPattern.test(messageText)) {
     return true;
   }
-  const normalizedSender = normalizeShip(senderShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
+
+  if (nickname) {
+    const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
+    if (nicknamePattern.test(messageText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function stripBotMention(messageText: string, botShipName: string): string {
+  if (!messageText || !botShipName) {
+    return messageText;
+  }
+  return messageText.replace(normalizeShip(botShipName), "").trim();
+}
+
+const tlonIngressIdentity = {
+  key: "sender-ship",
+  normalize: normalizeShip,
+  sensitivity: "pii",
+  isWildcardEntry: () => false,
+  entryIdPrefix: "tlon-entry",
+} satisfies StableChannelIngressIdentityParams;
+
+export async function isDmAllowedWithIngress(
+  senderShip: string,
+  allowlist: string[] | undefined,
+): Promise<boolean> {
+  const access = await resolveTlonMessageIngress({
+    senderShip,
+    allowFrom: allowlist ?? [],
+    conversation: { kind: "direct", id: "direct" },
+    dmPolicy: "allowlist",
+  });
+  return access.senderAccess.allowed;
+}
+
+export async function resolveTlonMessageIngress(params: {
+  senderShip: string;
+  allowFrom: string[];
+  conversation: { kind: "direct" | "group"; id: string };
+  accountId?: string;
+  dmPolicy?: "open" | "allowlist";
+  groupPolicy?: "open" | "allowlist";
+  contextBinding?: ChannelIngressContextBinding;
+}) {
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
+    channelId: "tlon",
+    accountId: params.accountId ?? "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: params.senderShip },
+    conversation: params.conversation,
+    contextBinding: params.contextBinding,
+    dmPolicy: params.dmPolicy ?? "allowlist",
+    groupPolicy: params.groupPolicy ?? "open",
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.allowFrom,
+  });
+}
+
+export async function resolveTlonCommandAuthorizationWithIngress(params: {
+  senderShip: string;
+  ownerShip: string | null | undefined;
+  useAccessGroups: boolean;
+}) {
+  const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
+  return await getTlonRuntime().channel.inbound.ingress.resolveStable({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    useAccessGroups: params.useAccessGroups,
+    subject: { stableId: params.senderShip },
+    conversation: {
+      kind: "direct",
+      id: "command",
+    },
+    event: {
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: normalizedOwner ? [normalizedOwner] : [],
+    command: {},
+  });
+}
+
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
+  });
+}
+
+export function isGroupInviteAllowed(
+  inviterShip: string,
+  allowlist: string[] | undefined,
+): boolean {
+  const normalizedInviter = normalizeShip(inviterShip);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
+}
+
+export async function resolveAuthorizedMessageText(params: {
+  rawText: string;
+  content: unknown;
+  authorizedForCites: boolean;
+  resolveAllCites: (content: unknown) => Promise<string>;
+}): Promise<string> {
+  const { rawText, content, authorizedForCites, resolveAllCites } = params;
+  if (!authorizedForCites) {
+    return rawText;
+  }
+  const citedContent = await resolveAllCites(content);
+  return citedContent + rawText;
+}
+
+// Helper to recursively extract text from inline content
+function renderInlineItem(
+  item: unknown,
+  options?: {
+    linkMode?: "content-or-href" | "href";
+    allowBreak?: boolean;
+    allowBlockquote?: boolean;
+  },
+): string {
+  if (typeof item === "string") {
+    return item;
+  }
+  const record = asNullableRecord(item);
+  if (!record) {
+    return "";
+  }
+  const ship = readStringField(record, "ship");
+  if (ship) {
+    return ship;
+  }
+  if ("sect" in record) {
+    const sect = record.sect;
+    if (typeof sect === "string") {
+      return `@${sect || "all"}`;
+    }
+    if (sect === null) {
+      return "@all";
+    }
+  }
+  if (options?.allowBreak && "break" in record) {
+    return "\n";
+  }
+  const inlineCode = readStringField(record, "inline-code");
+  if (inlineCode) {
+    return `\`${inlineCode}\``;
+  }
+  const code = readStringField(record, "code");
+  if (code) {
+    return `\`${code}\``;
+  }
+  const link = asNullableRecord(record.link);
+  const linkHref = link ? readStringField(link, "href") : undefined;
+  if (link && linkHref) {
+    const linkContent = readStringField(link, "content");
+    return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
+  }
+  if (Array.isArray(record.bold)) {
+    return `**${extractInlineText(record.bold)}**`;
+  }
+  if (Array.isArray(record.italics)) {
+    return `*${extractInlineText(record.italics)}*`;
+  }
+  if (Array.isArray(record.strike)) {
+    return `~~${extractInlineText(record.strike)}~~`;
+  }
+  if (options?.allowBlockquote && Array.isArray(record.blockquote)) {
+    return `> ${extractInlineText(record.blockquote)}`;
+  }
+  return "";
+}
+
+function extractInlineText(items: readonly unknown[]): string {
+  return items.map((item) => renderInlineItem(item)).join("");
 }
 
 export function extractMessageText(content: unknown): string {
@@ -50,39 +341,109 @@ export function extractMessageText(content: unknown): string {
     return "";
   }
 
-  return (
-    content
-      // oxlint-disable-next-line typescript/no-explicit-any
-      .map((block: any) => {
-        if (block.inline && Array.isArray(block.inline)) {
-          return (
-            block.inline
-              // oxlint-disable-next-line typescript/no-explicit-any
-              .map((item: any) => {
-                if (typeof item === "string") {
-                  return item;
-                }
-                if (item && typeof item === "object") {
-                  if (item.ship) {
-                    return item.ship;
-                  }
-                  if (item.break !== undefined) {
-                    return "\n";
-                  }
-                  if (item.link && item.link.href) {
-                    return item.link.href;
-                  }
-                }
-                return "";
-              })
-              .join("")
-          );
-        }
+  return content
+    .map((verse) => {
+      const verseRecord = asNullableRecord(verse);
+      if (!verseRecord) {
         return "";
-      })
-      .join("\n")
-      .trim()
-  );
+      }
+
+      // Handle inline content (text, ships, links, etc.)
+      if (Array.isArray(verseRecord.inline)) {
+        return verseRecord.inline
+          .map((item) =>
+            renderInlineItem(item, {
+              linkMode: "href",
+              allowBreak: true,
+              allowBlockquote: true,
+            }),
+          )
+          .join("");
+      }
+
+      // Handle block content (images, code blocks, etc.)
+      const block = asNullableRecord(verseRecord.block);
+      if (block) {
+        const image = asNullableRecord(block.image);
+
+        // Image blocks
+        if (image) {
+          const imageSrc = readStringField(image, "src");
+          if (imageSrc) {
+            const altText = readStringField(image, "alt");
+            const alt = altText ? ` (${altText})` : "";
+            return `\n${imageSrc}${alt}\n`;
+          }
+        }
+
+        // Code blocks
+        const codeBlock = asNullableRecord(block.code);
+        if (codeBlock) {
+          const lang = readStringField(codeBlock, "lang") ?? "";
+          const code = readStringField(codeBlock, "code") ?? "";
+          return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+        }
+
+        // Header blocks
+        const header = asNullableRecord(block.header);
+        if (header) {
+          const headerContent = Array.isArray(header.content) ? header.content : [];
+          const text =
+            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
+          return `\n## ${text}\n`;
+        }
+
+        // Cite/quote blocks - parse the reference structure
+        const cite = asNullableRecord(block.cite);
+        if (cite) {
+          const chanCite = asNullableRecord(cite.chan);
+
+          // ChanCite - reference to a channel message
+          if (chanCite) {
+            const nest = readStringField(chanCite, "nest");
+            const where = readStringField(chanCite, "where");
+            // where is typically /msg/~author/timestamp
+            const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
+            if (whereMatch) {
+              const [, author, _postId] = whereMatch;
+              return `\n> [quoted: ${author} in ${nest}]\n`;
+            }
+            return `\n> [quoted from ${nest}]\n`;
+          }
+
+          // GroupCite - reference to a group
+          const group = readStringField(cite, "group");
+          if (group) {
+            return `\n> [ref: group ${group}]\n`;
+          }
+
+          // DeskCite - reference to an app/desk
+          const desk = asNullableRecord(cite.desk);
+          if (desk) {
+            const flag = readStringField(desk, "flag");
+            if (flag) {
+              return `\n> [ref: ${flag}]\n`;
+            }
+          }
+
+          // BaitCite - reference with group+graph context
+          const bait = asNullableRecord(cite.bait);
+          if (bait) {
+            const graph = readStringField(bait, "graph");
+            const groupName = readStringField(bait, "group");
+            if (graph && groupName) {
+              return `\n> [ref: ${graph} in ${groupName}]\n`;
+            }
+          }
+
+          return `\n> [quoted message]\n`;
+        }
+      }
+
+      return "";
+    })
+    .join("\n")
+    .trim();
 }
 
 export function isSummarizationRequest(messageText: string): boolean {
@@ -96,11 +457,25 @@ export function isSummarizationRequest(messageText: string): boolean {
   return patterns.some((pattern) => pattern.test(messageText));
 }
 
-export function formatChangesDate(daysAgo = 5): string {
-  const now = new Date();
-  const targetDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-  const year = targetDate.getFullYear();
-  const month = targetDate.getMonth() + 1;
-  const day = targetDate.getDate();
-  return `~${year}.${month}.${day}..20.19.51..9b9d`;
+/**
+ * Formats channel history for a summarization request. Each entry is rendered
+ * through the shared inbound envelope so timestamps honor the configured user
+ * timezone instead of the host process zone (matches Mattermost/Feishu).
+ */
+export function formatSummarizationHistoryText(
+  history: ReadonlyArray<{ author: string; content: string; timestamp: number }>,
+  cfg?: OpenClawConfig,
+): string {
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  return history
+    .map((msg) =>
+      formatAgentEnvelope({
+        channel: "Tlon",
+        from: msg.author,
+        timestamp: msg.timestamp,
+        body: msg.content,
+        envelope: envelopeOptions,
+      }),
+    )
+    .join("\n");
 }

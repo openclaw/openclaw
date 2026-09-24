@@ -6,17 +6,17 @@ struct AssistantTextSegment: Identifiable {
         case response
     }
 
-    let id = UUID()
+    let id: Int
     let kind: Kind
     let text: String
 }
 
 enum AssistantTextParser {
-    static func segments(from raw: String) -> [AssistantTextSegment] {
+    static func segments(from raw: String, includeThinking: Bool = true) -> [AssistantTextSegment] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard raw.contains("<") else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
         var segments: [AssistantTextSegment] = []
@@ -51,14 +51,26 @@ enum AssistantTextParser {
         }
 
         guard matchedTag else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: 0, kind: .response, text: trimmed)]
         }
 
-        return segments
+        if includeThinking {
+            return segments
+        }
+
+        return segments.filter { $0.kind == .response }
+    }
+
+    static func visibleSegments(from raw: String) -> [AssistantTextSegment] {
+        self.segments(from: raw, includeThinking: false)
+    }
+
+    static func hasVisibleContent(in raw: String, includeThinking: Bool) -> Bool {
+        !self.segments(from: raw, includeThinking: includeThinking).isEmpty
     }
 
     static func hasVisibleContent(in raw: String) -> Bool {
-        !self.segments(from: raw).isEmpty
+        self.hasVisibleContent(in: raw, includeThinking: false)
     }
 
     private enum TagKind {
@@ -134,6 +146,8 @@ enum AssistantTextParser {
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        segments.append(AssistantTextSegment(kind: kind, text: trimmed))
+        // Parsing repeats during unrelated view updates. Stable positional IDs keep
+        // SwiftUI from rebuilding unchanged markdown segments and visibly flickering.
+        segments.append(AssistantTextSegment(id: segments.count, kind: kind, text: trimmed))
     }
 }

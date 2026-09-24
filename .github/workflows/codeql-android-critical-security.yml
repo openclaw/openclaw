@@ -1,0 +1,59 @@
+name: CodeQL Android Critical Security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *"
+
+concurrency:
+  group: codeql-android-critical-security-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || format('ref-{0}', github.ref) }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  android:
+    name: Critical Security (android)
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+
+      - name: Setup Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-android-critical-security.yml
+
+      - name: Build Android for CodeQL
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assemblePlayDebug
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          category: "/codeql-critical-security/android"

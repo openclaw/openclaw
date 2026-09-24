@@ -1,289 +1,134 @@
-/**
- * Tests for send.ts module
- *
- * Tests cover:
- * - Message sending with valid configuration
- * - Account resolution and validation
- * - Channel normalization
- * - Markdown stripping
- * - Error handling for missing/invalid accounts
- * - Registry integration
- */
-
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { sendMessageTwitchInternal } from "./send.js";
+import {
+  BASE_TWITCH_TEST_ACCOUNT,
+  installTwitchTestHooks,
+  makeTwitchTestConfig,
+} from "./test-fixtures.js";
+import { TwitchClientManager } from "./twitch-client.js";
 
-// Mock dependencies
-vi.mock("./config.js", () => ({
-  DEFAULT_ACCOUNT_ID: "default",
-  getAccountConfig: vi.fn(),
-}));
-
-vi.mock("./utils/twitch.js", () => ({
-  generateMessageId: vi.fn(() => "test-msg-id"),
-  isAccountConfigured: vi.fn(() => true),
-  normalizeTwitchChannel: (channel: string) => channel.toLowerCase().replace(/^#/, ""),
-}));
-
-vi.mock("./utils/markdown.js", () => ({
-  stripMarkdownForTwitch: vi.fn((text: string) => text.replace(/\*\*/g, "")),
-}));
-
-vi.mock("./client-manager-registry.js", () => ({
-  getClientManager: vi.fn(),
-}));
-
-describe("send", () => {
-  const mockLogger = {
+describe("sendMessageTwitchInternal", () => {
+  const logger = {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
   };
-
-  const mockAccount = {
-    username: "testbot",
-    token: "oauth:test123",
-    clientId: "test-client-id",
-    channel: "#testchannel",
+  const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "test123" };
+  const cfg = makeTwitchTestConfig(account);
+  const clientManager = new TwitchClientManager(logger);
+  let sendMessageSpy: MockInstance<TwitchClientManager["sendMessage"]>;
+  const params = {
+    channel: "testchannel",
+    text: "Hello Twitch!",
+    cfg,
+    account,
+    accountId: "default",
+    clientManager,
   };
-
-  const mockConfig = {
-    channels: {
-      twitch: {
-        accounts: {
-          default: mockAccount,
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
-
+  installTwitchTestHooks();
   beforeEach(() => {
-    vi.clearAllMocks();
+    sendMessageSpy = vi
+      .spyOn(clientManager, "sendMessage")
+      .mockResolvedValue({ ok: true, messageId: "twitch-msg-123" });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  it("returns a receipt for the delivered message", async () => {
+    const result = await sendMessageTwitchInternal(params);
 
-  describe("sendMessageTwitchInternal", () => {
-    it("should send a message successfully", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-      const { stripMarkdownForTwitch } = await import("./utils/markdown.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(getClientManager).mockReturnValue({
-        sendMessage: vi.fn().mockResolvedValue({
-          ok: true,
+    expect(result.messageId).toBe("twitch-msg-123");
+    expect(typeof result.receipt.sentAt).toBe("number");
+    expect({ ...result.receipt, sentAt: 0 }).toEqual({
+      primaryPlatformMessageId: "twitch-msg-123",
+      platformMessageIds: ["twitch-msg-123"],
+      parts: [
+        {
+          platformMessageId: "twitch-msg-123",
+          kind: "text",
+          index: 0,
+          raw: {
+            channel: "twitch",
+            conversationId: "testchannel",
+            messageId: "twitch-msg-123",
+          },
+        },
+      ],
+      raw: [
+        {
+          channel: "twitch",
+          conversationId: "testchannel",
           messageId: "twitch-msg-123",
-        }),
-      } as ReturnType<typeof getClientManager>);
-      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text);
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "Hello Twitch!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(true);
-      expect(result.messageId).toBe("twitch-msg-123");
+        },
+      ],
+      sentAt: 0,
     });
+    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
+      account,
+      "testchannel",
+      "Hello Twitch!",
+      cfg,
+      "default",
+    );
+  });
 
-    it("should strip markdown when enabled", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-      const { stripMarkdownForTwitch } = await import("./utils/markdown.js");
+  it.each([
+    ["**Bold** text", "Bold text"],
+    ["[link](https://example.com)", "link (https://example.com)"],
+    ["`---`", "---"],
+  ])("strips Markdown once from %s", async (text, expected) => {
+    await sendMessageTwitchInternal({ ...params, text });
 
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(getClientManager).mockReturnValue({
-        sendMessage: vi.fn().mockResolvedValue({
-          ok: true,
-          messageId: "twitch-msg-456",
-        }),
-      } as ReturnType<typeof getClientManager>);
-      vi.mocked(stripMarkdownForTwitch).mockImplementation((text) => text.replace(/\*\*/g, ""));
+    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
+      account,
+      "testchannel",
+      expected,
+      cfg,
+      "default",
+    );
+  });
 
-      await sendMessageTwitchInternal(
-        "#testchannel",
-        "**Bold** text",
-        mockConfig,
-        "default",
-        true,
-        mockLogger as unknown as Console,
-      );
-
-      expect(stripMarkdownForTwitch).toHaveBeenCalledWith("**Bold** text");
-    });
-
-    it("should return error when account not found", async () => {
-      const { getAccountConfig } = await import("./config.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(null);
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "Hello!",
-        mockConfig,
-        "nonexistent",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("Account not found: nonexistent");
-    });
-
-    it("should return error when account not configured", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(isAccountConfigured).mockReturnValue(false);
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "Hello!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("not properly configured");
-    });
-
-    it("should return error when no channel specified", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-
-      // Set channel to undefined to trigger the error (bypassing type check)
-      const accountWithoutChannel = {
-        ...mockAccount,
-        channel: undefined as unknown as string,
-      };
-      vi.mocked(getAccountConfig).mockReturnValue(accountWithoutChannel);
-      vi.mocked(isAccountConfigured).mockReturnValue(true);
-
-      const result = await sendMessageTwitchInternal(
-        "",
-        "Hello!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("No channel specified");
-    });
-
-    it("should skip sending empty message after markdown stripping", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-      const { stripMarkdownForTwitch } = await import("./utils/markdown.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(isAccountConfigured).mockReturnValue(true);
-      vi.mocked(stripMarkdownForTwitch).mockReturnValue("");
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "**Only markdown**",
-        mockConfig,
-        "default",
-        true,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(true);
-      expect(result.messageId).toBe("skipped");
-    });
-
-    it("should return error when client manager not found", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(isAccountConfigured).mockReturnValue(true);
-      vi.mocked(getClientManager).mockReturnValue(undefined);
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "Hello!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("Client manager not found");
-    });
-
-    it("should handle send errors gracefully", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(isAccountConfigured).mockReturnValue(true);
-      vi.mocked(getClientManager).mockReturnValue({
-        sendMessage: vi.fn().mockRejectedValue(new Error("Connection lost")),
-      } as ReturnType<typeof getClientManager>);
-
-      const result = await sendMessageTwitchInternal(
-        "#testchannel",
-        "Hello!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(result.error).toBe("Connection lost");
-      expect(mockLogger.error).toHaveBeenCalled();
-    });
-
-    it("should use account channel when channel parameter is empty", async () => {
-      const { getAccountConfig } = await import("./config.js");
-      const { isAccountConfigured } = await import("./utils/twitch.js");
-      const { getClientManager } = await import("./client-manager-registry.js");
-
-      vi.mocked(getAccountConfig).mockReturnValue(mockAccount);
-      vi.mocked(isAccountConfigured).mockReturnValue(true);
-      const mockSend = vi.fn().mockResolvedValue({
-        ok: true,
-        messageId: "twitch-msg-789",
+  it.each([true, false])(
+    "keeps empty Markdown unsent with a manager present: %s",
+    async (hasManager) => {
+      const result = await sendMessageTwitchInternal({
+        ...params,
+        text: "---",
+        clientManager: hasManager ? clientManager : undefined,
       });
-      vi.mocked(getClientManager).mockReturnValue({
-        sendMessage: mockSend,
-      } as ReturnType<typeof getClientManager>);
 
-      await sendMessageTwitchInternal(
-        "",
-        "Hello!",
-        mockConfig,
-        "default",
-        false,
-        mockLogger as unknown as Console,
-      );
+      expect(result).toMatchObject({ outcome: "not_sent", messageId: "" });
+      expect(result.receipt.platformMessageIds).toStrictEqual([]);
+      expect(result.receipt.parts).toStrictEqual([]);
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    },
+  );
 
-      expect(mockSend).toHaveBeenCalledWith(
-        mockAccount,
-        "testchannel", // normalized account channel
-        "Hello!",
-        mockConfig,
-        "default",
-      );
-    });
+  it("rejects a visible send when the caller has no manager", async () => {
+    await expect(
+      sendMessageTwitchInternal({ ...params, clientManager: undefined }),
+    ).rejects.toThrow(
+      "Client manager not found for account: default. Please start the Twitch gateway first.",
+    );
+  });
+
+  it("uses the caller's prepared account when config no longer contains it", async () => {
+    await sendMessageTwitchInternal({ ...params, cfg: {} });
+
+    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
+      account,
+      "testchannel",
+      "Hello Twitch!",
+      {},
+      "default",
+    );
+  });
+
+  it("exposes the manager's formatted failure without a cause or another log", async () => {
+    sendMessageSpy.mockResolvedValue({ ok: false, error: "Connection lost" });
+    const failure = sendMessageTwitchInternal(params);
+
+    await expect(failure).rejects.toThrow("Connection lost");
+    await expect(failure).rejects.not.toHaveProperty("cause");
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

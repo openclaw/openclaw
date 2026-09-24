@@ -1,14 +1,10 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+// Tlon plugin module implements runtime behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setTlonRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getTlonRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Tlon runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setTlonRuntime, getRuntime: getTlonRuntime } =
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "tlon",
+    errorMessage: "Tlon runtime not initialized",
+  });
+export { getTlonRuntime, setTlonRuntime };

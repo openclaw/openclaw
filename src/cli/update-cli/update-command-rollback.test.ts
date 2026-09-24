@@ -1,0 +1,978 @@
+import assert from "node:assert/strict";
+import { fork } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/config.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import { isDefaultInstallIdentity } from "../../config/paths.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
+import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import * as processRunner from "../../process/exec.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
+
+const mocks = vi.hoisted(() => ({
+  stop: vi.fn<
+    typeof import("./update-command-service.js").maybeStopManagedServiceBeforeMutableUpdate
+  >(),
+  restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
+  serviceState: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
+  execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
+}));
+vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+vi.mock("../../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: mocks.serviceState,
+}));
+vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+  createWindowsTaskAutoStartGuard: () => async () => {},
+}));
+vi.mock("./update-command-service.js", () => ({
+  maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
+  maybeRestartService: mocks.restart,
+  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async (
+    stopped: PreManagedServiceStop | undefined,
+    safe: boolean,
+    guard?: () => Promise<void>,
+  ) => stopped?.windowsTaskAutoStartRecovery?.restore(safe, guard),
+  resolveUpdatedGatewayRestartPort: async () => 19101,
+}));
+import * as updateShared from "./shared.js";
+import { inspectActivatedUpdateState } from "./update-command-migrated.js";
+import * as packageModule from "./update-command-package.js";
+import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import {
+  expectActiveRollbackIdentity,
+  expectDoctorRollback,
+  writeDoctorRollbackReceipt,
+} from "./update-command-rollback.test-support.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
+
+const dirs = createTempDirTracker();
+let candidateRoot: string;
+let previousRoot: string;
+let serviceStateDir: string;
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  dirs.cleanup();
+});
+async function readPreviousConfig(env: NodeJS.ProcessEnv) {
+  return createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot();
+}
+function setVersion(file: string, version: number) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`PRAGMA user_version = ${version}`);
+  } finally {
+    db.close();
+  }
+}
+
+describe("verified package rollback", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    const serviceHome = fs.realpathSync(dirs.make("rollback-service-home-"));
+    serviceStateDir = path.join(serviceHome, ".openclaw");
+    fs.mkdirSync(serviceStateDir);
+    vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: serviceHome });
+    vi.stubEnv("HOME", serviceHome);
+    vi.stubEnv("USERPROFILE", serviceHome);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
+    expect(
+      isDefaultInstallIdentity({ HOME: serviceHome, OPENCLAW_STATE_DIR: serviceStateDir }),
+    ).toBe(true);
+    previousRoot = fs.realpathSync(dirs.make("rollback-previous-runtime-"));
+    candidateRoot = fs.realpathSync(dirs.make("rollback-candidate-runtime-"));
+    for (const [root, version] of [
+      [previousRoot, "2026.9.1"],
+      [candidateRoot, "2026.9.3"],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", type: "module", version }),
+      );
+      fs.mkdirSync(path.join(root, "dist"));
+      fs.writeFileSync(path.join(root, "dist", "index.js"), "export {};\n");
+    }
+    const worker = "dist/infra/update-candidate-state.worker.js";
+    fs.mkdirSync(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
+    fs.writeFileSync(
+      path.join(candidateRoot, worker),
+      `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+    );
+    mocks.serviceState.mockImplementation(async (_service, options) => ({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      runtime: { status: "stopped", systemd: { managerUid: 2001 } },
+      env: options?.env ?? {},
+      command: {
+        programArguments: [
+          process.execPath,
+          path.join(previousRoot, "dist", "index.js"),
+          "gateway",
+        ],
+      },
+    }));
+    mocks.stop.mockImplementation(async ({ expectedService, updateRun }) => {
+      const env = expectedService?.serviceEnv ?? updateRun?.env ?? {};
+      const state = await readGatewayServiceState(resolveGatewayService(), { env });
+      return {
+        stopped: true,
+        stoppedAtMs: 100,
+        inspected: true,
+        runtimeInspected: true,
+        running: state.running,
+        serviceEnv: env,
+        serviceManagerUid: 2001,
+        serviceUpdateVerdict: await inspectManagedGatewayServiceBeforeUpdate({
+          state,
+          root: previousRoot,
+        }),
+      };
+    });
+    mocks.restart.mockImplementation(async ({ onVerified }) => {
+      onVerified?.(125);
+      return "ok";
+    });
+  });
+  it.each([false, true])(
+    "records refused project rollback without an additional stop (during stop=%s)",
+    async (duringStop) => {
+      const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+      const configSnapshot = await readPreviousConfig(env);
+      const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const schemaVersions = await readUpdateStateSchemaVersions({
+        stateDir: env.OPENCLAW_STATE_DIR,
+        config,
+        env,
+      });
+      const rollback = vi.fn(async () => ({
+        name: "global install rollback",
+        activePackageRoot: candidateRoot,
+        command: "restore",
+        cwd: candidateRoot,
+        durationMs: 1,
+        exitCode: 1,
+        reason: "rollback-project-changed" as const,
+        stderrTail: detail,
+      }));
+      const detail = "Global project changed since staging: sibling";
+      const outcome = await rollbackFailedUpdate({
+        definitionRecovery: {},
+        result: {
+          status: "error",
+          mode: "pnpm",
+          root: candidateRoot,
+          reason: "readyz-unhealthy",
+          steps: [],
+          durationMs: 1,
+        },
+        previousRoot,
+        schemaVersions,
+        configSnapshot,
+        opts: { json: true, run },
+        timeoutMs: 1_000,
+        preManagedServiceStop: {
+          stopped: true,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceEnv: env,
+        },
+        packageTransaction: {
+          backupRoot: "/backup",
+          assertRollbackSafe: async () => {
+            if (!duringStop) {
+              throw new NativePackageRollbackError(detail);
+            }
+          },
+          rollback,
+          complete: vi.fn(),
+        },
+      });
+      expect(outcome.result).toMatchObject({
+        status: "error",
+        reason: "rollback-project-changed",
+        root: candidateRoot,
+        rollbackOutcome: { status: duringStop ? "failed" : "not-attempted" },
+      });
+      expect(rollback).toHaveBeenCalledTimes(duringStop ? 1 : 0);
+      expect(mocks.stop).toHaveBeenCalledTimes(duringStop ? 1 : 0);
+      expect(mocks.restart).not.toHaveBeenCalled();
+      completeUpdateCommandRun(outcome.result, run);
+      const row = getUpdateRun(run.runId, { env })!;
+      expect(row).toMatchObject({
+        status: "failed",
+        reason: "rollback-project-changed",
+        verification: { rollbackOutcome: outcome.result.rollbackOutcome },
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "package rollback", status: "failed", detail }),
+        ]),
+      });
+      const nextAction = resolveUpdateResultNextAction({
+        result: outcome.result,
+        env,
+      });
+      expect(renderUpdateRunReport(row, { nextAction }).markdown).toContain(
+        "The new installation was left unchanged.",
+      );
+    },
+  );
+  it.each([
+    { activated: false, healthy: true },
+    { activated: false, healthy: false },
+    { activated: true, healthy: true },
+    { activated: true, healthy: false },
+  ])(
+    "retains Windows suspension through rollback (activated=$activated, healthy=$healthy)",
+    async ({ activated, healthy }) => {
+      const stateDir = serviceStateDir;
+      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_WINDOWS_TASK_NAME: "rollback-fixture" };
+      const configSnapshot = await readPreviousConfig(env);
+      const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+      const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+      let enabled = true;
+      const actions: string[] = [];
+      mocks.execSchtasks.mockImplementation(async (args) => {
+        if (args[0] === "/Query") {
+          return {
+            code: 0,
+            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+            stderr: "",
+          };
+        }
+        const action = args[0] === "/Run" ? "/Run" : args.at(-1)!;
+        actions.push(action);
+        if (action === "/Run") {
+          return { code: enabled ? 0 : 1, stdout: "", stderr: enabled ? "" : "task disabled" };
+        }
+        enabled = action === "/ENABLE";
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const original = createWindowsTaskAutoStartRecovery({ serviceEnv: env });
+      await original.suspended;
+      original.beginMutation();
+      if (activated) {
+        await original.restore(true);
+      }
+      let fresh: ReturnType<typeof createWindowsTaskAutoStartRecovery> | undefined;
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        state: await readGatewayServiceState(resolveGatewayService(), { env }),
+        root: previousRoot,
+      });
+      if (verdict.kind !== "owned") {
+        throw new Error("Previous service fixture must resolve to its real package.");
+      }
+      const service = {
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        serviceEnv: env,
+        serviceManagerUid: 2001,
+        serviceUpdateVerdict: {
+          ...verdict,
+          refreshDefinition: false,
+        },
+      };
+      mocks.stop.mockImplementationOnce(async () => {
+        fresh = createWindowsTaskAutoStartRecovery({ serviceEnv: env });
+        const suspended = await fresh.suspended;
+        if (!suspended) {
+          await fresh.complete();
+        }
+        return { ...service, windowsTaskAutoStartRecovery: suspended ? fresh : undefined };
+      });
+      mocks.restart.mockImplementationOnce(async ({ refreshServiceEnv }) => {
+        expect(refreshServiceEnv).toBe(false);
+        const running = await mocks.execSchtasks(["/Run", "/TN", "rollback-fixture"]);
+        if (running.code !== 0) {
+          throw new Error(running.stderr);
+        }
+        return healthy ? "ok" : "restart-health-failed";
+      });
+      try {
+        const outcome = await rollbackFailedUpdate({
+          definitionRecovery: {},
+          result: {
+            status: "error",
+            mode: "npm",
+            root: candidateRoot,
+            reason: "doctor-failed",
+            before: { version: "2026.9.1" },
+            after: { version: "2026.9.3" },
+            steps: [],
+            durationMs: 1,
+          },
+          previousRoot,
+          schemaVersions,
+          previousVerified: true,
+          packageTransaction: {
+            backupRoot: "/backup",
+            complete: vi.fn(async () => {}),
+            rollback: async () => ({
+              name: "package rollback",
+              activePackageRoot: previousRoot,
+              command: "restore",
+              cwd: previousRoot,
+              exitCode: 0,
+              durationMs: 1,
+            }),
+          },
+          configSnapshot,
+          opts: { json: true },
+          preManagedServiceStop: { ...service, windowsTaskAutoStartRecovery: original },
+          timeoutMs: 1_000,
+        });
+        expect(enabled).toBe(true);
+        expect(outcome.rolledBack).toBe(healthy);
+        expect(outcome.result.rollbackOutcome).toEqual({
+          status: "succeeded",
+          reason: "Previous package and configuration restored",
+        });
+        expect(outcome.result.recovery).toMatchObject({
+          packageRollbackVerified: true,
+          version: "2026.9.1",
+          service: healthy ? "healthy" : "failed",
+        });
+        const retained = outcome.stoppedForRollback?.windowsTaskAutoStartRecovery;
+        expect(retained).toBe(activated ? fresh : original);
+        await retained?.complete(healthy);
+        expect(enabled).toBe(healthy);
+        expect(actions.slice(-2)).toEqual(healthy ? ["/ENABLE", "/Run"] : ["/Run", "/DISABLE"]);
+      } finally {
+        await fresh?.complete(false);
+        await original.complete(false);
+      }
+    },
+  );
+  it.each([
+    { change: "none", previousVerified: true, restored: true, service: "stopped" },
+    ...(process.platform === "win32"
+      ? []
+      : [
+          { change: "readonly-config", previousVerified: true, restored: true, service: "stopped" },
+        ]),
+    { change: "doctor", previousVerified: true, restored: true, service: "stopped" },
+    {
+      change: "doctor-settled-exception",
+      previousVerified: true,
+      restored: true,
+      service: "stopped",
+    },
+    { change: "doctor-unchanged", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-compensated", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-missing-input", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-include", previousVerified: true, restored: true, service: "stopped" },
+    { change: "doctor-include-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-input-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-capture-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-operator-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-locked-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-stop-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "doctor-restore-edit", previousVerified: true, restored: false, service: "stopped" },
+    { change: "new-agent", previousVerified: true, restored: true, service: "stopped" },
+    { change: "new-agent-foreign", previousVerified: true, restored: false, service: "stopped" },
+    {
+      change: "new-agent-previous-incompatible",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    {
+      change: "new-agent-previous-unknown",
+      previousVerified: true,
+      restored: false,
+      service: "stopped",
+    },
+    { change: "identity-read-failed", previousVerified: true, restored: true, service: "stopped" },
+    { change: "shared", previousVerified: true, restored: false, service: "stopped" },
+    { change: "new-shared-deferred", previousVerified: true, restored: false, service: "stopped" },
+    { change: "agent", previousVerified: true, restored: false, service: "stopped" },
+    { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
+    { change: "unknown-runtime", previousVerified: true, restored: false, service: "stopped" },
+    { change: "none", previousVerified: false, restored: false, service: "stopped" },
+    { change: "none", previousVerified: true, restored: false, service: "absent" },
+    { change: "none", previousVerified: true, restored: false, service: "no-restart" },
+  ])(
+    "$change schema change; previous verified=$previousVerified; service=$service",
+    async ({ change, previousVerified, restored, service }) => {
+      const stateDir = serviceStateDir;
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const configPath = path.join(stateDir, "openclaw.json");
+      const includePath = path.join(stateDir, "logging.json");
+      const authored = {
+        gateway: { mode: "local" },
+        agents: { defaults: { models: { "openai/gpt-5.6-luna": {} } } },
+        ...(change.startsWith("doctor-include") ? { logging: { $include: "./logging.json" } } : {}),
+      };
+      const originalRaw = `// Fresh install: Doctor has never run.\n${JSON.stringify(authored, null, 2)}\n`;
+      if (change.startsWith("doctor-include")) {
+        fs.writeFileSync(includePath, '{"level":"info"}\n');
+      }
+      if (change.startsWith("doctor") || change === "readonly-config") {
+        fs.writeFileSync(configPath, originalRaw, { mode: 0o600 });
+      }
+      const configSnapshot = await createConfigIO({
+        env: process.env,
+        pluginValidation: "skip",
+      }).readConfigFileSnapshot();
+      const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+      let activationConfig: UpdateConfigSnapshot | undefined;
+      const shared = path.join(stateDir, "state/openclaw.sqlite");
+      const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
+      if (change !== "new-shared-deferred") {
+        setVersion(shared, 7);
+      }
+      if (!change.startsWith("new-agent")) {
+        setVersion(agent, 3);
+      }
+      const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      if (change === "new-shared-deferred") {
+        expect(schemaVersions.find((entry) => entry.path === shared)?.userVersion).toBeNull();
+        setVersion(shared, 7);
+        const database = new DatabaseSync(shared);
+        try {
+          database.exec(`
+            CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+            INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '8', 0);
+          `);
+        } finally {
+          database.close();
+        }
+      }
+      if (change.startsWith("new-agent")) {
+        setVersion(agent, change === "new-agent-foreign" ? 4 : 3);
+      }
+      if (change === "shared") {
+        setVersion(shared, 8);
+      }
+      if (change === "agent") {
+        setVersion(agent, 4);
+      }
+      if (change === "during-stop") {
+        mocks.stop.mockImplementationOnce(async () => {
+          setVersion(agent, 4);
+          return { stopped: true, inspected: true, runtimeInspected: true, running: false };
+        });
+      }
+      const result: UpdateRunResult = {
+        status: "error",
+        reason: change === "doctor-compensated" ? "doctor-failed" : "version-mismatch",
+        mode: "npm",
+        root: change === "unknown-runtime" ? undefined : candidateRoot,
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.3" },
+        steps: [],
+        durationMs: 10,
+      };
+      const operatorEdit = () =>
+        fs.appendFileSync(configPath, "\n// Operator edit after activation.\n");
+      if (change.startsWith("doctor")) {
+        fs.writeFileSync(path.join(candidateRoot, "dist/entry.js"), "export {};\n");
+        const writeDoctorReceipt = (resultPath: string) =>
+          writeDoctorRollbackReceipt({
+            change,
+            configPath,
+            resultPath,
+            authored,
+            originalRaw,
+            operatorEdit,
+          });
+        const settledFailure = new Error("Doctor command failed after its config write settled.");
+        if (change === "doctor-settled-exception") {
+          vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementationOnce(
+            async (_argv, options) => {
+              assert(typeof options === "object");
+              const resultPath = options.env?.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+              assert(resultPath);
+              await writeDoctorReceipt(resultPath);
+              throw settledFailure;
+            },
+          );
+        } else {
+          vi.spyOn(updateShared, "runUpdateStep").mockImplementationOnce(async (step) => {
+            const resultPath = step.env?.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+            assert(resultPath);
+            const doctorError = await writeDoctorReceipt(resultPath);
+            return {
+              name: "openclaw doctor",
+              command: "doctor",
+              cwd: candidateRoot,
+              durationMs: 1,
+              exitCode: doctorError ? 1 : 0,
+              ...(doctorError ? { stderrTail: doctorError.message } : {}),
+            };
+          });
+        }
+        const runDoctor = () =>
+          packageModule.runPackageUpdateDoctor({
+            root: candidateRoot,
+            timeoutMs: 1_000,
+            progress: {},
+            managedServiceEnv: process.env,
+            onConfigSnapshot: (snapshot) => {
+              activationConfig = snapshot;
+            },
+          });
+        const doctorStep =
+          change === "doctor-settled-exception"
+            ? await runPackagePostInstallVerification(candidateRoot, runDoctor)
+            : await runDoctor();
+        if (change === "doctor-settled-exception") {
+          assert(doctorStep);
+          expect(doctorStep).toMatchObject({
+            name: "post-install-verify",
+            exitCode: 1,
+            stderrTail: expect.stringContaining(settledFailure.message),
+          });
+          result.reason = "runtime-verification-failed";
+          result.steps.push(doctorStep);
+        }
+        if (change === "doctor-compensated") {
+          if (!doctorStep) {
+            throw new Error("Doctor compensation did not return an update step");
+          }
+          expect(doctorStep).toMatchObject({
+            exitCode: 1,
+            stderrTail: expect.stringContaining("Doctor runtime activation refused"),
+          });
+          expect(doctorStep.advisory).toBeUndefined();
+          result.steps.push(doctorStep);
+        }
+        expect(fs.readFileSync(`${configPath}.pre-update`, "utf8")).toBe(originalRaw);
+        const inspected = { ...result, status: "ok" as const };
+        expect(
+          await inspectActivatedUpdateState({
+            result: inspected,
+            root: candidateRoot,
+            schemaVersions,
+            candidateSchemaVersions: { state: change === "new-shared-deferred" ? 8 : 7, agent: 3 },
+            config,
+            env: process.env,
+          }),
+        ).toBeUndefined();
+        expect(inspected.status).toBe("ok");
+        if (change === "doctor-include-edit") {
+          fs.writeFileSync(includePath, '{"level":"debug"}\n');
+        }
+        if (change === "doctor-operator-edit") {
+          operatorEdit();
+        }
+        if (change === "doctor-stop-edit") {
+          mocks.stop.mockImplementationOnce(async () => {
+            operatorEdit();
+            return { stopped: true, inspected: true, runtimeInspected: true, running: false };
+          });
+        }
+      }
+      const rollback = vi.fn(async () => {
+        if (change === "doctor-restore-edit") {
+          operatorEdit();
+        }
+        return {
+          name: "rollback",
+          activePackageRoot: previousRoot,
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: 0,
+          durationMs: 1,
+        };
+      });
+      if (change === "identity-read-failed") {
+        vi.spyOn(packageModule, "readPackageUpdateIdentity").mockRejectedValueOnce(
+          new Error("Diagnostic identity read failed after verified restoration"),
+        );
+      }
+      let finishWriter: (() => Promise<void>) | undefined;
+      if (change === "doctor-locked-edit") {
+        const script = path.join(candidateRoot, "config-writer.mjs");
+        fs.writeFileSync(
+          script,
+          `
+          import { withFileLock } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/file-lock.ts")).href)};
+          import { appendFile } from "node:fs/promises";
+          const commit = new Promise(resolve => process.once("message", resolve));
+          await withFileLock(process.argv[2], {
+            retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 }, stale: 30_000,
+          }, async () => {
+            process.send("locked");
+            await commit;
+            await appendFile(process.argv[2], "\\n// Operator edit after activation.\\n");
+          });
+          process.disconnect();
+        `,
+        );
+        const writer = fork(script, [configPath], {
+          execArgv: ["--import", path.resolve("scripts/tsx.mjs")],
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
+        });
+        onTestFinished(() => stopChildProcess(writer, 1_000));
+        const exited = once(writer, "exit");
+        let requested = false;
+        finishWriter = async () => {
+          if (!requested && writer.connected) {
+            requested = true;
+            writer.send("commit");
+          }
+          const [code] = await exited;
+          expect(code).toBe(0);
+        };
+        await Promise.race([
+          once(writer, "message").then(([message]) => expect(message).toBe("locked")),
+          exited.then(([code]) => {
+            throw new Error(`Config writer exited before locking: ${code}`);
+          }),
+        ]);
+        const open = fs.promises.open.bind(fs.promises);
+        const rename = fs.promises.rename.bind(fs.promises);
+        const lockPath = `${fs.realpathSync(configPath)}.lock`;
+        // Commit at lock contention, or at an unprotected publication after its
+        // final read. The operator holds the same cross-process lock as config set.
+        vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+          if (String(args[0]) === lockPath) {
+            await finishWriter?.();
+          }
+          return open(...args);
+        });
+        vi.spyOn(fs.promises, "rename").mockImplementation(async (...args) => {
+          if (String(args[1]) === configPath) {
+            await finishWriter?.();
+          }
+          return rename(...args);
+        });
+      }
+      if (change === "readonly-config") {
+        fs.chmodSync(stateDir, 0o500);
+      }
+      let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+      try {
+        outcome = await rollbackFailedUpdate({
+          definitionRecovery: {},
+          result,
+          previousRoot,
+          nodeRunner: process.execPath,
+          configSnapshot,
+          activationConfig,
+          schemaVersions,
+          candidateSchemaVersions: { state: change === "new-shared-deferred" ? 8 : 7, agent: 3 },
+          previousSchemaVersions:
+            change === "new-agent-previous-unknown"
+              ? undefined
+              : {
+                  state: 7,
+                  agent: change === "new-agent-previous-incompatible" ? 2 : 3,
+                },
+          previousVerified,
+          packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
+          opts: { json: true, restart: service !== "no-restart" },
+          preManagedServiceStop:
+            service === "absent"
+              ? undefined
+              : {
+                  stopped: service === "stopped",
+                  inspected: true,
+                  runtimeInspected: true,
+                  running: true,
+                  serviceEnv: { OPENCLAW_STATE_DIR: stateDir },
+                  serviceNodeRunner: "/previous/node",
+                  serviceUpdateVerdict: {
+                    kind: "owned",
+                    root: previousRoot,
+                    fingerprint: "fixture",
+                    refreshDefinition: true,
+                  },
+                },
+          timeoutMs: 1_000,
+        });
+      } finally {
+        await finishWriter?.();
+        if (change === "readonly-config") {
+          const mode = fs.statSync(stateDir).mode & 0o777;
+          fs.chmodSync(stateDir, 0o700);
+          expect(mode).toBe(0o500);
+        }
+      }
+      if (change === "readonly-config") {
+        expect(rollback).toHaveBeenCalledOnce();
+        expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
+      }
+      if (
+        change === "doctor" ||
+        change === "doctor-settled-exception" ||
+        change === "doctor-unchanged" ||
+        change === "doctor-compensated" ||
+        change === "doctor-include"
+      ) {
+        expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
+        if (process.platform !== "win32") {
+          expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+        }
+      }
+      if (change.startsWith("doctor-") && change.endsWith("edit")) {
+        if (change === "doctor-input-edit") {
+          expect(fs.readFileSync(configPath, "utf8")).toContain('"debug"');
+        } else if (change === "doctor-include-edit") {
+          expect(fs.readFileSync(includePath, "utf8")).toContain('"debug"');
+        } else {
+          expect(fs.readFileSync(configPath, "utf8")).toContain("Operator edit after activation");
+        }
+        expect(
+          resolveUpdateResultNextAction({ result: outcome.result, env: process.env }),
+        ).toContain(configPath);
+      }
+      expect(outcome.rolledBack, JSON.stringify(outcome)).toBe(restored);
+      expect(rollback, JSON.stringify(outcome)).toHaveBeenCalledTimes(
+        change === "none" ||
+          change === "readonly-config" ||
+          change === "doctor" ||
+          change === "doctor-settled-exception" ||
+          change === "doctor-unchanged" ||
+          change === "doctor-compensated" ||
+          change === "doctor-include" ||
+          change === "doctor-restore-edit" ||
+          change === "identity-read-failed" ||
+          change === "new-agent"
+          ? 1
+          : 0,
+      );
+      expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
+      if (service !== "stopped") {
+        expect(mocks.stop).not.toHaveBeenCalled();
+        expect(outcome.result).toMatchObject({
+          root: previousRoot,
+          after: result.before,
+          reason: result.reason,
+          recovery: { serviceRestartSafe: false, packageRollbackVerified: true },
+        });
+        return;
+      }
+      if (restored) {
+        expect(outcome).toMatchObject({ verifiedAtMs: 125 });
+        expect(mocks.restart).toHaveBeenCalledWith(
+          expect.objectContaining({ nodeRunner: "/previous/node" }),
+        );
+        expect(outcome.result).toMatchObject({
+          root: previousRoot,
+          after: result.before,
+          reason:
+            change === "doctor-settled-exception"
+              ? "runtime-verification-failed"
+              : change === "doctor-compensated"
+                ? "doctor-failed"
+                : "version-mismatch",
+        });
+        if (change === "doctor-settled-exception") {
+          expect(activationConfig).toMatchObject({ raw: originalRaw, doctorOwned: true });
+        }
+        if (change === "doctor-compensated") {
+          expectDoctorRollback(activationConfig, outcome.result, configPath, originalRaw);
+        }
+        expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
+          rollback.mock.invocationCallOrder[0]!,
+        );
+        expect(rollback.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.restart.mock.invocationCallOrder[0]!,
+        );
+      } else {
+        expect(outcome.result.reason).toBe(
+          change === "unknown-runtime" ||
+            change === "new-shared-deferred" ||
+            change.startsWith("new-agent-previous-")
+            ? "rollback-state-unverified"
+            : previousVerified
+              ? "state-migrated-no-rollback"
+              : "previous-version-unverified",
+        );
+        if (!previousVerified) {
+          expect(outcome.result).toMatchObject({ root: previousRoot, after: result.before });
+        }
+        if (change.startsWith("new-agent-previous-")) {
+          expect(outcome.result).toMatchObject({ root: candidateRoot, after: result.after });
+          expect(mocks.stop).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
+  it("excludes a competing config writer across package rollback and config restoration", async () => {
+    const stateDir = serviceStateDir;
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const configPath = path.join(stateDir, "openclaw.json");
+    const original = '{"gateway":{"mode":"local","port":19101}}\n';
+    const candidate = '{"gateway":{"mode":"local","port":19102}}\n';
+    fs.writeFileSync(configPath, original);
+    const configSnapshot = await readPreviousConfig(env);
+    const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+    fs.writeFileSync(configPath, candidate);
+    const lockOptions = {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+    };
+    let foreignWrite = false;
+    const outcome = await rollbackFailedUpdate({
+      definitionRecovery: {},
+      result: {
+        status: "error",
+        mode: "npm",
+        root: candidateRoot,
+        reason: "readyz-unhealthy",
+        steps: [],
+        durationMs: 1,
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.3" },
+      },
+      previousRoot,
+      configSnapshot,
+      schemaVersions,
+      timeoutMs: 1000,
+      activationConfig: {
+        path: configPath,
+        raw: original,
+        hash: hashConfigRaw(candidate),
+        doctorOwned: true,
+      },
+      opts: { json: true },
+      preManagedServiceStop: {
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        stopped: false,
+        serviceEnv: env,
+      },
+      packageTransaction: {
+        backupRoot: previousRoot,
+        complete: async () => {},
+        rollback: async () => {
+          try {
+            await withFileLock(configPath, lockOptions, async () => {
+              foreignWrite = true;
+              fs.writeFileSync(configPath, '{"gateway":{"mode":"local","port":19103}}\n');
+            });
+          } catch (error) {
+            if (
+              !(
+                error instanceof Error &&
+                "code" in error &&
+                error.code === FILE_LOCK_TIMEOUT_ERROR_CODE
+              )
+            ) {
+              throw error;
+            }
+          }
+          return {
+            name: "package rollback",
+            command: "restore",
+            cwd: previousRoot,
+            durationMs: 1,
+            exitCode: 0,
+            activePackageRoot: previousRoot,
+          };
+        },
+      },
+    });
+    expect(foreignWrite).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    expect(outcome.result).toMatchObject({
+      root: previousRoot,
+      recovery: { packageRollbackVerified: true },
+    });
+    expect(mocks.restart).not.toHaveBeenCalled();
+    await withFileLock(configPath, lockOptions, async () => {
+      fs.writeFileSync(configPath, candidate);
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toBe(candidate);
+  });
+
+  it("leaves the original task recovery with finalization when rollback is blocked", async () => {
+    const complete = vi.fn(async () => {});
+    const stopped = {
+      stopped: true,
+      windowsTaskAutoStartRecovery: {
+        suspended: Promise.resolve(true),
+        handoff: () => {},
+        beginMutation: () => {},
+        restore: vi.fn(async () => {}),
+        complete,
+        interrupted: () => false,
+      },
+    };
+    const outcome = await rollbackFailedUpdate({
+      definitionRecovery: {},
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "readyz-unhealthy",
+        root: candidateRoot,
+        steps: [],
+        durationMs: 1,
+      },
+      previousRoot,
+      rollbackBlockedReason: "state-migrated-no-rollback",
+      configSnapshot: await readPreviousConfig({
+        OPENCLAW_STATE_DIR: dirs.make("rollback-blocked-config-"),
+      }),
+      opts: { json: true },
+      timeoutMs: 1_000,
+      preManagedServiceStop: {
+        stopped: true,
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        serviceEnv: { OPENCLAW_STATE_DIR: dirs.make("rollback-finalization-") },
+        windowsTaskAutoStartRecovery: stopped.windowsTaskAutoStartRecovery,
+      },
+    });
+    expect(outcome).toMatchObject({ rolledBack: false });
+    expect(outcome.stoppedForRollback).toBeUndefined();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "source-failed",
+    "restored-shims-failed",
+    "partial-restore",
+    "restart-unhealthy",
+    "restart-refused",
+    "restart-threw",
+    "restart-cleanup",
+    "restart-timeout",
+    "restart-verified",
+  ] as const)("retains active installation identity after %s", async (failure) => {
+    await expectActiveRollbackIdentity({
+      failure,
+      candidateRoot,
+      previousRoot,
+      stateDir: serviceStateDir,
+      restart: mocks.restart,
+    });
+  });
+});

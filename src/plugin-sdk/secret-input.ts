@@ -1,0 +1,42 @@
+// Secret input helpers normalize credential prompt definitions for plugin setup flows.
+import { z } from "zod";
+import "../config/types.secrets.js";
+import "../secrets/ref-contract.js";
+import "../utils/normalize-secret-input.js";
+import { buildSecretInputSchema, registerSensitiveConfigSchema } from "./secret-input-schema.js";
+export {
+  hasConfiguredSecretInput,
+  isSecretRef,
+  coerceSecretRef,
+  resolveSecretInputString,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+  type SecretInput,
+  type SecretInputStringResolution,
+  type SecretInputStringResolutionMode,
+} from "../config/types.secrets.js";
+export { isBuiltInDefaultSecretProviderRef, isValidSecretRef } from "../secrets/ref-contract.js";
+export { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+
+export {
+  readProviderEnvValue,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "../secrets/provider-credential-values.js";
+
+export { buildSecretInputSchema, registerSensitiveConfigSchema };
+
+/**
+ * Builds an optional secret-input schema for config fields that may be omitted.
+ * The inner schema stays shared so sensitive-path redaction still recognizes it.
+ */
+export function buildOptionalSecretInputSchema() {
+  return buildSecretInputSchema().optional();
+}
+
+/**
+ * Builds an array schema for provider/channel config that accepts multiple secret inputs.
+ * Each element uses the shared schema so plaintext and ref validation stay identical.
+ */
+export function buildSecretInputArraySchema() {
+  return z.array(buildSecretInputSchema());
+}

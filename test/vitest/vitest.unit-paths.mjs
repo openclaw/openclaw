@@ -1,0 +1,108 @@
+// Unit test routing globs and boundary/bundled-plugin exclusions.
+import path from "node:path";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { filterFilesByPatterns } from "./vitest.include-patterns.ts";
+import { isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
+
+export const unitTestIncludePatterns = [
+  "src/**/*.test.ts",
+  "packages/**/*.test.ts",
+  "test/**/*.test.ts",
+];
+
+export const boundaryTestFiles = [
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
+  "test/extension-import-boundaries.test.ts",
+  "test/extension-test-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
+];
+
+export const bundledPluginDependentUnitTestFiles = [
+  "src/infra/matrix-plugin-helper.test.ts",
+  "src/plugin-sdk/facade-runtime.test.ts",
+  "src/plugins/loader.test.ts",
+];
+
+export const unitTestAdditionalExcludePatterns = [
+  "src/gateway/**",
+  "packages/gateway-client/**",
+  "packages/gateway-protocol/**",
+  "src/hooks/**",
+  "src/infra/**",
+  `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
+  "src/browser/**",
+  "src/line/**",
+  "src/agents/**",
+  "src/auto-reply/**",
+  "src/channels/**",
+  "src/cli/**",
+  "src/commands/**",
+  "src/config/**",
+  "src/cron/**",
+  "src/daemon/**",
+  "src/media/**",
+  "src/plugin-sdk/**",
+  "src/plugins/**",
+  "src/process/**",
+  "src/secrets/**",
+  "src/shared/**",
+  "src/tasks/**",
+  "src/media-understanding/**",
+  "src/logging/**",
+  "src/tui/**",
+  "src/utils/**",
+  "src/wizard/**",
+  "src/plugins/contracts/**",
+  "src/scripts/**",
+  "test/**",
+  ...databaseWorkerCoreTestFiles,
+  ...cliProcessTestFiles,
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  ...bundledPluginDependentUnitTestFiles,
+  "src/config/doc-baseline.integration.test.ts",
+  "src/config/schema.base.generated.test.ts",
+  "src/config/schema.help.quality.test.ts",
+];
+
+const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+
+export function filterUnitConfigTestFiles(files) {
+  const selected = new Set(
+    filterFilesByPatterns(
+      files.map(normalizeRepoPath),
+      unitTestIncludePatterns,
+      unitTestAdditionalExcludePatterns,
+      path.matchesGlob,
+    ).filter((file) => !isSharedVitestExcludedPath(file)),
+  );
+  return files.filter((file) => selected.has(normalizeRepoPath(file)));
+}
+
+export function isUnitConfigTestFile(file) {
+  return filterUnitConfigTestFiles([file]).length > 0;
+}
+
+export function isBundledPluginDependentUnitTestFile(file) {
+  return bundledPluginDependentUnitTestFiles.includes(normalizeRepoPath(file));
+}
+
+export function isBoundaryTestFile(file) {
+  return boundaryTestFiles.includes(normalizeRepoPath(file));
+}

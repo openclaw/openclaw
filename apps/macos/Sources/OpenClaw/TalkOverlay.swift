@@ -10,7 +10,6 @@ final class TalkOverlayController {
     static let overlaySize: CGFloat = 440
     static let orbSize: CGFloat = 96
     static let orbPadding: CGFloat = 12
-    static let orbHitSlop: CGFloat = 10
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.overlay")
 
@@ -25,48 +24,35 @@ final class TalkOverlayController {
     private var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
     private let screenInset: CGFloat = 0
+    @ObservationIgnored private var transitionID = UUID()
 
     func present() {
+        self.transitionID = UUID()
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
-
-        guard let window else { return }
-        if !self.model.isVisible {
-            self.model.isVisible = true
-            let start = target.offsetBy(dx: 0, dy: -6)
-            window.setFrame(start, display: true)
-            window.alphaValue = 0
-            window.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window.animator().setFrame(target, display: true)
-                window.animator().alphaValue = 1
-            }
-        } else {
+        let isFirst = !self.model.isVisible
+        if isFirst { self.model.isVisible = true }
+        OverlayPanelFactory.present(
+            window: self.window,
+            isFirstPresent: isFirst,
+            target: target)
+        { window in
             window.setFrame(target, display: true)
             window.orderFrontRegardless()
         }
     }
 
     func dismiss() {
-        guard let window else {
-            self.model.isVisible = false
-            return
-        }
+        let dismissalID = UUID()
+        self.transitionID = dismissalID
+        self.model.isVisible = false
+        guard let window else { return }
 
-        let target = window.frame.offsetBy(dx: 6, dy: 6)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().setFrame(target, display: true)
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            Task { @MainActor in
-                window.orderOut(nil)
-                self.model.isVisible = false
-            }
+        OverlayPanelFactory.animateDismiss(window: window) { [weak self] in
+            // A later present or dismiss owns the panel, even while this fade is completing.
+            guard self?.transitionID == dismissalID else { return }
+            window.orderOut(nil)
         }
     }
 
@@ -87,36 +73,15 @@ final class TalkOverlayController {
         self.model.level = max(0, min(1, level))
     }
 
-    func currentWindowOrigin() -> CGPoint? {
-        self.window?.frame.origin
-    }
-
-    func setWindowOrigin(_ origin: CGPoint) {
-        guard let window else { return }
-        window.setFrameOrigin(origin)
-    }
-
     // MARK: - Private
 
     private func ensureWindow() {
         if self.window != nil { return }
-        let panel = NSPanel(
+        let panel = OverlayPanelFactory.makePanel(
             contentRect: NSRect(x: 0, y: 0, width: Self.overlaySize, height: Self.overlaySize),
-            styleMask: [.nonactivatingPanel, .borderless],
-            backing: .buffered,
-            defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.hidesOnDeactivate = false
-        panel.isMovable = false
-        panel.acceptsMouseMovedEvents = true
-        panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+            level: NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4),
+            hasShadow: false,
+            acceptsMouseMovedEvents: true)
 
         let host = TalkOverlayHostingView(rootView: TalkOverlayView(controller: self))
         host.translatesAutoresizingMaskIntoConstraints = false

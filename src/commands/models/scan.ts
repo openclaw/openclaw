@@ -1,43 +1,41 @@
-import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import type { RuntimeEnv } from "../../runtime.js";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
-import { withProgressTotals } from "../../cli/progress.js";
-import { loadConfig } from "../../config/config.js";
-import { logConfigUpdated } from "../../config/logging.js";
+/** OpenRouter free-model scanner and fallback updater for model commands. */
+import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../../terminal/prompt-style.js";
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
+import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { withProgressTotals } from "../../cli/progress.js";
+import { logConfigUpdated } from "../../config/logging.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { padTerminalCell, truncate } from "./list.format.js";
+import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  clackMultiselect(styleSelectParams(params));
 
-const pad = (value: string, size: number) => value.padEnd(size);
-
-const truncate = (value: string, max: number) => {
-  if (value.length <= max) {
-    return value;
+function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
+  if (typeof value === "symbol") {
+    cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
+    runtime.exit(0);
+    throw new Error("unreachable");
   }
-  if (max <= 3) {
-    return value.slice(0, max);
-  }
-  return `${value.slice(0, max - 3)}...`;
-};
+  return value;
+}
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
     if (aImage !== bImage) {
@@ -50,48 +48,44 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
       return aToolLatency - bToolLatency;
     }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) {
-      return bCtx - aCtx;
-    }
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) {
-      return bParams - aParams;
-    }
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().toSorted((a, b) => {
+  return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
     if (aLatency !== bLatency) {
       return aLatency - bLatency;
     }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) {
-      return bCtx - aCtx;
-    }
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) {
-      return bParams - aParams;
-    }
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
 }
 
+function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
+  const aCtx = a.contextLength ?? 0;
+  const bCtx = b.contextLength ?? 0;
+  if (aCtx !== bCtx) {
+    return bCtx - aCtx;
+  }
+
+  const aParams = a.inferredParamB ?? 0;
+  const bParams = b.inferredParamB ?? 0;
+  if (aParams !== bParams) {
+    return bParams - aParams;
+  }
+
+  return a.modelRef.localeCompare(b.modelRef);
+}
+
 function buildScanHint(result: ModelScanResult): string {
-  const toolLabel = result.tool.ok ? `tool ${formatMs(result.tool.latencyMs)}` : "tool fail";
+  const toolLabel = result.tool.skipped
+    ? "tool skip"
+    : result.tool.ok
+      ? `tool ${formatMs(result.tool.latencyMs)}`
+      : "tool fail";
   const imageLabel = result.image.skipped
     ? "img skip"
     : result.image.ok
@@ -112,32 +106,84 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   );
 }
 
+function printMetadataOnlyNotice(params: {
+  results: ModelScanResult[];
+  runtime: RuntimeEnv;
+  autoDowngraded: boolean;
+}) {
+  if (params.autoDowngraded) {
+    params.runtime.log(
+      "OpenRouter free models still require OPENROUTER_API_KEY for live probes and inference. Listing public catalog metadata only.",
+    );
+  }
+  params.runtime.log(
+    `Found ${params.results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
+  );
+}
+
 function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   const header = [
-    pad("Model", MODEL_PAD),
-    pad("Tool", 10),
-    pad("Image", 10),
-    pad("Ctx", CTX_PAD),
-    pad("Params", 8),
+    padTerminalCell("Model", MODEL_PAD),
+    padTerminalCell("Tool", 10),
+    padTerminalCell("Image", 10),
+    padTerminalCell("Ctx", CTX_PAD),
+    padTerminalCell("Params", 8),
     "Notes",
   ].join(" ");
   runtime.log(header);
 
   for (const entry of results) {
-    const modelLabel = pad(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
-    const toolLabel = pad(entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail", 10);
-    const imageLabel = pad(
+    const modelLabel = padTerminalCell(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
+    const toolLabel = padTerminalCell(
+      entry.tool.skipped ? "skip" : entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail",
+      10,
+    );
+    const imageLabel = padTerminalCell(
       entry.image.ok ? formatMs(entry.image.latencyMs) : entry.image.skipped ? "skip" : "fail",
       10,
     );
-    const ctxLabel = pad(formatTokenK(entry.contextLength), CTX_PAD);
-    const paramsLabel = pad(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
-    const notes = entry.modality ? `modality:${entry.modality}` : "";
+    const ctxLabel = padTerminalCell(formatTokenK(entry.contextLength), CTX_PAD);
+    const paramsLabel = padTerminalCell(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
+    const notes = entry.modality ? `modality:${sanitizeTerminalText(entry.modality)}` : "";
 
     runtime.log([modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(" "));
   }
 }
 
+function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed < 0) {
+    throw new Error(`${label} must be >= 0`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be > 0`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null) {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -155,39 +201,46 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
-    throw new Error("--min-params must be >= 0");
-  }
-  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
-    throw new Error("--max-age-days must be >= 0");
-  }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
-    throw new Error("--max-candidates must be > 0");
-  }
-  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
-  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-    throw new Error("--timeout must be > 0");
-  }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
-    throw new Error("--concurrency must be > 0");
-  }
+  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
+  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
+  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const concurrency =
+    opts.concurrency === undefined
+      ? undefined
+      : parsePositiveIntegerOption(opts.concurrency, "--concurrency", 1);
 
-  const cfg = loadConfig();
-  const probe = opts.probe ?? true;
+  const requestedProbe = opts.probe ?? true;
+  if (!requestedProbe && (opts.setDefault || opts.setImage)) {
+    throw new Error(
+      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+    );
+  }
+  let probe = requestedProbe;
   let storedKey: string | undefined;
-  if (probe) {
-    try {
-      const resolved = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg,
-      });
-      storedKey = resolved.apiKey;
-    } catch {
-      storedKey = undefined;
+  if (requestedProbe) {
+    storedKey = getEnvApiKey("openrouter")?.trim() || undefined;
+    if (!storedKey) {
+      try {
+        const cfg = await loadModelsConfig({ commandName: "models scan" });
+        const resolved = await resolveApiKeyForProviderCore({
+          provider: "openrouter",
+          cfg,
+        });
+        storedKey = resolved.apiKey?.trim() || undefined;
+      } catch {
+        storedKey = undefined;
+      }
+    }
+    if (!storedKey) {
+      if (opts.setDefault || opts.setImage) {
+        throw new Error(
+          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+        );
+      }
+      // Without a key, keep the command useful as catalog discovery only; writes
+      // stay blocked because metadata-only rows have not proven runtime support.
+      probe = false;
     }
   }
   const results = await withProgressTotals(
@@ -218,25 +271,29 @@ export async function modelsScanCommand(
         },
       }),
   );
+  const sorted = sortScanResults(results);
 
   if (!probe) {
     if (!opts.json) {
-      runtime.log(
-        `Found ${results.length} OpenRouter free models (metadata only; pass --probe to test tools/images).`,
-      );
-      printScanTable(sortScanResults(results), runtime);
+      printMetadataOnlyNotice({
+        results,
+        runtime,
+        autoDowngraded: requestedProbe,
+      });
+      printScanTable(sorted, runtime);
     } else {
-      runtime.log(JSON.stringify(results, null, 2));
+      writeRuntimeJson(runtime, sorted);
     }
     return;
   }
 
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
-    throw new Error("No tool-capable OpenRouter free models found.");
+    throw new Error(
+      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
+    );
   }
 
-  const sorted = sortScanResults(results);
   const toolSorted = sortScanResults(toolOk);
   const imageOk = results.filter((entry) => entry.image.ok);
   const imageSorted = sortImageResults(imageOk);
@@ -270,12 +327,7 @@ export async function modelsScanCommand(
       initialValues: preselected,
     });
 
-    if (isCancel(selection)) {
-      cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-      runtime.exit(0);
-    }
-
-    selected = selection;
+    selected = guardPromptCancel(selection, runtime);
     if (imageSorted.length > 0) {
       const imageSelection = await multiselect({
         message: "Select image fallback models (ordered)",
@@ -287,12 +339,7 @@ export async function modelsScanCommand(
         initialValues: imagePreselected,
       });
 
-      if (isCancel(imageSelection)) {
-        cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-        runtime.exit(0);
-      }
-
-      selectedImages = imageSelection;
+      selectedImages = guardPromptCancel(imageSelection, runtime);
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
@@ -305,21 +352,14 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
-    for (const entry of selected) {
+    for (const entry of [...selected, ...selectedImages]) {
       if (!nextModels[entry]) {
         nextModels[entry] = {};
       }
     }
-    for (const entry of selectedImages) {
-      if (!nextModels[entry]) {
-        nextModels[entry] = {};
-      }
-    }
-    const existingImageModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
     const nextImageModel =
       selectedImages.length > 0
         ? {
@@ -328,9 +368,7 @@ export async function modelsScanCommand(
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
     const defaults = {
       ...cfg.agents?.defaults,
       model: {
@@ -351,20 +389,14 @@ export async function modelsScanCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          selected,
-          selectedImages,
-          setDefault: Boolean(opts.setDefault),
-          setImage: Boolean(opts.setImage),
-          results,
-          warnings: [],
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      selected,
+      selectedImages,
+      setDefault: Boolean(opts.setDefault),
+      setImage: Boolean(opts.setImage),
+      results: sorted,
+      warnings: [],
+    });
     return;
   }
 

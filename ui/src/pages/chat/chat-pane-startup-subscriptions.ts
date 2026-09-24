@@ -1,0 +1,46 @@
+import type { ApplicationContext } from "../../app/context.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { admitChatSubmission } from "./history-merge.ts";
+import { resolveChatSnapshotKey } from "./session-message-cache.ts";
+import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
+
+type ChatPaneStartupContext = Pick<ApplicationContext, "placementStartup">;
+
+export function subscribeChatPaneStartup(
+  context: ChatPaneStartupContext,
+  getState: () => ChatPageHost | undefined,
+): () => void {
+  return context.placementStartup.subscribe(() => {
+    const state = getState();
+    if (state) {
+      admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+      // Project the accepted initial turn before waking followers parked behind recovery.
+      if (!parseCatalogSessionKey(state.sessionKey)) {
+        void resumeStoredChatOutboxes(state);
+      }
+      state.requestUpdate?.();
+    }
+  });
+}
+
+export function subscribeChatPaneSnapshotInvalidation(
+  getState: () => ChatPageHost | undefined,
+): () => void {
+  return subscribeSnapshotInvalidation(({ sessionKey, reason }) => {
+    // Cache eviction must preserve the active transcript and its completed load.
+    const state = getState();
+    if (
+      reason === "cache-eviction" ||
+      !state ||
+      (sessionKey && resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) !== sessionKey)
+    ) {
+      return;
+    }
+    resetChatHistoryProjection(state);
+    state.requestUpdate?.();
+  });
+}

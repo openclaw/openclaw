@@ -1,22 +1,11 @@
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+// CLI adapter for outbound sending dependencies used by message-style commands.
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import type { CliDeps } from "./deps.types.js";
+import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
-export type CliDeps = {
-  sendMessageWhatsApp: NonNullable<OutboundSendDeps["sendWhatsApp"]>;
-  sendMessageTelegram: NonNullable<OutboundSendDeps["sendTelegram"]>;
-  sendMessageDiscord: NonNullable<OutboundSendDeps["sendDiscord"]>;
-  sendMessageSlack: NonNullable<OutboundSendDeps["sendSlack"]>;
-  sendMessageSignal: NonNullable<OutboundSendDeps["sendSignal"]>;
-  sendMessageIMessage: NonNullable<OutboundSendDeps["sendIMessage"]>;
-};
+export type { CliDeps } from "./deps.types.js";
 
-// Provider docking: extend this mapping when adding new outbound send deps.
+/** Convert the broad CLI dependency bundle into the narrow outbound-send dependency shape. */
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return {
-    sendWhatsApp: deps.sendMessageWhatsApp,
-    sendTelegram: deps.sendMessageTelegram,
-    sendDiscord: deps.sendMessageDiscord,
-    sendSlack: deps.sendMessageSlack,
-    sendSignal: deps.sendMessageSignal,
-    sendIMessage: deps.sendMessageIMessage,
-  };
+  return createOutboundSendDepsFromCliSource(deps);
 }

@@ -1,3 +1,5 @@
+// OpenAI mock helpers provide deterministic fake Responses API streams for
+// gateway OpenAI-compatible HTTP tests.
 type OpenAIResponsesParams = {
   input?: unknown[];
 };
@@ -30,7 +32,7 @@ function extractLastUserText(input: unknown[]): string {
       const text = content
         .filter(
           (c): c is { type: "input_text"; text: string } =>
-            !!c &&
+            Boolean(c) &&
             typeof c === "object" &&
             (c as { type?: unknown }).type === "input_text" &&
             typeof (c as { text?: unknown }).text === "string",
@@ -149,12 +151,7 @@ function decodeBodyText(body: unknown): string {
   return "";
 }
 
-async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
-  const events: OpenAIResponseStreamEvent[] = [];
-  for await (const event of fakeOpenAIResponsesStream(params)) {
-    events.push(event);
-  }
-
+function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -167,6 +164,14 @@ async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<R
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
+  const events: OpenAIResponseStreamEvent[] = [];
+  for await (const event of fakeOpenAIResponsesStream(params)) {
+    events.push(event);
+  }
+  return buildSseResponse(events);
 }
 
 export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
@@ -183,7 +188,7 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
 
     if (isResponsesRequest(url)) {
       const bodyText =
-        typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+        (init as { body?: unknown } | undefined)?.body !== undefined
           ? decodeBodyText((init as { body?: unknown }).body)
           : input instanceof Request
             ? await input.clone().text()

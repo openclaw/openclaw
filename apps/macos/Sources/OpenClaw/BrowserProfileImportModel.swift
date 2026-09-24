@@ -1,0 +1,332 @@
+import Foundation
+import Observation
+import OpenClawKit
+
+struct BrowserSystemProfile: Codable, Equatable {
+    let browser: String
+    let id: String
+    let name: String
+    let hasCookies: Bool
+
+    var displayName: String {
+        "\(self.browserDisplayName) — \(self.name)"
+    }
+
+    var browserDisplayName: String {
+        self.browser.prefix(1).uppercased() + self.browser.dropFirst()
+    }
+
+    /// `id` is only unique per browser (Chrome and Brave both ship "Default");
+    /// UI identity must span browsers or menu rows collide.
+    var menuID: String {
+        "\(self.browser)/\(self.id)"
+    }
+}
+
+enum BrowserProfileImportDisposition: String, Codable, Equatable {
+    case dismissed
+    case imported
+}
+
+struct BrowserProfileImportOutcome: Codable, Equatable {
+    let status: BrowserProfileImportDisposition
+}
+
+struct BrowserProfileImportStatus: Codable, Equatable {
+    let enabled: Bool
+    let systemProfiles: [BrowserSystemProfile]
+    let state: BrowserProfileImportOutcome?
+    let suggestedTarget: String
+
+    var importableProfiles: [BrowserSystemProfile] {
+        self.systemProfiles.filter(\.hasCookies)
+    }
+}
+
+struct BrowserProfileImportResult: Codable, Equatable {
+    struct Counts: Codable, Equatable {
+        let total: Int
+        let imported: Int
+    }
+
+    let into: String
+    let cookies: Counts
+}
+
+struct BrowserProfileImportRequest: Equatable {
+    let method: String
+    let path: String
+    let body: [String: AnyCodable]?
+    let timeoutMs: Double?
+}
+
+/// Drives the dashboard's browser-login import banner: it mirrors the
+/// gateway-persisted import state and owns the offer → import → outcome flow
+/// that used to live in a modal alert.
+@MainActor
+@Observable
+final class BrowserProfileImportModel {
+    enum Phase: Equatable {
+        case hidden
+        case offering(BrowserProfileImportStatus)
+        case importing(profile: BrowserSystemProfile, target: String)
+        case imported(BrowserProfileImportResult)
+        case failed(message: String, retry: BrowserProfileImportStatus)
+    }
+
+    enum ForceRefreshOutcome: Equatable {
+        case offering
+        case superseded
+        case unavailable(title: String, message: String)
+    }
+
+    private struct StatusRequest {
+        let id = UUID()
+        let task: Task<BrowserProfileImportStatus, Error>
+    }
+
+    typealias Transport = @MainActor (BrowserProfileImportRequest) async throws -> Data
+
+    static let shared = BrowserProfileImportModel()
+
+    private(set) var phase: Phase = .hidden
+    private(set) var importAvailable = false
+    @ObservationIgnored private var phaseGeneration = 0
+    @ObservationIgnored private var pendingForcedRefreshGeneration: Int?
+    @ObservationIgnored private var statusRequest: StatusRequest?
+    /// A dismissal must stick for this app session even while its
+    /// fire-and-forget persistence write is pending or lost — otherwise the
+    /// next automatic poll reads the still-null server state and re-offers.
+    /// Only Settings force-refresh overrides.
+    @ObservationIgnored private var dismissedThisSession = false
+
+    private let transport: Transport
+    private let isOnboarded: @MainActor () -> Bool
+    private let isLocalMode: @MainActor () -> Bool
+
+    init(
+        transport: @escaping Transport = BrowserProfileImportModel.gatewayTransport,
+        isOnboarded: @escaping @MainActor () -> Bool = { AppStateStore.shared.onboardingSeen },
+        isLocalMode: @escaping @MainActor () -> Bool = { AppStateStore.shared.connectionMode == .local })
+    {
+        self.transport = transport
+        self.isOnboarded = isOnboarded
+        self.isLocalMode = isLocalMode
+    }
+
+    static func shouldOffer(status: BrowserProfileImportStatus, force: Bool) -> Bool {
+        status.enabled && !status.importableProfiles.isEmpty && (force || status.state == nil)
+    }
+
+    /// Read availability without changing the banner or overriding a remembered dismissal.
+    func refreshAvailability() async {
+        guard self.isLocalMode() else {
+            self.statusRequest = nil
+            self.importAvailable = false
+            return
+        }
+        let request = self.startStatusRequest(timeoutMs: 5000)
+        let status = try? await request.task.value
+        guard self.statusRequest?.id == request.id else { return }
+        self.importAvailable = self.isLocalMode() && status.map { Self.shouldOffer(status: $0, force: true) } == true
+    }
+
+    private func startStatusRequest(timeoutMs: Double? = nil) -> StatusRequest {
+        let request = StatusRequest(task: Task {
+            guard self.isLocalMode() else { throw CancellationError() }
+            return try await self.request(
+                method: "GET", path: "/system-profile-import/status", timeoutMs: timeoutMs)
+        })
+        self.statusRequest = request
+        return request
+    }
+
+    /// Phase changes and refresh starts invalidate earlier presentation work,
+    /// even when a mode switch or dismissal leaves the banner hidden again.
+    private func setPhase(_ phase: Phase) {
+        self.phase = phase
+        self.phaseGeneration += 1
+        self.pendingForcedRefreshGeneration = nil
+    }
+
+    /// First inline-browser open trigger. Only fills an empty banner slot so a
+    /// visible offer, in-flight import, or result is never clobbered by the
+    /// status poll.
+    @discardableResult
+    func refreshIfIdle(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard !self.dismissedThisSession, case .hidden = self.phase else { return false }
+        return await self.performRefresh(force: false, shouldApply: shouldApply).didApply
+    }
+
+    /// Defers the one-shot automatic offer until the app can actually query
+    /// the host-local import endpoint. A remote or pre-onboarding sidebar open
+    /// must not consume the first eligible local attempt.
+    @discardableResult
+    func requestAutomaticOfferIfEligible(
+        while shouldApply: @escaping @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard self.isOnboarded(), self.isLocalMode(), shouldApply() else { return false }
+        return await self.refreshIfIdle(while: shouldApply)
+    }
+
+    /// Dashboard → Settings → This Mac → Browser re-offers even after a persisted dismissal
+    /// and reports why nothing can be offered so the caller can tell the user.
+    @discardableResult
+    func refresh(force: Bool) async -> ForceRefreshOutcome {
+        await self.performRefresh(force: force).outcome
+    }
+
+    /// Automatic offers are consumed only after a status response is applied.
+    /// Failed or stale startup/reconnect requests stay retryable.
+    private func performRefresh(
+        force: Bool,
+        shouldApply: @escaping @MainActor () -> Bool = { true }) async
+        -> (outcome: ForceRefreshOutcome, didApply: Bool)
+    {
+        guard self.isOnboarded(), self.isLocalMode() else {
+            self.setPhase(.hidden)
+            return (
+                .unavailable(
+                    title: String(localized: "Browser import requires Local mode"),
+                    message: String(
+                        localized: "Switch this Mac app to a local Gateway before importing browser cookies.")),
+                false)
+        }
+        if case .importing = self.phase { return (.offering, false) }
+        guard shouldApply() else { return (.superseded, false) }
+        // Automatic offers must not consume a pending explicit re-offer.
+        guard force || self.pendingForcedRefreshGeneration == nil else { return (.superseded, false) }
+        self.phaseGeneration += 1
+        let generation = self.phaseGeneration
+        if force { self.pendingForcedRefreshGeneration = generation }
+        defer {
+            if self.pendingForcedRefreshGeneration == generation {
+                self.pendingForcedRefreshGeneration = nil
+            }
+        }
+        var request = self.startStatusRequest()
+        while true {
+            let result = await request.task.result
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode(), shouldApply(),
+                  let latestRequest = self.statusRequest else { return (.superseded, false) }
+            // Availability reads update the facts, not the user's presentation intent.
+            // Join the latest read so an explicit action uses its profiles and target.
+            if latestRequest.id != request.id {
+                request = latestRequest
+                continue
+            }
+            do {
+                let status = try result.get()
+                self.importAvailable = Self.shouldOffer(status: status, force: true)
+                guard Self.shouldOffer(status: status, force: force) else {
+                    self.setPhase(.hidden)
+                    let message = status.enabled
+                        ? String(localized: """
+                        No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.
+                        """)
+                        : String(
+                            localized: "System browser profile import is disabled in the local Gateway configuration.")
+                    return (
+                        .unavailable(title: String(localized: "No browser login available"), message: message),
+                        true)
+                }
+                self.setPhase(.offering(status))
+                return (.offering, true)
+            } catch {
+                if force { self.setPhase(.hidden) }
+                return (
+                    .unavailable(
+                        title: String(localized: "Browser import unavailable"),
+                        message: error.localizedDescription),
+                    false)
+            }
+        }
+    }
+
+    func importProfile(_ profile: BrowserSystemProfile) async {
+        guard self.isOnboarded(), self.isLocalMode(), case let .offering(status) = self.phase else { return }
+        self.setPhase(.importing(profile: profile, target: status.suggestedTarget))
+        let generation = self.phaseGeneration
+        do {
+            let body: [String: AnyCodable] = [
+                "browser": AnyCodable(profile.browser),
+                "systemProfile": AnyCodable(profile.id),
+                "into": AnyCodable(status.suggestedTarget),
+                "makeDefault": AnyCodable(true),
+            ]
+            let result: BrowserProfileImportResult = try await self.request(
+                method: "POST",
+                path: "/profiles/import",
+                body: body,
+                timeoutMs: 120_000)
+            // The Gateway import may finish after its banner context has gone away.
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode() else { return }
+            self.setPhase(.imported(result))
+        } catch {
+            guard self.phaseGeneration == generation, self.isOnboarded(), self.isLocalMode() else { return }
+            self.setPhase(.failed(message: error.localizedDescription, retry: status))
+        }
+    }
+
+    func retry() {
+        guard self.isOnboarded(), self.isLocalMode(), case let .failed(_, status) = self.phase else { return }
+        self.setPhase(.offering(status))
+    }
+
+    func dismiss() {
+        let wasOffering = if case .offering = self.phase {
+            true
+        } else {
+            false
+        }
+        self.setPhase(.hidden)
+        // Only an unanswered offer persists the dismissal; closing a result
+        // banner must not overwrite the recorded "imported" state.
+        guard wasOffering else { return }
+        self.dismissedThisSession = true
+        Task {
+            let _: [String: Bool]? = try? await self.request(
+                method: "POST",
+                path: "/system-profile-import/dismiss")
+        }
+    }
+
+    /// Import endpoints are host-local; a remote gateway can neither list nor
+    /// import system profiles, so the banner withdraws on mode switches.
+    func handleConnectionModeChange() {
+        guard !self.isLocalMode() else { return }
+        self.statusRequest = nil
+        self.importAvailable = false
+        self.setPhase(.hidden)
+    }
+
+    private func request<T: Decodable>(
+        method: String,
+        path: String,
+        body: [String: AnyCodable]? = nil,
+        timeoutMs: Double? = nil) async throws -> T
+    {
+        let data = try await self.transport(BrowserProfileImportRequest(
+            method: method,
+            path: path,
+            body: body,
+            timeoutMs: timeoutMs))
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static let gatewayTransport: Transport = { request in
+        var params: [String: AnyCodable] = [
+            "method": AnyCodable(request.method),
+            "path": AnyCodable(request.path),
+        ]
+        if let body = request.body {
+            params["body"] = AnyCodable(body)
+        }
+        return try await GatewayConnection.shared.request(
+            method: "browser.request",
+            params: params,
+            timeoutMs: request.timeoutMs)
+    }
+}

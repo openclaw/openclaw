@@ -1,0 +1,645 @@
+import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
+import {
+  dispatchCommandClientPresentation,
+  type CommandClientPresentationAction,
+} from "../../app/command-client-presentation.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
+import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
+import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
+import {
+  canonicalUiSessionKeyForPersistence,
+  isUiSelectedGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
+import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { loadChatHistory } from "./chat-history.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
+import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import {
+  moveQueuedChatMessage,
+  resumeStoredChatOutboxes,
+  retryQueuedChatMessage,
+  steerQueuedChatMessage,
+} from "./chat-send-actions.ts";
+import { setChatError } from "./chat-send-queue-state.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { retireChatModelSelectionOwnership } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
+import {
+  openSessionWorkspacePreview,
+  clearSessionWorkspacePreviews,
+} from "./components/chat-session-workspace-state.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import {
+  handleChatDraftChange,
+  handleChatInputHistoryKey,
+  resetChatInputHistoryNavigation,
+} from "./input-history.ts";
+import {
+  activeQueuedMessageEdit,
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  isQueuedMessageBeingEdited,
+  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
+  QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
+  updateQueuedMessageEdit,
+} from "./queued-message-edit.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
+import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
+import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
+import {
+  updateSidebarSessionActivePanel,
+  updateSidebarSessionLayout,
+} from "./sidebar-layout-persistence.ts";
+import {
+  SIDEBAR_NARROW_BREAKPOINT_PX,
+  activatePanel,
+  closeSlot,
+  fitSidebarLayout,
+  normalizeSidebarLayout,
+  type SidebarLayout,
+  openSlot,
+  sidebarDashboardPresentation,
+} from "./sidebar-layout.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
+
+function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const epoch = state.connectionEpoch;
+  const current = () =>
+    getChatPendingInputs(state) === view &&
+    state.client === client &&
+    state.connected &&
+    state.connectionEpoch === epoch;
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      state.requestUpdate?.();
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
+}
+
+type ChatPageElement = {
+  sessionKey?: string;
+  dispatchEvent: (event: Event) => boolean;
+  getBoundingClientRect?: () => DOMRect;
+  querySelector: (selectors: string) => Element | null;
+};
+
+function clearImageLightbox(state: ChatPageHost) {
+  const item = state.imageLightbox;
+  state.imageLightbox = null;
+  item?.release?.();
+}
+
+export function invalidateImageLightbox(state: ChatPageHost) {
+  state.imageLightboxRequestVersion += 1;
+  clearImageLightbox(state);
+  return state.imageLightboxRequestVersion;
+}
+
+async function loadPageAssistantIdentity(state: ChatPageHost) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const client = state.client;
+  const sessionKey = state.sessionKey.trim();
+  const agentId = resolveAgentIdForSession({
+    sessionKey,
+    assistantAgentId: state.assistantAgentId,
+    agentsList: state.agentsList,
+    hello: state.hello,
+  });
+  if (!agentId) {
+    return;
+  }
+  const requestVersion = ++state.assistantIdentityRequestVersion;
+  try {
+    const identity = await fetchAssistantIdentity(client, agentId);
+    if (
+      state.client !== client ||
+      !state.connected ||
+      state.assistantIdentityRequestVersion !== requestVersion ||
+      state.sessionKey.trim() !== sessionKey ||
+      resolveAgentIdForSession(state) !== agentId ||
+      !identity
+    ) {
+      return;
+    }
+    if (
+      state.assistantAgentId !== (identity.agentId ?? null) &&
+      isUiSelectedGlobalSessionKey(state, state.sessionKey)
+    ) {
+      retireChatModelSelectionOwnership(state);
+    }
+    state.assistantName = identity.name;
+    state.assistantAvatar = identity.avatar;
+    state.assistantAvatarSource = identity.avatarSource ?? null;
+    state.assistantAvatarStatus = identity.avatarStatus ?? null;
+    state.assistantAvatarReason = identity.avatarReason ?? null;
+    state.assistantAgentId = identity.agentId ?? null;
+    state.requestUpdate?.();
+  } catch {
+    // Keep the last known identity when the Gateway cannot answer.
+  }
+}
+
+export function createPageState(
+  context: ApplicationContext,
+  renderLifecycle: RenderLifecycle,
+  page: ChatPageElement,
+  chatMessagesBySession: ChatMessageCache = new Map(),
+): ChatPageHost {
+  const settings = loadSettings();
+  const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
+  const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
+    { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
+    initialSessionKey,
+  );
+  const identity = loadLocalUserIdentity();
+  const appConfig = context.config.current;
+  const state = {
+    sessions: context.sessions,
+    hasPendingInitialTurn: (sessionKey: string) =>
+      context.placementStartup.hasPendingTurn(sessionKey),
+    chatSubmissions: context.chatSubmissions,
+    settings,
+    password: "",
+    onboarding: false,
+    assistantName: appConfig.assistantIdentity.name,
+    assistantAvatar: null,
+    assistantAvatarStatus: null,
+    assistantAvatarReason: null,
+    assistantAvatarSource: null,
+    assistantIdentityRequestVersion: 0,
+    userName: identity.name,
+    userAvatar: identity.avatar,
+    embedSandboxMode: appConfig.embedSandboxMode,
+    allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
+    automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
+    client: null,
+    connected: false,
+    connectionEpoch: 0,
+    mediaPolicyEpoch: 0,
+    hello: null,
+    selfUser: null,
+    canvasPluginSurfaceUrl: null,
+    terminalAvailable: false,
+    browserPanelAvailable: false,
+    assistantAgentId: context.agentSelection.state.selectedId,
+    sessionKey: initialSessionKey,
+    chatLoading: false,
+    chatHistoryPagination: { hasMore: false },
+    chatSending: false,
+    chatMessage: "",
+    chatMessages: [],
+    chatDisplayedLeafEntryId: undefined as string | null | undefined,
+    chatBranches: [],
+    chatBranchesSessionKey: null,
+    chatBranchesConnectionEpoch: null,
+    chatToolMessages: [],
+    guardianNotices: [],
+    providerPolicyNotice: null,
+    chatThinkingLevel: null,
+    chatVerboseLevel: null,
+    chatQueueModeOverride: undefined,
+    chatEffectiveQueueMode: undefined,
+    chatAttachments: [],
+    chatRunId: null,
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
+    chatStream: null,
+    chatStreamStartedAt: null,
+    chatRunStartup: null,
+    lastError: null,
+    chatError: null,
+    chatRunError: null,
+    agentsError: null,
+    chatStreamSegments: [],
+    chatRunStatus: null,
+    compactionStatus: null,
+    fallbackStatus: null,
+    observerDigest: null,
+    knownAgentRunIds: new Set(),
+    waitingApprovalStatuses: new Map(),
+    waitingApprovalResolvedIds: new Set(),
+    chatAvatarUrl: null,
+    chatAvatarSource: null,
+    chatAvatarStatus: null,
+    chatAvatarReason: null,
+    chatModelSwitchPromises: {},
+    chatModelPickerOpenSessionKey: null,
+    chatModelsLoading: false,
+    chatModelCatalog: [],
+    chatModelCatalogInitialized: hasUnrestrictedModelCatalogSnapshot(
+      context.gateway.snapshot.client,
+    ),
+    chatModelSelectionPolicy: undefined,
+    chatModelCatalogRetired: false,
+    chatModelCatalogError: null,
+    chatAccountSelection: null,
+    modelAuthStatusRequestVersion: 0,
+    modelAuthStatusResult: null,
+    modelAuthStatusError: null,
+    sessionsResult: null,
+    sessionsResultAgentId: null,
+    sessionsLoading: false,
+    sessionsError: null,
+    sessionsArchivedFilter: "active",
+    selectedChatSessionArchived: false,
+    selectedChatSessionIncognito: false,
+    agentsList: context.agents.state.agentsList,
+    agentsSelectedId: context.agentSelection.state.selectedId,
+    refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
+    pendingAbort: null,
+    pendingSessionMessageReloadSessionKey: null,
+    chatSubmitGuards: new Set<string>(),
+    chatGoalDraftMode: null,
+    chatSendTimingsByRun: new Map(),
+    chatQueue: [],
+    chatComposerFallbackByScope: {},
+    chatSendingScopeKey: null,
+    chatMessagesBySession,
+    eventLogBuffer: [],
+    dispatchClientPresentation: (action: CommandClientPresentationAction) =>
+      dispatchCommandClientPresentation(context, action),
+    basePath: context.basePath,
+    resourceBasePath: context.resourceBasePath,
+    chatNewMessagesBelow: false,
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    chatStreamRenderFrame: null,
+    chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatReadingHistory: false,
+    sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
+    sidebarContent: null,
+    sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
+    sidebarFocusVersion: 0,
+    imageLightbox: null,
+    imageLightboxRequestVersion: 0,
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    activityEventSeqById: new Map(),
+    toolStreamSyncTimer: null,
+    ...createInitialChatRealtimeState(),
+    renderLifecycle,
+    requestUpdate: () => renderLifecycle.invalidate(),
+    // Background warming gates on these edges. Session-event reloads never
+    // re-render the page, so no update can carry the fact to it.
+    transcriptLoadingChanged: () =>
+      page.dispatchEvent(
+        new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
+    sessionWorkspaceState: undefined,
+    backgroundTasksState: undefined,
+    querySelector: page.querySelector.bind(page),
+  } as unknown as ChatPageHost;
+
+  state.resetToolStream = () => resetToolStream(state as never);
+  state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
+  state.resetChatScroll = () => resetChatScroll(state);
+  state.scrollToBottom = (options) => {
+    resetChatScroll(state);
+    scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
+  };
+  state.handleChatScroll = (event) => handleChatScroll(state, event);
+  state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
+  state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
+  state.applySettings = (patch) => {
+    const next = { ...state.settings, ...patch };
+    state.settings = patchSettings({
+      chatShowThinking: next.chatShowThinking,
+      chatShowToolCalls: next.chatShowToolCalls,
+      chatPersistCommentary: next.chatPersistCommentary,
+      chatSendShortcut: next.chatSendShortcut,
+    });
+    renderLifecycle.invalidate();
+  };
+  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
+  state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
+  state.handleSendChat = (messageOverride, options, submissionAction) => {
+    const message = messageOverride ?? state.chatMessage;
+    const isCommand =
+      parseSlashCommand(message) !== null ||
+      (isChatStopCommand(message) && hasAbortableSessionRun(state));
+    if (
+      shouldAutoPromptNotificationsOnSend({
+        connected: state.connected,
+        directComposerSend:
+          messageOverride === undefined &&
+          options === undefined &&
+          hasActiveNotificationPromptGesture(),
+        message,
+        hasAttachments: state.chatAttachments.length > 0,
+        isCommand,
+      })
+    ) {
+      autoPromptNotificationsOnSend(context);
+    }
+    return handleSendChat(state, messageOverride, options as never, submissionAction);
+  };
+  state.handleAbortChat = async (options) => {
+    await handleAbortChat(state, options as never);
+    renderLifecycle.invalidate();
+  };
+  state.removeQueuedMessage = (id) => {
+    if (cancelPendingQueuedChatInput(state, id)) {
+      return;
+    }
+    if (isQueuedMessageBeingEdited(state, id)) {
+      setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
+      renderLifecycle.invalidate();
+      return;
+    }
+    const outcome = removeQueuedMessage(state, id, { discard: true });
+    if (outcome === "removed") {
+      setChatError(state, null);
+      void resumeStoredChatOutboxes(state);
+    } else if (outcome === "rejected") {
+      setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
+    }
+    renderLifecycle.invalidate();
+  };
+  state.retryQueuedChatMessage = async (id) => {
+    await retryQueuedChatMessage(state, id);
+    renderLifecycle.invalidate();
+  };
+  state.steerQueuedChatMessage = async (id) => {
+    await steerQueuedChatMessage(state, id);
+    renderLifecycle.invalidate();
+  };
+  state.moveQueuedChatMessage = (id, targetId) => {
+    moveQueuedChatMessage(state, id, targetId);
+    renderLifecycle.invalidate();
+  };
+  state.editQueuedChatMessage = (id) => {
+    if (beginQueuedMessageEdit(state, id) === "unavailable") {
+      setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+    } else {
+      for (const key of ["lastError", "chatError"] as const) {
+        if (state[key] === QUEUED_MESSAGE_EDIT_CONFLICT_ERROR) {
+          state[key] = null;
+        }
+      }
+    }
+    renderLifecycle.invalidate();
+  };
+  state.updateQueuedChatMessageEdit = (draftText, mentions) => {
+    updateQueuedMessageEdit(state, draftText, mentions);
+    renderLifecycle.invalidate();
+  };
+  state.submitQueuedChatMessageEdit = () => {
+    const edit = activeQueuedMessageEdit(state);
+    if (!edit) {
+      return;
+    }
+    void state
+      .handleSendChat(edit.draftText, {
+        attachmentsOverride: [...edit.attachments],
+        mentionsOverride: edit.mentions,
+        resumeQueuedMessageEditId: edit.id,
+      })
+      .then(
+        () => renderLifecycle.invalidate(),
+        () => renderLifecycle.invalidate(),
+      );
+  };
+  state.cancelQueuedChatMessageEdit = () => {
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
+    renderLifecycle.invalidate();
+  };
+  const transientResources = new Set<"desktop" | "browser">();
+  let transientResourceScope = "";
+  state.updateSidebarLayout = (layout, options) => {
+    const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const scope = JSON.stringify([state.settings.gatewayUrl, layoutKey]);
+    if (scope !== transientResourceScope) {
+      transientResources.clear();
+      transientResourceScope = scope;
+    }
+    const normalized = normalizeSidebarLayout(layout);
+    const previous = state.sidebarLayout;
+    const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
+      value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
+    if (
+      options?.automaticResource &&
+      !includesResource(previous, options.automaticResource) &&
+      includesResource(normalized, options.automaticResource)
+    ) {
+      transientResources.add(options.automaticResource);
+    }
+    for (const resource of transientResources) {
+      const panel = normalized.columns
+        .flatMap((column) => column.panels)
+        .find((entry) => entry.slot === resource);
+      // Explicit targets are saved choices, even when discovery first opened the tab.
+      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+        transientResources.delete(resource);
+      }
+    }
+    if (
+      previous.resourceAutoOpenDismissed ||
+      (options?.persist !== false &&
+        ((previous.open && !normalized.open) ||
+          (includesResource(previous, "desktop") && !includesResource(normalized, "desktop")) ||
+          (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
+    ) {
+      normalized.resourceAutoOpenDismissed = true;
+    }
+    if (
+      state.sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")?.taskId !==
+      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
+        ?.taskId
+    ) {
+      resetTaskDetail(state);
+    }
+    const presentation =
+      options?.dashboardPresentation === "personal"
+        ? sidebarDashboardPresentation(normalized)
+        : undefined;
+    if (presentation) {
+      const row = selectedChatSessionRow(state);
+      // Unknown metadata cannot establish that the user chose the shared default.
+      normalized.dashboardPresentationOverride =
+        row && presentation === (row.boardPresentation ?? "split") ? null : presentation;
+    }
+    // Every close route commits here; tab switches retain the pending selection.
+    if (
+      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
+      !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
+    ) {
+      state.sidebarContent = null;
+    }
+    state.sidebarLayout = normalized;
+    if (options?.persist === false) {
+      renderLifecycle.invalidate();
+      return;
+    }
+    // Other layout edits cannot persist an automatically discovered target before
+    // ownership is checked again on reload. Dashboard restoration has its own policy.
+    let persisted = normalized;
+    for (const resource of transientResources) {
+      persisted = closeSlot(persisted, resource);
+    }
+    state.settings = patchSettings({
+      sidebarSessionLayouts: updateSidebarSessionLayout(
+        loadSettings().sidebarSessionLayouts,
+        layoutKey,
+        persisted,
+        {
+          geometryOnly: options?.geometryOnly,
+          dashboardPresentationOverride: presentation
+            ? normalized.dashboardPresentationOverride
+            : undefined,
+        },
+      ),
+    });
+    normalized.dashboardPresentationOverride =
+      state.settings.sidebarSessionLayouts?.[layoutKey]?.dashboardPresentationOverride;
+    renderLifecycle.invalidate();
+  };
+  state.updateSidebarActivePanel = (panelId) => {
+    const normalizedPanelId = panelId.trim();
+    if (!normalizedPanelId) {
+      return;
+    }
+    state.sidebarFocusPanelId = normalizedPanelId;
+    state.sidebarFocusVersion += 1;
+    const selected = state.sidebarLayout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.id === normalizedPanelId)?.slot;
+    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
+      renderLifecycle.invalidate();
+      return;
+    }
+    state.settings = patchSettings({
+      sidebarSessionActivePanels: updateSidebarSessionActivePanel(
+        loadSettings().sidebarSessionActivePanels,
+        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
+        normalizedPanelId,
+      ),
+    });
+    renderLifecycle.invalidate();
+  };
+  state.handleOpenSidebar = (content) => {
+    const fileTab =
+      content?.fileTab ??
+      (content?.kind === "attachment"
+        ? {
+            id: `attachment:${content.sourceIdentity ?? content.src ?? crypto.randomUUID()}`,
+            label: content.title,
+          }
+        : content?.kind === "file"
+          ? { id: `file:${content.path}`, label: content.name }
+          : null);
+    const targetSlot = fileTab ? "workspace" : "detail";
+    let opened = openSlot(state.sidebarLayout, targetSlot);
+    const targetPanel = opened.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === targetSlot);
+    if (targetPanel) {
+      opened = activatePanel(opened, targetPanel.id);
+    }
+    const availableWidth = page.getBoundingClientRect?.().width ?? 0;
+    const fitted =
+      availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
+        ? (fitSidebarLayout(opened, availableWidth) ?? opened)
+        : opened;
+    if (fileTab && content) {
+      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+    } else {
+      state.sidebarContent = content;
+    }
+    state.updateSidebarLayout(fitted);
+    if (targetPanel) {
+      state.updateSidebarActivePanel(targetPanel.id);
+    }
+  };
+  state.handleCloseSidebar = (slot) => {
+    if (slot === "workspace") {
+      clearSessionWorkspacePreviews(state);
+    }
+    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+  };
+  state.beginImageOpen = () => {
+    const requestVersion = invalidateImageLightbox(state);
+    renderLifecycle.invalidate();
+    return requestVersion;
+  };
+  state.handleOpenImage = (item, requestVersion) => {
+    const activeRequestVersion = requestVersion ?? state.beginImageOpen();
+    if (activeRequestVersion !== state.imageLightboxRequestVersion) {
+      item.release?.();
+      return;
+    }
+    const video = item.kind === "video";
+    const resolveSrc = (src: string) =>
+      video
+        ? safeMediaAttachmentHref(src, "video")
+        : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
+    const safeSrc = resolveSrc(item.src);
+    const safeOriginalSrc = item.originalSrc ? resolveSrc(item.originalSrc) : undefined;
+    if (!safeSrc || (item.originalSrc && !safeOriginalSrc)) {
+      item.release?.();
+      return;
+    }
+    state.imageLightbox = {
+      ...item,
+      src: safeSrc,
+      ...(safeOriginalSrc ? { originalSrc: safeOriginalSrc } : {}),
+    };
+    renderLifecycle.invalidate();
+  };
+  state.handleCloseImage = () => {
+    invalidateImageLightbox(state);
+    renderLifecycle.invalidate();
+  };
+  return state;
+}

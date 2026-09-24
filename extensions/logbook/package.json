@@ -1,0 +1,47 @@
+{
+  "name": "@openclaw/logbook",
+  "version": "2026.9.6",
+  "description": "OpenClaw automatic work journal plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "build": {
+      "bundledDist": true,
+      "workerEntries": [
+        "./src/store.worker.ts"
+      ],
+      "openclawVersion": "2026.9.6"
+    },
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/logbook",
+      "npmSpec": "@openclaw/logbook",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.9.5"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  }
+}

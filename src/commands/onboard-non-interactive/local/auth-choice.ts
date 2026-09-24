@@ -1,642 +1,232 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+/**
+ * Non-interactive local auth-choice dispatcher.
+ *
+ * It normalizes legacy choices, handles secret storage mode, delegates plugin
+ * setup when applicable, and applies built-in custom provider config.
+ */
+import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { SecretInput } from "../../../config/types.secrets.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
+import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
-import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { upsertSharedEnvVar } from "../../../infra/env-file.js";
-import { shortenHomePath } from "../../../utils.js";
-import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
-import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
-import {
-  applyAuthProfileConfig,
-  applyCloudflareAiGatewayConfig,
-  applyQianfanConfig,
-  applyKimiCodeConfig,
-  applyMinimaxApiConfig,
-  applyMinimaxConfig,
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  applyOpencodeZenConfig,
-  applyOpenrouterConfig,
-  applySyntheticConfig,
-  applyVeniceConfig,
-  applyTogetherConfig,
-  applyVercelAiGatewayConfig,
-  applyLitellmConfig,
-  applyXaiConfig,
-  applyXiaomiConfig,
-  applyZaiConfig,
-  setAnthropicApiKey,
-  setCloudflareAiGatewayConfig,
-  setQianfanApiKey,
-  setGeminiApiKey,
-  setKimiCodingApiKey,
-  setLitellmApiKey,
-  setMinimaxApiKey,
-  setMoonshotApiKey,
-  setOpencodeZenApiKey,
-  setOpenrouterApiKey,
-  setSyntheticApiKey,
-  setXaiApiKey,
-  setVeniceApiKey,
-  setTogetherApiKey,
-  setVercelAiGatewayApiKey,
-  setXiaomiApiKey,
-  setZaiApiKey,
-} from "../../onboard-auth.js";
+import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import { resolveLegacyOnboardAuthChoice } from "../../auth-choice-legacy.js";
+import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
+import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
+import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
-} from "../../onboard-custom.js";
-import { applyOpenAIConfig } from "../../openai-model-default.js";
+} from "../../onboard-custom-config.js";
+import { rejectOnboardingOption } from "../../onboard-options.js";
+import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
+import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
+type ResolvedNonInteractiveApiKey = NonNullable<
+  Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
+>;
+
+/** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
   authChoice: AuthChoice;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  target: OnboardingAgentTarget;
 }): Promise<OpenClawConfig | null> {
-  const { authChoice, opts, runtime, baseConfig } = params;
-  let nextConfig = params.nextConfig;
-
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
-    runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
+  const { opts, runtime, baseConfig } = params;
+  let authChoice = normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: opts.tokenProvider,
+    config: params.nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  });
+  const nextConfig = params.nextConfig;
+  const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
+  if (opts.secretInputMode && !requestedSecretInputMode) {
+    rejectOnboardingOption(
+      opts,
+      runtime,
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
-    runtime.exit(1);
     return null;
   }
-
-  if (authChoice === "setup-token") {
-    runtime.error(
-      [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "apiKey") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "anthropic",
-      cfg: baseConfig,
-      flagValue: opts.anthropicApiKey,
-      flagName: "--anthropic-api-key",
-      envVar: "ANTHROPIC_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
+  const toStoredSecretInput = (paramsLocal: {
+    resolved: ResolvedNonInteractiveApiKey;
+    provider: string;
+    envVarName?: string;
+  }): SecretInput | null => {
+    const { resolved } = paramsLocal;
+    const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
+    if (storePlaintextSecret) {
+      return resolved.key;
     }
-    if (resolved.source !== "profile") {
-      await setAnthropicApiKey(resolved.key);
-    }
-    return applyAuthProfileConfig(nextConfig, {
-      profileId: "anthropic:default",
-      provider: "anthropic",
-      mode: "api_key",
-    });
-  }
-
-  if (authChoice === "token") {
-    const providerRaw = opts.tokenProvider?.trim();
-    if (!providerRaw) {
-      runtime.error("Missing --token-provider for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const provider = normalizeProviderId(providerRaw);
-    if (provider !== "anthropic") {
-      runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenRaw = normalizeSecretInput(opts.token);
-    if (!tokenRaw) {
-      runtime.error("Missing --token for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenError = validateAnthropicSetupToken(tokenRaw);
-    if (tokenError) {
-      runtime.error(tokenError);
-      runtime.exit(1);
-      return null;
-    }
-
-    let expires: number | undefined;
-    const expiresInRaw = opts.tokenExpiresIn?.trim();
-    if (expiresInRaw) {
-      try {
-        expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
-      } catch (err) {
-        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
-        runtime.exit(1);
-        return null;
-      }
-    }
-
-    const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
-    upsertAuthProfile({
-      profileId,
-      credential: {
-        type: "token",
-        provider,
-        token: tokenRaw.trim(),
-        ...(expires ? { expires } : {}),
-      },
-    });
-    return applyAuthProfileConfig(nextConfig, {
-      profileId,
-      provider,
-      mode: "token",
-    });
-  }
-
-  if (authChoice === "gemini-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "google",
-      cfg: baseConfig,
-      flagValue: opts.geminiApiKey,
-      flagName: "--gemini-api-key",
-      envVar: "GEMINI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setGeminiApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "google:default",
-      provider: "google",
-      mode: "api_key",
-    });
-    return applyGoogleGeminiModelDefault(nextConfig).next;
-  }
-
-  if (
-    authChoice === "zai-api-key" ||
-    authChoice === "zai-coding-global" ||
-    authChoice === "zai-coding-cn" ||
-    authChoice === "zai-global" ||
-    authChoice === "zai-cn"
-  ) {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "zai",
-      cfg: baseConfig,
-      flagValue: opts.zaiApiKey,
-      flagName: "--zai-api-key",
-      envVar: "ZAI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setZaiApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "zai:default",
-      provider: "zai",
-      mode: "api_key",
-    });
-
-    // Determine endpoint from authChoice or opts
-    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
-    if (authChoice === "zai-coding-global") {
-      endpoint = "coding-global";
-    } else if (authChoice === "zai-coding-cn") {
-      endpoint = "coding-cn";
-    } else if (authChoice === "zai-global") {
-      endpoint = "global";
-    } else if (authChoice === "zai-cn") {
-      endpoint = "cn";
-    } else {
-      endpoint = "coding-global";
-    }
-    return applyZaiConfig(nextConfig, { endpoint });
-  }
-
-  if (authChoice === "xiaomi-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "xiaomi",
-      cfg: baseConfig,
-      flagValue: opts.xiaomiApiKey,
-      flagName: "--xiaomi-api-key",
-      envVar: "XIAOMI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setXiaomiApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "xiaomi:default",
-      provider: "xiaomi",
-      mode: "api_key",
-    });
-    return applyXiaomiConfig(nextConfig);
-  }
-
-  if (authChoice === "xai-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "xai",
-      cfg: baseConfig,
-      flagValue: opts.xaiApiKey,
-      flagName: "--xai-api-key",
-      envVar: "XAI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      setXaiApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "xai:default",
-      provider: "xai",
-      mode: "api_key",
-    });
-    return applyXaiConfig(nextConfig);
-  }
-
-  if (authChoice === "qianfan-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "qianfan",
-      cfg: baseConfig,
-      flagValue: opts.qianfanApiKey,
-      flagName: "--qianfan-api-key",
-      envVar: "QIANFAN_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      setQianfanApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "qianfan:default",
-      provider: "qianfan",
-      mode: "api_key",
-    });
-    return applyQianfanConfig(nextConfig);
-  }
-
-  if (authChoice === "openai-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "openai",
-      cfg: baseConfig,
-      flagValue: opts.openaiApiKey,
-      flagName: "--openai-api-key",
-      envVar: "OPENAI_API_KEY",
-      runtime,
-      allowProfile: false,
-    });
-    if (!resolved) {
-      return null;
-    }
-    const key = resolved.key;
-    const result = upsertSharedEnvVar({ key: "OPENAI_API_KEY", value: key });
-    process.env.OPENAI_API_KEY = key;
-    runtime.log(`Saved OPENAI_API_KEY to ${shortenHomePath(result.path)}`);
-    return applyOpenAIConfig(nextConfig);
-  }
-
-  if (authChoice === "openrouter-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "openrouter",
-      cfg: baseConfig,
-      flagValue: opts.openrouterApiKey,
-      flagName: "--openrouter-api-key",
-      envVar: "OPENROUTER_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setOpenrouterApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "openrouter:default",
-      provider: "openrouter",
-      mode: "api_key",
-    });
-    return applyOpenrouterConfig(nextConfig);
-  }
-
-  if (authChoice === "litellm-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "litellm",
-      cfg: baseConfig,
-      flagValue: opts.litellmApiKey,
-      flagName: "--litellm-api-key",
-      envVar: "LITELLM_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setLitellmApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "litellm:default",
-      provider: "litellm",
-      mode: "api_key",
-    });
-    return applyLitellmConfig(nextConfig);
-  }
-
-  if (authChoice === "ai-gateway-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "vercel-ai-gateway",
-      cfg: baseConfig,
-      flagValue: opts.aiGatewayApiKey,
-      flagName: "--ai-gateway-api-key",
-      envVar: "AI_GATEWAY_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setVercelAiGatewayApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "vercel-ai-gateway:default",
-      provider: "vercel-ai-gateway",
-      mode: "api_key",
-    });
-    return applyVercelAiGatewayConfig(nextConfig);
-  }
-
-  if (authChoice === "cloudflare-ai-gateway-api-key") {
-    const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
-    const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";
-    if (!accountId || !gatewayId) {
-      runtime.error(
+    if (resolved.source !== "env" || !resolved.envVarName) {
+      // Existing profiles may be reused, but neither serializer may turn their
+      // resolved secret or a literal flag into plaintext when refs were requested.
+      const envHint = paramsLocal.envVarName
+        ? `Set ${paramsLocal.envVarName} in env and retry`
+        : "Set the provider API key env var and retry";
+      rejectOnboardingOption(
+        opts,
+        runtime,
         [
-          'Auth choice "cloudflare-ai-gateway-api-key" requires Account ID and Gateway ID.',
-          "Use --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
+          `--secret-input-mode ref requires an explicit environment variable for provider "${paramsLocal.provider}".`,
+          `${envHint}, or use --secret-input-mode plaintext.`,
         ].join("\n"),
       );
-      runtime.exit(1);
       return null;
     }
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "cloudflare-ai-gateway",
-      cfg: baseConfig,
-      flagValue: opts.cloudflareAiGatewayApiKey,
-      flagName: "--cloudflare-ai-gateway-api-key",
-      envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-      runtime,
+    return {
+      source: "env",
+      provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
+        preferFirstProviderForSource: true,
+      }),
+      id: resolved.envVarName,
+    };
+  };
+  const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
+    resolveNonInteractiveApiKey({
+      ...input,
+      agentDir: params.target.agentDir,
+      workspaceDir: params.target.workspaceDir,
+      secretInputMode: requestedSecretInputMode,
+      json: opts.json,
     });
-    if (!resolved) {
+  const toApiKeyCredential = (paramsLocal: {
+    provider: string;
+    resolved: ResolvedNonInteractiveApiKey;
+    email?: string;
+    metadata?: Record<string, string>;
+  }): ApiKeyCredential | null => {
+    const stored = toStoredSecretInput({
+      resolved: paramsLocal.resolved,
+      provider: paramsLocal.provider,
+    });
+    if (!stored) {
       return null;
     }
-    if (resolved.source !== "profile") {
-      await setCloudflareAiGatewayConfig(accountId, gatewayId, resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "cloudflare-ai-gateway:default",
-      provider: "cloudflare-ai-gateway",
-      mode: "api_key",
-    });
-    return applyCloudflareAiGatewayConfig(nextConfig, {
-      accountId,
-      gatewayId,
-    });
+    return {
+      type: "api_key",
+      provider: paramsLocal.provider,
+      ...(typeof stored === "string" ? { key: stored } : { keyRef: stored }),
+      ...(paramsLocal.email ? { email: paramsLocal.email } : {}),
+      ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
+    };
+  };
+  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, {
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  });
+  if (legacyChoice.deprecated) {
+    // Only provider aliases normalize here; the onboarding entry point owns
+    // the separate oauth spelling before local dispatch.
+    runtime.log(legacyChoice.deprecated.message);
+    authChoice = legacyChoice.authChoice;
   }
 
-  if (authChoice === "moonshot-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "moonshot",
-      cfg: baseConfig,
-      flagValue: opts.moonshotApiKey,
-      flagName: "--moonshot-api-key",
-      envVar: "MOONSHOT_API_KEY",
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  });
+  const deprecatedInstallChoice = deprecatedChoice
+    ? undefined
+    : resolveDeprecatedProviderInstallCatalogEntry(authChoice as string, {
+        config: nextConfig,
+        workspaceDir: params.target.workspaceDir,
+        env: process.env,
+        includeUntrustedWorkspacePlugins: false,
+      });
+  const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
+  if (replacementChoiceId) {
+    rejectOnboardingOption(
+      opts,
       runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setMoonshotApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    return applyMoonshotConfig(nextConfig);
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
+    );
+    return null;
   }
 
-  if (authChoice === "moonshot-api-key-cn") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "moonshot",
-      cfg: baseConfig,
-      flagValue: opts.moonshotApiKey,
-      flagName: "--moonshot-api-key",
-      envVar: "MOONSHOT_API_KEY",
+  const validAuthChoices = formatAuthChoiceChoicesForCli({
+    includeSkip: true,
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  }).split("|");
+  if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
+    rejectOnboardingOption(
+      opts,
       runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setMoonshotApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    return applyMoonshotConfigCn(nextConfig);
+      `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
+    );
+    return null;
   }
 
-  if (authChoice === "kimi-code-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "kimi-coding",
-      cfg: baseConfig,
-      flagValue: opts.kimiCodeApiKey,
-      flagName: "--kimi-code-api-key",
-      envVar: "KIMI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setKimiCodingApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      mode: "api_key",
-    });
-    return applyKimiCodeConfig(nextConfig);
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    target: params.target,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: nextConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    // null means the plugin path handled an error and requested exit; undefined
+    // means no trusted plugin matched and core choices should continue.
+    return pluginProviderChoice;
   }
 
-  if (authChoice === "synthetic-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "synthetic",
-      cfg: baseConfig,
-      flagValue: opts.syntheticApiKey,
-      flagName: "--synthetic-api-key",
-      envVar: "SYNTHETIC_API_KEY",
+  if (authChoice === "setup-token" || authChoice === "token") {
+    rejectOnboardingOption(
+      opts,
       runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setSyntheticApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "synthetic:default",
-      provider: "synthetic",
-      mode: "api_key",
-    });
-    return applySyntheticConfig(nextConfig);
-  }
-
-  if (authChoice === "venice-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "venice",
-      cfg: baseConfig,
-      flagValue: opts.veniceApiKey,
-      flagName: "--venice-api-key",
-      envVar: "VENICE_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setVeniceApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "venice:default",
-      provider: "venice",
-      mode: "api_key",
-    });
-    return applyVeniceConfig(nextConfig);
-  }
-
-  if (
-    authChoice === "minimax-cloud" ||
-    authChoice === "minimax-api" ||
-    authChoice === "minimax-api-lightning"
-  ) {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "minimax",
-      cfg: baseConfig,
-      flagValue: opts.minimaxApiKey,
-      flagName: "--minimax-api-key",
-      envVar: "MINIMAX_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setMinimaxApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "minimax:default",
-      provider: "minimax",
-      mode: "api_key",
-    });
-    const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
-    return applyMinimaxApiConfig(nextConfig, modelId);
-  }
-
-  if (authChoice === "minimax") {
-    return applyMinimaxConfig(nextConfig);
-  }
-
-  if (authChoice === "opencode-zen") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "opencode",
-      cfg: baseConfig,
-      flagValue: opts.opencodeZenApiKey,
-      flagName: "--opencode-zen-api-key",
-      envVar: "OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY)",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setOpencodeZenApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode:default",
-      provider: "opencode",
-      mode: "api_key",
-    });
-    return applyOpencodeZenConfig(nextConfig);
-  }
-
-  if (authChoice === "together-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "together",
-      cfg: baseConfig,
-      flagValue: opts.togetherApiKey,
-      flagName: "--together-api-key",
-      envVar: "TOGETHER_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      await setTogetherApiKey(resolved.key);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "together:default",
-      provider: "together",
-      mode: "api_key",
-    });
-    return applyTogetherConfig(nextConfig);
+      [
+        `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
+      ].join("\n"),
+    );
+    return null;
   }
 
   if (authChoice === "custom-api-key") {
     try {
+      // Custom provider setup can be optional-key: some local endpoints do not
+      // require auth, but flags and env refs still need validation if present.
       const customAuth = parseNonInteractiveCustomApiFlags({
         baseUrl: opts.customBaseUrl,
         modelId: opts.customModelId,
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
+        supportsImageInput: opts.customImageInput,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,
         baseUrl: customAuth.baseUrl,
         providerId: customAuth.providerId,
       });
-      const resolvedCustomApiKey = await resolveNonInteractiveApiKey({
+      const resolvedCustomApiKey = await resolveApiKey({
         provider: resolvedProviderId.providerId,
-        cfg: baseConfig,
+        cfg: nextConfig,
         flagValue: customAuth.apiKey,
         flagName: "--custom-api-key",
         envVar: "CUSTOM_API_KEY",
@@ -644,50 +234,84 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime,
         required: false,
       });
+      let customApiKeyInput: SecretInput | undefined;
+      if (
+        resolvedCustomApiKey &&
+        (requestedSecretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
+      ) {
+        // Profile ownership stays in the auth store; serializing its resolved
+        // value would expose plaintext and overwrite an existing SecretRef.
+        const stored = toStoredSecretInput({
+          resolved: resolvedCustomApiKey,
+          provider: resolvedProviderId.providerId,
+          envVarName: "CUSTOM_API_KEY",
+        });
+        if (!stored) {
+          return null;
+        }
+        customApiKeyInput = stored;
+      }
       const result = applyCustomApiConfig({
         config: nextConfig,
         baseUrl: customAuth.baseUrl,
         modelId: customAuth.modelId,
         compatibility: customAuth.compatibility,
-        apiKey: resolvedCustomApiKey?.key,
+        apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
+        supportsImageInput: customAuth.supportsImageInput,
+        target: params.target,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
           `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,
         );
       }
+      if (customApiKeyInput !== undefined && resolvedCustomApiKey?.source !== "profile") {
+        const { isSetupCredentialReplacement, saveSetupCredential } =
+          await import("../../../system-agent/setup-inference-credentials.js");
+        if (
+          isSetupCredentialReplacement({
+            provider: result.providerId,
+            baseConfig,
+            agentDir: params.target.agentDir,
+          })
+        ) {
+          const { prepareCustomSetupCredentials } =
+            await import("../../../system-agent/setup-inference-custom.js");
+          const prepared = prepareCustomSetupCredentials(result);
+          const saved = await saveSetupCredential({
+            profile: prepared.profiles[0]!,
+            config: prepared.config,
+            baseConfig,
+            agentDir: params.target.agentDir,
+            modelRef: `${result.providerId}/${result.modelId}`,
+          });
+          rejectOnboardingOption(
+            opts,
+            runtime,
+            `Replacement credential saved but inactive. Your connection is unchanged. Test and activate it with:\n${formatCliCommand(`openclaw models auth activate ${quoteCliArg(saved.profile.profileId)} --agent ${quoteCliArg(params.target.agentId)}`)}`,
+          );
+          return null;
+        }
+      }
       return result.config;
     } catch (err) {
-      if (err instanceof CustomApiError) {
-        switch (err.code) {
-          case "missing_required":
-          case "invalid_compatibility":
-            runtime.error(err.message);
-            break;
-          default:
-            runtime.error(`Invalid custom provider config: ${err.message}`);
-            break;
-        }
-        runtime.exit(1);
-        return null;
-      }
-      const reason = err instanceof Error ? err.message : String(err);
-      runtime.error(`Invalid custom provider config: ${reason}`);
-      runtime.exit(1);
+      const message =
+        err instanceof CustomApiError &&
+        (err.code === "missing_required" || err.code === "invalid_compatibility")
+          ? err.message
+          : `Invalid custom provider config: ${err instanceof CustomApiError ? err.message : formatErrorMessage(err)}`;
+      rejectOnboardingOption(opts, runtime, message);
       return null;
     }
   }
 
   if (
-    authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "openai-codex" ||
-    authChoice === "qwen-portal" ||
-    authChoice === "minimax-portal"
+    authChoice === "minimax-global-oauth" ||
+    authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
-    runtime.exit(1);
+    rejectOnboardingOption(opts, runtime, "OAuth requires interactive mode.");
     return null;
   }
 

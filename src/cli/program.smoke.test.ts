@@ -1,285 +1,197 @@
+// Program smoke tests cover core CLI command registration and startup behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const messageCommand = vi.fn();
-const statusCommand = vi.fn();
-const configureCommand = vi.fn();
-const configureCommandWithSections = vi.fn();
-const setupCommand = vi.fn();
-const onboardCommand = vi.fn();
-const callGateway = vi.fn();
-const runChannelLogin = vi.fn();
-const runChannelLogout = vi.fn();
-const runTui = vi.fn();
-const loadAndMaybeMigrateDoctorConfig = vi.fn();
-const ensureConfigReady = vi.fn();
-const ensurePluginRegistryLoaded = vi.fn();
-
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
-
-vi.mock("./plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: () => undefined,
-}));
-
-vi.mock("../commands/message.js", () => ({ messageCommand }));
-vi.mock("../commands/status.js", () => ({ statusCommand }));
-vi.mock("../commands/configure.js", () => ({
-  CONFIGURE_WIZARD_SECTIONS: [
-    "workspace",
-    "model",
-    "web",
-    "gateway",
-    "daemon",
-    "channels",
-    "skills",
-    "health",
-  ],
+import { buildProgram } from "./program.js";
+import {
+  programGatewayCallMock,
   configureCommand,
-  configureCommandWithSections,
-}));
-vi.mock("../commands/setup.js", () => ({ setupCommand }));
-vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
-vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig,
-}));
-vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-vi.mock("./channel-auth.js", () => ({ runChannelLogin, runChannelLogout }));
-vi.mock("../tui/tui.js", () => ({ runTui }));
-vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded }));
-vi.mock("./program/config-guard.js", () => ({ ensureConfigReady }));
-vi.mock("../gateway/call.js", () => ({
-  callGateway,
-  randomIdempotencyKey: () => "idem-test",
-  buildGatewayConnectionDetails: () => ({
-    url: "ws://127.0.0.1:1234",
-    urlSource: "test",
-    message: "Gateway target: ws://127.0.0.1:1234",
-  }),
-}));
-vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
-vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
+  ensureConfigReadyMock,
+  runtime,
+  setupCommandMock,
+  setupWizardCommandMock,
+  systemAgentRunMock,
+  tuiRunMock,
+} from "./program.test-mocks.js";
 
-const { buildProgram } = await import("./program.js");
+vi.mock("./config-cli.js", () => ({
+  registerConfigCli: (program: {
+    command: (name: string) => { action: (fn: () => unknown) => void };
+  }) => {
+    program.command("config").action(() => configureCommand({}, runtime));
+  },
+  runConfigGet: vi.fn(),
+  runConfigUnset: vi.fn(),
+}));
 
 describe("cli program (smoke)", () => {
+  let program = createProgram();
+
+  function createProgram() {
+    return buildProgram();
+  }
+
+  async function runProgram(argv: string[]) {
+    await program.parseAsync(argv, { from: "user" });
+  }
+
+  function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+    const call = mock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected mock to have at least one call");
+    }
+    return call[0];
+  }
+
   beforeEach(() => {
+    program = createProgram();
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
-    ensureConfigReady.mockResolvedValue(undefined);
+    tuiRunMock.mockResolvedValue(undefined);
+    systemAgentRunMock.mockResolvedValue(undefined);
+    ensureConfigReadyMock.mockResolvedValue(undefined);
   });
 
-  it("runs message with required options", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["message", "send", "--target", "+1", "--message", "hi"], {
-      from: "user",
-    });
-    expect(messageCommand).toHaveBeenCalled();
-  });
-
-  it("runs message react with signal author fields", async () => {
-    const program = buildProgram();
-    await program.parseAsync(
-      [
-        "message",
-        "react",
-        "--channel",
-        "signal",
-        "--target",
-        "signal:group:abc123",
-        "--message-id",
-        "1737630212345",
-        "--emoji",
-        "✅",
-        "--target-author-uuid",
-        "123e4567-e89b-12d3-a456-426614174000",
-      ],
-      { from: "user" },
-    );
-    expect(messageCommand).toHaveBeenCalled();
-  });
-
-  it("runs status command", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["status"], { from: "user" });
-    expect(statusCommand).toHaveBeenCalled();
-  });
-
-  it("registers memory command", () => {
-    const program = buildProgram();
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
-    expect(names).toContain("memory");
-  });
-
-  it("runs tui without overriding timeout", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["tui"], { from: "user" });
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
+    expect(names).toContain("message");
+    expect(names).toContain("status");
   });
 
   it("runs tui with explicit timeout override", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["tui", "--timeout-ms", "45000"], {
-      from: "user",
+    await runProgram(["tui", "--timeout-ms", "45000"]);
+    const options = firstMockArg(tuiRunMock) as {
+      timeoutMs?: number;
+      historyLimit?: number;
+      forceProcessExitOnReturn?: boolean;
+    };
+    expect(options?.timeoutMs).toBe(45000);
+    expect(options?.historyLimit).toBe(200);
+    expect(options?.forceProcessExitOnReturn).toBe(true);
+  });
+
+  it("resolves a positional tui short reference before launch", async () => {
+    programGatewayCallMock.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
+
+    await runProgram(["tui", "movies-a1166b81"]);
+
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: { shortId: "a1166b81", slugHint: "movies" },
+      }),
+    );
+    expect(firstMockArg(tuiRunMock)).toMatchObject({
+      local: false,
+      session: "agent:main:thread:resolved",
     });
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
+  });
+
+  it("preserves a global-scope URL main session when launching tui", async () => {
+    programGatewayCallMock.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    });
+
+    await runProgram(["tui", "https://gateway.example/dashboard/ops"]);
+
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agents.list",
+        params: {},
+      }),
+    );
+    expect(firstMockArg(tuiRunMock)).toMatchObject({
+      local: false,
+      session: "global",
+      agentId: "ops",
+    });
+  });
+
+  it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
+    "preserves the resolved global owner when launching tui from %s",
+    async (target) => {
+      programGatewayCallMock.mockResolvedValue({ ok: true, key: "global", agentId: "ops" });
+
+      await runProgram(["tui", target]);
+
+      expect(firstMockArg(tuiRunMock)).toMatchObject({ session: "global", agentId: "ops" });
+    },
+  );
+
+  it("leaves tui agent inference unchanged without a URL agent", async () => {
+    await runProgram(["tui"]);
+
+    expect(firstMockArg(tuiRunMock)).not.toHaveProperty("agentId");
+  });
+
+  it("rejects a URL target combined with --url", async () => {
+    await expect(
+      runProgram([
+        "tui",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--url",
+        "wss://other.example",
+      ]),
+    ).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("pass one target"));
+    expect(tuiRunMock).not.toHaveBeenCalled();
+  });
+
+  it("runs setup one-shot requests", async () => {
+    await runProgram(["setup", "--message", "status"]);
+    const options = firstMockArg(systemAgentRunMock) as {
+      message?: string;
+      yes?: boolean;
+      json?: boolean;
+    };
+    expect(options?.message).toBe("status");
+    expect(options?.yes).toBe(false);
+    expect(options?.json).toBe(false);
+    expect(systemAgentRunMock).toHaveBeenCalledWith(options, runtime);
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["tui", "--timeout-ms", "nope"], { from: "user" });
+    await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
+    const options = firstMockArg(tuiRunMock) as { timeoutMs?: number };
+    expect(options?.timeoutMs).toBeUndefined();
   });
 
-  it("runs config alias as configure", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["config"], { from: "user" });
-    expect(configureCommand).toHaveBeenCalled();
+  it("rejects partial tui history limits", async () => {
+    await expect(runProgram(["tui", "--history-limit", "10x"])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith("--history-limit must be a positive integer.");
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
-  it("runs setup without wizard flags", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["setup"], { from: "user" });
-    expect(setupCommand).toHaveBeenCalled();
-    expect(onboardCommand).not.toHaveBeenCalled();
+  it("accepts the maximum Gateway tui history limit", async () => {
+    await runProgram(["tui", "--history-limit", "1000"]);
+
+    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: false, historyLimit: 1000 });
+  });
+
+  it.each([
+    { entryPoint: "tui --local", args: ["tui", "--local"] },
+    { entryPoint: "terminal", args: ["terminal"] },
+    { entryPoint: "chat", args: ["chat"] },
+  ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
+    await runProgram([...args, "--history-limit", "1001"]);
+
+    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: true, historyLimit: 1001 });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects tui history limits above the Gateway maximum", async () => {
+    await expect(runProgram(["tui", "--history-limit", "1001"])).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith("--history-limit must be at most 1000.");
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["setup", "--remote-url", "ws://example"], {
-      from: "user",
-    });
-    expect(onboardCommand).toHaveBeenCalled();
-    expect(setupCommand).not.toHaveBeenCalled();
-  });
+    await runProgram(["setup", "--remote-url", "ws://example"]);
 
-  it("passes auth api keys to onboard", async () => {
-    const cases = [
-      {
-        authChoice: "opencode-zen",
-        flag: "--opencode-zen-api-key",
-        key: "sk-opencode-zen-test",
-        field: "opencodeZenApiKey",
-      },
-      {
-        authChoice: "openrouter-api-key",
-        flag: "--openrouter-api-key",
-        key: "sk-openrouter-test",
-        field: "openrouterApiKey",
-      },
-      {
-        authChoice: "moonshot-api-key",
-        flag: "--moonshot-api-key",
-        key: "sk-moonshot-test",
-        field: "moonshotApiKey",
-      },
-      {
-        authChoice: "together-api-key",
-        flag: "--together-api-key",
-        key: "sk-together-test",
-        field: "togetherApiKey",
-      },
-      {
-        authChoice: "moonshot-api-key-cn",
-        flag: "--moonshot-api-key",
-        key: "sk-moonshot-cn-test",
-        field: "moonshotApiKey",
-      },
-      {
-        authChoice: "kimi-code-api-key",
-        flag: "--kimi-code-api-key",
-        key: "sk-kimi-code-test",
-        field: "kimiCodeApiKey",
-      },
-      {
-        authChoice: "synthetic-api-key",
-        flag: "--synthetic-api-key",
-        key: "sk-synthetic-test",
-        field: "syntheticApiKey",
-      },
-      {
-        authChoice: "zai-api-key",
-        flag: "--zai-api-key",
-        key: "sk-zai-test",
-        field: "zaiApiKey",
-      },
-    ] as const;
-
-    for (const entry of cases) {
-      const program = buildProgram();
-      await program.parseAsync(
-        ["onboard", "--non-interactive", "--auth-choice", entry.authChoice, entry.flag, entry.key],
-        { from: "user" },
-      );
-      expect(onboardCommand).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nonInteractive: true,
-          authChoice: entry.authChoice,
-          [entry.field]: entry.key,
-        }),
-        runtime,
-      );
-      onboardCommand.mockClear();
-    }
-  });
-
-  it("passes custom provider flags to onboard", async () => {
-    const program = buildProgram();
-    await program.parseAsync(
-      [
-        "onboard",
-        "--non-interactive",
-        "--auth-choice",
-        "custom-api-key",
-        "--custom-base-url",
-        "https://llm.example.com/v1",
-        "--custom-api-key",
-        "sk-custom-test",
-        "--custom-model-id",
-        "foo-large",
-        "--custom-provider-id",
-        "my-custom",
-        "--custom-compatibility",
-        "anthropic",
-      ],
-      { from: "user" },
-    );
-
-    expect(onboardCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nonInteractive: true,
-        authChoice: "custom-api-key",
-        customBaseUrl: "https://llm.example.com/v1",
-        customApiKey: "sk-custom-test",
-        customModelId: "foo-large",
-        customProviderId: "my-custom",
-        customCompatibility: "anthropic",
-      }),
-      runtime,
-    );
-  });
-
-  it("runs channels login", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["channels", "login", "--account", "work"], {
-      from: "user",
-    });
-    expect(runChannelLogin).toHaveBeenCalledWith(
-      { channel: undefined, account: "work", verbose: false },
-      runtime,
-    );
-  });
-
-  it("runs channels logout", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["channels", "logout", "--account", "work"], {
-      from: "user",
-    });
-    expect(runChannelLogout).toHaveBeenCalledWith({ channel: undefined, account: "work" }, runtime);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).toHaveBeenCalledTimes(1);
   });
 });

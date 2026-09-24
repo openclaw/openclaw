@@ -2,17 +2,24 @@
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
-  echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>"
+  echo "Usage: scripts/pr-prepare <init|correction-init|correction-review-init|validate-commit|gates|push|run> <PR>"
   exit 2
 fi
 
 mode="$1"
 pr="$2"
-base="$(cd "$(dirname "$0")" && pwd)/pr"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+base="$script_dir/pr"
 
 case "$mode" in
   init)
     exec "$base" prepare-init "$pr"
+    ;;
+  correction-init)
+    exec "$base" prepare-correction-init "$pr"
+    ;;
+  correction-review-init)
+    exec "$base" prepare-correction-review-init "$pr"
     ;;
   validate-commit)
     exec "$base" prepare-validate-commit "$pr"
@@ -27,7 +34,7 @@ case "$mode" in
     exec "$base" prepare-run "$pr"
     ;;
   *)
-    echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>"
+    echo "Usage: scripts/pr-prepare <init|correction-init|correction-review-init|validate-commit|gates|push|run> <PR>"
     exit 2
     ;;
 esac

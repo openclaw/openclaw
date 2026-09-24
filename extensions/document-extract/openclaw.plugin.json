@@ -1,0 +1,18 @@
+{
+  "id": "document-extract",
+  "categories": ["documents-files"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Document Extraction",
+  "description": "Extract text and fallback page images from local document attachments.",
+  "contracts": {
+    "documentExtractors": ["pdf"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,97 @@
+// Timestamp helpers validate time zones and format log and diagnostic timestamps.
+const validTimeZoneCache = new Map<string, boolean>();
+const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
+let hostTimeZone: string | undefined;
+// Calendar parts and offsets are stable within a second; milliseconds stay per call.
+let lastTimestampParts:
+  | { second: number; timeZone: string; parts: Record<string, string> }
+  | undefined;
+
+function isValidTimeZone(tz: string): boolean {
+  const cached = validTimeZoneCache.get(tz);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let valid;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz }).format();
+    valid = true;
+  } catch {
+    valid = false;
+  }
+  validTimeZoneCache.set(tz, valid);
+  return valid;
+}
+
+type TimestampStyle = "short" | "medium" | "long";
+
+type FormatTimestampOptions = {
+  style?: TimestampStyle;
+  timeZone?: string;
+};
+
+function resolveEffectiveTimeZone(timeZone?: string): string {
+  const explicit = timeZone ?? process.env.TZ;
+  return explicit && isValidTimeZone(explicit)
+    ? explicit
+    : (hostTimeZone ??= Intl.DateTimeFormat().resolvedOptions().timeZone);
+}
+
+function formatOffset(offsetRaw: string): string {
+  return offsetRaw === "GMT" ? "+00:00" : offsetRaw.slice(3);
+}
+
+export function formatDiagnosticFilenameTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function getTimestampParts(date: Date, timeZone?: string) {
+  const effectiveTimeZone = resolveEffectiveTimeZone(timeZone);
+  const second = Math.floor(date.getTime() / 1000);
+  if (lastTimestampParts?.second === second && lastTimestampParts.timeZone === effectiveTimeZone) {
+    return lastTimestampParts.parts;
+  }
+  let fmt = timestampFormatterCache.get(effectiveTimeZone);
+  if (!fmt) {
+    // Log timestamps are formatted on hot paths; Intl construction is much
+    // costlier than formatToParts, while timezone rules remain process-stable.
+    fmt = new Intl.DateTimeFormat("en", {
+      timeZone: effectiveTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      fractionalSecondDigits: 3 as 1 | 2 | 3,
+      timeZoneName: "longOffset",
+    });
+    timestampFormatterCache.set(effectiveTimeZone, fmt);
+  }
+
+  // Native Intl supplies the closed set of part names.
+  const parts: Record<string, string> = {};
+  for (const part of fmt.formatToParts(date)) {
+    parts[part.type] = part.value;
+  }
+  lastTimestampParts = { second, timeZone: effectiveTimeZone, parts };
+  return parts;
+}
+
+export function formatTimestamp(date: Date, options?: FormatTimestampOptions): string {
+  const style = options?.style ?? "medium";
+  const parts = getTimestampParts(date, options?.timeZone);
+  const offset = formatOffset(parts.timeZoneName ?? "GMT");
+  const milliseconds = String(date.getUTCMilliseconds()).padStart(3, "0");
+
+  switch (style) {
+    case "short":
+      return `${parts.hour}:${parts.minute}:${parts.second}${offset}`;
+    case "medium":
+      return `${parts.hour}:${parts.minute}:${parts.second}.${milliseconds}${offset}`;
+    case "long":
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${milliseconds}${offset}`;
+  }
+  throw new Error("Unsupported timestamp style");
+}

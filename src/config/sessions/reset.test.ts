@@ -1,72 +1,26 @@
-import { describe, expect, it } from "vitest";
-import type { SessionConfig } from "../types.base.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+// Session reset tests cover conversation-aware reset classification.
+import { beforeEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { resolveSessionResetType } from "./reset.js";
 
-describe("resolveSessionResetPolicy", () => {
-  describe("backward compatibility: resetByType.dm → direct", () => {
-    it("uses resetByType.direct when available", () => {
-      const sessionCfg = {
-        resetByType: {
-          direct: { mode: "idle" as const, idleMinutes: 30 },
-        },
-      } satisfies SessionConfig;
+describe("session reset thread detection", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
 
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
+  it("does not treat Feishu conversation ids with embedded :topic: as thread suffixes", () => {
+    expect(
+      resolveSessionResetType({
+        sessionKey:
+          "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      }),
+    ).toBe("group");
+  });
 
-      expect(policy.mode).toBe("idle");
-      expect(policy.idleMinutes).toBe(30);
-    });
-
-    it("falls back to resetByType.dm (legacy) when direct is missing", () => {
-      // Simulating legacy config with "dm" key instead of "direct"
-      const sessionCfg = {
-        resetByType: {
-          dm: { mode: "idle" as const, idleMinutes: 45 },
-        },
-      } as unknown as SessionConfig;
-
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
-
-      expect(policy.mode).toBe("idle");
-      expect(policy.idleMinutes).toBe(45);
-    });
-
-    it("prefers resetByType.direct over resetByType.dm when both present", () => {
-      const sessionCfg = {
-        resetByType: {
-          direct: { mode: "daily" as const },
-          dm: { mode: "idle" as const, idleMinutes: 99 },
-        },
-      } as unknown as SessionConfig;
-
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
-
-      expect(policy.mode).toBe("daily");
-    });
-
-    it("does not use dm fallback for group/thread types", () => {
-      const sessionCfg = {
-        resetByType: {
-          dm: { mode: "idle" as const, idleMinutes: 45 },
-        },
-      } as unknown as SessionConfig;
-
-      const groupPolicy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "group",
-      });
-
-      // Should use default mode since group has no config and dm doesn't apply
-      expect(groupPolicy.mode).toBe("daily");
-    });
+  it("still treats Telegram :topic: suffixes as thread sessions", () => {
+    expect(
+      resolveSessionResetType({ sessionKey: "agent:main:telegram:group:-100123:topic:77" }),
+    ).toBe("thread");
   });
 });

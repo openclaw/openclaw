@@ -1,0 +1,427 @@
+import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
+import {
+  createAccountCronScheduledToolPolicy,
+  createTrustedCronScheduledToolPolicy,
+  type CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronToolsAllowExecTarget,
+  CronToolsAllowProvenance,
+} from "../../cron/types.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  consumeCronCreatorAuthorityGrant,
+  getCronManagementAuthority,
+  getCronManagementCallerOrigin,
+  getCronManagementChannelRequester,
+  resolveCronCreatorAuthorityGrantProvenance,
+} from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
+import { bindGatewayDeviceRevocation } from "../device-revocation.js";
+import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
+
+export function resolveCronCreatorAuthorityCapture(
+  callerScope: CronCallerScope | undefined,
+): (() => CronRuntimeAuthority | undefined) | undefined {
+  const grant = callerScope?.cronCreatorAuthorityGrant;
+  if (!grant) {
+    return undefined;
+  }
+  if (
+    resolveCronCreatorAuthorityGrantProvenance(grant, grant.runId)?.capturesRuntimeAuthority ===
+    false
+  ) {
+    return undefined;
+  }
+  if (callerScope.toolsAllowProvenance?.source !== "final-executable-surface") {
+    throw new TypeError("cron creator authority grant is missing tool-surface provenance");
+  }
+  return () => consumeCronCreatorAuthorityGrant(grant);
+}
+
+export function resolveCronMutationCommitGuard(
+  client: GatewayClient | null,
+  context: GatewayRequestContext,
+  jobScope?: {
+    callerScope: CronCallerScope | undefined;
+    jobId: string;
+    allowCurrentJob?: boolean;
+    expectedConfigRevision?: string;
+  },
+  callerAuthority?: Pick<
+    GatewayRequestHandlerOptions,
+    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  >,
+): (() => void) | undefined {
+  const validatesAuthority =
+    client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
+  const identity = client?.internal?.agentRuntimeIdentity;
+  const manageAll = identity ? getCronManagementAuthority(identity) : undefined;
+  const creatorGrant = identity?.cronCreatorAuthorityGrant;
+  const requesterGrant =
+    creatorGrant &&
+    identity &&
+    resolveCronCreatorAuthorityGrantProvenance(creatorGrant, identity.operationalRunInstance.runId)
+      ?.capturesRuntimeAuthority === false
+      ? creatorGrant
+      : undefined;
+  if (
+    !validatesAuthority &&
+    !jobScope?.callerScope &&
+    !manageAll &&
+    !requesterGrant &&
+    !callerAuthority?.sessionMutationCommitGuard &&
+    !callerAuthority?.hasCurrentClientAuthority
+  ) {
+    return undefined;
+  }
+  return bindGatewayDeviceRevocation(() => {
+    callerAuthority?.sessionMutationCommitGuard?.();
+    if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
+      throw new TypeError("Gateway caller authority is no longer active.");
+    }
+    manageAll?.();
+    if (validatesAuthority) {
+      assertActiveAgentRuntimeAuthority(client, context);
+    }
+    // The capability can expire, or the same id can acquire another owner while
+    // this request waits for the cron lock. Re-read both at the commit owner.
+    if (jobScope?.callerScope) {
+      const callerScope = readCronCallerScope(client);
+      const job = context.cron.getJob(jobScope.jobId);
+      if (
+        !callerScope ||
+        !job ||
+        (jobScope.expectedConfigRevision !== undefined &&
+          resolveCronJobConfigRevision(job) !== jobScope.expectedConfigRevision) ||
+        !cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId: context.cron.getDefaultAgentId(),
+          allowCurrentJob: jobScope.allowCurrentJob,
+        })
+      ) {
+        throw new TypeError(`unknown cron job id: ${jobScope.jobId}`);
+      }
+    }
+    if (requesterGrant) {
+      consumeCronCreatorAuthorityGrant(requesterGrant);
+    }
+  }, callerAuthority?.hasCurrentClientAuthority);
+}
+
+export type CronCallerScope = {
+  kind: "agentTool";
+  agentId: string;
+  sessionKey?: string;
+  accountId: string;
+  currentJobId?: string;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Restrict-only exec policy carried by the signed creator-turn identity. */
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
+  manageAll?: () => void;
+};
+
+export function readCronCallerScope(
+  client: GatewayClient | null | undefined,
+): CronCallerScope | undefined {
+  const identity = client?.internal?.agentRuntimeIdentity;
+  if (!identity?.agentId) {
+    return undefined;
+  }
+  const cronSelfManagementContext = identity.cronSelfManagementContext;
+  const currentJobId =
+    cronSelfManagementContext && Date.now() < cronSelfManagementContext.expiresAtMs
+      ? cronSelfManagementContext.jobId.trim() || undefined
+      : undefined;
+  const sourceChannel = identity.turnSourceChannel?.trim().toLowerCase();
+  const manageAll = getCronManagementAuthority(identity);
+  const fallbackCallerOrigin = sourceChannel
+    ? ({ kind: "external", channel: sourceChannel } as const)
+    : identity.turnSourceLocal === true
+      ? ({ kind: "local" } as const)
+      : ({ kind: "unknown" } as const);
+  const grantProvenance = identity.cronCreatorAuthorityGrant
+    ? resolveCronCreatorAuthorityGrantProvenance(
+        identity.cronCreatorAuthorityGrant,
+        identity.operationalRunInstance.runId,
+      )
+    : undefined;
+  const requester = manageAll
+    ? getCronManagementChannelRequester(identity)
+    : grantProvenance?.channelRequester;
+  const authenticatedCallerOrigin = manageAll
+    ? getCronManagementCallerOrigin(identity)
+    : grantProvenance?.callerOrigin;
+  const callerOrigin = authenticatedCallerOrigin ?? fallbackCallerOrigin;
+  const channelRequester =
+    requester &&
+    requester.channel === sourceChannel &&
+    requester.accountId === normalizeAccountId(identity.turnSourceAccountId)
+      ? requester
+      : undefined;
+  const surfaceProvenance: CronToolsAllowProvenance | undefined =
+    !manageAll && identity.cronToolsAllowCapture === "final-executable-surface"
+      ? { version: 1, source: "final-executable-surface", callerOrigin }
+      : undefined;
+  const authenticatedRequesterProvenance = authenticatedCallerOrigin
+    ? ({
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: authenticatedCallerOrigin,
+        ...(channelRequester ? { channelRequester } : {}),
+      } satisfies CronToolsAllowProvenance)
+    : channelRequester
+      ? ({
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester,
+        } satisfies CronToolsAllowProvenance)
+      : undefined;
+  const toolsAllowProvenance = surfaceProvenance
+    ? {
+        ...surfaceProvenance,
+        ...(channelRequester ? { channelRequester } : {}),
+      }
+    : authenticatedRequesterProvenance;
+  return {
+    kind: "agentTool",
+    agentId: normalizeAgentId(identity.agentId),
+    sessionKey: identity.sessionKey?.trim() || undefined,
+    accountId: normalizeAccountId(identity.turnSourceAccountId),
+    currentJobId,
+    manageAll,
+    ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
+    ...(surfaceProvenance && identity.cronExecToolTarget?.host === "gateway"
+      ? {
+          toolsAllowExecTarget: {
+            version: 1 as const,
+            ...identity.cronExecToolTarget,
+          },
+        }
+      : {}),
+    ...(!manageAll && identity.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
+      : {}),
+  };
+}
+
+/** Management access can reauthorize origin, but cannot lend another account native identity. */
+export function resolveCronRequesterProvenanceForJob(
+  job: Pick<CronJob, "owner">,
+  callerScope: CronCallerScope | undefined,
+): CronToolsAllowProvenance | undefined {
+  const provenance = callerScope?.toolsAllowProvenance;
+  if (!provenance?.channelRequester) {
+    return provenance;
+  }
+  if (
+    job.owner?.sessionKey === callerScope?.sessionKey &&
+    normalizeAccountId(job.owner?.accountId) === callerScope?.accountId
+  ) {
+    return provenance;
+  }
+  if (provenance.source === "final-executable-surface") {
+    const { channelRequester: _requester, ...surfaceProvenance } = provenance;
+    return surfaceProvenance;
+  }
+  return provenance.callerOrigin
+    ? { version: 1, source: "authenticated-requester", callerOrigin: provenance.callerOrigin }
+    : undefined;
+}
+
+/** Converts the authenticated gateway caller into server-only scheduled authority provenance. */
+export function resolveCronScheduledToolPolicyForCaller(
+  callerScope: CronCallerScope | undefined,
+): CronScheduledToolPolicy {
+  if (!callerScope) {
+    return createTrustedCronScheduledToolPolicy();
+  }
+  const policy = callerScope.sessionKey
+    ? createAccountCronScheduledToolPolicy({
+        ownerSessionKey: callerScope.sessionKey,
+        ownerAccountId: callerScope.accountId,
+      })
+    : undefined;
+  if (!policy) {
+    // An agent-runtime caller cannot be promoted to operator authority merely
+    // because its signed runtime envelope omitted a session identity.
+    throw new TypeError("agent-runtime cron mutations require an authenticated session identity");
+  }
+  return policy;
+}
+function parseAgentIdFromSessionRef(
+  value: string | undefined | null,
+  fallbackAgentId?: string,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? (parseAgentSessionKey(trimmed)?.agentId ?? fallbackAgentId) : undefined;
+}
+
+function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string | undefined {
+  const ownerAgentId =
+    job.owner?.agentId?.trim() || parseAgentIdFromSessionRef(job.owner?.sessionKey);
+  return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
+}
+
+function isOperatorCommandCronJob(job: CronJob): boolean {
+  return (
+    job.payload.kind === "command" ||
+    job.schedule.kind === "on-exit" ||
+    job.schedule.kind === "stream"
+  );
+}
+
+export function cronJobMatchesCallerScope(params: {
+  job: CronJob;
+  callerScope: CronCallerScope | undefined;
+  defaultAgentId?: string;
+  allowCurrentJob?: boolean;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  if (params.callerScope.manageAll) {
+    params.callerScope.manageAll();
+    return true;
+  }
+  // Command cron is an operator-admin automation surface, not a model-visible
+  // agent tool capability. Hide it before owner/routing fallback can expose
+  // payload env, watched commands, or manual force-run controls.
+  if (isOperatorCommandCronJob(params.job)) {
+    return false;
+  }
+  const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  const policy = params.job.scheduledToolPolicy;
+  // A signed scheduled-run claim restores only the cron tool's historical
+  // current-job surface. Callers must opt in per read/self-remove operation.
+  if (
+    params.allowCurrentJob === true &&
+    params.callerScope.currentJobId === params.job.id &&
+    effectiveAgentId === params.callerScope.agentId &&
+    (policy?.mode !== "account" ||
+      normalizeAccountId(policy.ownerAccountId) === params.callerScope.accountId)
+  ) {
+    return true;
+  }
+  // Account jobs retain the exact creator session's scheduled authority.
+  if (
+    policy &&
+    (policy.mode === "trusted" ||
+      params.callerScope.sessionKey?.trim() !== policy.ownerSessionKey ||
+      params.job.owner?.sessionKey?.trim() !== policy.ownerSessionKey ||
+      params.callerScope.accountId !== normalizeAccountId(policy.ownerAccountId))
+  ) {
+    return false;
+  }
+  const ownerAccountId = params.job.owner?.accountId;
+  // Operator-created records may name an account without an owner agent; account ownership is
+  // therefore an independent boundary, not a refinement of ownerAgentId.
+  if (ownerAccountId && normalizeAccountId(ownerAccountId) !== params.callerScope.accountId) {
+    return false;
+  }
+  // Declarative jobs retain their stamped owner when an operator retargets execution.
+  // Ownerless jobs predate attribution, so keep their routing-based visibility.
+  const ownerAgentId = resolveCronJobOwnerAgentId(params.job);
+  if (ownerAgentId) {
+    return ownerAgentId === params.callerScope.agentId;
+  }
+  if (effectiveAgentId !== params.callerScope.agentId) {
+    return false;
+  }
+  return cronPatchSessionRefsMatchCaller(params.job, params.callerScope);
+}
+
+export function cronJobMatchesDeclarationScope(params: {
+  job: CronJob;
+  input: CronJobCreate;
+  callerScope: CronCallerScope | undefined;
+  defaultAgentId?: string;
+}): boolean {
+  if (params.callerScope) {
+    return cronJobMatchesCallerScope(params);
+  }
+
+  // Declarative convergence preserves the matched job's owner, so account identity must be part
+  // of selection or a same-key declaration can mutate another account's authority envelope.
+  if (
+    normalizeAccountId(params.job.owner?.accountId) !==
+    normalizeAccountId(params.input.owner?.accountId)
+  ) {
+    return false;
+  }
+  const inputOwnerSessionKey = params.input.owner?.sessionKey;
+  const inputOwnerAgentId = resolveCronJobOwnerAgentId(params.input);
+  if (inputOwnerSessionKey && !inputOwnerAgentId) {
+    return params.job.owner?.sessionKey === inputOwnerSessionKey;
+  }
+  const inputAgentId =
+    inputOwnerAgentId ?? resolveCronJobEffectiveAgentId(params.input, params.defaultAgentId);
+  const jobAgentId =
+    resolveCronJobOwnerAgentId(params.job) ??
+    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  return jobAgentId === inputAgentId;
+}
+
+export function cronCreateMatchesCallerScope(params: {
+  job: CronJobCreate;
+  callerScope: CronCallerScope | undefined;
+  defaultAgentId?: string;
+}): boolean {
+  if (!params.callerScope) {
+    return true;
+  }
+  const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  if (effectiveAgentId !== params.callerScope.agentId) {
+    return false;
+  }
+  return cronPatchSessionRefsMatchCaller(params.job, params.callerScope);
+}
+
+export function applyCronCreateCallerScopeDefault(
+  job: CronJobCreate,
+  callerScope: CronCallerScope | undefined,
+): CronJobCreate {
+  if (!callerScope) {
+    return job;
+  }
+  return {
+    ...job,
+    agentId: job.agentId?.trim() ? job.agentId : callerScope.agentId,
+    owner: {
+      agentId: callerScope.agentId,
+      ...(callerScope.sessionKey ? { sessionKey: callerScope.sessionKey } : {}),
+      accountId: callerScope.accountId,
+    },
+  };
+}
+
+export function cronPatchSessionRefsMatchCaller(
+  patch: CronJobPatch,
+  callerScope: CronCallerScope | undefined,
+): boolean {
+  if (!callerScope || callerScope.manageAll) {
+    callerScope?.manageAll?.();
+    return true;
+  }
+  const target = patch.sessionTarget?.trim();
+  return [patch.sessionKey, target?.startsWith("session:") ? target.slice(8) : undefined].every(
+    (ref) => {
+      const agentId = parseAgentIdFromSessionRef(ref, callerScope.agentId);
+      return !agentId || normalizeAgentId(agentId) === callerScope.agentId;
+    },
+  );
+}

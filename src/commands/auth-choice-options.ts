@@ -1,323 +1,185 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { AuthChoice } from "./onboard-types.js";
+// Builds provider-aware auth-choice options and grouped onboarding menus.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
+import {
+  compareProviderAuthChoiceGroups,
+  isFeaturedProviderAuthChoiceGroup,
+} from "../plugins/provider-auth-choice-order.js";
+import {
+  CORE_AUTH_CHOICE_OPTIONS,
+  type AuthChoiceGroup,
+  type AuthChoiceOption,
+  formatStaticAuthChoiceChoicesForCli,
+} from "./auth-choice-options.static.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
-export type AuthChoiceOption = {
-  value: AuthChoice;
-  label: string;
-  hint?: string;
-};
+function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  return a.label.localeCompare(b.label);
+}
 
-export type AuthChoiceGroupId =
-  | "openai"
-  | "anthropic"
-  | "google"
-  | "copilot"
-  | "openrouter"
-  | "litellm"
-  | "ai-gateway"
-  | "cloudflare-ai-gateway"
-  | "moonshot"
-  | "zai"
-  | "xiaomi"
-  | "opencode-zen"
-  | "minimax"
-  | "synthetic"
-  | "venice"
-  | "qwen"
-  | "together"
-  | "qianfan"
-  | "xai"
-  | "custom";
+/** Keep the first-tier provider list stable; every other group belongs under More. */
+export function isFeaturedAuthChoiceGroup(group: AuthChoiceGroup): boolean {
+  return isFeaturedProviderAuthChoiceGroup(group.value);
+}
 
-export type AuthChoiceGroup = {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  options: AuthChoiceOption[];
-};
+function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  const priorityA = a.assistantPriority ?? 0;
+  const priorityB = b.assistantPriority ?? 0;
+  return priorityA - priorityB || compareOptionLabels(a, b);
+}
 
-const AUTH_CHOICE_GROUP_DEFS: {
-  value: AuthChoiceGroupId;
-  label: string;
-  hint?: string;
-  choices: AuthChoice[];
-}[] = [
-  {
-    value: "openai",
-    label: "OpenAI",
-    hint: "Codex OAuth + API key",
-    choices: ["openai-codex", "openai-api-key"],
-  },
-  {
-    value: "anthropic",
-    label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
-  },
-  {
-    value: "minimax",
-    label: "MiniMax",
-    hint: "M2.1 (recommended)",
-    choices: ["minimax-portal", "minimax-api", "minimax-api-lightning"],
-  },
-  {
-    value: "moonshot",
-    label: "Moonshot AI (Kimi K2.5)",
-    hint: "Kimi K2.5 + Kimi Coding",
-    choices: ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key"],
-  },
-  {
-    value: "google",
-    label: "Google",
-    hint: "Gemini API key + OAuth",
-    choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
-  },
-  {
-    value: "xai",
-    label: "xAI (Grok)",
-    hint: "API key",
-    choices: ["xai-api-key"],
-  },
-  {
-    value: "openrouter",
-    label: "OpenRouter",
-    hint: "API key",
-    choices: ["openrouter-api-key"],
-  },
-  {
-    value: "qwen",
-    label: "Qwen",
-    hint: "OAuth",
-    choices: ["qwen-portal"],
-  },
-  {
-    value: "zai",
-    label: "Z.AI",
-    hint: "GLM Coding Plan / Global / CN",
-    choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
-  },
-  {
-    value: "qianfan",
-    label: "Qianfan",
-    hint: "API key",
-    choices: ["qianfan-api-key"],
-  },
-  {
-    value: "copilot",
-    label: "Copilot",
-    hint: "GitHub + local proxy",
-    choices: ["github-copilot", "copilot-proxy"],
-  },
-  {
-    value: "ai-gateway",
-    label: "Vercel AI Gateway",
-    hint: "API key",
-    choices: ["ai-gateway-api-key"],
-  },
-  {
-    value: "opencode-zen",
-    label: "OpenCode Zen",
-    hint: "API key",
-    choices: ["opencode-zen"],
-  },
-  {
-    value: "xiaomi",
-    label: "Xiaomi",
-    hint: "API key",
-    choices: ["xiaomi-api-key"],
-  },
-  {
-    value: "synthetic",
-    label: "Synthetic",
-    hint: "Anthropic-compatible (multi-model)",
-    choices: ["synthetic-api-key"],
-  },
-  {
-    value: "together",
-    label: "Together AI",
-    hint: "API key",
-    choices: ["together-api-key"],
-  },
-  {
-    value: "venice",
-    label: "Venice AI",
-    hint: "Privacy-focused (uncensored models)",
-    choices: ["venice-api-key"],
-  },
-  {
-    value: "litellm",
-    label: "LiteLLM",
-    hint: "Unified LLM gateway (100+ providers)",
-    choices: ["litellm-api-key"],
-  },
-  {
-    value: "cloudflare-ai-gateway",
-    label: "Cloudflare AI Gateway",
-    hint: "Account ID + Gateway ID + API key",
-    choices: ["cloudflare-ai-gateway-api-key"],
-  },
-  {
-    value: "custom",
-    label: "Custom Provider",
-    hint: "Any OpenAI or Anthropic compatible endpoint",
-    choices: ["custom-api-key"],
-  },
-];
+/** Sort auth-choice groups with featured providers first, then stable labels. */
+export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  return compareProviderAuthChoiceGroups(
+    { id: a.value, label: a.label },
+    { id: b.value, label: b.label },
+  );
+}
 
-export function buildAuthChoiceOptions(params: {
-  store: AuthProfileStore;
-  includeSkip: boolean;
+function resolveProviderChoiceOptions(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
-  void params.store;
-  const options: AuthChoiceOption[] = [];
+  return resolveProviderSetupFlowContributions({
+    ...params,
+    scope: "text-inference",
+  }).map((contribution) =>
+    Object.assign(
+      {},
+      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
+      { providerId: contribution.providerId },
+      contribution.option.modelTarget ? { modelTarget: contribution.option.modelTarget } : {},
+      contribution.option.hint ? { hint: contribution.option.hint } : {},
+      contribution.option.assistantPriority !== undefined
+        ? { assistantPriority: contribution.option.assistantPriority }
+        : {},
+      contribution.option.assistantVisibility
+        ? { assistantVisibility: contribution.option.assistantVisibility }
+        : {},
+      contribution.option.group
+        ? {
+            groupId: contribution.option.group.id as AuthChoiceGroupId,
+            groupLabel: contribution.option.group.label,
+            ...(contribution.option.group.hint
+              ? { groupHint: contribution.option.group.hint }
+              : {}),
+          }
+        : {},
+      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
+    ),
+  );
+}
 
-  options.push({
-    value: "token",
-    label: "Anthropic token (paste setup-token)",
-    hint: "run `claude setup-token` elsewhere, then paste the token here",
-  });
+/**
+ * Format every accepted `--auth-choice` value for CLI help and validation.
+ *
+ * This is the single owner of that set: help text, onboard preflight, and the
+ * non-interactive dispatcher all render it, so an advertised value is always an
+ * accepted one. Deprecated aliases stay out; `auth-choice-legacy.ts` normalizes
+ * them before any surface sees them.
+ */
+export function formatAuthChoiceChoicesForCli(params?: {
+  includeSkip?: boolean;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const values = [
+    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
+      (contribution) => contribution.option.value,
+    ),
+  ];
 
-  options.push({
-    value: "openai-codex",
-    label: "OpenAI Codex (ChatGPT OAuth)",
-  });
-  options.push({ value: "chutes", label: "Chutes (OAuth)" });
-  options.push({ value: "openai-api-key", label: "OpenAI API key" });
-  options.push({ value: "xai-api-key", label: "xAI (Grok) API key" });
-  options.push({
-    value: "qianfan-api-key",
-    label: "Qianfan API key",
-  });
-  options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
-  options.push({
-    value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
-  });
-  options.push({
-    value: "ai-gateway-api-key",
-    label: "Vercel AI Gateway API key",
-  });
-  options.push({
-    value: "cloudflare-ai-gateway-api-key",
-    label: "Cloudflare AI Gateway",
-    hint: "Account ID + Gateway ID + API key",
-  });
-  options.push({
-    value: "moonshot-api-key",
-    label: "Kimi API key (.ai)",
-  });
-  options.push({
-    value: "moonshot-api-key-cn",
-    label: "Kimi API key (.cn)",
-  });
-  options.push({
-    value: "kimi-code-api-key",
-    label: "Kimi Code API key (subscription)",
-  });
-  options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
-  options.push({
-    value: "venice-api-key",
-    label: "Venice AI API key",
-    hint: "Privacy-focused inference (uncensored models)",
-  });
-  options.push({
-    value: "together-api-key",
-    label: "Together AI API key",
-    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
-  });
-  options.push({
-    value: "github-copilot",
-    label: "GitHub Copilot (GitHub device login)",
-    hint: "Uses GitHub device flow",
-  });
-  options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
-  options.push({
-    value: "google-antigravity",
-    label: "Google Antigravity OAuth",
-    hint: "Uses the bundled Antigravity auth plugin",
-  });
-  options.push({
-    value: "google-gemini-cli",
-    label: "Google Gemini CLI OAuth",
-    hint: "Uses the bundled Gemini CLI auth plugin",
-  });
-  options.push({ value: "zai-api-key", label: "Z.AI API key" });
-  options.push({
-    value: "zai-coding-global",
-    label: "Coding-Plan-Global",
-    hint: "GLM Coding Plan Global (api.z.ai)",
-  });
-  options.push({
-    value: "zai-coding-cn",
-    label: "Coding-Plan-CN",
-    hint: "GLM Coding Plan CN (open.bigmodel.cn)",
-  });
-  options.push({
-    value: "zai-global",
-    label: "Global",
-    hint: "Z.AI Global (api.z.ai)",
-  });
-  options.push({
-    value: "zai-cn",
-    label: "CN",
-    hint: "Z.AI CN (open.bigmodel.cn)",
-  });
-  options.push({
-    value: "xiaomi-api-key",
-    label: "Xiaomi API key",
-  });
-  options.push({
-    value: "minimax-portal",
-    label: "MiniMax OAuth",
-    hint: "Oauth plugin for MiniMax",
-  });
-  options.push({ value: "qwen-portal", label: "Qwen OAuth" });
-  options.push({
-    value: "copilot-proxy",
-    label: "Copilot Proxy (local)",
-    hint: "Local proxy for VS Code Copilot models",
-  });
-  options.push({ value: "apiKey", label: "Anthropic API key" });
-  // Token flow is currently Anthropic-only; use CLI for advanced providers.
-  options.push({
-    value: "opencode-zen",
-    label: "OpenCode Zen (multi-model proxy)",
-    hint: "Claude, GPT, Gemini via opencode.ai/zen",
-  });
-  options.push({ value: "minimax-api", label: "MiniMax M2.1" });
-  options.push({
-    value: "minimax-api-lightning",
-    label: "MiniMax M2.1 Lightning",
-    hint: "Faster, higher output cost",
-  });
-  options.push({ value: "custom-api-key", label: "Custom Provider" });
+  return uniqueStrings(values).join("|");
+}
 
-  if (params.includeSkip) {
-    options.push({ value: "skip", label: "Skip for now" });
+/** Build flat auth-choice options from core choices plus provider setup flows. */
+function buildAuthChoiceOptions(params: {
+  assistantVisibleOnly?: boolean;
+  detectedProviderIds?: ReadonlySet<string>;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): AuthChoiceOption[] {
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
+  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
+    optionByValue.set(option.value, option);
   }
+  for (const option of resolveProviderChoiceOptions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })) {
+    optionByValue.set(option.value, option);
+  }
+
+  const detectedProviders = new Set(
+    [...(params.detectedProviderIds ?? [])].map(normalizeProviderId),
+  );
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values())
+    .toSorted(compareOptionLabels)
+    .filter(
+      (option) =>
+        option.assistantVisibility !== "detected-only" ||
+        (option.providerId !== undefined &&
+          detectedProviders.has(normalizeProviderId(option.providerId))),
+    )
+    .filter((option) =>
+      params.assistantVisibleOnly ? option.assistantVisibility !== "manual-only" : true,
+    );
 
   return options;
 }
 
-export function buildAuthChoiceGroups(params: { store: AuthProfileStore; includeSkip: boolean }): {
+/** Build grouped auth choices, filtering manual-only methods by default. */
+export function buildAuthChoiceGroups(params: {
+  includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
+  detectedProviderIds?: ReadonlySet<string>;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): {
   groups: AuthChoiceGroup[];
   skipOption?: AuthChoiceOption;
 } {
   const options = buildAuthChoiceOptions({
     ...params,
-    includeSkip: false,
+    assistantVisibleOnly: params.assistantVisibleOnly ?? true,
   });
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
-    options.map((opt) => [opt.value, opt]),
-  );
+  const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
-  const groups = AUTH_CHOICE_GROUP_DEFS.map((group) => ({
-    ...group,
-    options: group.choices
-      .map((choice) => optionByValue.get(choice))
-      .filter((opt): opt is AuthChoiceOption => Boolean(opt)),
-  }));
+  for (const option of options) {
+    if (!option.groupId || !option.groupLabel) {
+      continue;
+    }
+    const existing = groupsById.get(option.groupId);
+    if (existing) {
+      existing.options.push(option);
+      if (option.providerId) {
+        existing.providerIds = uniqueStrings([...(existing.providerIds ?? []), option.providerId]);
+      }
+      continue;
+    }
+    const providerIds = option.providerId ? [option.providerId] : [];
+    groupsById.set(option.groupId, {
+      value: option.groupId,
+      label: option.groupLabel,
+      ...(option.groupHint ? { hint: option.groupHint } : {}),
+      ...(providerIds.length > 0 ? { providerIds } : {}),
+      options: [option],
+    });
+  }
+  const groups = Array.from(groupsById.values())
+    .map((group) => {
+      group.options = group.options.toSorted(compareAssistantOptions);
+      return group;
+    })
+    .toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

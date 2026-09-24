@@ -1,15 +1,28 @@
+// System CLI commands that call Gateway RPC methods for events, heartbeats, and presence.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import type { GatewayRpcOpts } from "./gateway-rpc.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { isSystemMachineOutput } from "./system-output-mode.js";
 
-type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
+type SystemEventOpts = GatewayRpcOpts & {
+  text?: string;
+  mode?: string;
+  sessionKey?: string;
+  json?: boolean;
+};
+type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
 const normalizeWakeMode = (raw: unknown) => {
-  const mode = typeof raw === "string" ? raw.trim() : "";
+  const mode = normalizeOptionalString(raw) ?? "";
   if (!mode) {
     return "next-heartbeat" as const;
   }
@@ -19,6 +32,32 @@ const normalizeWakeMode = (raw: unknown) => {
   throw new Error("--mode must be now or next-heartbeat");
 };
 
+async function runSystemGatewayCommand(
+  opts: SystemGatewayOpts,
+  action: () => Promise<unknown>,
+  successText?: string,
+): Promise<void> {
+  const machineOutput = opts.json || successText === undefined;
+  try {
+    const result = await action();
+    if (machineOutput) {
+      defaultRuntime.writeJson(result);
+    } else {
+      defaultRuntime.log(successText);
+    }
+  } catch (err) {
+    rethrowExpectedCliError(err);
+    const message = formatErrorMessage(err);
+    if (machineOutput) {
+      defaultRuntime.writeJson(formatCliJsonFailure(message));
+    } else {
+      defaultRuntime.error(danger(message));
+    }
+    defaultRuntime.exit(1);
+  }
+}
+
+/** Register Gateway-backed system event, heartbeat, and presence commands. */
 export function registerSystemCli(program: Command) {
   const system = program
     .command("system")
@@ -28,6 +67,7 @@ export function registerSystemCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.openclaw.ai/cli/system")}\n`,
     );
+  setCommandJsonMode(system, "output", ({ argv }) => isSystemMachineOutput(argv));
 
   addGatewayClientOptions(
     system
@@ -35,24 +75,40 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option(
+        "--session-key <sessionKey>",
+        "Target a specific session for the event (defaults to the agent's main session)",
+      )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
-    try {
-      const text = typeof opts.text === "string" ? opts.text.trim() : "";
-      if (!text) {
-        throw new Error("--text is required");
-      }
-      const mode = normalizeWakeMode(opts.mode);
-      const result = await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
-      if (opts.json) {
-        defaultRuntime.log(JSON.stringify(result, null, 2));
-      } else {
-        defaultRuntime.log("ok");
-      }
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+    await runSystemGatewayCommand(
+      opts,
+      async () => {
+        const text = normalizeOptionalString(opts.text) ?? "";
+        if (!text) {
+          throw new Error(
+            `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
+          );
+        }
+        const mode = normalizeWakeMode(opts.mode);
+        const sessionKey = normalizeOptionalString(opts.sessionKey);
+        const result = await callGatewayFromCli(
+          "wake",
+          opts,
+          sessionKey ? { mode, text, sessionKey } : { mode, text },
+          { expectFinal: false },
+        );
+        if (typeof result === "object" && result !== null && "ok" in result && !result.ok) {
+          const reason =
+            "reason" in result && typeof result.reason === "string"
+              ? result.reason
+              : "Gateway did not accept the system event";
+          throw new Error(reason);
+        }
+        return result;
+      },
+      "ok",
+    );
   });
 
   const heartbeat = system.command("heartbeat").description("Heartbeat controls");
@@ -62,72 +118,45 @@ export function registerSystemCli(program: Command) {
       .command("last")
       .description("Show the last heartbeat event")
       .option("--json", "Output JSON", false),
-  ).action(async (opts: GatewayRpcOpts & { json?: boolean }) => {
-    try {
-      const result = await callGatewayFromCli("last-heartbeat", opts, undefined, {
+  ).action(async (opts: SystemGatewayOpts) => {
+    await runSystemGatewayCommand(opts, async () => {
+      return await callGatewayFromCli("last-heartbeat", opts, undefined, {
         expectFinal: false,
       });
-      defaultRuntime.log(JSON.stringify(result, null, 2));
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+    });
   });
 
-  addGatewayClientOptions(
-    heartbeat
-      .command("enable")
-      .description("Enable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: GatewayRpcOpts & { json?: boolean }) => {
-    try {
-      const result = await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: true },
-        { expectFinal: false },
-      );
-      defaultRuntime.log(JSON.stringify(result, null, 2));
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
-  });
-
-  addGatewayClientOptions(
-    heartbeat
-      .command("disable")
-      .description("Disable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: GatewayRpcOpts & { json?: boolean }) => {
-    try {
-      const result = await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: false },
-        { expectFinal: false },
-      );
-      defaultRuntime.log(JSON.stringify(result, null, 2));
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
-  });
+  for (const [name, enabled] of [
+    ["enable", true],
+    ["disable", false],
+  ] as const) {
+    addGatewayClientOptions(
+      heartbeat
+        .command(name)
+        .description(`${enabled ? "Enable" : "Disable"} heartbeats`)
+        .option("--json", "Output JSON", false),
+    ).action(async (opts: SystemGatewayOpts) => {
+      await runSystemGatewayCommand(opts, async () => {
+        return await callGatewayFromCli(
+          "set-heartbeats",
+          opts,
+          { enabled },
+          { expectFinal: false },
+        );
+      });
+    });
+  }
 
   addGatewayClientOptions(
     system
       .command("presence")
       .description("List system presence entries")
       .option("--json", "Output JSON", false),
-  ).action(async (opts: GatewayRpcOpts & { json?: boolean }) => {
-    try {
-      const result = await callGatewayFromCli("system-presence", opts, undefined, {
+  ).action(async (opts: SystemGatewayOpts) => {
+    await runSystemGatewayCommand(opts, async () => {
+      return await callGatewayFromCli("system-presence", opts, undefined, {
         expectFinal: false,
       });
-      defaultRuntime.log(JSON.stringify(result, null, 2));
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+    });
   });
 }

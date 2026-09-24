@@ -1,0 +1,225 @@
+/**
+ * Normalizes transcript messages before provider transport replay. It drops
+ * unsafe failed turns, maps tool-call ids across model boundaries, and fills
+ * strict provider tool-result gaps when supported.
+ */
+import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  isReasoningOnlyLengthAssistantTurn,
+  resolveFailedAssistantReplay,
+} from "@openclaw/ai/internal/shared";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import type { Api, Context, Model } from "../llm/types.js";
+import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+
+const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
+  "anthropic-messages",
+  "openclaw-anthropic-messages-transport",
+  "bedrock-converse-stream",
+  "google-generative-ai",
+  "openclaw-google-generative-ai-transport",
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+
+// "aborted" is the OpenAI Responses-family synthetic result convention,
+// inherited from upstream Codex history normalization. It applies to public,
+// Codex, Azure, and their OpenClaw transport aliases; Gemini/Anthropic use their
+// own text. tool-replay-repair.live.test.ts exercises both paths against real models.
+const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+
+function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
+  return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
+}
+
+/** Transforms transcript messages into a provider-safe replay context. */
+export function transformTransportMessages(
+  messages: Context["messages"],
+  model: Model,
+  normalizeToolCallId?: (
+    id: string,
+    targetModel: Model,
+    source: { provider: string; api: Api; model: string },
+  ) => string,
+  options?: {
+    normalizeSameModelToolCallIds?: boolean;
+    preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
+  },
+): Context["messages"] {
+  const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
+  const syntheticToolResultText = OPENAI_RESPONSES_ABORTED_OUTPUT_APIS.has(model.api)
+    ? "aborted"
+    : "No result provided";
+  const toolCallIdMap = new Map<string, string>();
+  let hasCrossModelAsyncCalls = false;
+  const transformed = messages.map((msg) => {
+    if (msg.role === "user") {
+      return msg;
+    }
+    if (msg.role === "toolResult") {
+      // Earlier history repair may already have paired this call. Apply the same
+      // transport placeholder without rewriting persisted diagnostics or real output.
+      const normalizeRepairText =
+        isSyntheticMissingToolResult(msg) &&
+        (msg.content.length !== 1 ||
+          msg.content[0]?.type !== "text" ||
+          msg.content[0].text !== syntheticToolResultText);
+      const result = normalizeRepairText
+        ? {
+            ...msg,
+            content: [{ type: "text" as const, text: syntheticToolResultText }],
+            // Legacy placeholders were identified by prose alone. Preserve their
+            // provenance so pairing can still replace them with a later real result.
+            details: {
+              ...(isRecord(msg.details) ? msg.details : {}),
+              [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true,
+            },
+          }
+        : msg;
+      const normalizedId = toolCallIdMap.get(msg.toolCallId);
+      return normalizedId && normalizedId !== msg.toolCallId
+        ? { ...result, toolCallId: normalizedId }
+        : result;
+    }
+    if (msg.role !== "assistant") {
+      return msg;
+    }
+    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
+      source: {
+        provider: msg.provider,
+        api: msg.api,
+        modelId: msg.model,
+        responseModelId: msg.responseModel,
+      },
+      target: {
+        provider: model.provider,
+        api: model.api,
+        modelId: model.id,
+        modelParams: model.params,
+      },
+    });
+    const isSameModel =
+      modelBoundThinkingReplayMode === "preserve" ||
+      (msg.provider === model.provider && msg.api === model.api && msg.model === model.id);
+    const sourceContent = Array.isArray(msg.content)
+      ? msg.content
+      : msg.content != null && typeof msg.content === "object"
+        ? ([msg.content] as typeof msg.content)
+        : [];
+    const content: typeof msg.content = [];
+    for (const block of sourceContent) {
+      if (block.type === "thinking") {
+        if (modelBoundThinkingReplayMode === "drop") {
+          continue;
+        }
+        if (block.redacted) {
+          if (isSameModel) {
+            content.push(block);
+          }
+          continue;
+        }
+        if (isSameModel && block.thinkingSignature) {
+          content.push(block);
+          continue;
+        }
+        if (!block.thinking.trim()) {
+          continue;
+        }
+        content.push(isSameModel ? block : { type: "text", text: block.thinking });
+        continue;
+      }
+      if (block.type === "text") {
+        content.push(isSameModel ? block : { type: "text", text: block.text });
+        continue;
+      }
+      if (block.type !== "toolCall") {
+        content.push(block);
+        continue;
+      }
+      let normalizedToolCall = block;
+      if (!isSameModel && block.async) {
+        hasCrossModelAsyncCalls = true;
+        normalizedToolCall = { ...normalizedToolCall };
+        delete normalizedToolCall.async;
+      }
+      if (
+        !isSameModel &&
+        block.thoughtSignature &&
+        options?.preserveCrossModelToolCallThoughtSignature !== true
+      ) {
+        normalizedToolCall = { ...normalizedToolCall };
+        delete normalizedToolCall.thoughtSignature;
+      }
+      if (
+        (!isSameModel || options?.normalizeSameModelToolCallIds === true) &&
+        normalizeToolCallId
+      ) {
+        const normalizedId = normalizeToolCallId(block.id, model, msg);
+        if (normalizedId !== block.id) {
+          toolCallIdMap.set(block.id, normalizedId);
+          normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+        }
+      }
+      content.push(normalizedToolCall);
+    }
+    return { ...msg, content };
+  });
+  // Pairing-aware transports must let shared repair see errored tool-call frames and
+  // their adjacent results together; pre-filtering the call can misattribute its result
+  // to an older turn that reused the same provider id.
+  const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
+  let replayLength = 0;
+  transformed.forEach((msg, index) => {
+    const original = messages[index];
+    let replayMessage = msg;
+    if (original) {
+      if (isReasoningOnlyLengthAssistantTurn(original)) {
+        return;
+      }
+      switch (resolveFailedAssistantReplay(original, { pairingAware: requiresPairing })) {
+        case "drop":
+          return;
+        case "marker":
+          replayMessage = {
+            ...msg,
+            content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+          };
+          break;
+        case "keep":
+          break;
+      }
+    }
+    transformed[replayLength++] = replayMessage;
+  });
+  transformed.length = replayLength;
+
+  if (!requiresPairing) {
+    return transformed;
+  }
+
+  // The local transport transform can synthesize missing results, but it does not move
+  // displaced real results back before an intervening user turn. Shared repair
+  // handles both and drops aborted/error turns together with their owned results.
+  return repairToolUseResultPairing(transformed, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: syntheticToolResultText,
+    preserveUnframedToolResults: options?.preserveUnframedToolResults,
+  }).messages as Context["messages"];
+}

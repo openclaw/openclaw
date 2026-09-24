@@ -1,65 +1,141 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+// Applies an onboarding auth choice through provider setup flows and legacy normalization.
+import { formatCliCommand } from "../cli/command-format.js";
+import { prepareAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+  PreparedAuthChoiceResult,
+} from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
-import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
-import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
-import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
-import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot.js";
-import { applyAuthChoiceGoogleAntigravity } from "./auth-choice.apply.google-antigravity.js";
-import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
-import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
-import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
-import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
-import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
-import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
 
-export type ApplyAuthChoiceParams = {
+async function normalizeLegacyChoice(
+  authChoice: AuthChoice | undefined,
+  params: Pick<ApplyAuthChoiceParams, "config" | "env" | "workspaceDir">,
+): Promise<AuthChoice | undefined> {
+  if (authChoice === "oauth") {
+    return "setup-token";
+  }
+  if (typeof authChoice !== "string") {
+    return authChoice;
+  }
+  const { resolveLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
+  return resolveLegacyOnboardAuthChoice(authChoice, params).authChoice;
+}
+
+async function normalizeTokenProviderChoice(params: {
   authChoice: AuthChoice;
-  config: OpenClawConfig;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  agentDir?: string;
-  setDefaultModel: boolean;
-  agentId?: string;
-  opts?: {
-    tokenProvider?: string;
-    token?: string;
-    cloudflareAiGatewayAccountId?: string;
-    cloudflareAiGatewayGatewayId?: string;
-    cloudflareAiGatewayApiKey?: string;
-    xaiApiKey?: string;
+  source: ApplyAuthChoiceParams;
+}): Promise<AuthChoice> {
+  if (!params.source.opts?.tokenProvider) {
+    return params.authChoice;
+  }
+  if (
+    params.authChoice !== "apiKey" &&
+    params.authChoice !== "token" &&
+    params.authChoice !== "setup-token"
+  ) {
+    return params.authChoice;
+  }
+  const { normalizeApiKeyTokenProviderAuthChoice } =
+    await import("./auth-choice.apply.api-providers.js");
+  return normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: params.source.opts.tokenProvider,
+    config: params.source.config,
+    workspaceDir: params.source.workspaceDir,
+    env: params.source.env,
+  });
+}
+
+async function formatDeprecatedProviderChoiceError(
+  authChoice: AuthChoice | undefined,
+  params: Pick<ApplyAuthChoiceParams, "config" | "env" | "workspaceDir">,
+): Promise<string | undefined> {
+  if (typeof authChoice !== "string") {
+    return undefined;
+  }
+  const { resolveManifestDeprecatedProviderAuthChoice } =
+    await import("../plugins/provider-auth-choices.js");
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, params);
+  if (deprecatedChoice) {
+    return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
+  }
+  const { resolveDeprecatedProviderInstallCatalogEntry } =
+    await import("../plugins/provider-install-catalog.js");
+  const externalDeprecatedChoice = resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
+    ...params,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  if (!externalDeprecatedChoice) {
+    return undefined;
+  }
+  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(externalDeprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
+}
+
+/** Prepare a selected auth choice without writing its returned provider profiles. */
+export async function prepareAuthChoice(
+  params: ApplyAuthChoiceParams,
+): Promise<PreparedAuthChoiceResult> {
+  const normalizedAuthChoice =
+    (await normalizeLegacyChoice(params.authChoice, params)) ?? params.authChoice;
+  const normalizedProviderAuthChoice = await normalizeTokenProviderChoice({
+    authChoice: normalizedAuthChoice,
+    source: params,
+  });
+  const normalizedParams =
+    normalizedProviderAuthChoice === params.authChoice
+      ? params
+      : { ...params, authChoice: normalizedProviderAuthChoice };
+  const result = await prepareAuthChoiceLoadedPluginProvider(
+    normalizedParams,
+    (prepared) => prepared,
+  );
+  if (result) {
+    return result;
+  }
+
+  const deprecatedProviderChoiceError = await formatDeprecatedProviderChoiceError(
+    normalizedParams.authChoice,
+    normalizedParams,
+  );
+  if (deprecatedProviderChoiceError) {
+    throw new Error(deprecatedProviderChoiceError);
+  }
+
+  if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {
+    throw new Error(
+      [
+        `Auth choice "${normalizedParams.authChoice}" was not matched to a provider setup flow.`,
+        `Run ${formatCliCommand("openclaw models auth login --provider <provider>")} for provider auth, or rerun ${formatCliCommand("openclaw onboard")} to choose interactively.`,
+      ].join("\n"),
+    );
+  }
+
+  if (normalizedParams.authChoice === "oauth") {
+    throw new Error(
+      `Auth choice "oauth" is no longer supported directly. Use a provider-specific auth entry, or run ${formatCliCommand("openclaw models auth login --provider <provider>")}.`,
+    );
+  }
+
+  return {
+    config: normalizedParams.config,
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
   };
-};
+}
 
-export type ApplyAuthChoiceResult = {
-  config: OpenClawConfig;
-  agentModelOverride?: string;
-};
-
+/** Apply a selected auth choice, returning the mutated config or retry/model override signals. */
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
-  const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
-    applyAuthChoiceAnthropic,
-    applyAuthChoiceOpenAI,
-    applyAuthChoiceOAuth,
-    applyAuthChoiceApiProviders,
-    applyAuthChoiceMiniMax,
-    applyAuthChoiceGitHubCopilot,
-    applyAuthChoiceGoogleAntigravity,
-    applyAuthChoiceGoogleGeminiCli,
-    applyAuthChoiceCopilotProxy,
-    applyAuthChoiceQwenPortal,
-    applyAuthChoiceXAI,
-  ];
-
-  for (const handler of handlers) {
-    const result = await handler(params);
-    if (result) {
-      return result;
-    }
-  }
-
-  return { config: params.config };
+  const prepared = await prepareAuthChoice(params);
+  await prepared.persistAuthProfiles();
+  return {
+    config: prepared.config,
+    ...(prepared.utilityModelOverride
+      ? { utilityModelOverride: prepared.utilityModelOverride, modelTarget: prepared.modelTarget }
+      : {}),
+    ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
+    ...(prepared.retrySelection ? { retrySelection: true } : {}),
+  };
 }

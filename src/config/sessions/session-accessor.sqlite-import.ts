@@ -1,0 +1,263 @@
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import type { LegacyAcpMigrationSource } from "../../infra/legacy-acp-migration-source.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  withSqliteSessionImportStage,
+  type SqliteSessionImportStage,
+} from "./session-accessor.sqlite-import-stage.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
+import {
+  formatSqliteSessionReferenceForScope,
+  getSessionKysely,
+  resolveSqliteScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import {
+  advanceTranscriptMutationAtInTransaction,
+  touchTranscriptMutationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
+import type { SessionEntry } from "./types.js";
+
+/** Internal doctor/migration import target for one legacy session row. */
+type SqliteSessionImportRowsParams = Pick<
+  SessionAccessScope,
+  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+> & {
+  beforePersistentApply?: () => void;
+  allowMalformedRowRepair?: boolean;
+  repairLegacyTranscript?: boolean;
+  /** Doctor-discovered history cannot replace the current logical session or window owner. */
+  historicalOnly?: boolean;
+  preserveExactStoredKey?: boolean;
+  skipIfExists?: boolean;
+  entry: SessionEntry;
+  legacyAcpMigrationSource?: LegacyAcpMigrationSource;
+  readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
+  transcriptMtimeMs?: number;
+};
+
+/** Summary of rows written by an internal doctor/migration import. */
+type SqliteSessionImportRowsResult = {
+  sessionId: string;
+  sessionKey: string;
+  skippedExisting?: true;
+  recovery?: { complete: boolean; repaired: boolean; events: number };
+  transcriptEvents: number;
+};
+
+function resolveSqliteSessionImport(params: SqliteSessionImportRowsParams) {
+  const resolvedScope = resolveSqliteScope(params);
+  // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
+  const resolved = params.preserveExactStoredKey
+    ? { ...resolvedScope, sessionKey: params.sessionKey }
+    : resolvedScope;
+  return { params, resolved };
+}
+
+function importSqliteSessionRowsInTransaction(
+  database: OpenClawAgentDatabase,
+  prepared: ReturnType<typeof resolveSqliteSessionImport>,
+  stage: SqliteSessionImportStage,
+  source: number,
+  repair?: ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>,
+): SqliteSessionImportRowsResult {
+  const { params, resolved } = prepared;
+  let transcriptEvents = 0;
+  // Doctor may have staged another legacy alias in this database already. Inspect only this
+  // exact import target; runtime-wide canonical validation runs after the import phase.
+  const currentEntry = readExactSessionEntryRowForCanonicalRepair(database, resolved.sessionKey, {
+    allowMalformedRowRepair: params.allowMalformedRowRepair === true,
+  })?.entry;
+  if (params.skipIfExists === true && currentEntry) {
+    return {
+      sessionId: params.entry.sessionId,
+      sessionKey: resolved.sessionKey,
+      skippedExisting: true,
+      transcriptEvents,
+    };
+  }
+  assertSessionTranscriptHot(database.db, params.entry.sessionId);
+  const preservedHarnessId =
+    params.entry.agentHarnessId === undefined &&
+    currentEntry?.sessionId === params.entry.sessionId &&
+    currentEntry.lifecycleRevision === params.entry.lifecycleRevision
+      ? currentEntry.agentHarnessId?.trim()
+      : undefined;
+  // Plugin doctor migrations can claim a legacy session before the full
+  // session import runs. Preserve that same-generation canonical owner.
+  const importedEntry = {
+    ...params.entry,
+    ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
+    sessionFile: formatSqliteSessionReferenceForScope({
+      ...resolved,
+      sessionId: params.entry.sessionId,
+    }),
+  };
+  let preserveHistoricalNode = false;
+  if (params.historicalOnly) {
+    const db = getSessionKysely(database.db);
+    const owner = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", params.entry.sessionId),
+    )?.session_key;
+    if (owner && owner !== resolved.sessionKey) {
+      throw new Error(
+        `Historical transcript ${params.entry.sessionId} already belongs to ${owner}`,
+      );
+    }
+    preserveHistoricalNode = Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("session_key", "=", resolved.sessionKey),
+      ),
+    );
+  }
+  // Historical generations append under their existing node without changing its current pointer.
+  if (!preserveHistoricalNode) {
+    invalidateSessionEntryMaintenanceAgeFact(database.db);
+    writeSessionEntry(database, resolved.sessionKey, importedEntry, {
+      allowStoredAliases: true,
+      previousEntry: currentEntry ?? null,
+    });
+    if (params.legacyAcpMigrationSource) {
+      recordLegacyAcpMigrationSources(database.db, resolved.sessionKey, [
+        params.legacyAcpMigrationSource,
+      ]);
+    }
+  }
+  if (params.readTranscriptEvents) {
+    const transcriptScope = {
+      ...resolved,
+      sessionId: params.entry.sessionId,
+    };
+    stage.resetSeen();
+    for (const row of iterateSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("transcript_events")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
+        .where("session_id", "=", params.entry.sessionId),
+    )) {
+      stage.addSeen(row.event_json);
+    }
+    transcriptEvents = appendTranscriptEventsInTransaction(
+      database,
+      transcriptScope,
+      stage.iterateUnseenEvents(source),
+      { allowStoredAlias: true, scheduleProjectionReconcile: false, touchMutation: false },
+    );
+    // Doctor imports run outside gateway requests and must finish with a complete projection.
+    reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
+    publishSessionEntryCacheInvalidation(database, { sessionKey: resolved.sessionKey });
+  }
+  if (params.transcriptMtimeMs !== undefined) {
+    advanceTranscriptMutationAtInTransaction(
+      database,
+      params.entry.sessionId,
+      params.transcriptMtimeMs,
+    );
+  } else if (transcriptEvents > 0) {
+    touchTranscriptMutationInTransaction(database, params.entry.sessionId);
+  }
+  return {
+    sessionId: params.entry.sessionId,
+    sessionKey: resolved.sessionKey,
+    transcriptEvents,
+    ...(repair
+      ? {
+          recovery: {
+            complete: repair.recognized && stage.complete,
+            repaired: repair.repaired,
+            events: repair.events,
+          },
+        }
+      : {}),
+  };
+}
+
+/** Imports legacy session rows that share one SQLite store in one durable transaction. */
+export async function importSqliteSessionRowsBatch(
+  params: readonly SqliteSessionImportRowsParams[],
+): Promise<SqliteSessionImportRowsResult[]> {
+  if (params.length === 0) {
+    return [];
+  }
+  const prepared = params.map(resolveSqliteSessionImport);
+  const resolved = prepared[0]!.resolved;
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  if (
+    prepared.some(
+      (row) => resolveOpenClawAgentSqlitePath(toDatabaseOptions(row.resolved)) !== databasePath,
+    )
+  ) {
+    throw new Error("SQLite session import batch spans multiple stores");
+  }
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () =>
+      withSqliteSessionImportStage((stage) => {
+        const validators: Array<() => void> = [];
+        const repairs = new Map<
+          number,
+          ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>
+        >();
+        for (const [source, { params: importParams }] of prepared.entries()) {
+          let seq = 0;
+          const validate = importParams.readTranscriptEvents?.((event) =>
+            stage.append(source, seq++, JSON.stringify(event)),
+          );
+          if (validate) {
+            validators.push(validate);
+          }
+          if (importParams.repairLegacyTranscript && importParams.readTranscriptEvents) {
+            repairs.set(source, stage.repairLegacyTranscript(source));
+          }
+        }
+        // Recheck every source after the last reader, before any canonical transaction.
+        // No filesystem readers or callbacks cross the synchronous SQLite commit boundary.
+        for (const validate of validators) {
+          validate();
+        }
+        for (const { params: importParams } of prepared) {
+          importParams.beforePersistentApply?.();
+        }
+        return runOpenClawAgentWriteTransaction(
+          (database) =>
+            prepared.map((row, source) =>
+              importSqliteSessionRowsInTransaction(
+                database,
+                row,
+                stage,
+                source,
+                repairs.get(source),
+              ),
+            ),
+          toDatabaseOptions(resolved),
+        );
+      }),
+    "session.import.batch",
+  );
+}

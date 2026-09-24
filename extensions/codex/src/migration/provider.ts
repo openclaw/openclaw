@@ -1,0 +1,73 @@
+// Codex provider module implements model/runtime integration.
+import type {
+  MigrationPlan,
+  MigrationProviderContext,
+  MigrationProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-entry";
+
+function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
+  return Boolean(
+    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "memory"),
+  );
+}
+
+function isAuthOnlyMigration(ctx: MigrationProviderContext): boolean {
+  return Boolean(
+    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "auth"),
+  );
+}
+
+export function buildCodexMigrationProvider(
+  params: {
+    runtime?: MigrationProviderContext["runtime"];
+  } = {},
+): MigrationProviderPlugin {
+  return {
+    id: "codex",
+    label: "Codex",
+    description: [
+      "Import consolidated memories, selected Codex and personal AgentSkills, and selected eligible openai-curated plugins.",
+      "Auth credentials require separate consent. Sessions and chat history are not imported.",
+      "Codex config and hooks are saved for manual review, not activated. Source files are not moved or deleted.",
+    ].join(" "),
+    supportedItemKinds: ["memory", "auth"],
+    async detect(ctx) {
+      const { discoverCodexSource, hasCodexSource } = await import("./source.js");
+      const source = await discoverCodexSource({
+        input: ctx.source,
+        memoryOnly: isMemoryOnlyMigration(ctx),
+        authOnly: isAuthOnlyMigration(ctx),
+      });
+      const memoryOnly = isMemoryOnlyMigration(ctx);
+      const found = memoryOnly
+        ? source.memoryFiles.length > 0
+        : isAuthOnlyMigration(ctx)
+          ? Boolean(source.authPath)
+          : hasCodexSource(source);
+      return {
+        found,
+        source: source.root,
+        label: "Codex",
+        confidence: found ? source.confidence : "low",
+        message: found ? "Codex state found." : "Codex state not found.",
+      };
+    },
+    async plan(ctx) {
+      const { buildCodexMigrationPlan } = await import("./plan.js");
+      return buildCodexMigrationPlan(ctx);
+    },
+    deferredApply: { retrySafe: true },
+    prepareApply(ctx) {
+      if (isMemoryOnlyMigration(ctx) || isAuthOnlyMigration(ctx)) {
+        return undefined;
+      }
+      return import("./apply.js").then(({ prepareTargetCodexAppServer }) =>
+        prepareTargetCodexAppServer(ctx),
+      );
+    },
+    async apply(ctx, plan?: MigrationPlan) {
+      const { applyCodexMigrationPlan } = await import("./apply.js");
+      return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
+    },
+  };
+}

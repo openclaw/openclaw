@@ -1,59 +1,76 @@
 ---
-summary: "Bun workflow (experimental): installs and gotchas vs pnpm"
+summary: "Bun workflow for installs, package scripts, and opt-in runtime use"
 read_when:
-  - You want the fastest local dev loop (bun + watch)
+  - You want to install dependencies or run package scripts with Bun
+  - You want to run OpenClaw with Bun 1.4+
   - You hit Bun install/patch/lifecycle script issues
-title: "Bun (Experimental)"
+title: "Bun"
 ---
 
-# Bun (experimental)
+<Warning>
+Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
+</Warning>
 
-Goal: run this repo with **Bun** (optional, not recommended for WhatsApp/Telegram)
-without diverging from pnpm workflows.
-
-⚠️ **Not recommended for Gateway runtime** (WhatsApp/Telegram bugs). Use Node for production.
-
-## Status
-
-- Bun is an optional local runtime for running TypeScript directly (`bun run …`, `bun --watch …`).
-- `pnpm` is the default for builds and remains fully supported (and used by some docs tooling).
-- Bun cannot use `pnpm-lock.yaml` and will ignore it.
+Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
 
 ## Install
 
-Default:
+<Steps>
+  <Step title="Install dependencies">
+    ```sh
+    pnpm install
+    ```
+
+    Bun cannot resolve this repo's pnpm workspace layout, so `bun install` fails during workspace resolution. Use `pnpm install`.
+
+  </Step>
+  <Step title="Build and test">
+    ```sh
+    bun run build
+    bun run vitest run
+    ```
+
+    Use Node by default for commands that launch OpenClaw.
+
+  </Step>
+  <Step title="Run OpenClaw with Bun">
+    To run onboarding under Bun and install the managed Gateway under Bun:
+
+    ```sh
+    bun openclaw.mjs onboard --install-daemon --daemon-runtime bun
+    ```
+
+    For a managed node host, select Bun separately:
+
+    ```sh
+    bun openclaw.mjs node install --runtime bun
+    ```
+
+  </Step>
+</Steps>
+
+## Lifecycle scripts
+
+Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
+
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
+- `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
+
+If you hit a runtime issue that needs these scripts, trust them explicitly:
 
 ```sh
-bun install
-```
-
-Note: `bun.lock`/`bun.lockb` are gitignored, so there’s no repo churn either way. If you want _no lockfile writes_:
-
-```sh
-bun install --no-save
-```
-
-## Build / Test (Bun)
-
-```sh
-bun run build
-bun run vitest run
-```
-
-## Bun lifecycle scripts (blocked by default)
-
-Bun may block dependency lifecycle scripts unless explicitly trusted (`bun pm untrusted` / `bun pm trust`).
-For this repo, the commonly blocked scripts are not required:
-
-- `@whiskeysockets/baileys` `preinstall`: checks Node major >= 20 (we run Node 22+).
-- `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts).
-
-If you hit a real runtime issue that requires these scripts, trust them explicitly:
-
-```sh
-bun pm trust @whiskeysockets/baileys protobufjs
+bun pm trust baileys protobufjs
 ```
 
 ## Caveats
 
-- Some scripts still hardcode pnpm (e.g. `docs:build`, `ui:*`, `protocol:check`). Run those via pnpm for now.
+On macOS, run `brew install sqlite` for native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
+
+Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
+
+## Related
+
+- [Bun compatibility](/install/bun-compatibility)
+- [Install overview](/install)
+- [Node.js compatibility](/install/node-compatibility)
+- [Updating](/install/updating)

@@ -1,0 +1,205 @@
+// File Transfer plugin entrypoint registers its OpenClaw integration.
+import {
+  definePluginEntry,
+  type AnyAgentTool,
+  type OpenClawPluginNodeHostCommand,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createLazyFileTransferNodeInvokePolicy } from "./src/shared/lazy-node-invoke-policy.js";
+import {
+  DIR_FETCH_TOOL_DESCRIPTOR,
+  DIR_LIST_TOOL_DESCRIPTOR,
+  FILE_FETCH_TOOL_DESCRIPTOR,
+  FILE_WRITE_TOOL_DESCRIPTOR,
+} from "./src/tools/descriptors.js";
+import { registerNodeWorkspaces } from "./src/workspace-service.js";
+
+type FileTransferToolDescriptor = Pick<
+  AnyAgentTool,
+  "label" | "name" | "description" | "parameters"
+>;
+
+function readNodeCommandParams(paramsJSON: string | null | undefined): unknown {
+  return paramsJSON ? JSON.parse(paramsJSON) : {};
+}
+
+function createLazyTool(
+  descriptor: FileTransferToolDescriptor,
+  loadTool: () => Promise<AnyAgentTool>,
+): AnyAgentTool {
+  let toolPromise: Promise<AnyAgentTool> | undefined;
+  const loadOnce = () => {
+    toolPromise ??= loadTool();
+    return toolPromise;
+  };
+  return {
+    ...descriptor,
+    async execute(toolCallId, args, signal, onUpdate) {
+      const tool = await loadOnce();
+      return await tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
+
+const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
+  {
+    command: "file.stat",
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON) => {
+      const { handleFileStat } = await import("./src/node-host/file-stat.js");
+      const params = asOptionalRecord(readNodeCommandParams(paramsJSON)) ?? {};
+      return JSON.stringify(await handleFileStat(params));
+    },
+  },
+  {
+    command: "file.fetch",
+    hasActiveWork: () => false,
+    duplex: "optional",
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON, io) => {
+      const { handleFileFetch } = await import("./src/node-host/file-fetch.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileFetch>[0];
+      const result = await handleFileFetch(params, io);
+      return JSON.stringify(result);
+    },
+  },
+  {
+    command: "dir.list",
+    hasActiveWork: () => false,
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON) => {
+      const { handleDirList } = await import("./src/node-host/dir-list.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirList>[0];
+      const result = await handleDirList(params);
+      return JSON.stringify(result);
+    },
+  },
+  {
+    command: "dir.fetch",
+    hasActiveWork: () => false,
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON) => {
+      const { handleDirFetch } = await import("./src/node-host/dir-fetch.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirFetch>[0];
+      const result = await handleDirFetch(params);
+      return JSON.stringify(result);
+    },
+  },
+  {
+    command: "file.create",
+    cap: "file",
+    dangerous: true,
+    duplex: true,
+    handle: async (paramsJSON, io) => {
+      const { handleFileCreate } = await import("./src/node-host/file-create.js");
+      const params = asOptionalRecord(readNodeCommandParams(paramsJSON)) ?? {};
+      return JSON.stringify(await handleFileCreate(params, io));
+    },
+  },
+  {
+    command: "file.write",
+    hasActiveWork: () => false,
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON) => {
+      const { handleFileWrite } = await import("./src/node-host/file-write.js");
+      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileWrite>[0];
+      const result = await handleFileWrite(params);
+      return JSON.stringify(result);
+    },
+  },
+];
+
+export default definePluginEntry({
+  id: "file-transfer",
+  name: "File Transfer",
+  description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
+  nodeHostCommands: fileTransferNodeHostCommands,
+  register(api) {
+    api.registerNodeHostCommand({
+      command: "workspace.memory",
+      cap: "file",
+      dangerous: true,
+      duplex: true,
+      handle: async (...args) => {
+        const { createWorkspaceMemoryCommand } =
+          await import("./src/node-host/workspace-memory.js");
+        return await createWorkspaceMemoryCommand(api).handle(...args);
+      },
+    });
+    api.registerNodeInvokePolicy({
+      commands: ["workspace.memory"],
+      dangerous: true,
+      async handle(ctx) {
+        const { createWorkspaceMemoryPolicy } =
+          await import("./src/shared/workspace-memory-policy.js");
+        return await createWorkspaceMemoryPolicy().handle(ctx);
+      },
+    });
+    api.registerNodeHostCommand({
+      command: "workspace.skills",
+      cap: "file",
+      dangerous: true,
+      duplex: true,
+      handle: async (...args) => {
+        const { createWorkspaceSkillsCommand } =
+          await import("./src/node-host/workspace-memory.js");
+        return await createWorkspaceSkillsCommand(api).handle(...args);
+      },
+    });
+    api.registerNodeInvokePolicy({
+      commands: ["workspace.skills"],
+      dangerous: true,
+      async handle(ctx) {
+        const { createWorkspaceSkillsPolicy } =
+          await import("./src/shared/workspace-memory-policy.js");
+        return await createWorkspaceSkillsPolicy().handle(ctx);
+      },
+    });
+    registerNodeWorkspaces(api);
+    api.registerCli(
+      async ({ program }) => {
+        const { registerFileTransferCli } = await import("./src/cli.js");
+        registerFileTransferCli(program);
+      },
+      {
+        descriptors: [
+          {
+            name: "file-transfer",
+            description: "Review file-transfer standing approvals",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    );
+    api.registerNodeInvokePolicy(createLazyFileTransferNodeInvokePolicy());
+    api.registerTool(
+      createLazyTool(FILE_FETCH_TOOL_DESCRIPTOR, async () => {
+        const { createFileFetchTool } = await import("./src/tools/file-fetch-tool.js");
+        return createFileFetchTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(DIR_LIST_TOOL_DESCRIPTOR, async () => {
+        const { createDirListTool } = await import("./src/tools/dir-list-tool.js");
+        return createDirListTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(DIR_FETCH_TOOL_DESCRIPTOR, async () => {
+        const { createDirFetchTool } = await import("./src/tools/dir-fetch-tool.js");
+        return createDirFetchTool();
+      }),
+    );
+    api.registerTool(
+      createLazyTool(FILE_WRITE_TOOL_DESCRIPTOR, async () => {
+        const { createFileWriteTool } = await import("./src/tools/file-write-tool.js");
+        return createFileWriteTool();
+      }),
+    );
+  },
+});

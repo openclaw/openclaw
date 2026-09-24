@@ -1,71 +1,93 @@
 import AVFoundation
+import OpenClawKit
 import OSLog
 import SwiftUI
 
 actor MicLevelMonitor {
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.meter")
     private var engine: AVAudioEngine?
-    private var update: (@Sendable (Double) -> Void)?
-    private var running = false
+    private var update: (@MainActor @Sendable (Double) -> Void)?
+    private var deliveryTask: Task<Void, Never>?
+    private var captureGeneration: UInt64 = 0
     private var smoothedLevel: Double = 0
+    private var lastUpdate = ContinuousClock.now
+    private var lastPublishedLevel: Double = 0
+    private let minimumUpdateInterval: Duration = .milliseconds(125)
+    private let minimumLevelDelta = 0.02
 
-    func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
-        self.update = onLevel
-        if self.running { return }
+    func start(onLevel: @MainActor @Sendable @escaping (Double) -> Void) async throws {
+        if self.engine != nil {
+            self.update = onLevel
+            return
+        }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
+        self.lastUpdate = .now
+        self.lastPublishedLevel = self.smoothedLevel
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            throw NSError(
+                domain: "MicLevelMonitor",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
         let engine = AVAudioEngine()
-        self.engine = engine
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {
-            self.engine = nil
             throw NSError(
                 domain: "MicLevelMonitor",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
         }
-        input.removeTap(onBus: 0)
+        self.captureGeneration &+= 1
+        let generation = self.captureGeneration
         input.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            let level = Self.normalizedLevel(from: buffer)
-            Task { await self.push(level: level) }
+            let level = TalkAudioLevel.normalized(rms: TalkAudioLevel.rms(buffer: buffer))
+            Task { await self.push(level: level, generation: generation) }
         }
         engine.prepare()
-        try engine.start()
-        self.running = true
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            engine.stop()
+            throw error
+        }
+        self.engine = engine
+        self.update = onLevel
     }
 
-    func stop() {
-        guard self.running else { return }
+    func stop() async {
+        self.captureGeneration &+= 1
+        let deliveryTask = self.deliveryTask
+        self.deliveryTask = nil
+        deliveryTask?.cancel()
+        self.update = nil
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
         }
         self.engine = nil
-        self.running = false
+        await deliveryTask?.value
     }
 
-    private func push(level: Double) {
+    private func push(level: Double, generation: UInt64) {
+        guard self.engine != nil, generation == self.captureGeneration else { return }
         self.smoothedLevel = (self.smoothedLevel * 0.45) + (level * 0.55)
         guard let update else { return }
+        let now = ContinuousClock.now
+        guard now - self.lastUpdate >= self.minimumUpdateInterval ||
+            abs(self.smoothedLevel - self.lastPublishedLevel) >= self.minimumLevelDelta
+        else { return }
+        self.lastUpdate = now
         let value = self.smoothedLevel
-        Task { @MainActor in update(value) }
-    }
-
-    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Double {
-        guard let channel = buffer.floatChannelData?[0] else { return 0 }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return 0 }
-        var sum: Float = 0
-        for i in 0..<frameCount {
-            let s = channel[i]
-            sum += s * s
+        self.lastPublishedLevel = value
+        self.deliveryTask?.cancel()
+        self.deliveryTask = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            update(value)
         }
-        let rms = sqrt(sum / Float(frameCount) + 1e-12)
-        let db = 20 * log10(Double(rms))
-        let normalized = max(0, min(1, (db + 50) / 50))
-        return normalized
     }
 }
 

@@ -1,3 +1,4 @@
+// Covers heartbeat active-hours evaluation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -39,7 +40,7 @@ describe("isWithinActiveHours", () => {
     ).toBe(true);
   });
 
-  it("returns true when activeHours start equals end", () => {
+  it("returns false when activeHours start equals end", () => {
     const cfg = cfgWithUserTimezone("UTC");
     expect(
       isWithinActiveHours(
@@ -47,7 +48,7 @@ describe("isWithinActiveHours", () => {
         heartbeatWindow("08:00", "08:00", "UTC"),
         Date.UTC(2025, 0, 1, 12, 0, 0),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("respects user timezone windows for normal ranges", () => {

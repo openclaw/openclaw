@@ -1,6 +1,4 @@
-/**
- * Voice mapping and XML utilities for voice call providers.
- */
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Escape XML special characters for TwiML and other XML responses.
@@ -17,19 +15,19 @@ export function escapeXml(text: string): string {
 /**
  * Map of OpenAI voice names to similar Twilio Polly voices.
  */
-const OPENAI_TO_POLLY_MAP: Record<string, string> = {
-  alloy: "Polly.Joanna", // neutral, warm
-  echo: "Polly.Matthew", // male, warm
-  fable: "Polly.Amy", // British, expressive
-  onyx: "Polly.Brian", // deep male
-  nova: "Polly.Salli", // female, friendly
-  shimmer: "Polly.Kimberly", // female, clear
-};
+const OPENAI_TO_POLLY_MAP = new Map<string, string>([
+  ["alloy", "Polly.Joanna"], // neutral, warm
+  ["echo", "Polly.Matthew"], // male, warm
+  ["fable", "Polly.Amy"], // British, expressive
+  ["onyx", "Polly.Brian"], // deep male
+  ["nova", "Polly.Salli"], // female, friendly
+  ["shimmer", "Polly.Kimberly"], // female, clear
+]);
 
 /**
  * Default Polly voice when no mapping is found.
  */
-export const DEFAULT_POLLY_VOICE = "Polly.Joanna";
+const DEFAULT_POLLY_VOICE = "Polly.Joanna";
 
 /**
  * Map OpenAI voice names to Twilio Polly equivalents.
@@ -48,20 +46,8 @@ export function mapVoiceToPolly(voice: string | undefined): string {
     return voice;
   }
 
-  // Map OpenAI voices to Polly equivalents
-  return OPENAI_TO_POLLY_MAP[voice.toLowerCase()] || DEFAULT_POLLY_VOICE;
-}
-
-/**
- * Check if a voice name is a known OpenAI voice.
- */
-export function isOpenAiVoice(voice: string): boolean {
-  return voice.toLowerCase() in OPENAI_TO_POLLY_MAP;
-}
-
-/**
- * Get all supported OpenAI voice names.
- */
-export function getOpenAiVoiceNames(): string[] {
-  return Object.keys(OPENAI_TO_POLLY_MAP);
+  // Voice names are caller-controlled (Twilio playTts / notify TwiML), so a
+  // name such as "constructor" or "__proto__" must not read through to
+  // Object.prototype and interpolate Function/Object into <Say voice="...">.
+  return OPENAI_TO_POLLY_MAP.get(normalizeLowercaseStringOrEmpty(voice)) ?? DEFAULT_POLLY_VOICE;
 }

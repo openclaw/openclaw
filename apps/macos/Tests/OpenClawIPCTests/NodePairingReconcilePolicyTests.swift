@@ -1,14 +1,13 @@
 import Testing
 @testable import OpenClaw
 
-@Suite struct NodePairingReconcilePolicyTests {
-    @Test func policyPollsOnlyWhenActive() {
-        #expect(NodePairingReconcilePolicy.shouldPoll(pendingCount: 0, isPresenting: false) == false)
-        #expect(NodePairingReconcilePolicy.shouldPoll(pendingCount: 1, isPresenting: false))
-        #expect(NodePairingReconcilePolicy.shouldPoll(pendingCount: 0, isPresenting: true))
+struct NodePairingReconcilePolicyTests {
+    @Test func `policy polls only while requests are pending`() {
+        #expect(NodePairingReconcilePolicy.shouldPoll(pendingCount: 0) == false)
+        #expect(NodePairingReconcilePolicy.shouldPoll(pendingCount: 1))
     }
 
-    @Test func policyUsesSlowSafetyInterval() {
+    @Test func `policy uses slow safety interval`() {
         #expect(NodePairingReconcilePolicy.activeIntervalMs >= 10000)
     }
 }

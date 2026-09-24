@@ -1,0 +1,145 @@
+/** Shared doctor-only SQLite compaction mechanics. */
+import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+
+export type DoctorSqliteCompactSnapshot = {
+  autoVacuum: number;
+  dbSizeBytes: number;
+  freelistPages: number;
+  pageSizeBytes: number;
+  walSizeBytes: number;
+};
+
+type DoctorSqliteCompactResult = {
+  after: DoctorSqliteCompactSnapshot;
+  before: DoctorSqliteCompactSnapshot;
+  integrityCheck: "ok";
+  reclaimedBytes: number;
+};
+
+type DoctorSqliteCompactOptions = {
+  afterSuccess?: () => void;
+  busyTimeoutMs?: number;
+  operation?: "import-finalize";
+  sqlitePath: string;
+  validateBeforeMutation?: (database: DatabaseSync) => void;
+};
+
+/**
+ * Compact one SQLite file during an explicit offline doctor operation.
+ *
+ * Validation runs before the first checkpoint because checkpointing mutates
+ * the database files. A busy checkpoint is a hard failure, never partial
+ * success, so VACUUM cannot race an active reader or writer.
+ */
+export function compactDoctorSqliteFile(
+  options: DoctorSqliteCompactOptions,
+): DoctorSqliteCompactResult {
+  const database = openNodeSqliteDatabase(options.sqlitePath);
+  let operationError: unknown;
+  let result: DoctorSqliteCompactResult | undefined;
+  try {
+    database.exec(
+      `PRAGMA busy_timeout = ${options.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`,
+    );
+    database.exec("PRAGMA trusted_schema = OFF;");
+    options.validateBeforeMutation?.(database);
+    const before = readCompactSnapshot(database, options.sqlitePath);
+    let { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const alreadyCompact =
+      options.operation === "import-finalize" &&
+      before.autoVacuum === 2 &&
+      before.freelistPages === 0 &&
+      before.walSizeBytes === 0;
+    // A verified no-op needs neither a file mutation nor a second full-file scan.
+    // Explicit compaction still repacks partially filled pages.
+    if (!alreadyCompact) {
+      truncateSqliteWal(database, options.sqlitePath);
+      database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+      // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
+      // stores can release free pages without repacking; explicit compact still repacks.
+      database.exec(
+        options.operation === "import-finalize" && before.autoVacuum !== 0
+          ? "PRAGMA incremental_vacuum;"
+          : "VACUUM;",
+      );
+      truncateSqliteWal(database, options.sqlitePath);
+      ({ integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath));
+    }
+    const after = readCompactSnapshot(database, options.sqlitePath);
+    const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
+    const afterBytes = after.dbSizeBytes + after.walSizeBytes;
+    result = {
+      after,
+      before,
+      integrityCheck,
+      reclaimedBytes: Math.max(0, beforeBytes - afterBytes),
+    };
+  } catch (error) {
+    operationError = error;
+  }
+  try {
+    database.close();
+  } catch (error) {
+    operationError ??= error;
+  }
+  if (operationError === undefined && result) {
+    try {
+      options.afterSuccess?.();
+    } catch (error) {
+      operationError ??= error;
+    }
+  }
+  if (operationError !== undefined) {
+    throw operationError instanceof Error
+      ? operationError
+      : new Error("SQLite compaction failed with a non-Error value.");
+  }
+  if (!result) {
+    throw new Error(`SQLite compaction produced no result for ${options.sqlitePath}.`);
+  }
+  return result;
+}
+
+function readCompactSnapshot(
+  database: DatabaseSync,
+  sqlitePath: string,
+): DoctorSqliteCompactSnapshot {
+  return {
+    autoVacuum: readPragmaNumber(database, "auto_vacuum"),
+    dbSizeBytes: fileSize(sqlitePath),
+    freelistPages: readPragmaNumber(database, "freelist_count"),
+    pageSizeBytes: readPragmaNumber(database, "page_size"),
+    walSizeBytes: fileSize(`${sqlitePath}-wal`),
+  };
+}
+
+function readPragmaNumber(
+  database: DatabaseSync,
+  pragmaName: "auto_vacuum" | "freelist_count" | "page_size",
+): number {
+  const row = database.prepare(`PRAGMA ${pragmaName};`).get();
+  const value = readFiniteSqliteNumber(
+    row?.[pragmaName] ?? (row ? Object.values(row)[0] : undefined),
+  );
+  if (value === undefined) {
+    throw new Error(`SQLite PRAGMA ${pragmaName} returned an invalid result.`);
+  }
+  return value;
+}
+
+function fileSize(filePath: string): number {
+  try {
+    return fs.statSync(filePath).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+}

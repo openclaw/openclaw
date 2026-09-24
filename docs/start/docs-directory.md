@@ -12,9 +12,15 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 
 ## Start here
 
-- [Docs hubs (all pages linked)](/start/hubs)
-- [Help](/help)
+- [Getting started](/start/getting-started)
+- [Onboarding (CLI)](/start/wizard)
+- [Chat channels](/channels)
 - [Configuration](/gateway/configuration)
+- [Help](/help)
+
+## Setup and reference
+
+- [Docs hubs (all pages linked)](/start/hubs)
 - [Configuration examples](/gateway/configuration-examples)
 - [Slash commands](/tools/slash-commands)
 - [Multi-agent routing](/concepts/multi-agent)
@@ -32,33 +38,38 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Discovery and transports](/gateway/discovery)
 - [Remote access](/gateway/remote)
 
-## Providers and UX
+## Channels and UX
 
-- [WebChat](/web/webchat)
 - [Control UI (browser)](/web/control-ui)
-- [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
-- [Mattermost (plugin)](/channels/mattermost)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
-- [iMessage (legacy)](/channels/imessage)
 - [Groups](/channels/groups)
-- [WhatsApp group messages](/channels/group-messages)
-- [Media images](/nodes/images)
+- [iMessage](/channels/imessage)
+- [Mattermost](/channels/mattermost)
 - [Media audio](/nodes/audio)
+- [Media images](/nodes/images)
+- [QQ Bot](/channels/qqbot)
+- [Telegram](/channels/telegram)
+- [WebChat](/web/webchat)
+- [WhatsApp group messages](/channels/group-messages)
 
 ## Companion apps
 
-- [macOS app](/platforms/macos)
-- [iOS app](/platforms/ios)
 - [Android app](/platforms/android)
-- [Windows (WSL2)](/platforms/windows)
+- [iOS app](/platforms/ios)
 - [Linux app](/platforms/linux)
+- [macOS app](/platforms/macos)
+- [Windows Hub](/platforms/windows)
 
 ## Operations and safety
 
 - [Sessions](/concepts/session)
 - [Cron jobs](/automation/cron-jobs)
-- [Webhooks](/automation/webhook)
-- [Gmail hooks (Pub/Sub)](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail hooks (Pub/Sub)](/automation/cron-jobs#gmail-pubsub-integration)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Docs hubs](/start/hubs)

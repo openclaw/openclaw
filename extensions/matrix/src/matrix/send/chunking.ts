@@ -1,0 +1,300 @@
+// Matrix helper module prepares and chunks outbound formatted text.
+import {
+  resolveMarkdownTableMode,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { isInsideCode } from "openclaw/plugin-sdk/text-chunking";
+import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig } from "../../types.js";
+import {
+  createMatrixPrivateMarkers,
+  isMarkdownEscaped,
+  type MatrixSpoilerMarkers,
+  type MatrixSpoilerProtection,
+} from "../format-profile.js";
+import { analyzeMatrixSpoilers, prepareMatrixMarkdownSource } from "../format-spoiler-ranges.js";
+import { findMatrixTableSourceRanges } from "../format-table-ranges.js";
+import {
+  markdownToMatrixBody,
+  MATRIX_FORMAT_PROFILE,
+  protectMatrixSpoilerDelimiters,
+  renderMatrixBody,
+  renderMatrixMarkdownTables,
+} from "../format.js";
+
+type MatrixPreparedSingleText = {
+  trimmedText: string;
+  convertedText: string;
+  preparedBody: string;
+  singleEventLimit: number;
+  eventTextLength: number;
+  fitsInSingleEvent: boolean;
+  tableMode: MarkdownTableMode;
+};
+
+type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
+  chunks: string[];
+};
+
+function normalizeMatrixEventLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return limit;
+  }
+  return Math.max(1, Math.floor(limit));
+}
+
+function resolveMatrixChunkOverflow(chunk: string, limit: number): number {
+  const body = markdownToMatrixBody(chunk);
+  const renderedLength = Math.max(chunk.length, body.length);
+  if (limit === 1 && Array.from(chunk).length === 1 && Array.from(body).length === 1) {
+    // One astral code point occupies two UTF-16 units but cannot be split into a valid event.
+    return 0;
+  }
+  return Math.max(0, renderedLength - limit);
+}
+
+function protectMatrixUnderlineTags(markdown: string): MatrixSpoilerProtection {
+  const { codeRegions, metadataRanges, underlineTags } = prepareMatrixMarkdownSource(markdown);
+  const tags = underlineTags.filter(
+    (tag) =>
+      !tag.selfClosing &&
+      !isInsideCode(tag.start, codeRegions) &&
+      !isMarkdownEscaped(markdown, tag.start) &&
+      !metadataRanges.some((range) => tag.start >= range.start && tag.start < range.end),
+  );
+  if (tags.length === 0) {
+    return { markdown };
+  }
+  const markers = createMatrixPrivateMarkers(
+    markdown,
+    "Matrix underline chunking exhausted its private marker pool",
+  );
+  let depth = 0;
+  const replacements = tags.flatMap((tag) => {
+    if (!tag.closing) {
+      depth += 1;
+      return [{ tag, marker: depth === 1 ? markers.open : "" }];
+    }
+    if (depth === 0) {
+      return [];
+    }
+    depth -= 1;
+    return [{ tag, marker: depth === 0 ? markers.close : "" }];
+  });
+  let protectedMarkdown = markdown;
+  for (const { tag, marker } of replacements.toReversed()) {
+    protectedMarkdown = `${protectedMarkdown.slice(0, tag.start)}${marker}${markers.padding.repeat(tag.raw.length - marker.length)}${protectedMarkdown.slice(tag.end)}`;
+  }
+  return { markdown: protectedMarkdown, markers };
+}
+
+type MatrixChunkStyle = "spoiler" | "underline";
+
+function restoreMatrixStyleChunks(
+  chunks: string[],
+  spoiler: MatrixSpoilerMarkers | undefined,
+  underline: MatrixSpoilerMarkers | undefined,
+): string[] {
+  if (!spoiler && !underline) {
+    return chunks;
+  }
+  const stack: MatrixChunkStyle[] = [];
+  const syntax = {
+    spoiler: { open: "||", close: "||" },
+    underline: { open: "<u>", close: "</u>" },
+  } as const;
+  return chunks.map((chunk) => {
+    let restored = stack.map((style) => syntax[style].open).join("");
+    for (const character of chunk) {
+      const opening =
+        character === spoiler?.open
+          ? "spoiler"
+          : character === underline?.open
+            ? "underline"
+            : undefined;
+      const closing =
+        character === spoiler?.close
+          ? "spoiler"
+          : character === underline?.close
+            ? "underline"
+            : undefined;
+      if (opening) {
+        stack.push(opening);
+        restored += syntax[opening].open;
+      } else if (closing) {
+        const stackIndex = stack.lastIndexOf(closing);
+        if (stackIndex >= 0) {
+          const above = stack.slice(stackIndex + 1);
+          restored += above
+            .toReversed()
+            .map((style) => syntax[style].close)
+            .join("");
+          restored += syntax[closing].close;
+          stack.splice(stackIndex, 1);
+          restored += above.map((style) => syntax[style].open).join("");
+        }
+      } else if (character !== spoiler?.padding && character !== underline?.padding) {
+        restored += character;
+      }
+    }
+    return (
+      restored +
+      stack
+        .toReversed()
+        .map((style) => syntax[style].close)
+        .join("")
+    );
+  });
+}
+
+function splitMatrixTableSegments(markdown: string): Array<{ table: boolean; text: string }> {
+  const segments: Array<{ table: boolean; text: string }> = [];
+  let cursor = 0;
+  for (const range of findMatrixTableSourceRanges(markdown)) {
+    const plain = markdown.slice(cursor, range.start).replace(/(?:[ \t]*\n)+$/u, "");
+    if (plain.trim()) {
+      segments.push({ table: false, text: plain });
+    }
+    const rawTable = markdown.slice(range.start, range.end).trimEnd();
+    const indent = /^ +/u.exec(rawTable)?.[0] ?? "";
+    const table = indent
+      ? rawTable
+          .split("\n")
+          .map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
+          .join("\n")
+      : rawTable;
+    segments.push({ table: true, text: table });
+    cursor = range.end;
+  }
+  const tail = markdown.slice(cursor).replace(/^(?:[ \t]*\n)+/u, "");
+  if (tail.trim()) {
+    segments.push({ table: false, text: tail });
+  }
+  return segments;
+}
+
+export function prepareMatrixSingleText(
+  text: string,
+  opts: {
+    cfg: CoreConfig;
+    accountId?: string;
+    tableMode?: MarkdownTableMode;
+    preserveWhitespace?: boolean;
+  },
+): MatrixPreparedSingleText {
+  const normalizedText = text.replace(/\r\n?/gu, "\n");
+  const trimmedText = opts.preserveWhitespace ? normalizedText : normalizedText.trim();
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
+  const tableMode =
+    opts.tableMode ??
+    resolveMarkdownTableMode({
+      cfg,
+      channel: "matrix",
+      accountId: opts.accountId,
+      supportsBlockTables: MATRIX_FORMAT_PROFILE.constructs.table === "native",
+    });
+  const convertedText = renderMatrixMarkdownTables(trimmedText, tableMode);
+  const singleEventLimit = normalizeMatrixEventLimit(
+    Math.min(
+      resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+      MATRIX_FORMAT_PROFILE.chunk.limit,
+    ),
+  );
+  const preparedBody = markdownToMatrixBody(convertedText);
+  const eventTextLength = Math.max(convertedText.length, preparedBody.length);
+  return {
+    trimmedText,
+    convertedText,
+    preparedBody,
+    singleEventLimit,
+    eventTextLength,
+    fitsInSingleEvent: eventTextLength <= singleEventLimit,
+    tableMode,
+  };
+}
+
+export function chunkMatrixText(
+  text: string,
+  opts: {
+    cfg: CoreConfig;
+    accountId?: string;
+    tableMode?: MarkdownTableMode;
+    preserveWhitespace?: boolean;
+  },
+): MatrixPreparedChunkedText {
+  const preparedText = prepareMatrixSingleText(text, opts);
+  if (preparedText.fitsInSingleEvent) {
+    return {
+      ...preparedText,
+      chunks: preparedText.convertedText ? [preparedText.convertedText] : [],
+    };
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
+  const chunkMode = getMatrixRuntime().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  const analysis = analyzeMatrixSpoilers(preparedText.convertedText);
+  const collisionRedacted = analysis.metadataCollision ? renderMatrixBody(analysis) : undefined;
+  const chunkSegment = (segmentText: string): string[] => {
+    const segmentAnalysis = analyzeMatrixSpoilers(segmentText);
+    const sourceText = segmentAnalysis.metadataCollision
+      ? renderMatrixBody(segmentAnalysis)
+      : segmentText;
+    const protectedUnderline = protectMatrixUnderlineTags(sourceText);
+    const protectedSpoilers = protectMatrixSpoilerDelimiters(
+      analyzeMatrixSpoilers(protectedUnderline.markdown),
+    );
+    const wrapperReserve =
+      (protectedSpoilers.markers ? 4 : 0) + (protectedUnderline.markers ? 7 : 0);
+    const privateMarkers = [protectedSpoilers.markers, protectedUnderline.markers].flatMap(
+      (markers) => (markers ? [markers.open, markers.close, markers.padding] : []),
+    );
+    let reserve = wrapperReserve;
+    while (reserve < preparedText.singleEventLimit) {
+      const protectedChunks = getMatrixRuntime().channel.text.chunkMarkdownTextWithMode(
+        protectedSpoilers.markdown,
+        preparedText.singleEventLimit - reserve,
+        chunkMode,
+      );
+      const restored = restoreMatrixStyleChunks(
+        protectedChunks,
+        protectedSpoilers.markers,
+        protectedUnderline.markers,
+      ).filter((_, index) => {
+        const source = privateMarkers.reduce(
+          (value, marker) => value.replaceAll(marker, ""),
+          protectedChunks[index] ?? "",
+        );
+        return source.length > 0;
+      });
+      const overflow = Math.max(
+        0,
+        ...restored.map((chunk) =>
+          resolveMatrixChunkOverflow(chunk, preparedText.singleEventLimit),
+        ),
+      );
+      if (overflow === 0) {
+        return restored;
+      }
+      reserve += overflow;
+    }
+    throw new Error("Matrix text chunk limit is too small for formatted content");
+  };
+  const chunks =
+    collisionRedacted !== undefined
+      ? chunkSegment(collisionRedacted)
+      : preparedText.tableMode === "block"
+        ? splitMatrixTableSegments(preparedText.convertedText).flatMap((segment) => {
+            if (!segment.table) {
+              return chunkSegment(segment.text);
+            }
+            return segment.text.length <= preparedText.singleEventLimit
+              ? [segment.text]
+              : chunkSegment(renderMatrixMarkdownTables(segment.text, "bullets"));
+          })
+        : chunkSegment(preparedText.convertedText);
+  return {
+    ...preparedText,
+    chunks,
+  };
+}

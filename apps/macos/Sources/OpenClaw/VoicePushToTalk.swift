@@ -80,6 +80,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
         // assert(Thread.isMainThread)  - Removed for Swift 6
+
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)
@@ -108,13 +109,13 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 }
 
-/// Short-lived speech recognizer that records while the hotkey is held.
+/// Records speech while the hotkey is held.
 actor VoicePushToTalk {
     static let shared = VoicePushToTalk()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if push-to-talk is never used.
     private var audioEngine: AVAudioEngine?
@@ -122,7 +123,7 @@ actor VoicePushToTalk {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
 
-    // Session token used to drop stale callbacks when a new capture starts.
+    /// Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
 
     private var committed: String = ""
@@ -159,7 +160,8 @@ actor VoicePushToTalk {
         self.isCapturing = true
         self.triggerChimePlayed = false
         self.finalized = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
         let snapshot = await MainActor.run { VoiceSessionCoordinator.shared.snapshot() }
         self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
@@ -170,10 +172,11 @@ actor VoicePushToTalk {
         // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
         await VoiceWakeRuntime.shared.pauseForPushToTalk()
         let adoptedPrefix = self.adoptedPrefix
-        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : Self.makeAttributed(
-            committed: adoptedPrefix,
-            volatile: "",
-            isFinal: false)
+        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
+            .makeAttributed(
+                committed: adoptedPrefix,
+                volatile: "",
+                isFinal: false)
         self.overlayToken = await MainActor.run {
             VoiceSessionCoordinator.shared.startSession(
                 source: .pushToTalk,
@@ -225,8 +228,7 @@ actor VoicePushToTalk {
     // MARK: - Private
 
     private func startRecognition(localeID: String?, sessionID: UUID) async throws {
-        let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
-        self.recognizer = SFSpeechRecognizer(locale: locale)
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(
                 domain: "VoicePushToTalk",
@@ -235,8 +237,8 @@ actor VoicePushToTalk {
         }
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
         guard let request = self.recognitionRequest else { return }
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
         if self.audioEngine == nil {
@@ -244,15 +246,23 @@ actor VoicePushToTalk {
         }
         guard let audioEngine = self.audioEngine else { return }
 
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            throw NSError(
+                domain: "VoicePushToTalk",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
+
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         if self.tapInstalled {
             input.removeTap(onBus: 0)
             self.tapInstalled = false
         }
-        // Pipe raw mic buffers into the Speech request while the chord is held.
+        // Pipe Speech-compatible mic buffers into the request while the chord is held.
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(buffer)
+            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
         }
         self.tapInstalled = true
 
@@ -284,12 +294,15 @@ actor VoicePushToTalk {
             self.committed = transcript
             self.volatile = ""
         } else {
-            self.volatile = Self.delta(after: self.committed, current: transcript)
+            self.volatile = VoiceOverlayTextFormatting.delta(after: self.committed, current: transcript)
         }
 
         let committedWithPrefix = Self.join(self.adoptedPrefix, self.committed)
         let snapshot = Self.join(committedWithPrefix, self.volatile)
-        let attributed = Self.makeAttributed(committed: committedWithPrefix, volatile: self.volatile, isFinal: isFinal)
+        let attributed = VoiceOverlayTextFormatting.makeAttributed(
+            committed: committedWithPrefix,
+            volatile: self.volatile,
+            isFinal: isFinal)
         if let token = self.overlayToken {
             await MainActor.run {
                 VoiceSessionCoordinator.shared.updatePartial(
@@ -308,7 +321,8 @@ actor VoicePushToTalk {
         }
         self.finalized = true
         self.isCapturing = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
 
         let finalRecognized: String = {
             if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -335,7 +349,7 @@ actor VoicePushToTalk {
                     VoiceWakeChimePlayer.play(chime, reason: "ptt.fallback_send")
                 }
                 Task.detached {
-                    await VoiceWakeForwarder.forward(transcript: finalText)
+                    await VoiceWakeForwarder.forwardToSelectedSession(transcript: finalText)
                 }
             }
         }
@@ -376,46 +390,9 @@ actor VoicePushToTalk {
             sendChime: state.voiceWakeSendChime)
     }
 
-    // MARK: - Test helpers
-
-    static func _testDelta(committed: String, current: String) -> String {
-        self.delta(after: committed, current: current)
-    }
-
-    static func _testAttributedColors(isFinal: Bool) -> (NSColor, NSColor) {
-        let sample = self.makeAttributed(committed: "a", volatile: "b", isFinal: isFinal)
-        let committedColor = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
-        let volatileColor = sample.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor ?? .clear
-        return (committedColor, volatileColor)
-    }
-
     private static func join(_ prefix: String, _ suffix: String) -> String {
         if prefix.isEmpty { return suffix }
         if suffix.isEmpty { return prefix }
         return "\(prefix) \(suffix)"
-    }
-
-    private static func delta(after committed: String, current: String) -> String {
-        if current.hasPrefix(committed) {
-            let start = current.index(current.startIndex, offsetBy: committed.count)
-            return String(current[start...])
-        }
-        return current
-    }
-
-    private static func makeAttributed(committed: String, volatile: String, isFinal: Bool) -> NSAttributedString {
-        let full = NSMutableAttributedString()
-        let committedAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.labelColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.tertiaryLabelColor
-        let volatileAttr: [NSAttributedString.Key: Any] = [
-            .foregroundColor: volatileColor,
-            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-        ]
-        full.append(NSAttributedString(string: volatile, attributes: volatileAttr))
-        return full
     }
 }

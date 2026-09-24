@@ -1,441 +1,305 @@
-import { randomUUID } from "node:crypto";
-import { WebSocket, type ClientOptions, type CertMeta } from "ws";
-import type { DeviceIdentity } from "../infra/device-identity.js";
+// OpenClaw Gateway client facade.
+// Injects OpenClaw host dependencies into the shared gateway-client package.
+import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/index.js";
+import type {
+  GatewayClientConnectionMetadata,
+  GatewayClientHostDeps,
+  GatewayClientOptions as BaseGatewayClientOptions,
+  GatewayClientRequestOptions,
+} from "../../packages/gateway-client/src/index.js";
+import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
+import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   clearDeviceAuthToken,
+  clearOriginDeviceToken,
   loadDeviceAuthToken,
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceToken,
+  loadOriginDeviceTokenReadOnly,
+  prepareDeviceAuthStore,
   storeDeviceAuthToken,
+  storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
 import {
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
-import { rawDataToString } from "../infra/ws.js";
+import {
+  ensureInheritedManagedProxyRoutingActive,
+  registerManagedProxyGatewayLoopbackBypass,
+} from "../infra/net/proxy/proxy-lifecycle.js";
 import { logDebug, logError } from "../logger.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
-import {
-  type ConnectParams,
-  type EventFrame,
-  type HelloOk,
-  PROTOCOL_VERSION,
-  type RequestFrame,
-  validateEventFrame,
-  validateRequestFrame,
-  validateResponseFrame,
-} from "./protocol/index.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { type DeviceAuthEntry, normalizeDeviceAuthRole } from "../shared/device-auth.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
+import { VERSION } from "../version.js";
 
-type Pending = {
-  resolve: (value: unknown) => void;
-  reject: (err: unknown) => void;
-  expectFinal: boolean;
+export {
+  GatewayClientRequestError,
+  isGatewayConnectAssemblyError,
+  isGatewayProtocolResponseError,
+} from "../../packages/gateway-client/src/index.js";
+export type {
+  GatewayClientCloseInfo,
+  GatewayClientRequestOptions,
+  GatewayReconnectPausedInfo,
+} from "../../packages/gateway-client/src/index.js";
+
+export type GatewayClientOptions = BaseGatewayClientOptions & {
+  /** Exact normalized remote gateway scope for origin-bound device credentials. */
+  deviceAuthScope?: string;
+  /** Prevent this client lifecycle from creating or mutating shared state. */
+  sharedStateMode?: "read-only";
+  /** Auth already resolved and validated by the one-shot call owner. */
+  preparedDeviceAuth?: DeviceAuthEntry;
 };
 
-export type GatewayClientOptions = {
-  url?: string; // ws://127.0.0.1:18789
-  token?: string;
-  password?: string;
-  instanceId?: string;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  platform?: string;
-  mode?: GatewayClientMode;
-  role?: string;
-  scopes?: string[];
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
-  deviceIdentity?: DeviceIdentity;
-  minProtocol?: number;
-  maxProtocol?: number;
-  tlsFingerprint?: string;
-  onEvent?: (evt: EventFrame) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-  onConnectError?: (err: Error) => void;
-  onClose?: (code: number, reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-};
+function createOpenClawGatewayClientHostDeps(
+  overrides?: GatewayClientHostDeps,
+  deviceAuthScope?: string,
+  suppressStoredDeviceAuth = false,
+  sharedStateMode?: "read-only",
+  preparedDeviceAuth?: DeviceAuthEntry,
+): GatewayClientHostDeps {
+  const readOnly = sharedStateMode === "read-only";
+  // Prepared auth is immutable request input. Any later durable mutation must
+  // still match this token so a stale request cannot undo a concurrent rotation.
+  const rotationFence = preparedDeviceAuth
+    ? { expectedToken: preparedDeviceAuth.token }
+    : undefined;
+  let tokenObservation:
+    | { deviceId: string; role: string; expectedToken: string | null }
+    | undefined;
+  const observe = (params: { deviceId: string; role: string }) => {
+    const deviceId = params.deviceId;
+    const role = normalizeDeviceAuthRole(params.role);
+    return (snapshot: { expectedToken: string | null }) => {
+      tokenObservation = { deviceId, role, expectedToken: snapshot.expectedToken };
+    };
+  };
+  const observedFor = (params: { deviceId: string; role: string }) =>
+    tokenObservation?.deviceId === params.deviceId &&
+    tokenObservation.role === normalizeDeviceAuthRole(params.role)
+      ? tokenObservation
+      : undefined;
+  const writeFence = (params: { deviceId: string; role: string }) => {
+    if (rotationFence) {
+      return rotationFence;
+    }
+    // Each connection's accepted writes settle before its successor loads another observation.
+    const observed = observedFor(params);
+    return observed ? { expectedToken: observed.expectedToken } : undefined;
+  };
+  const clearFence = (params: { deviceId: string; role: string; expectedToken?: string }) => {
+    const expectedToken = rotationFence?.expectedToken ?? params.expectedToken;
+    const raw = observedFor(params)?.expectedToken;
+    return {
+      ...rotationFence,
+      ...(typeof raw === "string" && raw !== expectedToken && raw.trim() === expectedToken
+        ? { observedToken: raw }
+        : {}),
+    };
+  };
+  const deviceAuthDeps: Pick<
+    GatewayClientHostDeps,
+    "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
+  > = deviceAuthScope
+    ? {
+        loadDeviceAuthToken: async (params) => {
+          if (readOnly) {
+            return suppressStoredDeviceAuth
+              ? null
+              : loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope });
+          }
+          const load = await loadOriginDeviceToken({
+            ...params,
+            gatewayScope: deviceAuthScope,
+            onSnapshot: observe(params),
+          });
+          return suppressStoredDeviceAuth ? null : load;
+        },
+        storeDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              storeOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...writeFence(params),
+              }),
+        clearDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              clearOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...clearFence(params),
+              }),
+      }
+    : readOnly
+      ? {
+          loadDeviceAuthToken: suppressStoredDeviceAuth ? () => null : loadDeviceAuthTokenReadOnly,
+          storeDeviceAuthToken: () => {},
+          clearDeviceAuthToken: () => {},
+        }
+      : {
+          loadDeviceAuthToken: (params) =>
+            loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+          storeDeviceAuthToken: (params) =>
+            storeDeviceAuthToken({ ...params, ...writeFence(params) }),
+          clearDeviceAuthToken: (params) =>
+            clearDeviceAuthToken({ ...params, ...clearFence(params) }),
+        };
+  const preparedDeviceAuthDeps = preparedDeviceAuth
+    ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
+    : deviceAuthDeps;
+  return {
+    // This wrapper is the only place the package reaches into OpenClaw runtime
+    // state. Keep device identity, token storage, proxy, and redaction here.
+    loadOrCreateDeviceIdentity,
+    signDevicePayload,
+    publicKeyRawBase64UrlFromPem,
+    ...preparedDeviceAuthDeps,
+    beforeConnect: ensureInheritedManagedProxyRoutingActive,
+    registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
+    logDebug,
+    logError,
+    redactForLog: redactToolPayloadText,
+    ...overrides,
+    ...(readOnly
+      ? {
+          // Read-only is an authoritative lifecycle policy: caller overrides
+          // must not restore identity creation or token writes behind it.
+          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
+          ...preparedDeviceAuthDeps,
+        }
+      : {}),
+  };
+}
 
-export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
-  1000: "normal closure",
-  1006: "abnormal closure (no close frame)",
-  1008: "policy violation",
-  1012: "service restart",
-};
+function shouldSuppressStoredDeviceAuth(opts: GatewayClientOptions): boolean {
+  // Password-only read-only clients cannot use stored tokens for auth, retry, or persistence.
+  return (
+    Boolean(opts.deviceAuthScope && (opts.token?.trim() || opts.password?.trim())) ||
+    (!opts.deviceAuthScope &&
+      opts.sharedStateMode === "read-only" &&
+      Boolean(opts.password?.trim()) &&
+      !opts.token?.trim() &&
+      !opts.bootstrapToken?.trim() &&
+      !opts.deviceToken?.trim() &&
+      !opts.approvalRuntimeToken?.trim() &&
+      !opts.agentRuntimeIdentityToken?.trim() &&
+      !opts.preferBootstrapToken)
+  );
+}
 
-export function describeGatewayCloseCode(code: number): string | undefined {
-  return GATEWAY_CLOSE_CODE_HINTS[code];
+/** Prepare storage before the one-shot RPC budget; connection loads still observe current rows. */
+export async function prepareGatewayClientDeviceAuth(
+  opts: GatewayClientOptions & {
+    url: string;
+    deviceIdentity: NonNullable<GatewayClientOptions["deviceIdentity"]> | null;
+  },
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  if (
+    opts.deviceIdentity === null ||
+    opts.preparedDeviceAuth ||
+    (opts.sharedStateMode === "read-only" && shouldSuppressStoredDeviceAuth(opts))
+  ) {
+    return;
+  }
+  // Leave transport rejection with the client, before it can open token storage.
+  try {
+    if (Object.keys(opts.edgeAuthHeaders ?? {}).length && new URL(opts.url).protocol !== "wss:") {
+      return;
+    }
+    resolveGatewayWebSocketTransport({
+      url: opts.url,
+      tlsFingerprint: opts.tlsFingerprint,
+      env: opts.env,
+      options: {},
+    });
+  } catch {
+    return;
+  }
+  try {
+    await prepareDeviceAuthStore({
+      env: opts.env,
+      signal,
+      readOnly: opts.sharedStateMode === "read-only",
+    });
+  } catch (error) {
+    throw markGatewayConnectAssemblyError(
+      error instanceof Error ? error : new Error(String(error)),
+    );
+  }
 }
 
 export class GatewayClient {
-  private ws: WebSocket | null = null;
-  private opts: GatewayClientOptions;
-  private pending = new Map<string, Pending>();
-  private backoffMs = 1000;
-  private closed = false;
-  private lastSeq: number | null = null;
-  private connectNonce: string | null = null;
-  private connectSent = false;
-  private connectTimer: NodeJS.Timeout | null = null;
-  // Track last tick to detect silent stalls.
-  private lastTick: number | null = null;
-  private tickIntervalMs = 30_000;
-  private tickTimer: NodeJS.Timeout | null = null;
+  #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
-    this.opts = {
-      ...opts,
-      deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
-    };
-  }
-
-  start() {
-    if (this.closed) {
-      return;
+    const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
+    const runtimeIdentity = resolveGatewayClientPlatformIdentity(process.platform);
+    const suppressStoredAuth = shouldSuppressStoredDeviceAuth(opts);
+    for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
+      registerSecretValueForRedaction(value);
     }
-    const url = this.opts.url ?? "ws://127.0.0.1:18789";
-    if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
-      this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
-      return;
-    }
-    // Allow node screen snapshots and other large responses.
-    const wsOptions: ClientOptions = {
-      maxPayload: 25 * 1024 * 1024,
-    };
-    if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
-      wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = ((_host: string, cert: CertMeta) => {
-        const fingerprintValue =
-          typeof cert === "object" && cert && "fingerprint256" in cert
-            ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
-            : "";
-        const fingerprint = normalizeFingerprint(
-          typeof fingerprintValue === "string" ? fingerprintValue : "",
-        );
-        const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
-        if (!expected) {
-          return new Error("gateway tls fingerprint missing");
-        }
-        if (!fingerprint) {
-          return new Error("gateway tls fingerprint unavailable");
-        }
-        if (fingerprint !== expected) {
-          return new Error("gateway tls fingerprint mismatch");
-        }
-        return undefined;
-        // oxlint-disable-next-line typescript/no-explicit-any
-      }) as any;
-    }
-    this.ws = new WebSocket(url, wsOptions);
-
-    this.ws.on("open", () => {
-      if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
-        const tlsError = this.validateTlsFingerprint();
-        if (tlsError) {
-          this.opts.onConnectError?.(tlsError);
-          this.ws?.close(1008, tlsError.message);
-          return;
-        }
-      }
-      this.queueConnect();
-    });
-    this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
-    this.ws.on("close", (code, reason) => {
-      const reasonText = rawDataToString(reason);
-      this.ws = null;
-      this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
-      this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
-    });
-    this.ws.on("error", (err) => {
-      logDebug(`gateway client error: ${String(err)}`);
-      if (!this.connectSent) {
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-      }
+    this.#client = new BaseGatewayClient({
+      ...baseOptions,
+      clientVersion: baseOptions.clientVersion ?? VERSION,
+      platform: baseOptions.platform ?? runtimeIdentity.platform,
+      deviceFamily:
+        baseOptions.deviceFamily ??
+        (baseOptions.platform === undefined ? runtimeIdentity.deviceFamily : undefined),
+      hostDeps: createOpenClawGatewayClientHostDeps(
+        baseOptions.hostDeps,
+        deviceAuthScope,
+        suppressStoredAuth,
+        sharedStateMode,
+        preparedDeviceAuth,
+      ),
     });
   }
 
-  stop() {
-    this.closed = true;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
-    this.ws?.close();
-    this.ws = null;
-    this.flushPendingErrors(new Error("gateway client stopped"));
+  start(): void {
+    this.#client.start();
   }
 
-  private sendConnect() {
-    if (this.connectSent) {
-      return;
-    }
-    this.connectSent = true;
-    if (this.connectTimer) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
-    const role = this.opts.role ?? "operator";
-    const storedToken = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
-      : null;
-    const authToken = storedToken ?? this.opts.token ?? undefined;
-    const canFallbackToShared = Boolean(storedToken && this.opts.token);
-    const auth =
-      authToken || this.opts.password
-        ? {
-            token: authToken,
-            password: this.opts.password,
-          }
-        : undefined;
-    const signedAtMs = Date.now();
-    const nonce = this.connectNonce ?? undefined;
-    const scopes = this.opts.scopes ?? ["operator.admin"];
-    const device = (() => {
-      if (!this.opts.deviceIdentity) {
-        return undefined;
-      }
-      const payload = buildDeviceAuthPayload({
-        deviceId: this.opts.deviceIdentity.deviceId,
-        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-        role,
-        scopes,
-        signedAtMs,
-        token: authToken ?? null,
-        nonce,
-      });
-      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
-      return {
-        id: this.opts.deviceIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
-        signature,
-        signedAt: signedAtMs,
-        nonce,
-      };
-    })();
-    const params: ConnectParams = {
-      minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
-      maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
-      client: {
-        id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        displayName: this.opts.clientDisplayName,
-        version: this.opts.clientVersion ?? "dev",
-        platform: this.opts.platform ?? process.platform,
-        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-        instanceId: this.opts.instanceId,
-      },
-      caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
-      commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
-      permissions:
-        this.opts.permissions && typeof this.opts.permissions === "object"
-          ? this.opts.permissions
-          : undefined,
-      pathEnv: this.opts.pathEnv,
-      auth,
-      role,
-      scopes,
-      device,
-    };
-
-    void this.request<HelloOk>("connect", params)
-      .then((helloOk) => {
-        const authInfo = helloOk?.auth;
-        if (authInfo?.deviceToken && this.opts.deviceIdentity) {
-          storeDeviceAuthToken({
-            deviceId: this.opts.deviceIdentity.deviceId,
-            role: authInfo.role ?? role,
-            token: authInfo.deviceToken,
-            scopes: authInfo.scopes ?? [],
-          });
-        }
-        this.backoffMs = 1000;
-        this.tickIntervalMs =
-          typeof helloOk.policy?.tickIntervalMs === "number"
-            ? helloOk.policy.tickIntervalMs
-            : 30_000;
-        this.lastTick = Date.now();
-        this.startTickWatch();
-        this.opts.onHelloOk?.(helloOk);
-      })
-      .catch((err) => {
-        if (canFallbackToShared && this.opts.deviceIdentity) {
-          clearDeviceAuthToken({
-            deviceId: this.opts.deviceIdentity.deviceId,
-            role,
-          });
-        }
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
-        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
-          logDebug(msg);
-        } else {
-          logError(msg);
-        }
-        this.ws?.close(1008, "connect failed");
-      });
+  stop(): void {
+    this.#client.stop();
   }
 
-  private handleMessage(raw: string) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (validateEventFrame(parsed)) {
-        const evt = parsed;
-        if (evt.event === "connect.challenge") {
-          const payload = evt.payload as { nonce?: unknown } | undefined;
-          const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
-          if (nonce) {
-            this.connectNonce = nonce;
-            this.sendConnect();
-          }
-          return;
-        }
-        const seq = typeof evt.seq === "number" ? evt.seq : null;
-        if (seq !== null) {
-          if (this.lastSeq !== null && seq > this.lastSeq + 1) {
-            this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
-          }
-          this.lastSeq = seq;
-        }
-        if (evt.event === "tick") {
-          this.lastTick = Date.now();
-        }
-        this.opts.onEvent?.(evt);
-        return;
-      }
-      if (validateResponseFrame(parsed)) {
-        const pending = this.pending.get(parsed.id);
-        if (!pending) {
-          return;
-        }
-        // If the payload is an ack with status accepted, keep waiting for final.
-        const payload = parsed.payload as { status?: unknown } | undefined;
-        const status = payload?.status;
-        if (pending.expectFinal && status === "accepted") {
-          return;
-        }
-        this.pending.delete(parsed.id);
-        if (parsed.ok) {
-          pending.resolve(parsed.payload);
-        } else {
-          pending.reject(new Error(parsed.error?.message ?? "unknown error"));
-        }
-      }
-    } catch (err) {
-      logDebug(`gateway client parse error: ${String(err)}`);
-    }
+  stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
+    return this.#client.stopAndWait(opts);
   }
 
-  private queueConnect() {
-    this.connectNonce = null;
-    this.connectSent = false;
-    if (this.connectTimer) {
-      clearTimeout(this.connectTimer);
-    }
-    this.connectTimer = setTimeout(() => {
-      this.sendConnect();
-    }, 750);
-  }
-
-  private scheduleReconnect() {
-    if (this.closed) {
-      return;
-    }
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
-  }
-
-  private flushPendingErrors(err: Error) {
-    for (const [, p] of this.pending) {
-      p.reject(err);
-    }
-    this.pending.clear();
-  }
-
-  private startTickWatch() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-    }
-    const interval = Math.max(this.tickIntervalMs, 1000);
-    this.tickTimer = setInterval(() => {
-      if (this.closed) {
-        return;
-      }
-      if (!this.lastTick) {
-        return;
-      }
-      const gap = Date.now() - this.lastTick;
-      if (gap > this.tickIntervalMs * 2) {
-        this.ws?.close(4000, "tick timeout");
-      }
-    }, interval);
-  }
-
-  private validateTlsFingerprint(): Error | null {
-    if (!this.opts.tlsFingerprint || !this.ws) {
-      return null;
-    }
-    const expected = normalizeFingerprint(this.opts.tlsFingerprint);
-    if (!expected) {
-      return new Error("gateway tls fingerprint missing");
-    }
-    const socket = (
-      this.ws as WebSocket & {
-        _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
-      }
-    )._socket;
-    if (!socket || typeof socket.getPeerCertificate !== "function") {
-      return new Error("gateway tls fingerprint unavailable");
-    }
-    const cert = socket.getPeerCertificate();
-    const fingerprint = normalizeFingerprint(cert?.fingerprint256 ?? "");
-    if (!fingerprint) {
-      return new Error("gateway tls fingerprint unavailable");
-    }
-    if (fingerprint !== expected) {
-      return new Error("gateway tls fingerprint mismatch");
-    }
-    return null;
-  }
-
-  async request<T = Record<string, unknown>>(
+  request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: GatewayClientRequestOptions,
   ): Promise<T> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("gateway not connected");
-    }
-    const id = randomUUID();
-    const frame: RequestFrame = { type: "req", id, method, params };
-    if (!validateRequestFrame(frame)) {
-      throw new Error(
-        `invalid request frame: ${JSON.stringify(validateRequestFrame.errors, null, 2)}`,
-      );
-    }
-    const expectFinal = opts?.expectFinal === true;
-    const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (value) => resolve(value as T),
-        reject,
-        expectFinal,
-      });
-    });
-    this.ws.send(JSON.stringify(frame));
-    return p;
+    return this.#client.request<T>(method, params, opts);
+  }
+
+  /** Current transport state, including CLOSING before the close callback fires.
+   * This is not authentication or readiness evidence on its own. */
+  get connected(): boolean {
+    return this.#client.connected;
+  }
+
+  getConnectionMetadata(): GatewayClientConnectionMetadata {
+    return this.#client.getConnectionMetadata();
+  }
+
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: BaseGatewayClientOptions["computerUse"];
+  }): void {
+    this.#client.updateNodeManifest(manifest);
   }
 }

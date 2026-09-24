@@ -1,13 +1,18 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+// Talk Voice plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
-type ElevenLabsVoice = {
-  voice_id: string;
-  name?: string;
-  category?: string;
-  description?: string;
-};
-
-function mask(s: string, keep: number = 6): string {
+function mask(s: string, keep = 6): string {
   const trimmed = s.trim();
   if (trimmed.length <= keep) {
     return "***";
@@ -23,30 +28,48 @@ function isLikelyVoiceId(value: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(v);
 }
 
-async function listVoices(apiKey: string): Promise<ElevenLabsVoice[]> {
-  const res = await fetch("https://api.elevenlabs.io/v1/voices", {
-    headers: {
-      "xi-api-key": apiKey,
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`ElevenLabs voices API error (${res.status})`);
+function resolveProviderLabel(providerId: string): string {
+  switch (providerId) {
+    case "openai":
+      return "OpenAI";
+    case "microsoft":
+      return "Microsoft";
+    case "elevenlabs":
+      return "ElevenLabs";
+    default:
+      return providerId;
   }
-  const json = (await res.json()) as { voices?: ElevenLabsVoice[] };
-  return Array.isArray(json.voices) ? json.voices : [];
 }
 
-function formatVoiceList(voices: ElevenLabsVoice[], limit: number): string {
+function formatVoiceMeta(voice: SpeechVoiceOption): string | undefined {
+  const parts = [voice.locale, voice.gender];
+  const personalities = voice.personalities?.filter((value) => value.trim().length > 0) ?? [];
+  if (personalities.length > 0) {
+    parts.push(personalities.join(", "));
+  }
+  const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
+  return filtered.length > 0 ? filtered.join(" · ") : undefined;
+}
+
+function formatVoiceList(voices: SpeechVoiceOption[], limit: number, providerId: string): string {
   const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
   const lines: string[] = [];
-  lines.push(`Voices: ${voices.length}`);
+  lines.push(`${resolveProviderLabel(providerId)} voices: ${voices.length}`);
   lines.push("");
   for (const v of sliced) {
     const name = (v.name ?? "").trim() || "(unnamed)";
     const category = (v.category ?? "").trim();
     const meta = category ? ` · ${category}` : "";
     lines.push(`- ${name}${meta}`);
-    lines.push(`  id: ${v.voice_id}`);
+    lines.push(`  id: ${v.id}`);
+    const details = formatVoiceMeta(v);
+    if (details) {
+      lines.push(`  meta: ${details}`);
+    }
+    const description = (v.description ?? "").trim();
+    if (description) {
+      lines.push(`  note: ${description}`);
+    }
   }
   if (voices.length > sliced.length) {
     lines.push("");
@@ -55,96 +78,201 @@ function formatVoiceList(voices: ElevenLabsVoice[], limit: number): string {
   return lines.join("\n");
 }
 
-function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | null {
+function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOption | null {
   const q = query.trim();
   if (!q) {
     return null;
   }
-  const lower = q.toLowerCase();
-  const byId = voices.find((v) => v.voice_id === q);
+  const lower = normalizeLowercaseStringOrEmpty(q);
+  const byId = voices.find((v) => v.id === q);
   if (byId) {
     return byId;
   }
-  const exactName = voices.find((v) => (v.name ?? "").trim().toLowerCase() === lower);
+  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
   if (exactName) {
     return exactName;
   }
-  const partial = voices.find((v) => (v.name ?? "").trim().toLowerCase().includes(lower));
+  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
   return partial ?? null;
 }
 
-export default function register(api: OpenClawPluginApi) {
-  api.registerCommand({
-    name: "voice",
-    description: "List/set ElevenLabs Talk voice (affects iOS Talk playback).",
-    acceptsArgs: true,
-    handler: async (ctx) => {
-      const args = ctx.args?.trim() ?? "";
-      const tokens = args.split(/\s+/).filter(Boolean);
-      const action = (tokens[0] ?? "status").toLowerCase();
-
-      const cfg = api.runtime.config.loadConfig();
-      const apiKey = (cfg.talk?.apiKey ?? "").trim();
-      if (!apiKey) {
-        return {
-          text:
-            "Talk voice is not configured.\n\n" +
-            "Missing: talk.apiKey (ElevenLabs API key).\n" +
-            "Set it on the gateway, then retry.",
-        };
-      }
-
-      const currentVoiceId = (cfg.talk?.voiceId ?? "").trim();
-
-      if (action === "status") {
-        return {
-          text:
-            "Talk voice status:\n" +
-            `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
-            `- talk.apiKey: ${mask(apiKey)}`,
-        };
-      }
-
-      if (action === "list") {
-        const limit = Number.parseInt(tokens[1] ?? "12", 10);
-        const voices = await listVoices(apiKey);
-        return { text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12) };
-      }
-
-      if (action === "set") {
-        const query = tokens.slice(1).join(" ").trim();
-        if (!query) {
-          return { text: "Usage: /voice set <voiceId|name>" };
-        }
-        const voices = await listVoices(apiKey);
-        const chosen = findVoice(voices, query);
-        if (!chosen) {
-          const hint = isLikelyVoiceId(query) ? query : `"${query}"`;
-          return { text: `No voice found for ${hint}. Try: /voice list` };
-        }
-
-        const nextConfig = {
-          ...cfg,
-          talk: {
-            ...cfg.talk,
-            voiceId: chosen.voice_id,
-          },
-        };
-        await api.runtime.config.writeConfigFile(nextConfig);
-
-        const name = (chosen.name ?? "").trim() || "(unnamed)";
-        return { text: `✅ Talk voice set to ${name}\n${chosen.voice_id}` };
-      }
-
-      return {
-        text: [
-          "Voice commands:",
-          "",
-          "/voice status",
-          "/voice list [limit]",
-          "/voice set <voiceId|name>",
-        ].join("\n"),
-      };
-    },
-  });
+function asTrimmedString(value: unknown): string {
+  return normalizeOptionalString(value) ?? "";
 }
+
+function resolveCommandLabel(channel: string): string {
+  return channel === "discord" ? "/talkvoice" : "/voice";
+}
+
+const TALK_ADMIN_SCOPE = "operator.admin";
+
+function requiresAdminToSetVoice(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
+  if (Array.isArray(gatewayClientScopes)) {
+    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
+  }
+  return senderIsOwner !== true;
+}
+
+export default definePluginEntry({
+  id: "talk-voice",
+  name: "Talk Voice",
+  description: "Select the active Talk voice and manage Talk voice configuration",
+  register(api: OpenClawPluginApi) {
+    const loadTool = createLazyRuntimeModule(() => import("./tool.js"));
+    api.registerTool({
+      name: "talk_voice",
+      label: "Talk Voice",
+      description:
+        "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["list", "set"] },
+          voice: { type: "string", description: "Voice ID from list; required for set." },
+        },
+        required: ["action"],
+        additionalProperties: false,
+      },
+      execute: async (...args) => await (await loadTool()).executeTalkVoiceTool(...args),
+    });
+    api.registerCommand({
+      name: "voice",
+      nativeNames: {
+        discord: "talkvoice",
+      },
+      description: "List/set Talk provider voices (affects iOS Talk playback).",
+      acceptsArgs: true,
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        const assertOwnerCurrent = ctx.assertOwnerCurrent;
+        const commandLabel = resolveCommandLabel(ctx.channel);
+        const args = ctx.args?.trim() ?? "";
+        const tokens = args.split(/\s+/).filter(Boolean);
+        const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
+
+        const cfg = api.runtime.config.current() as OpenClawConfig;
+        const active = resolveActiveTalkProviderConfig(cfg.talk);
+        if (!active) {
+          return {
+            text:
+              "Talk voice is not configured.\n\n" +
+              "Missing: talk.provider and talk.providers.<provider>.\n" +
+              "Set it on the gateway, then retry.",
+          };
+        }
+        const providerId = active.provider;
+        const providerLabel = resolveProviderLabel(providerId);
+        const apiKey = asTrimmedString(active.config.apiKey);
+        const baseUrl = normalizeOptionalString(active.config.baseUrl);
+
+        const currentVoiceId = asTrimmedString(active.config.voiceId);
+
+        if (action === "status") {
+          return {
+            text:
+              "Talk voice status:\n" +
+              `- provider: ${providerId}\n` +
+              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
+          };
+        }
+
+        if (action === "list") {
+          const limit = parseStrictPositiveInteger(tokens[1]) ?? 12;
+          try {
+            const voices = await api.runtime.tts.listVoices({
+              provider: providerId,
+              cfg,
+              apiKey: apiKey || undefined,
+              baseUrl,
+            });
+            return {
+              text: formatVoiceList(voices, limit, providerId),
+            };
+          } catch (error) {
+            const message = formatErrorMessage(error);
+            return { text: `${providerLabel} voice list failed: ${message}` };
+          }
+        }
+
+        if (action === "set") {
+          // Persistent Talk voice changes are gateway config writes, so the
+          // mutating subcommand requires explicit admin or owner authority.
+          if (
+            requiresAdminToSetVoice({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
+          }
+
+          const query = tokens.slice(1).join(" ").trim();
+          if (!query) {
+            return { text: `Usage: ${commandLabel} set <voiceId|name>` };
+          }
+          let voices: SpeechVoiceOption[];
+          try {
+            voices = await api.runtime.tts.listVoices({
+              provider: providerId,
+              cfg,
+              apiKey: apiKey || undefined,
+              baseUrl,
+            });
+          } catch (error) {
+            const message = formatErrorMessage(error);
+            return { text: `${providerLabel} voice lookup failed: ${message}` };
+          }
+          const chosen = findVoice(voices, query);
+          if (!chosen) {
+            const hint = isLikelyVoiceId(query) ? query : `"${query}"`;
+            return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
+          }
+
+          await api.runtime.config.mutateConfigFile({
+            afterWrite: { mode: "auto" },
+            writeOptions: {
+              assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                ? undefined
+                : assertOwnerCurrent,
+            },
+            mutate: (draft) => {
+              const nextConfig = {
+                ...draft,
+                talk: {
+                  ...draft.talk,
+                  provider: providerId,
+                  providers: {
+                    ...draft.talk?.providers,
+                    [providerId]: {
+                      ...draft.talk?.providers?.[providerId],
+                      voiceId: chosen.id,
+                    },
+                  },
+                },
+              };
+              Object.assign(draft, nextConfig);
+            },
+          });
+
+          const name = (chosen.name ?? "").trim() || "(unnamed)";
+          return { text: `✅ ${providerLabel} Talk voice set to ${name}\n${chosen.id}` };
+        }
+
+        return {
+          text: [
+            "Voice commands:",
+            "",
+            `${commandLabel} status`,
+            `${commandLabel} list [limit]`,
+            `${commandLabel} set <voiceId|name>`,
+          ].join("\n"),
+        };
+      },
+    });
+  },
+});

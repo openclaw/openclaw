@@ -9,8 +9,7 @@ final class MotionService: MotionServicing {
                 NSLocalizedDescriptionKey: "MOTION_UNAVAILABLE: activity not supported on this device",
             ])
         }
-        let auth = CMMotionActivityManager.authorizationStatus()
-        guard auth == .authorized else {
+        guard Self.allowsMotionQuery(CMMotionActivityManager.authorizationStatus()) else {
             throw NSError(domain: "Motion", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
@@ -20,7 +19,7 @@ final class MotionService: MotionServicing {
         let limit = max(1, min(params.limit ?? 200, 1000))
 
         let manager = CMMotionActivityManager()
-        let mapped = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[OpenClawMotionActivityEntry], Error>) in
+        let mapped: [OpenClawMotionActivityEntry] = try await withCheckedThrowingContinuation { cont in
             manager.queryActivityStarting(from: start, to: end, to: OperationQueue()) { activity, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -53,8 +52,7 @@ final class MotionService: MotionServicing {
                 NSLocalizedDescriptionKey: "PEDOMETER_UNAVAILABLE: step counting not supported",
             ])
         }
-        let auth = CMPedometer.authorizationStatus()
-        guard auth == .authorized else {
+        guard Self.allowsMotionQuery(CMPedometer.authorizationStatus()) else {
             throw NSError(domain: "Motion", code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "MOTION_PERMISSION_REQUIRED: grant Motion & Fitness permission",
             ])
@@ -62,7 +60,7 @@ final class MotionService: MotionServicing {
 
         let (start, end) = Self.resolveRange(startISO: params.startISO, endISO: params.endISO)
         let pedometer = CMPedometer()
-        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<OpenClawPedometerPayload, Error>) in
+        return try await withCheckedThrowingContinuation { cont in
             pedometer.queryPedometerData(from: start, to: end) { data, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -79,7 +77,18 @@ final class MotionService: MotionServicing {
                 }
             }
         }
-        return payload
+    }
+
+    static func allowsMotionQuery(_ authorizationStatus: CMAuthorizationStatus) -> Bool {
+        switch authorizationStatus {
+        case .notDetermined, .authorized:
+            // Core Motion only presents its first-use permission prompt when a query runs.
+            return true
+        case .restricted, .denied:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     private static func resolveRange(startISO: String?, endISO: String?) -> (Date, Date) {

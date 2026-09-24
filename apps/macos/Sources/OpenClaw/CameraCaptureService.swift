@@ -1,19 +1,19 @@
 import AVFoundation
-import OpenClawIPC
-import OpenClawKit
 import CoreGraphics
 import Foundation
+import OpenClawIPC
+import OpenClawKit
 import OSLog
 
 actor CameraCaptureService {
-    struct CameraDeviceInfo: Encodable, Sendable {
+    struct CameraDeviceInfo: Encodable {
         let id: String
         let name: String
         let position: String
         let deviceType: String
     }
 
-    enum CameraError: LocalizedError, Sendable {
+    enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
         case permissionDenied(kind: String)
@@ -39,7 +39,7 @@ actor CameraCaptureService {
     private let logger = Logger(subsystem: "ai.openclaw", category: "camera")
 
     func listDevices() -> [CameraDeviceInfo] {
-        Self.availableCameras().map { device in
+        CameraDeviceResolver.availableCameras().map { device in
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
@@ -64,56 +64,62 @@ actor CameraCaptureService {
 
         try await self.ensureAccess(for: .video)
 
-        let session = AVCaptureSession()
-        session.sessionPreset = .photo
-
-        guard let device = Self.pickCamera(facing: facing, deviceId: deviceId) else {
-            throw CameraError.cameraUnavailable
-        }
-
-        let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else {
-            throw CameraError.captureFailed("Failed to add camera input")
-        }
-        session.addInput(input)
-
-        let output = AVCapturePhotoOutput()
-        guard session.canAddOutput(output) else {
-            throw CameraError.captureFailed("Failed to add photo output")
-        }
-        session.addOutput(output)
-        output.maxPhotoQualityPrioritization = .quality
+        let prepared = try CameraCapturePipelineSupport.preparePhotoSession(
+            preferFrontCamera: facing == .front,
+            deviceId: deviceId,
+            pickCamera: { preferFrontCamera, deviceId in
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            },
+            mapSetupError: { setupError in
+                CameraError.captureFailed(setupError.localizedDescription)
+            })
+        let session = prepared.session
+        let device = prepared.device
+        let output = prepared.output
 
         session.startRunning()
         defer { session.stopRunning() }
-        await Self.warmUpCaptureSession()
+        // The photo preset can choose a portrait format at startup on external webcams.
+        // Select its landscape counterpart only after negotiation and before capturing.
+        let formats = device.formats
+        if let index = CameraDeviceResolver.landscapePhotoFormatIndex(
+            deviceType: device.deviceType,
+            activeFormat: device.activeFormat.formatDescription,
+            formats: formats.map(\.formatDescription))
+        {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.activeFormat = formats[index]
+            } catch {
+                self.logger.warning(
+                    "camera landscape format selection failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
 
-        let settings: AVCapturePhotoSettings = {
-            if output.availablePhotoCodecTypes.contains(.jpeg) {
-                return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            }
-            return AVCapturePhotoSettings()
-        }()
-        settings.photoQualityPrioritization = .quality
-
         var delegate: PhotoCaptureDelegate?
-        let rawData: Data = try await withCheckedThrowingContinuation { cont in
-            let d = PhotoCaptureDelegate(cont)
-            delegate = d
-            output.capturePhoto(with: settings, delegate: d)
+        let rawData: Data = try await withCheckedThrowingContinuation { continuation in
+            let captureDelegate = PhotoCaptureDelegate(continuation)
+            delegate = captureDelegate
+            output.capturePhoto(
+                with: CameraCapturePipelineSupport.makePhotoSettings(output: output),
+                delegate: captureDelegate)
         }
         withExtendedLifetime(delegate) {}
 
-        let maxPayloadBytes = 5 * 1024 * 1024
-        // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
-        let maxEncodedBytes = (maxPayloadBytes / 4) * 3
-        let res = try JPEGTranscoder.transcodeToJPEG(
-            imageData: rawData,
-            maxWidthPx: maxWidth,
-            quality: quality,
-            maxBytes: maxEncodedBytes)
+        let res: (data: Data, widthPx: Int, heightPx: Int)
+        do {
+            res = try PhotoCapture.transcodeJPEGForGateway(
+                rawData: rawData,
+                maxWidthPx: maxWidth,
+                quality: quality)
+        } catch {
+            throw CameraError.captureFailed(error.localizedDescription)
+        }
+
         return (data: res.data, size: CGSize(width: res.widthPx, height: res.heightPx))
     }
 
@@ -133,40 +139,6 @@ actor CameraCaptureService {
             try await self.ensureAccess(for: .audio)
         }
 
-        let session = AVCaptureSession()
-        session.sessionPreset = .high
-
-        guard let camera = Self.pickCamera(facing: facing, deviceId: deviceId) else {
-            throw CameraError.cameraUnavailable
-        }
-        let cameraInput = try AVCaptureDeviceInput(device: camera)
-        guard session.canAddInput(cameraInput) else {
-            throw CameraError.captureFailed("Failed to add camera input")
-        }
-        session.addInput(cameraInput)
-
-        if includeAudio {
-            guard let mic = AVCaptureDevice.default(for: .audio) else {
-                throw CameraError.microphoneUnavailable
-            }
-            let micInput = try AVCaptureDeviceInput(device: mic)
-            guard session.canAddInput(micInput) else {
-                throw CameraError.captureFailed("Failed to add microphone input")
-            }
-            session.addInput(micInput)
-        }
-
-        let output = AVCaptureMovieFileOutput()
-        guard session.canAddOutput(output) else {
-            throw CameraError.captureFailed("Failed to add movie output")
-        }
-        session.addOutput(output)
-        output.maxRecordedDuration = CMTime(value: Int64(durationMs), timescale: 1000)
-
-        session.startRunning()
-        defer { session.stopRunning() }
-        await Self.warmUpCaptureSession()
-
         let tmpMovURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
@@ -178,84 +150,54 @@ actor CameraCaptureService {
             return FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
         }()
-
-        // Ensure we don't fail exporting due to an existing file.
-        try? FileManager().removeItem(at: outputURL)
-
         let logger = self.logger
-        var delegate: MovieFileDelegate?
-        let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
-            let d = MovieFileDelegate(cont, logger: logger)
-            delegate = d
-            output.startRecording(to: tmpMovURL, recordingDelegate: d)
-        }
-        withExtendedLifetime(delegate) {}
-
+        let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
+            pickCamera: { preferFrontCamera, deviceId in
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            },
+            mapSetupError: Self.mapMovieSetupError,
+            operation: { output in
+                // Replace the export destination only after camera setup succeeds.
+                try? FileManager().removeItem(at: outputURL)
+                var delegate: MovieFileDelegate?
+                let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
+                    let captureDelegate = MovieFileDelegate(cont, logger: logger)
+                    delegate = captureDelegate
+                    output.startRecording(to: tmpMovURL, recordingDelegate: captureDelegate)
+                }
+                withExtendedLifetime(delegate) {}
+                return recordedURL
+            })
         try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
         return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        let status = AVCaptureDevice.authorizationStatus(for: mediaType)
-        switch status {
-        case .authorized:
-            return
-        case .notDetermined:
-            let ok = await withCheckedContinuation(isolation: nil) { cont in
-                AVCaptureDevice.requestAccess(for: mediaType) { granted in
-                    cont.resume(returning: granted)
-                }
-            }
-            if !ok {
-                throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
-            }
-        case .denied, .restricted:
-            throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
-        @unknown default:
+        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }
-    }
-
-    private nonisolated static func availableCameras() -> [AVCaptureDevice] {
-        var types: [AVCaptureDevice.DeviceType] = [
-            .builtInWideAngleCamera,
-            .continuityCamera,
-        ]
-        if let external = externalDeviceType() {
-            types.append(external)
-        }
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types,
-            mediaType: .video,
-            position: .unspecified)
-        return session.devices
-    }
-
-    private nonisolated static func externalDeviceType() -> AVCaptureDevice.DeviceType? {
-        if #available(macOS 14.0, *) {
-            return .external
-        }
-        // Use raw value to avoid deprecated symbol in the SDK.
-        return AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
     }
 
     private nonisolated static func pickCamera(
         facing: CameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = availableCameras().first(where: { $0.uniqueID == deviceId }) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-
-        // Many macOS cameras report `unspecified` position; fall back to any default.
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: CameraDeviceResolver.camera,
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
     private nonisolated static func clampQuality(_ quality: Double?) -> Double {
@@ -276,6 +218,13 @@ actor CameraCaptureService {
         return min(60000, max(250, v))
     }
 
+    private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
+        CameraCapturePipelineSupport.mapMovieSetupError(
+            setupError,
+            microphoneUnavailableError: .microphoneUnavailable,
+            captureFailed: { .captureFailed($0) })
+    }
+
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {
         let asset = AVURLAsset(url: inputURL)
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
@@ -283,39 +232,11 @@ actor CameraCaptureService {
         }
         export.shouldOptimizeForNetworkUse = true
 
-        if #available(macOS 15.0, *) {
-            do {
-                try await export.export(to: outputURL, as: .mp4)
-                return
-            } catch {
-                throw CameraError.exportFailed(error.localizedDescription)
-            }
-        } else {
-            export.outputURL = outputURL
-            export.outputFileType = .mp4
-
-            try await withCheckedThrowingContinuation(isolation: nil) { (cont: CheckedContinuation<Void, Error>) in
-                export.exportAsynchronously {
-                    cont.resume(returning: ())
-                }
-            }
-
-            switch export.status {
-            case .completed:
-                return
-            case .failed:
-                throw CameraError.exportFailed(export.error?.localizedDescription ?? "export failed")
-            case .cancelled:
-                throw CameraError.exportFailed("export cancelled")
-            default:
-                throw CameraError.exportFailed("export did not complete (\(export.status.rawValue))")
-            }
+        do {
+            try await export.export(to: outputURL, as: .mp4)
+        } catch {
+            throw CameraError.exportFailed(error.localizedDescription)
         }
-    }
-
-    private nonisolated static func warmUpCaptureSession() async {
-        // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
     }
 
     private func waitForExposureAndWhiteBalance(device: AVCaptureDevice) async {
@@ -336,11 +257,7 @@ actor CameraCaptureService {
     }
 
     private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        switch position {
-        case .front: "front"
-        case .back: "back"
-        default: "unspecified"
-        }
+        CameraCapturePipelineSupport.positionLabel(position)
     }
 }
 

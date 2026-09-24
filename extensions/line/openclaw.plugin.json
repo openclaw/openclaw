@@ -1,5 +1,14 @@
 {
   "id": "line",
+  "categories": ["channels"],
+  "doctorContract": {
+    "stateMigrations": [{ "id": "line-pre-drain-spool-rows" }]
+  },
+  "name": "LINE",
+  "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["line"],
   "configSchema": {
     "type": "object",

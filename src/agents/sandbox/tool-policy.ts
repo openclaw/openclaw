@@ -1,142 +1,233 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Sandbox tool policy resolver.
+ *
+ * Merges global, agent, and default allow/deny lists into normalized policy plus source diagnostics.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
+import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 import type {
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,
 } from "./types.js";
-import { resolveAgentConfig } from "../agent-scope.js";
-import { expandToolGroups } from "../tool-policy.js";
-import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
+type SandboxToolPolicyConfig = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+};
 
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = pattern.trim().toLowerCase();
-  if (!normalized) {
-    return { kind: "exact", value: "" };
+function pickConfiguredList(
+  field: keyof SandboxToolPolicyConfig,
+  agent?: SandboxToolPolicyConfig,
+  global?: SandboxToolPolicyConfig,
+): {
+  values?: string[];
+  source: SandboxToolPolicySource;
+} {
+  const agentValues = agent?.[field];
+  const globalValues = global?.[field];
+  const key = `tools.sandbox.tools.${field}`;
+  if (Array.isArray(agentValues)) {
+    return {
+      values: agentValues,
+      source: { source: "agent", key: `agents.entries.*.${key}` },
+    };
   }
-  if (normalized === "*") {
-    return { kind: "all" };
+  if (Array.isArray(globalValues)) {
+    return {
+      values: globalValues,
+      source: { source: "global", key },
+    };
   }
-  if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
-  }
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
-    kind: "regex",
-    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
+    values: undefined,
+    source: { source: "default", key },
   };
 }
 
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) {
-    return [];
+function mergeAllowlist(
+  base: string[] | undefined,
+  extra: string[] | undefined,
+  defaultAllow: readonly string[],
+): string[] {
+  if (Array.isArray(base)) {
+    // Preserve the existing sandbox meaning of `allow: []` => allow all.
+    if (base.length === 0) {
+      return [];
+    }
+    if (!Array.isArray(extra) || extra.length === 0) {
+      return [...base];
+    }
+    return uniqueStrings([...base, ...extra]);
   }
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
+  if (Array.isArray(extra) && extra.length > 0) {
+    return uniqueStrings([...defaultAllow, ...extra]);
+  }
+  return [...defaultAllow];
 }
 
-function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && name === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(name)) {
-      return true;
-    }
+function pickAllowSource(params: {
+  allow: SandboxToolPolicySource;
+  allowDefined: boolean;
+  alsoAllow?: SandboxToolPolicySource;
+}): SandboxToolPolicySource {
+  if (params.allowDefined && params.allow.source === "agent") {
+    return params.allow;
   }
-  return false;
+  if (params.alsoAllow?.source === "agent") {
+    return params.alsoAllow;
+  }
+  if (params.allowDefined && params.allow.source === "global") {
+    return params.allow;
+  }
+  if (params.alsoAllow?.source === "global") {
+    return params.alsoAllow;
+  }
+  return params.allow;
 }
 
-export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
-  const normalized = name.trim().toLowerCase();
-  const deny = compilePatterns(policy.deny);
-  if (matchesAny(normalized, deny)) {
-    return false;
-  }
-  const allow = compilePatterns(policy.allow);
-  if (allow.length === 0) {
-    return true;
-  }
-  return matchesAny(normalized, allow);
+function resolveExplicitSandboxReAllowPatterns(params: {
+  allow?: string[];
+  alsoAllow?: string[];
+}): string[] {
+  return uniqueStrings([...(params.allow ?? []), ...(params.alsoAllow ?? [])]);
 }
 
-export function resolveSandboxToolPolicyForAgent(
-  cfg?: OpenClawConfig,
-  agentId?: string,
-): SandboxToolPolicyResolved {
-  const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  const agentAllow = agentConfig?.tools?.sandbox?.tools?.allow;
-  const agentDeny = agentConfig?.tools?.sandbox?.tools?.deny;
-  const globalAllow = cfg?.tools?.sandbox?.tools?.allow;
-  const globalDeny = cfg?.tools?.sandbox?.tools?.deny;
+function filterDefaultDenyForExplicitAllows(params: {
+  deny: string[];
+  explicitAllowPatterns: string[];
+}): string[] {
+  if (params.explicitAllowPatterns.length === 0) {
+    return [...params.deny];
+  }
+  const allowPatterns = compileGlobPatterns({
+    raw: expandToolGroups(params.explicitAllowPatterns),
+    normalize: normalizeToolPolicyName,
+  });
+  if (allowPatterns.length === 0) {
+    return [...params.deny];
+  }
+  return params.deny.filter(
+    (toolName) => !matchesAnyGlobPattern(normalizeToolPolicyName(toolName), allowPatterns),
+  );
+}
 
-  const allowSource = Array.isArray(agentAllow)
-    ? ({
-        source: "agent",
-        key: "agents.list[].tools.sandbox.tools.allow",
-      } satisfies SandboxToolPolicySource)
-    : Array.isArray(globalAllow)
-      ? ({
-          source: "global",
-          key: "tools.sandbox.tools.allow",
-        } satisfies SandboxToolPolicySource)
-      : ({
-          source: "default",
-          key: "tools.sandbox.tools.allow",
-        } satisfies SandboxToolPolicySource);
-
-  const denySource = Array.isArray(agentDeny)
-    ? ({
-        source: "agent",
-        key: "agents.list[].tools.sandbox.tools.deny",
-      } satisfies SandboxToolPolicySource)
-    : Array.isArray(globalDeny)
-      ? ({
-          source: "global",
-          key: "tools.sandbox.tools.deny",
-        } satisfies SandboxToolPolicySource)
-      : ({
-          source: "default",
-          key: "tools.sandbox.tools.deny",
-        } satisfies SandboxToolPolicySource);
-
-  const deny = Array.isArray(agentDeny)
-    ? agentDeny
-    : Array.isArray(globalDeny)
-      ? globalDeny
-      : [...DEFAULT_TOOL_DENY];
-  const allow = Array.isArray(agentAllow)
-    ? agentAllow
-    : Array.isArray(globalAllow)
-      ? globalAllow
-      : [...DEFAULT_TOOL_ALLOW];
-
-  const expandedDeny = expandToolGroups(deny);
-  let expandedAllow = expandToolGroups(allow);
-
-  // `image` is essential for multimodal workflows; always include it in sandboxed
-  // sessions unless explicitly denied.
+function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
+  let expandedDeny = expandToolGroups(policy.deny ?? []);
+  let expandedAllow = expandToolGroups(policy.allow ?? []);
+  const denyPatterns = compileGlobPatterns({
+    raw: expandedDeny,
+    normalize: normalizeToolPolicyName,
+  });
+  // Shipped sandbox denies are security boundaries. Keep the old spelling
+  // fail-closed until Doctor rewrites it, without restoring a runtime alias.
   if (
-    !expandedDeny.map((v) => v.toLowerCase()).includes("image") &&
-    !expandedAllow.map((v) => v.toLowerCase()).includes("image")
+    matchesAnyGlobPattern("image", denyPatterns) &&
+    !matchesAnyGlobPattern("view_image", denyPatterns)
   ) {
-    expandedAllow = [...expandedAllow, "image"];
+    expandedDeny = [...expandedDeny, "view_image"];
+  }
+  const expandedDenyLower = expandedDeny.map(normalizeLowercaseStringOrEmpty);
+  const expandedAllowLower = expandedAllow.map(normalizeLowercaseStringOrEmpty);
+
+  // `view_image` is essential for multimodal workflows; keep the existing sandbox
+  // behavior that auto-includes it for explicit allowlists unless it is denied.
+  if (
+    expandedAllow.length > 0 &&
+    !expandedDenyLower.includes("view_image") &&
+    !expandedAllowLower.includes("view_image")
+  ) {
+    expandedAllow = [...expandedAllow, "view_image"];
   }
 
   return {
     allow: expandedAllow,
     deny: expandedDeny,
+  };
+}
+
+export function classifyToolAgainstSandboxToolPolicy(name: string, policy?: SandboxToolPolicy) {
+  if (!policy) {
+    return {
+      blockedByDeny: false,
+      blockedByAllow: false,
+    };
+  }
+
+  const normalized = normalizeToolPolicyName(name);
+  const deny = compileGlobPatterns({
+    raw: expandToolGroups(policy.deny ?? []),
+    normalize: normalizeToolPolicyName,
+  });
+  const blockedByDeny = matchesAnyGlobPattern(normalized, deny);
+  const allow = compileGlobPatterns({
+    raw: expandToolGroups(policy.allow ?? []),
+    normalize: normalizeToolPolicyName,
+  });
+  const blockedByAllow =
+    !blockedByDeny && allow.length > 0 && !matchesAnyGlobPattern(normalized, allow);
+  return {
+    blockedByDeny,
+    blockedByAllow,
+  };
+}
+
+export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
+  const { blockedByDeny, blockedByAllow } = classifyToolAgainstSandboxToolPolicy(name, policy);
+  return !blockedByDeny && !blockedByAllow;
+}
+
+export function resolveSandboxToolPolicyForAgent(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+  options?: { containedToolNames?: readonly string[] },
+): SandboxToolPolicyResolved {
+  const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  const agentPolicy = agentConfig?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
+  const globalPolicy = cfg?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
+
+  const allowConfig = pickConfiguredList("allow", agentPolicy, globalPolicy);
+  const alsoAllowConfig = pickConfiguredList("alsoAllow", agentPolicy, globalPolicy);
+  const denyConfig = pickConfiguredList("deny", agentPolicy, globalPolicy);
+
+  const explicitAllowPatterns = resolveExplicitSandboxReAllowPatterns({
+    allow: allowConfig.values,
+    alsoAllow: alsoAllowConfig.values,
+  });
+
+  // Host-bound tools that operate inside this placement are sandbox capabilities.
+  // Change defaults only; configured allow/deny lists retain their normal authority.
+  const containedTools = new Set(options?.containedToolNames);
+  const defaultAllow = uniqueStrings([...DEFAULT_TOOL_ALLOW, ...containedTools]);
+  const resolvedAllow = mergeAllowlist(allowConfig.values, alsoAllowConfig.values, defaultAllow);
+  const resolvedDeny = Array.isArray(denyConfig.values)
+    ? [...denyConfig.values]
+    : filterDefaultDenyForExplicitAllows({
+        deny: DEFAULT_TOOL_DENY.filter((name) => !containedTools.has(name)),
+        explicitAllowPatterns,
+      });
+
+  const expanded = expandResolvedPolicy({
+    allow: resolvedAllow,
+    deny: resolvedDeny,
+  });
+
+  return {
+    allow: expanded.allow ?? [],
+    deny: expanded.deny ?? [],
     sources: {
-      allow: allowSource,
-      deny: denySource,
+      allow: pickAllowSource({
+        allow: allowConfig.source,
+        allowDefined: Array.isArray(allowConfig.values),
+        alsoAllow: alsoAllowConfig.source,
+      }),
+      deny: denyConfig.source,
     },
   };
 }

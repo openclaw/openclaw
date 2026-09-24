@@ -1,254 +1,425 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultRuntime } from "../runtime.js";
-import {
-  applyCustomApiConfig,
-  parseNonInteractiveCustomApiFlags,
-  promptCustomApiConfig,
-} from "./onboard-custom.js";
+// Onboard custom tests cover custom provider prompts and API-key credential handling.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import { promptCustomApiConfig } from "./onboard-custom.js";
 
-// Mock dependencies
-vi.mock("./model-picker.js", () => ({
-  applyPrimaryModel: vi.fn((cfg) => cfg),
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot,
 }));
 
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
+
+vi.mock("../plugins/provider-auth-input.js", () => ({
+  ensureApiKeyFromEnvOrPrompt: vi.fn(
+    async (params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]) => {
+      await params.prompter.select({ message: "Secret input mode", options: [] });
+      const input = await params.prompter.text({
+        message: params.promptMessage,
+        validate: params.validate,
+      });
+      const apiKey = params.normalize(input ?? "");
+      await params.setCredential(apiKey);
+      return apiKey;
+    },
+  ),
+}));
+
+function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }): {
+  text: ReturnType<typeof vi.fn>;
+  select: ReturnType<typeof vi.fn>;
+  confirm: ReturnType<typeof vi.fn>;
+  note: ReturnType<typeof vi.fn>;
+  progress: ReturnType<typeof vi.fn>;
+} {
+  const text = vi.fn();
+  for (const answer of params.text) {
+    text.mockResolvedValueOnce(answer);
+  }
+  const select = vi.fn();
+  for (const answer of params.select ?? []) {
+    select.mockResolvedValueOnce(answer);
+  }
+  const confirm = vi.fn(async () => false);
+  for (const answer of params.confirm ?? []) {
+    confirm.mockResolvedValueOnce(answer);
+  }
+  return {
+    text,
+    progress: vi.fn(() => ({
+      update: vi.fn(),
+      stop: vi.fn(),
+    })),
+    select,
+    confirm,
+    note: vi.fn(),
+  };
+}
+
+function stubFetchSequence(
+  responses: Array<{ ok: boolean; status?: number }>,
+): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce({
+      ok: response.ok,
+      status: response.status,
+      headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
+      json: async () => ({}),
+    });
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+async function runPromptCustomApi(
+  prompter: ReturnType<typeof createTestPrompter>,
+  config: object = {},
+  target?: Parameters<typeof promptCustomApiConfig>[0]["target"],
+  setup?: Pick<Parameters<typeof promptCustomApiConfig>[0], "verification" | "setAsPrimary">,
+) {
+  return promptCustomApiConfig({
+    prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
+    runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
+    config,
+    ...(target ? { target } : {}),
+    ...setup,
+  });
+}
+
+function expectOpenAiCompatResult(params: {
+  prompter: ReturnType<typeof createTestPrompter>;
+  textCalls: number;
+  selectCalls: number;
+  result: Awaited<ReturnType<typeof runPromptCustomApi>>;
+}) {
+  expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
+  expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
+  expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
+}
+
 describe("promptCustomApiConfig", () => {
+  beforeEach(() => {
+    loadManifestMetadataSnapshot.mockReset();
+    loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
   it("handles openai flow and saves alias", async () => {
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("http://localhost:11434/v1") // Base URL
-        .mockResolvedValueOnce("") // API Key
-        .mockResolvedValueOnce("llama3") // Model ID
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce("local"), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi.fn().mockResolvedValueOnce("openai"), // Compatibility
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      }),
-    );
-
-    const result = await promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {},
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", "local"],
+      select: ["plaintext", "openai"],
     });
+    stubFetchSequence([{ ok: true }]);
+    const result = await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledTimes(5);
-    expect(prompter.select).toHaveBeenCalledTimes(1);
-    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
+    expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
-  it("retries when verification fails", async () => {
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("http://localhost:11434/v1") // Base URL
-        .mockResolvedValueOnce("") // API Key
-        .mockResolvedValueOnce("bad-model") // Model ID
-        .mockResolvedValueOnce("good-model") // Model ID retry
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce(""), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi
-        .fn()
-        .mockResolvedValueOnce("openai") // Compatibility
-        .mockResolvedValueOnce("model"), // Retry choice
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
+  it("prepares deferred setup without a provider request or a selected default", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://provider.example/v1", "fixture-key", "fixture-model", "custom", ""],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([]);
+    const config = {};
 
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({}) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({}) }),
-    );
-
-    await promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {},
+    const result = await runPromptCustomApi(prompter, config, undefined, {
+      verification: "deferred",
+      setAsPrimary: false,
     });
 
-    expect(prompter.text).toHaveBeenCalledTimes(6);
-    expect(prompter.select).toHaveBeenCalledTimes(2);
-  });
-
-  it("detects openai compatibility when unknown", async () => {
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("https://example.com/v1") // Base URL
-        .mockResolvedValueOnce("test-key") // API Key
-        .mockResolvedValueOnce("detected-model") // Model ID
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce("alias"), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi.fn().mockResolvedValueOnce("unknown"),
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      }),
-    );
-
-    const result = await promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {},
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      models: [expect.objectContaining({ id: "fixture-model" })],
     });
-
-    expect(prompter.text).toHaveBeenCalledTimes(5);
-    expect(prompter.select).toHaveBeenCalledTimes(1);
-    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+    expect(result.config.agents?.defaults?.model).toBeUndefined();
+    expect(config).toEqual({});
   });
 
-  it("re-prompts base url when unknown detection fails", async () => {
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("https://bad.example.com/v1") // Base URL #1
-        .mockResolvedValueOnce("bad-key") // API Key #1
-        .mockResolvedValueOnce("bad-model") // Model ID #1
-        .mockResolvedValueOnce("https://ok.example.com/v1") // Base URL #2
-        .mockResolvedValueOnce("ok-key") // API Key #2
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce(""), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi.fn().mockResolvedValueOnce("unknown").mockResolvedValueOnce("baseUrl"),
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
-
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
-        .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) })
-        .mockResolvedValueOnce({ ok: true, json: async () => ({}) }),
-    );
-
-    await promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {},
+  it("rejects aliases already used only by the selected agent", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
     });
+    stubFetchSequence([{ ok: true }]);
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("did not respond"),
-      "Endpoint detection",
+    await runPromptCustomApi(
+      prompter,
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
+        },
+      },
+      { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    );
+
+    const aliasPrompt = prompter.text.mock.calls.find(
+      ([options]) => options.message === "Model alias (optional)",
+    );
+    expect(aliasPrompt?.[0].validate("Operations")).toBe(
+      "Alias Operations already points to openai/ops.",
     );
   });
 
-  it("renames provider id when baseUrl differs", async () => {
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("http://localhost:11434/v1") // Base URL
-        .mockResolvedValueOnce("") // API Key
-        .mockResolvedValueOnce("llama3") // Model ID
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce(""), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi.fn().mockResolvedValueOnce("openai"),
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      }),
-    );
-
-    const result = await promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {
-        models: {
+  it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
+    const preparedPlugins = [
+      {
+        modelIdNormalization: {
           providers: {
             custom: {
-              baseUrl: "http://old.example.com/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "old-model",
-                  name: "Old",
-                  contextWindow: 1,
-                  maxTokens: 1,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
+              aliases: {
+                latest: "modern-model",
+              },
             },
           },
         },
       },
+    ];
+    loadManifestMetadataSnapshot.mockReturnValueOnce({ plugins: preparedPlugins } as never);
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "modern-model", "custom", "Legacy"],
+      select: ["plaintext", "openai"],
     });
+    stubFetchSequence([{ ok: true }]);
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/latest": { alias: "Legacy" },
+          },
+        },
+      },
+    };
+    const target = {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    };
 
-    expect(result.providerId).toBe("custom-2");
-    expect(result.config.models?.providers?.custom).toBeDefined();
-    expect(result.config.models?.providers?.["custom-2"]).toBeDefined();
+    const result = await runPromptCustomApi(prompter, config, target);
+
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
+      config,
+      workspaceDir: target.workspaceDir,
+      env: process.env,
+    });
+    expect(loadManifestMetadataSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      prompter.text.mock.invocationCallOrder[0]!,
+    );
+    expect(result.config.agents?.defaults?.models?.["custom/modern-model"]?.alias).toBe("Legacy");
+  });
+
+  it("cancels custom provider verification response bodies", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
+        body: { cancel },
+      })),
+    );
+
+    await runPromptCustomApi(prompter);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles explicit OpenAI Responses flow", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "test-key", "gpt-5.4", "custom", ""],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/v1/responses");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "gpt-5.4",
+      input: "Hi",
+      max_output_tokens: 16,
+    });
+  });
+
+  it("skips the image-input prompt for known custom vision models", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "test-key", "gpt-4o", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+  });
+
+  it("prompts for custom model image support when the model is unknown", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "test-key", "private-model", "custom", ""],
+      select: ["plaintext", "openai"],
+      confirm: [true],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Does this model support image input?",
+      initialValue: false,
+    });
+  });
+
+  it("does not seed custom setup with a provider-specific base URL", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const apiBaseUrlCall = prompter.text.mock.calls.find(
+      ([options]) => options.message === "API Base URL",
+    );
+    expect(apiBaseUrlCall?.[0].initialValue).toBeUndefined();
+  });
+
+  it("retries when verification fails", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
+      select: ["plaintext", "openai", "model"],
+    });
+    stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.text).toHaveBeenCalledTimes(6);
+    expect(prompter.select).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects successful-looking HTML verification responses with a base URL hint", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://proxy.example.com",
+        "test-key",
+        "bad-model",
+        "https://proxy.example.com/v1",
+        "test-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "openai", "baseUrl", "plaintext"],
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+        text: async () => "<html>not the API</html>",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({}),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
+      expect.stringContaining("usually need a /v1 path prefix"),
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://proxy.example.com/v1/chat/completions");
+  });
+
+  it("detects openai compatibility when unknown", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    stubFetchSequence([{ ok: true }]);
+    const result = await runPromptCustomApi(prompter);
+
+    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+  });
+
+  it("detects OpenAI Responses compatibility when chat completions fail", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: false, status: 503 }, { ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.com/v1/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.com/v1/responses");
+    expect(prompter.text).toHaveBeenCalledTimes(5);
+    expect(prompter.select).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-prompts base url when unknown detection fails", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://bad.example.com/v1",
+        "bad-key",
+        "bad-model",
+        "https://ok.example.com/v1",
+        "ok-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "unknown", "baseUrl", "plaintext"],
+    });
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
+      "Endpoint detection",
+    );
   });
 
   it("aborts verification after timeout", async () => {
     vi.useFakeTimers();
-    const prompter = {
-      text: vi
-        .fn()
-        .mockResolvedValueOnce("http://localhost:11434/v1") // Base URL
-        .mockResolvedValueOnce("") // API Key
-        .mockResolvedValueOnce("slow-model") // Model ID
-        .mockResolvedValueOnce("fast-model") // Model ID retry
-        .mockResolvedValueOnce("custom") // Endpoint ID
-        .mockResolvedValueOnce(""), // Alias
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-      select: vi.fn().mockResolvedValueOnce("openai").mockResolvedValueOnce("model"),
-      confirm: vi.fn(),
-      note: vi.fn(),
-    };
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "slow-model", "fast-model", "custom", ""],
+      select: ["plaintext", "openai", "model"],
+    });
 
     const fetchMock = vi
       .fn()
@@ -260,87 +431,11 @@ describe("promptCustomApiConfig", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
 
-    const promise = promptCustomApiConfig({
-      prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-      runtime: { ...defaultRuntime, log: vi.fn() },
-      config: {},
-    });
+    const promise = runPromptCustomApi(prompter);
 
-    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(30_000);
     await promise;
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
-  });
-});
-
-describe("applyCustomApiConfig", () => {
-  it("rejects invalid compatibility values at runtime", () => {
-    expect(() =>
-      applyCustomApiConfig({
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "invalid" as unknown as "openai",
-      }),
-    ).toThrow('Custom provider compatibility must be "openai" or "anthropic".');
-  });
-
-  it("rejects explicit provider ids that normalize to empty", () => {
-    expect(() =>
-      applyCustomApiConfig({
-        config: {},
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "openai",
-        providerId: "!!!",
-      }),
-    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
-  });
-});
-
-describe("parseNonInteractiveCustomApiFlags", () => {
-  it("parses required flags and defaults compatibility to openai", () => {
-    const result = parseNonInteractiveCustomApiFlags({
-      baseUrl: " https://llm.example.com/v1 ",
-      modelId: " foo-large ",
-      apiKey: " custom-test-key ",
-      providerId: " my-custom ",
-    });
-
-    expect(result).toEqual({
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      apiKey: "custom-test-key",
-      providerId: "my-custom",
-    });
-  });
-
-  it("rejects missing required flags", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
-        baseUrl: "https://llm.example.com/v1",
-      }),
-    ).toThrow('Auth choice "custom-api-key" requires a base URL and model ID.');
-  });
-
-  it("rejects invalid compatibility values", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        compatibility: "xmlrpc",
-      }),
-    ).toThrow('Invalid --custom-compatibility (use "openai" or "anthropic").');
-  });
-
-  it("rejects invalid explicit provider ids", () => {
-    expect(() =>
-      parseNonInteractiveCustomApiFlags({
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "foo-large",
-        providerId: "!!!",
-      }),
-    ).toThrow("Custom provider ID must include letters, numbers, or hyphens.");
   });
 });

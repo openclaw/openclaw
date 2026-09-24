@@ -1,5 +1,37 @@
+/** Shared daemon runtime status types and systemd cgroup hygiene helpers. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import {
+  findServiceOwnershipRefusal,
+  ServiceInspectionError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
+export type SystemdUserTransport =
+  | { kind: "session-bus" | "runtime-bus" | "private"; address: string; runtimeDir: string }
+  | { kind: "machine"; user: string };
+
+/** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
+type GatewayServiceSystemdRuntime = {
+  scope?: "user" | "system";
+  transport?: SystemdUserTransport;
+  unit?: string;
+  /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
+  managerUid?: number;
+  killMode?: string;
+  tasksCurrent?: number;
+  memoryCurrent?: number;
+  // systemd `Result` (e.g. success, exit-code, start-limit-hit) plus the restart
+  // counter and configured StartLimitBurst. Together they detect a crash-loop
+  // give-up that the collapsed `status` string and `Result` alone cannot.
+  result?: string;
+  nRestarts?: number;
+  startLimitBurst?: number;
+};
+
 export type GatewayServiceRuntime = {
-  status?: "running" | "stopped" | "unknown";
+  inspectionReason?: ServiceInspectionReason;
+  status?: string;
   state?: string;
   subState?: string;
   pid?: number;
@@ -8,6 +40,135 @@ export type GatewayServiceRuntime = {
   lastRunResult?: string;
   lastRunTime?: string;
   detail?: string;
+  /** Bounded platform detail for classifiers/debug JSON; never render as the primary status. */
+  inspectionFailure?: {
+    code: "service-runtime-inspection-failed";
+    detail: string;
+    /** Present only when the native inspection timed out, with its enforced budget. */
+    timeoutMs?: number;
+  };
   cachedLabel?: boolean;
   missingUnit?: boolean;
+  missingGuiSession?: boolean;
+  /** Same-label system-domain owner or an ownership probe that failed closed. */
+  systemLaunchDaemon?: {
+    status: "loaded" | "installed" | "unverifiable";
+    serviceTarget: string;
+    plistPath?: string;
+  };
+  systemd?: GatewayServiceSystemdRuntime;
 };
+
+const SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS = 500;
+const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";
+
+/** Keeps native probe failures bounded and diagnostic-only for status presentation owners. */
+export function createServiceRuntimeInspectionFailure(
+  error: unknown,
+  timeoutMs?: number,
+): GatewayServiceRuntime {
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
+  const rawDetail = error instanceof Error ? error.message : String(error);
+  return {
+    status: "unknown",
+    ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
+    detail: SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL,
+    inspectionFailure: {
+      code: "service-runtime-inspection-failed",
+      detail:
+        truncateUtf16Safe(sanitizeForLog(rawDetail), SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS) ||
+        "unknown error",
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    },
+  };
+}
+
+const SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD = 200;
+const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;
+
+// EX_CONFIG (78) from sysexits.h. The generated systemd unit pins
+// RestartPreventExitStatus=78 (see systemd-unit.ts) so the gateway's
+// config-error / duplicate-lock exit (gateway-cli run) deliberately stops
+// without a restart. A last exit of 78 therefore means systemd gave up on
+// purpose, not that it exhausted StartLimitBurst, so any accumulated NRestarts
+// is stale from earlier crashes and must not drive start-limit detection.
+const SYSTEMD_NO_RESTART_EXIT_STATUS = 78;
+
+export function getSystemdCgroupHygieneSummary(
+  runtime?: GatewayServiceSystemdRuntime,
+): string | null {
+  const killMode = normalizeLowercaseStringOrEmpty(runtime?.killMode);
+  if (!runtime || (killMode !== "process" && killMode !== "none")) {
+    return null;
+  }
+  // KillMode=process/none only becomes noisy when the cgroup is visibly large.
+  const details: string[] = [];
+  if (
+    runtime.tasksCurrent !== undefined &&
+    Number.isSafeInteger(runtime.tasksCurrent) &&
+    runtime.tasksCurrent >= SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD
+  ) {
+    details.push(`tasks=${runtime.tasksCurrent}`);
+  }
+  if (
+    runtime.memoryCurrent !== undefined &&
+    Number.isSafeInteger(runtime.memoryCurrent) &&
+    runtime.memoryCurrent >= SYSTEMD_MEMORY_CURRENT_WARNING_BYTES
+  ) {
+    const gib = (runtime.memoryCurrent / 1024 ** 3).toFixed(1).replace(/\.0$/, "");
+    details.push(`memory=${gib}GiB`);
+  }
+  if (details.length === 0) {
+    return null;
+  }
+  return `cgroup hygiene: KillMode=${runtime.killMode}, ${details.join(", ")}`;
+}
+
+export function isSystemdCgroupHygieneRisk(runtime?: GatewayServiceSystemdRuntime): boolean {
+  return getSystemdCgroupHygieneSummary(runtime) !== null;
+}
+
+/**
+ * True when systemd has stopped auto-restarting the gateway because it crashed
+ * faster than StartLimitBurst/StartLimitIntervalSec allows. Unlike an ordinary
+ * stopped/exited unit, this terminal latch needs an explicit `reset-failed` +
+ * restart to recover, so status/doctor must surface it instead of the generic
+ * "exited immediately" message.
+ *
+ * Detection: the unit is `failed` and either systemd reported the give-up
+ * directly (Result=start-limit-hit, the start-was-refused-before-exec case) or
+ * the restart counter reached the configured burst. The counter path is the
+ * common one: once the gateway process has actually run and exited non-zero,
+ * systemd keeps Result=exit-code and never overwrites it with start-limit-hit
+ * (verified against systemd 249), so Result alone misses real crash loops.
+ *
+ * The counter path is guarded against the deliberate no-restart exit: a last
+ * exit of 78 (EX_CONFIG, held back by RestartPreventExitStatus=78) means
+ * systemd stopped on purpose, so a stale NRestarts left over from earlier
+ * crashes must not be mistaken for start-limit exhaustion. The explicit
+ * Result=start-limit-hit signal stays authoritative regardless of exit status.
+ */
+export function isSystemdStartLimitHit(runtime?: GatewayServiceRuntime): boolean {
+  if (!runtime || normalizeLowercaseStringOrEmpty(runtime.state) !== "failed") {
+    return false;
+  }
+  const systemd = runtime.systemd;
+  if (!systemd) {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(systemd.result) === "start-limit-hit") {
+    return true;
+  }
+  if (runtime.lastExitStatus === SYSTEMD_NO_RESTART_EXIT_STATUS) {
+    return false;
+  }
+  return (
+    typeof systemd.startLimitBurst === "number" &&
+    systemd.startLimitBurst > 0 &&
+    typeof systemd.nRestarts === "number" &&
+    systemd.nRestarts >= systemd.startLimitBurst
+  );
+}

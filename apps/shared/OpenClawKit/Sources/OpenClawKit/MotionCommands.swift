@@ -5,17 +5,7 @@ public enum OpenClawMotionCommand: String, Codable, Sendable {
     case pedometer = "motion.pedometer"
 }
 
-public struct OpenClawMotionActivityParams: Codable, Sendable, Equatable {
-    public var startISO: String?
-    public var endISO: String?
-    public var limit: Int?
-
-    public init(startISO: String? = nil, endISO: String? = nil, limit: Int? = nil) {
-        self.startISO = startISO
-        self.endISO = endISO
-        self.limit = limit
-    }
-}
+public typealias OpenClawMotionActivityParams = OpenClawDateRangeLimitParams
 
 public struct OpenClawMotionActivityEntry: Codable, Sendable, Equatable {
     public var startISO: String

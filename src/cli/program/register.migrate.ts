@@ -1,0 +1,232 @@
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+// Migration command registration: list, plan, and apply migration providers.
+import type { Command } from "commander";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  migrateApplyCommand,
+  migrateDefaultCommand,
+  migrateListCommand,
+  migratePlanCommand,
+} from "../../commands/migrate.js";
+import { defaultRuntime } from "../../runtime.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { formatHelpExamples } from "../help-format.js";
+import { collectOption } from "./helpers.js";
+
+function readMigrationOption<T>(command: Command, name: string, value: T): T {
+  return inheritOptionFromParent<T>(command, name) ?? value;
+}
+
+function addMigrationSkillOption(command: Command): Command {
+  return command.option(
+    "--skill <name>",
+    "Select one skill to migrate by name or item id; repeat for multiple skills",
+    collectOption,
+  );
+}
+
+function addMigrationPluginOption(command: Command): Command {
+  return command.option(
+    "--plugin <name>",
+    "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
+    collectOption,
+  );
+}
+
+function addVerifyPluginAppsOption(command: Command): Command {
+  return command.option(
+    "--verify-plugin-apps",
+    "Codex only: verify source plugin app accessibility with app/installed before planning native plugin activation",
+    false,
+  );
+}
+
+function addMigrationItemOption(command: Command): Command {
+  return command.option(
+    "--item <id>",
+    "Select one exact migration item id; repeat for multiple items",
+    collectOption,
+  );
+}
+
+function addMigrationOptions(command: Command): Command {
+  return addVerifyPluginAppsOption(
+    addMigrationItemOption(
+      addMigrationPluginOption(
+        addMigrationSkillOption(
+          command
+            .option("--from <path>", "Source directory to migrate from")
+            .option("--agent <id>", "Target agent (default: configured default agent)")
+            .option("--include-secrets", "Import supported credentials and secrets")
+            .option("--no-auth-credentials", "Skip auth credential migration")
+            .option(
+              "--overwrite",
+              "Overwrite conflicting target files after item-level backups",
+              false,
+            )
+            .option("--json", "Output JSON", false),
+        ),
+      ),
+    ),
+  );
+}
+
+function readSharedMigrationOptions(opts: Record<string, unknown>, command: Command) {
+  const agent = readMigrationOption(command, "agent", opts.agent);
+  return {
+    source: readMigrationOption(command, "from", opts.from as string | undefined),
+    targetAgentId: typeof agent === "string" ? agent : undefined,
+    includeSecrets:
+      readMigrationOption(command, "includeSecrets", opts.includeSecrets) === true
+        ? true
+        : undefined,
+    authCredentials: readMigrationOption(
+      command,
+      "authCredentials",
+      opts.authCredentials as boolean | undefined,
+    ),
+    overwrite: Boolean(readMigrationOption(command, "overwrite", opts.overwrite)),
+    skills: normalizeOptionalTrimmedStringList(readMigrationOption(command, "skill", opts.skill)),
+    plugins: normalizeOptionalTrimmedStringList(
+      readMigrationOption(command, "plugin", opts.plugin),
+    ),
+    itemIds: normalizeOptionalTrimmedStringList(readMigrationOption(command, "item", opts.item)),
+    verifyPluginApps:
+      readMigrationOption(command, "verifyPluginApps", opts.verifyPluginApps) === true,
+    json: Boolean(readMigrationOption(command, "json", opts.json)),
+  };
+}
+
+function rejectUnsupportedApplyDryRun(command: Command): void {
+  if (inheritOptionFromParent<boolean>(command, "dryRun") === true) {
+    throw new Error(
+      "--dry-run is not supported for `openclaw migrate apply`. Run `openclaw migrate plan <provider>` or `openclaw migrate <provider> --dry-run` instead.",
+    );
+  }
+}
+
+/** Register migration commands and shared provider/item selection flags. */
+export function registerMigrateCommand(program: Command) {
+  const migrate = addVerifyPluginAppsOption(
+    program
+      .command("migrate")
+      .description("Import state from another agent system")
+      .argument("[provider]", "Migration provider id, for example hermes")
+      .option("--from <path>", "Source directory to migrate from")
+      .option("--agent <id>", "Target agent (default: configured default agent)")
+      .option("--include-secrets", "Import supported credentials and secrets")
+      .option("--no-auth-credentials", "Skip auth credential migration")
+      .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
+      .option("--dry-run", "Preview only; do not apply changes", false)
+      .option("--yes", "Apply without prompting after preview", false)
+      .option(
+        "--skill <name>",
+        "Select one skill to migrate by name or item id; repeat for multiple skills",
+        collectOption,
+      )
+      .option(
+        "--plugin <name>",
+        "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
+        collectOption,
+      )
+      .option(
+        "--item <id>",
+        "Select one exact migration item id; repeat for multiple items",
+        collectOption,
+      )
+      .option("--backup-output <path>", "Pre-migration backup archive path or directory")
+      .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+      .option("--force", "Allow dangerous options such as --no-backup", false)
+      .option("--json", "Output JSON", false),
+  )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw migrate list", "Show available migration providers."],
+          ["openclaw migrate hermes", "Preview Hermes migration, then prompt before applying."],
+          ["openclaw migrate hermes --dry-run", "Preview Hermes migration only."],
+          [
+            "openclaw migrate apply hermes --yes",
+            "Apply Hermes migration non-interactively after writing a verified backup.",
+          ],
+          [
+            "openclaw migrate hermes --no-auth-credentials",
+            "Preview and apply Hermes migration while skipping auth credential import.",
+          ],
+        ])}`,
+    )
+    .action(async (provider, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await migrateDefaultCommand(defaultRuntime, {
+          provider: provider as string | undefined,
+          source: opts.from as string | undefined,
+          targetAgentId: opts.agent as string | undefined,
+          includeSecrets: opts.includeSecrets === true ? true : undefined,
+          authCredentials: opts.authCredentials as boolean | undefined,
+          overwrite: Boolean(opts.overwrite),
+          skills: normalizeOptionalTrimmedStringList(opts.skill),
+          plugins: normalizeOptionalTrimmedStringList(opts.plugin),
+          itemIds: normalizeOptionalTrimmedStringList(opts.item),
+          verifyPluginApps: opts.verifyPluginApps === true,
+          dryRun: Boolean(opts.dryRun),
+          yes: Boolean(opts.yes),
+          backupOutput: opts.backupOutput as string | undefined,
+          noBackup: opts.backup === false,
+          force: Boolean(opts.force),
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  migrate
+    .command("list")
+    .description("List migration providers")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await migrateListCommand(defaultRuntime, {
+          json: Boolean(readMigrationOption(command, "json", opts.json)),
+        });
+      });
+    });
+
+  addMigrationOptions(
+    migrate
+      .command("plan <provider>")
+      .description("Preview a migration without changing OpenClaw state"),
+  ).action(async (provider, opts, command) => {
+    await runCommandWithRuntime(defaultRuntime, async () => {
+      await migratePlanCommand(defaultRuntime, {
+        provider: provider as string,
+        ...readSharedMigrationOptions(opts, command),
+      });
+    });
+  });
+
+  addMigrationOptions(
+    migrate.command("apply <provider>").description("Apply a migration after a verified backup"),
+  )
+    .option("--yes", "Apply without prompting", false)
+    .option("--backup-output <path>", "Pre-migration backup archive path or directory")
+    .option("--no-backup", "Skip the pre-migration OpenClaw backup")
+    .option("--force", "Allow dangerous options such as --no-backup", false)
+    .action(async (provider, opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        rejectUnsupportedApplyDryRun(command);
+        await migrateApplyCommand(defaultRuntime, {
+          provider: provider as string,
+          ...readSharedMigrationOptions(opts, command),
+          yes: Boolean(readMigrationOption(command, "yes", opts.yes)),
+          backupOutput: readMigrationOption(
+            command,
+            "backupOutput",
+            opts.backupOutput as string | undefined,
+          ),
+          noBackup: readMigrationOption(command, "backup", opts.backup) === false,
+          force: Boolean(readMigrationOption(command, "force", opts.force)),
+        });
+      });
+    });
+}

@@ -1,309 +1,77 @@
 ---
-summary: "Model provider overview with example configs + CLI flows"
+summary: "Index of the model provider reference: quick rules, Control UI and keys, bundled provider plugins, and custom providers"
 read_when:
   - You need a provider-by-provider model setup reference
   - You want example configs or CLI onboarding commands for model providers
-title: "Model Providers"
+title: "Model providers"
+sidebarTitle: "Model providers"
 ---
 
-# Model providers
-
-This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
-For model selection rules, see [/concepts/models](/concepts/models).
-
-## Quick rules
-
-- Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
-- If you set `agents.defaults.models`, it becomes the allowlist.
-- CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-
-## Built-in providers (pi-ai catalog)
-
-OpenClaw ships with the pi‑ai catalog. These providers require **no**
-`models.providers` config; just set auth + pick a model.
-
-### OpenAI
-
-- Provider: `openai`
-- Auth: `OPENAI_API_KEY`
-- Example model: `openai/gpt-5.1-codex`
-- CLI: `openclaw onboard --auth-choice openai-api-key`
-
-```json5
-{
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
-}
-```
-
-### Anthropic
-
-- Provider: `anthropic`
-- Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
-- Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
-
-```json5
-{
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
-}
-```
-
-### OpenAI Code (Codex)
-
-- Provider: `openai-codex`
-- Auth: OAuth (ChatGPT)
-- Example model: `openai-codex/gpt-5.3-codex`
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
-
-```json5
-{
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
-}
-```
-
-### OpenCode Zen
-
-- Provider: `opencode`
-- Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
-- Example model: `opencode/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice opencode-zen`
-
-```json5
-{
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
-}
-```
-
-### Google Gemini (API key)
-
-- Provider: `google`
-- Auth: `GEMINI_API_KEY`
-- Example model: `google/gemini-3-pro-preview`
-- CLI: `openclaw onboard --auth-choice gemini-api-key`
-
-### Google Vertex, Antigravity, and Gemini CLI
-
-- Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
-- Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-antigravity-auth`
-  - Login: `openclaw models auth login --provider google-antigravity --set-default`
-- Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
-  - Enable: `openclaw plugins enable google-gemini-cli-auth`
-  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
-    tokens in auth profiles on the gateway host.
-
-### Z.AI (GLM)
-
-- Provider: `zai`
-- Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-4.7`
-- CLI: `openclaw onboard --auth-choice zai-api-key`
-  - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
-
-### Vercel AI Gateway
-
-- Provider: `vercel-ai-gateway`
-- Auth: `AI_GATEWAY_API_KEY`
-- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
-
-### Other built-in providers
-
-- OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/anthropic/claude-sonnet-4-5`
-- xAI: `xai` (`XAI_API_KEY`)
-- Groq: `groq` (`GROQ_API_KEY`)
-- Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
-  - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
-  - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
-- GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-
-## Providers via `models.providers` (custom/base URL)
-
-Use `models.providers` (or `models.json`) to add **custom** providers or
-OpenAI/Anthropic‑compatible proxies.
-
-### Moonshot AI (Kimi)
-
-Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
-
-- Provider: `moonshot`
-- Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.5`
-
-Kimi K2 model IDs:
-
-{/_moonshot-kimi-k2-model-refs:start_/ && null}
-
-- `moonshot/kimi-k2.5`
-- `moonshot/kimi-k2-0905-preview`
-- `moonshot/kimi-k2-turbo-preview`
-- `moonshot/kimi-k2-thinking`
-- `moonshot/kimi-k2-thinking-turbo`
-  {/_moonshot-kimi-k2-model-refs:end_/ && null}
-
-```json5
-{
-  agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      moonshot: {
-        baseUrl: "https://api.moonshot.ai/v1",
-        apiKey: "${MOONSHOT_API_KEY}",
-        api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
-      },
-    },
-  },
-}
-```
-
-### Kimi Coding
-
-Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
-
-- Provider: `kimi-coding`
-- Auth: `KIMI_API_KEY`
-- Example model: `kimi-coding/k2p5`
-
-```json5
-{
-  env: { KIMI_API_KEY: "sk-..." },
-  agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
-  },
-}
-```
-
-### Qwen OAuth (free tier)
-
-Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-Enable the bundled plugin, then log in:
-
-```bash
-openclaw plugins enable qwen-portal-auth
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-Model refs:
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-See [/providers/qwen](/providers/qwen) for setup details and notes.
-
-### Synthetic
-
-Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
-
-- Provider: `synthetic`
-- Auth: `SYNTHETIC_API_KEY`
-- Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.1`
-- CLI: `openclaw onboard --auth-choice synthetic-api-key`
-
-```json5
-{
-  agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      synthetic: {
-        baseUrl: "https://api.synthetic.new/anthropic",
-        apiKey: "${SYNTHETIC_API_KEY}",
-        api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
-      },
-    },
-  },
-}
-```
-
-### MiniMax
-
-MiniMax is configured via `models.providers` because it uses custom endpoints:
-
-- MiniMax (Anthropic‑compatible): `--auth-choice minimax-api`
-- Auth: `MINIMAX_API_KEY`
-
-See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
-
-### Ollama
-
-Ollama is a local LLM runtime that provides an OpenAI-compatible API:
-
-- Provider: `ollama`
-- Auth: None required (local server)
-- Example model: `ollama/llama3.3`
-- Installation: [https://ollama.ai](https://ollama.ai)
-
-```bash
-# Install Ollama, then pull a model:
-ollama pull llama3.3
-```
-
-```json5
-{
-  agents: {
-    defaults: { model: { primary: "ollama/llama3.3" } },
-  },
-}
-```
-
-Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
-
-### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
-
-Example (OpenAI‑compatible):
-
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "lmstudio/minimax-m2.1-gs32" },
-      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } },
-    },
-  },
-  models: {
-    providers: {
-      lmstudio: {
-        baseUrl: "http://localhost:1234/v1",
-        apiKey: "LMSTUDIO_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    },
-  },
-}
-```
-
-Notes:
-
-- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
-  When omitted, OpenClaw defaults to:
-  - `reasoning: false`
-  - `input: ["text"]`
-  - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
-  - `contextWindow: 200000`
-  - `maxTokens: 8192`
-- Recommended: set explicit values that match your proxy/model limits.
+Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram). For model selection rules, see [Models](/concepts/models).
+
+This page is an index. The provider reference is documented on four pages, one
+per reader job. Open the page that matches your task.
+
+| Page                                                                              | Read it when                                                                                                        |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| [Quick rules](/concepts/model-providers/quick-rules)                              | You need model refs, CLI helpers, or the rules that decide your primary model and OpenAI runtime.                   |
+| [Control UI and API keys](/concepts/model-providers/control-ui-and-keys)          | You are configuring providers from Settings -> Models, or setting up multiple API keys and rotation.                |
+| [Official provider plugins](/concepts/model-providers/official-provider-plugins)  | You are setting up a bundled provider, or need its id, auth env, example model, and quirks.                         |
+| [Custom providers and local runtimes](/concepts/model-providers/custom-providers) | You are configuring a provider through `models.providers`, a custom base URL, a proxy, or a local inference server. |
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor
+here, so an existing link such as `/concepts/model-providers#byteplus-international` still resolves.
+Each entry points at the page that now holds the content.
+
+- <a id="quick-rules" />[Quick rules](/concepts/model-providers/quick-rules#quick-rules)
+- <a id="model-refs-and-cli-helpers" />[Model refs and CLI helpers](/concepts/model-providers/quick-rules#model-refs-and-cli-helpers)
+- <a id="adding-provider-auth-does-not-change-your-primary-model" />[Adding provider auth does not change your primary model](/concepts/model-providers/quick-rules#adding-provider-auth-does-not-change-your-primary-model)
+- <a id="openai-provider-runtime-split" />[OpenAI provider/runtime split](/concepts/model-providers/quick-rules#openai-provider-runtime-split)
+- <a id="cli-runtimes" />[CLI runtimes](/concepts/model-providers/quick-rules#cli-runtimes)
+- <a id="configure-providers-in-the-control-ui" />[Configure providers in the Control UI](/concepts/model-providers/control-ui-and-keys#configure-providers-in-the-control-ui)
+- <a id="plugin-owned-provider-behavior" />[Plugin-owned provider behavior](/concepts/model-providers/control-ui-and-keys#plugin-owned-provider-behavior)
+- <a id="api-key-rotation" />[API key rotation](/concepts/model-providers/control-ui-and-keys#api-key-rotation)
+- <a id="key-sources-and-priority" />[Key sources and priority](/concepts/model-providers/control-ui-and-keys#key-sources-and-priority)
+- <a id="when-rotation-kicks-in" />[When rotation kicks in](/concepts/model-providers/control-ui-and-keys#when-rotation-kicks-in)
+- <a id="official-provider-plugins" />[Official provider plugins](/concepts/model-providers/official-provider-plugins#official-provider-plugins)
+- <a id="openai" />[OpenAI](/concepts/model-providers/official-provider-plugins#openai)
+- <a id="anthropic" />[Anthropic](/concepts/model-providers/official-provider-plugins#anthropic)
+- <a id="openai-chatgpt%2Fcodex-oauth" /><a id="openai-chatgpt/codex-oauth" />[OpenAI ChatGPT/Codex OAuth](/concepts/model-providers/official-provider-plugins#openai-chatgpt/codex-oauth)
+- <a id="other-subscription-style-hosted-options" />[Other subscription-style hosted options](/concepts/model-providers/official-provider-plugins#other-subscription-style-hosted-options)
+- <a id="opencode" />[OpenCode](/concepts/model-providers/official-provider-plugins#opencode)
+- <a id="google-gemini-(api-key)" /><a id="google-gemini-api-key" />[Google Gemini (API key)](/concepts/model-providers/official-provider-plugins#google-gemini-api-key)
+- <a id="google-vertex-and-gemini-cli-runtime" />[Google Vertex and Gemini CLI runtime](/concepts/model-providers/official-provider-plugins#google-vertex-and-gemini-cli-runtime)
+- <a id="z.ai-(glm)" /><a id="z-ai-glm" />[Z.AI (GLM)](/concepts/model-providers/official-provider-plugins#z-ai-glm)
+- <a id="vercel-ai-gateway" />[Vercel AI Gateway](/concepts/model-providers/official-provider-plugins#vercel-ai-gateway)
+- <a id="other-bundled-provider-plugins" />[Other bundled provider plugins](/concepts/model-providers/official-provider-plugins#other-bundled-provider-plugins)
+- <a id="quirks-worth-knowing" />[Quirks worth knowing](/concepts/model-providers/official-provider-plugins#quirks-worth-knowing)
+- <a id="openrouter" />[OpenRouter](/concepts/model-providers/official-provider-plugins#openrouter)
+- <a id="kilo-gateway" />[Kilo Gateway](/concepts/model-providers/official-provider-plugins#kilo-gateway)
+- <a id="minimax-1" />[MiniMax (quirks)](/concepts/model-providers/official-provider-plugins#minimax)
+- <a id="nvidia" />[NVIDIA](/concepts/model-providers/official-provider-plugins#nvidia)
+- <a id="xai" />[xAI](/concepts/model-providers/official-provider-plugins#xai)
+- <a id="providers-via-models.providers-(custom%2Fbase-url)" /><a id="providers-via-models-providers-custom/base-url" />[Providers via `models.providers` (custom/base URL)](/concepts/model-providers/custom-providers#providers-via-models-providers-custom/base-url)
+- <a id="moonshot-ai-(kimi)" /><a id="moonshot-ai-kimi" />[Moonshot AI (Kimi)](/concepts/model-providers/custom-providers#moonshot-ai-kimi)
+- <a id="kimi-coding" />[Kimi Coding](/concepts/model-providers/custom-providers#kimi-coding)
+- <a id="volcano-engine-(doubao)" /><a id="volcano-engine-doubao" />[Volcano Engine (Doubao)](/concepts/model-providers/custom-providers#volcano-engine-doubao)
+- <a id="standard-models" />[Standard models (Volcano Engine)](/concepts/model-providers/custom-providers#standard-models)
+- <a id="coding-models-volcengine-plan" />[Coding models (volcengine-plan)](/concepts/model-providers/custom-providers#coding-models-volcengine-plan)
+- <a id="byteplus-(international)" /><a id="byteplus-international" />[BytePlus (International)](/concepts/model-providers/custom-providers#byteplus-international)
+- <a id="standard-models-2" />[Standard models (BytePlus)](/concepts/model-providers/custom-providers#standard-models-2)
+- <a id="coding-models-byteplus-plan" />[Coding models (byteplus-plan)](/concepts/model-providers/custom-providers#coding-models-byteplus-plan)
+- <a id="synthetic" />[Synthetic](/concepts/model-providers/custom-providers#synthetic)
+- <a id="minimax" />[MiniMax](/concepts/model-providers/custom-providers#minimax)
+- <a id="llama.cpp" /><a id="llama-cpp" />[llama.cpp](/concepts/model-providers/custom-providers#llama-cpp)
+- <a id="llmman" />[llmman](/concepts/model-providers/custom-providers#llmman)
+- <a id="lm-studio" />[LM Studio](/concepts/model-providers/custom-providers#lm-studio)
+- <a id="ollama" />[Ollama](/concepts/model-providers/custom-providers#ollama)
+- <a id="vllm" />[vLLM](/concepts/model-providers/custom-providers#vllm)
+- <a id="sglang" />[SGLang](/concepts/model-providers/custom-providers#sglang)
+- <a id="local-proxies-(lm-studio%2C-vllm%2C-litellm%2C-etc.)" /><a id="local-proxies-lm-studio-vllm-litellm-etc" />[Local proxies (LM Studio, vLLM, LiteLLM, etc.)](/concepts/model-providers/custom-providers#local-proxies-lm-studio-vllm-litellm-etc)
+- <a id="default-optional-fields" />[Default optional fields](/concepts/model-providers/custom-providers#default-optional-fields)
+- <a id="proxy-route-shaping-rules" />[Proxy-route shaping rules](/concepts/model-providers/custom-providers#proxy-route-shaping-rules)
 
 ## CLI examples
 
@@ -313,4 +81,13 @@ openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```
 
-See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.
+See also: [Configuration](/gateway/configuration) for full configuration examples.
+
+## Related
+
+- [Configuration reference](/gateway/config-agents#agent-defaults) - model config keys
+- [Model failover](/concepts/model-failover) - fallback chains and retry behavior
+- [Models](/concepts/models) - model configuration and aliases
+- [Providers](/providers) - per-provider setup guides
+- [Agent harness plugins](/plugins/sdk-agent-harness) - SDK surface for plugins that replace the embedded agent executor
+- [`openclaw models`](/cli/models) - list, select, and authenticate providers from the CLI

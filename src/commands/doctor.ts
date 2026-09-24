@@ -1,313 +1,377 @@
-import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
-import fs from "node:fs";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import {
-  getModelRefStatus,
-  resolveConfiguredModelRef,
-  resolveHooksGmailModel,
-} from "../agents/model-selection.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { logConfigUpdated } from "../config/logging.js";
-import { resolveGatewayService } from "../daemon/service.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { defaultRuntime } from "../runtime.js";
-import { note } from "../terminal/note.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
-import { shortenHomePath } from "../utils.js";
-import {
-  maybeRemoveDeprecatedCliAuthProfiles,
-  maybeRepairAnthropicOAuthProfileId,
-  noteAuthProfileHealth,
-} from "./doctor-auth.js";
-import { doctorShellCompletion } from "./doctor-completion.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
-import { checkGatewayHealth } from "./doctor-gateway-health.js";
-import {
-  maybeRepairGatewayServiceConfig,
-  maybeScanExtraGatewayServices,
-} from "./doctor-gateway-services.js";
-import { noteSourceInstallIssues } from "./doctor-install.js";
-import {
-  noteMacLaunchAgentOverrides,
-  noteMacLaunchctlGatewayEnvOverrides,
-  noteDeprecatedLegacyEnvVars,
-} from "./doctor-platform-notes.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
-import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
-import { noteSecurityWarnings } from "./doctor-security.js";
-import { noteStateIntegrity, noteWorkspaceBackupTip } from "./doctor-state-integrity.js";
-import {
-  detectLegacyStateMigrations,
-  runLegacyStateMigrations,
-} from "./doctor-state-migrations.js";
-import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
-import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
-import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
-import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "./doctor-workspace.js";
-import { applyWizardMetadata, printWizardHeader, randomToken } from "./onboard-helpers.js";
-import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
+/** Top-level doctor command wrapper, including post-upgrade probe mode. */
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
+import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
-const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+export { runDoctorProcess } from "./doctor-process.js";
 
-function resolveMode(cfg: OpenClawConfig): "local" | "remote" {
-  return cfg.gateway?.mode === "remote" ? "remote" : "local";
+async function resolveExplicitSessionSqliteMaintenancePaths(
+  options: DoctorOptions,
+): Promise<string[]> {
+  if (!options.sessionSqliteStore) {
+    return [];
+  }
+  const [
+    { resolveSessionStoreTargets },
+    { resolveSqliteTargetFromSessionStorePath },
+    { resolveSqliteDatabaseFilePaths },
+  ] = await Promise.all([
+    import("../config/sessions/targets.js"),
+    import("../config/sessions/session-sqlite-target.js"),
+    import("../infra/sqlite-files.js"),
+  ]);
+  const requestedAgentId = normalizeAgentId(options.sessionSqliteAgent ?? LEGACY_IMPLICIT_AGENT_ID);
+  // Explicit path mode intentionally bypasses runtime config. Resolve through
+  // the same selector as the migration so ownership checks cover exact targets.
+  const targets = resolveSessionStoreTargets(
+    { agents: { entries: { [requestedAgentId]: { default: true } } } },
+    {
+      store: options.sessionSqliteStore,
+      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+    },
+    { env: process.env },
+  );
+  const protectedPaths: string[] = [];
+  for (const target of targets) {
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+    }).path;
+    protectedPaths.push(target.storePath, ...resolveSqliteDatabaseFilePaths(sqlitePath));
+  }
+  return [...new Set(protectedPaths)];
 }
 
+/** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(
-  runtime: RuntimeEnv = defaultRuntime,
-  options: DoctorOptions = {},
-) {
-  const prompter = createDoctorPrompter({ runtime, options });
-  printWizardHeader(runtime);
-  intro("OpenClaw doctor");
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
+  const outputRuntime = runtime ?? defaultRuntime;
+  if (options?.stateSqlite) {
+    const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
+    const report = await runDoctorStateSqliteCompact();
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else if (report.skipped) {
+      outputRuntime.log(`state-sqlite compact: skipped; database missing at ${report.path}`);
+    } else {
+      outputRuntime.log(
+        `state-sqlite compact: reclaimed=${report.reclaimedBytes} bytes, db=${report.before.dbSizeBytes}->${report.after.dbSizeBytes} bytes, wal=${report.before.walSizeBytes}->${report.after.walSizeBytes} bytes`,
+      );
+      outputRuntime.log(
+        `- freelist=${report.before.freelistPages}->${report.after.freelistPages} pages, page-size=${report.after.pageSizeBytes} bytes, auto-vacuum=${report.before.autoVacuum}->${report.after.autoVacuum}`,
+      );
+      outputRuntime.log(`- integrity-check=${report.integrityCheck}, path=${report.path}`);
+    }
+    exitCliAfterOutput(outputRuntime, 0);
+  }
+  if (options?.sessionSqlite) {
+    const sessionSqliteMode = options.sessionSqlite;
+    const { countBlockingSessionSqliteIssues } = await import("./doctor-session-sqlite-types.js");
+    const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
+      await import("./doctor-sqlite-maintenance-lock.js");
+    const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
+      await import("./doctor-session-sqlite.js");
+    const { withArtifactPreservingStateReads } =
+      await import("../state/openclaw-state-db-readonly.js");
+    const sessionSqliteOptions = {
+      mode: sessionSqliteMode,
+      ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
+      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+    };
+    const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
+    const reconcileHardlink = (filePath: string) =>
+      reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath);
+    // Custom-target discovery can create a missing shared WAL before maintenance admission.
+    const report = await withArtifactPreservingStateReads(async () =>
+      isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
+        ? await withDoctorSqliteMaintenanceLock({
+            env: process.env,
+            operation: `session SQLite ${sessionSqliteMode}`,
+            ...(options.sessionSqliteStore
+              ? { protectedPaths: await resolveExplicitSessionSqliteMaintenancePaths(options) }
+              : {}),
+            ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
+            run: runSessionSqlite,
+          })
+        : await runSessionSqlite(),
+    );
+    if (sessionSqliteMode === "recover" && options.sessionSqliteGithubIssue === true) {
+      await maybeCreateSessionSqliteGithubIssue(outputRuntime, report, options);
+    }
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else {
+      outputRuntime.log(
+        `session-sqlite ${report.mode}: ${report.totals.targets} target(s), ${report.totals.legacyEntries} legacy entries, ${report.totals.sqliteEntries} sqlite entries, ${report.totals.issues} issue(s)`,
+      );
+      if (report.migrationRun) {
+        outputRuntime.log(`- migration-run=${report.migrationRun.runId}`);
+        outputRuntime.log(`- manifest=${report.migrationRun.manifestPath}`);
+        if (report.migrationRun.failureReportMarkdownPath) {
+          outputRuntime.log(`- failure-report=${report.migrationRun.failureReportMarkdownPath}`);
+        }
+      }
+      if (report.supportIssue) {
+        outputRuntime.log(`- support-issue-report=${report.supportIssue.bodyPath ?? "inline"}`);
+      }
+      for (const target of report.targets) {
+        outputRuntime.log(
+          `- ${target.agentId}: imported=${target.importedEntries}/${target.importedTranscriptEvents} events, validated=${target.validatedEntries}/${target.validatedTranscriptEvents} events, archived-unreferenced-jsonl=${target.archivedUnreferencedJsonlFiles.length}, unreferenced-jsonl=${target.unreferencedJsonlFiles.length}`,
+        );
+        if (target.restore) {
+          outputRuntime.log(
+            `  restored=${target.restore.restoredFiles.length}, skipped=${target.restore.skippedFiles.length}, conflicts=${target.restore.conflicts.length}, manifests=${target.restore.manifestPaths.length}`,
+          );
+        }
+        if (target.compact) {
+          outputRuntime.log(
+            `  compact reclaimed=${target.compact.reclaimedBytes} bytes, db=${target.compact.dbSizeBeforeBytes}->${target.compact.dbSizeAfterBytes} bytes, wal=${target.compact.walSizeBeforeBytes}->${target.compact.walSizeAfterBytes} bytes`,
+          );
+        }
+        if (target.corruptRecovery) {
+          outputRuntime.log(
+            `  corrupt-db-recovery moved=${target.corruptRecovery.movedFiles.length}, skipped=${target.corruptRecovery.skippedFiles.length}`,
+          );
+        }
+        for (const issue of target.issues.slice(0, 10)) {
+          outputRuntime.log(
+            `  [${issue.code}]${issue.sessionKey ? ` ${issue.sessionKey}:` : ""} ${issue.message}`,
+          );
+        }
+        if (target.issues.length > 10) {
+          outputRuntime.log(`  ...and ${target.issues.length - 10} more issue(s)`);
+        }
+      }
+    }
+    const hasBlockingIssues = report.targets.some(
+      (target) => countBlockingSessionSqliteIssues(target) > 0,
+    );
+    exitCliAfterOutput(outputRuntime, hasBlockingIssues ? 1 : 0);
+  }
+  if (options?.postUpgrade) {
+    const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
+    const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+    const config = await readSourceConfigBestEffort();
+    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else {
+      for (const f of report.findings) {
+        outputRuntime.log(`[${f.level}] ${f.code}: ${f.message}`);
+      }
+      if (report.findings.length === 0) {
+        outputRuntime.log("post-upgrade: no findings");
+      }
+    }
+    const hasError = report.findings.some((f) => f.level === "error");
+    exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
+  }
+  const doctorHealth = await import("../flows/doctor-health.js");
+  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+}
 
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-
-  const updateResult = await maybeOfferUpdateBeforeDoctor({
-    runtime,
-    options,
-    root,
-    confirm: (p) => prompter.confirm(p),
-    outro,
-  });
-  if (updateResult.handled) {
+async function maybeCreateSessionSqliteGithubIssue(
+  runtime: RuntimeEnv,
+  report: DoctorSessionSqliteReport,
+  options: DoctorOptions,
+): Promise<void> {
+  const shouldLog = options.json !== true;
+  const supportIssue = report.supportIssue;
+  if (!supportIssue) {
+    if (shouldLog) {
+      runtime.log(
+        report.totals.issues === 0 &&
+          report.totals.importedEntries === 0 &&
+          report.totals.archivedTranscriptFiles === 0 &&
+          report.totals.archivedUnreferencedJsonlFiles === 0 &&
+          report.targets.every(
+            (target) =>
+              !target.restore?.restoredFiles.length && !target.corruptRecovery?.movedFiles.length,
+          )
+          ? "session-sqlite recover: nothing to recover; no report filed"
+          : "session-sqlite recover: no support issue payload was generated",
+      );
+    }
     return;
   }
+  const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
+  const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
+  let approved = options.yes === true;
+  if (canPrompt) {
+    const { promptYesNo } = await import("../cli/prompt.js");
+    approved = await promptYesNo(
+      "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
+      false,
+    );
+  }
+  if (!approved) {
+    const message = canPrompt
+      ? "GitHub issue creation skipped: confirmation was declined."
+      : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
+    supportIssue.github = { message, status: "skipped" };
+    if (shouldLog) {
+      runtime.log(`session-sqlite recover: ${message}`);
+    }
+    return;
+  }
+  const manifestPath = report.migrationRun?.manifestPath;
+  if (!manifestPath) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt could not be prepared.",
+    );
+    return;
+  }
+  const { prepareGithubIssue, reconcileGithubIssue, submitGithubIssue } =
+    await import("../infra/github-issue.js");
+  const { claimSessionSqliteMigrationGithubIssue, clearSessionSqliteMigrationGithubIssueClaim } =
+    await import("./doctor-session-sqlite-failure.js");
+  const prepared = prepareGithubIssue({ body: supportIssue.body, title: supportIssue.title });
+  let claim: ReturnType<typeof claimSessionSqliteMigrationGithubIssue>;
+  try {
+    claim = await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      claimSessionSqliteMigrationGithubIssue(
+        manifestPath,
+        { marker: prepared.marker, title: prepared.title },
+        authority,
+      ),
+    );
+  } catch {
+    claim = undefined;
+  }
+  if (!claim) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt could not be saved.",
+    );
+    return;
+  }
+  supportIssue.title = claim.issue.title;
+  const claimedIssue = prepareGithubIssue({ body: supportIssue.body, title: claim.issue.title });
+  if (claimedIssue.marker !== claim.issue.marker) {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable because its private retry receipt is inconsistent.",
+    );
+    return;
+  }
+  if (claim.status === "existing") {
+    const reconciled = await reconcileGithubIssue(claimedIssue).catch(() => ({
+      status: "unavailable" as const,
+    }));
+    if (reconciled.status === "created") {
+      setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, reconciled.url);
+      return;
+    }
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "A prior GitHub issue handoff may already have created this report; no duplicate was opened.",
+    );
+    return;
+  }
+  const created = await submitGithubIssue(claimedIssue).catch(() => ({
+    reason: "creation-outcome-unknown" as const,
+    status: "outcome-unknown" as const,
+  }));
+  if (created.status === "created") {
+    setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, created.url);
+    return;
+  }
+  if (created.status === "outcome-unknown") {
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation outcome is unknown; no duplicate was opened.",
+    );
+    return;
+  }
+  if (created.status === "fallback-unavailable") {
+    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
+    ).catch(() => false);
+    setSessionSqliteGithubIssueFailure(
+      runtime,
+      supportIssue,
+      shouldLog,
+      "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.",
+    );
+    return;
+  }
+  const message =
+    created.reason === "cli-unavailable"
+      ? "GitHub CLI is unavailable."
+      : created.reason === "authentication-unavailable"
+        ? "GitHub authentication is unavailable."
+        : "GitHub issue creation is unavailable.";
+  const { detectBrowserOpenSupport, openUrl } = await import("../infra/browser-open.js");
+  const browserSupport = await detectBrowserOpenSupport().catch(() => ({ ok: false }));
+  const opened = browserSupport.ok ? await openUrl(created.url).catch(() => false) : false;
+  if (!browserSupport.ok) {
+    await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
+      clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
+    ).catch(() => false);
+  }
+  supportIssue.github = { message, status: "failed" };
+  if (shouldLog) {
+    runtime.log(`session-sqlite recover: ${message}`);
+    runtime.log(
+      opened
+        ? "session-sqlite recover: opened the sanitized fallback in your browser"
+        : "session-sqlite recover: browser handoff unavailable; the sanitized report remains available in the recovery result",
+    );
+  }
+}
 
-  await maybeRepairUiProtocolFreshness(runtime, prompter);
-  noteSourceInstallIssues(root);
-  noteDeprecatedLegacyEnvVars();
-
-  const configResult = await loadAndMaybeMigrateDoctorConfig({
-    options,
-    confirm: (p) => prompter.confirm(p),
+async function withSessionSqliteGithubIssueReceipt<T>(
+  manifestPath: string,
+  run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T,
+): Promise<T> {
+  const { withDoctorSqliteMaintenanceLock } = await import("./doctor-sqlite-maintenance-lock.js");
+  return await withDoctorSqliteMaintenanceLock({
+    env: process.env,
+    operation: "session SQLite GitHub issue receipt",
+    protectedPaths: [manifestPath],
+    run,
   });
-  let cfg: OpenClawConfig = configResult.cfg;
+}
 
-  const configPath = configResult.path ?? CONFIG_PATH;
-  if (!cfg.gateway?.mode) {
-    const lines = [
-      "gateway.mode is unset; gateway start will be blocked.",
-      `Fix: run ${formatCliCommand("openclaw configure")} and set Gateway mode (local/remote).`,
-      `Or set directly: ${formatCliCommand("openclaw config set gateway.mode local")}`,
-    ];
-    if (!fs.existsSync(configPath)) {
-      lines.push(`Missing config: run ${formatCliCommand("openclaw setup")} first.`);
-    }
-    note(lines.join("\n"), "Gateway");
+function setSessionSqliteGithubIssueCreated(
+  runtime: RuntimeEnv,
+  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+  shouldLog: boolean,
+  url: string,
+): void {
+  issue.github = { status: "created", url };
+  if (shouldLog) {
+    runtime.log(`session-sqlite recover: created GitHub issue ${url}`);
   }
+}
 
-  cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
-  cfg = await maybeRemoveDeprecatedCliAuthProfiles(cfg, prompter);
-  await noteAuthProfileHealth({
-    cfg,
-    prompter,
-    allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
-  });
-  const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
-  if (gatewayDetails.remoteFallbackNote) {
-    note(gatewayDetails.remoteFallbackNote, "Gateway");
+function setSessionSqliteGithubIssueFailure(
+  runtime: RuntimeEnv,
+  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
+  shouldLog: boolean,
+  message: string,
+): void {
+  issue.github = { message, status: "failed" };
+  if (shouldLog) {
+    runtime.log(`session-sqlite recover: ${message}`);
   }
-  if (resolveMode(cfg) === "local") {
-    const auth = resolveGatewayAuth({
-      authConfig: cfg.gateway?.auth,
-      tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
-    });
-    const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
-    if (needsToken) {
-      note(
-        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
-        "Gateway auth",
-      );
-      const shouldSetToken =
-        options.generateGatewayToken === true
-          ? true
-          : options.nonInteractive === true
-            ? false
-            : await prompter.confirmRepair({
-                message: "Generate and configure a gateway token now?",
-                initialValue: true,
-              });
-      if (shouldSetToken) {
-        const nextToken = randomToken();
-        cfg = {
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            auth: {
-              ...cfg.gateway?.auth,
-              mode: "token",
-              token: nextToken,
-            },
-          },
-        };
-        note("Gateway token configured.", "Gateway auth");
-      }
-    }
-  }
-
-  const legacyState = await detectLegacyStateMigrations({ cfg });
-  if (legacyState.preview.length > 0) {
-    note(legacyState.preview.join("\n"), "Legacy state detected");
-    const migrate =
-      options.nonInteractive === true
-        ? true
-        : await prompter.confirm({
-            message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
-            initialValue: true,
-          });
-    if (migrate) {
-      const migrated = await runLegacyStateMigrations({
-        detected: legacyState,
-      });
-      if (migrated.changes.length > 0) {
-        note(migrated.changes.join("\n"), "Doctor changes");
-      }
-      if (migrated.warnings.length > 0) {
-        note(migrated.warnings.join("\n"), "Doctor warnings");
-      }
-    }
-  }
-
-  await noteStateIntegrity(cfg, prompter, configResult.path ?? CONFIG_PATH);
-
-  cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
-  noteSandboxScopeWarnings(cfg);
-
-  await maybeScanExtraGatewayServices(options, runtime, prompter);
-  await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
-  await noteMacLaunchAgentOverrides();
-  await noteMacLaunchctlGatewayEnvOverrides(cfg);
-
-  await noteSecurityWarnings(cfg);
-
-  if (cfg.hooks?.gmail?.model?.trim()) {
-    const hooksModelRef = resolveHooksGmailModel({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    if (!hooksModelRef) {
-      note(`- hooks.gmail.model "${cfg.hooks.gmail.model}" could not be resolved`, "Hooks");
-    } else {
-      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-      const catalog = await loadModelCatalog({ config: cfg });
-      const status = getModelRefStatus({
-        cfg,
-        catalog,
-        ref: hooksModelRef,
-        defaultProvider,
-        defaultModel,
-      });
-      const warnings: string[] = [];
-      if (!status.allowed) {
-        warnings.push(
-          `- hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
-        );
-      }
-      if (!status.inCatalog) {
-        warnings.push(
-          `- hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
-        );
-      }
-      if (warnings.length > 0) {
-        note(warnings.join("\n"), "Hooks");
-      }
-    }
-  }
-
-  if (
-    options.nonInteractive !== true &&
-    process.platform === "linux" &&
-    resolveMode(cfg) === "local"
-  ) {
-    const service = resolveGatewayService();
-    let loaded = false;
-    try {
-      loaded = await service.isLoaded({ env: process.env });
-    } catch {
-      loaded = false;
-    }
-    if (loaded) {
-      await ensureSystemdUserLingerInteractive({
-        runtime,
-        prompter: {
-          confirm: async (p) => prompter.confirm(p),
-          note,
-        },
-        reason:
-          "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-        requireConfirm: true,
-      });
-    }
-  }
-
-  noteWorkspaceStatus(cfg);
-
-  // Check and fix shell completion
-  await doctorShellCompletion(runtime, prompter, {
-    nonInteractive: options.nonInteractive,
-  });
-
-  const { healthOk } = await checkGatewayHealth({
-    runtime,
-    cfg,
-    timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
-  });
-  await maybeRepairGatewayDaemon({
-    cfg,
-    runtime,
-    prompter,
-    options,
-    gatewayDetailsMessage: gatewayDetails.message,
-    healthOk,
-  });
-
-  const shouldWriteConfig = prompter.shouldRepair || configResult.shouldWriteConfig;
-  if (shouldWriteConfig) {
-    cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
-    await writeConfigFile(cfg);
-    logConfigUpdated(runtime);
-    const backupPath = `${CONFIG_PATH}.bak`;
-    if (fs.existsSync(backupPath)) {
-      runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
-    }
-  } else {
-    runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
-  }
-
-  if (options.workspaceSuggestions !== false) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-    noteWorkspaceBackupTip(workspaceDir);
-    if (await shouldSuggestMemorySystem(workspaceDir)) {
-      note(MEMORY_SYSTEM_PROMPT, "Workspace");
-    }
-  }
-
-  const finalSnapshot = await readConfigFileSnapshot();
-  if (finalSnapshot.exists && !finalSnapshot.valid) {
-    runtime.error("Invalid config:");
-    for (const issue of finalSnapshot.issues) {
-      const path = issue.path || "<root>";
-      runtime.error(`- ${path}: ${issue.message}`);
-    }
-  }
-
-  outro("Doctor complete.");
 }

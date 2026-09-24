@@ -2,6 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
+base="$script_dir/pr"
 
 usage() {
   cat <<USAGE
@@ -13,7 +14,7 @@ USAGE
 }
 
 if [ "$#" -eq 1 ]; then
-  exec "$script_dir/pr" merge-verify "$1"
+  exec "$base" merge-verify "$1"
 fi
 
 if [ "$#" -eq 2 ]; then
@@ -21,10 +22,10 @@ if [ "$#" -eq 2 ]; then
   pr="$2"
   case "$mode" in
     verify)
-      exec "$script_dir/pr" merge-verify "$pr"
+      exec "$base" merge-verify "$pr"
       ;;
     run)
-      exec "$script_dir/pr" merge-run "$pr"
+      exec "$base" merge-run "$pr"
       ;;
     *)
       usage

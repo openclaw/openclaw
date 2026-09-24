@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawKit
 import OSLog
 @preconcurrency import ScreenCaptureKit
 
@@ -34,8 +35,8 @@ final class ScreenRecordService {
         includeAudio: Bool?,
         outPath: String?) async throws -> (path: String, hasAudio: Bool)
     {
-        let durationMs = Self.clampDurationMs(durationMs)
-        let fps = Self.clampFps(fps)
+        let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
+        let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false
 
         let outURL: URL = {
@@ -95,17 +96,6 @@ final class ScreenRecordService {
 
         try await recorder.finish()
         return (path: outURL.path, hasAudio: recorder.hasAudio)
-    }
-
-    private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 10000
-        return min(60000, max(250, v))
-    }
-
-    private nonisolated static func clampFps(_ fps: Double?) -> Double {
-        let v = fps ?? 10
-        if !v.isFinite { return 10 }
-        return min(60, max(1, v))
     }
 }
 

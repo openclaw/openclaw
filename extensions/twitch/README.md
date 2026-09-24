@@ -5,7 +5,7 @@ Twitch channel plugin for OpenClaw.
 ## Install (local checkout)
 
 ```bash
-openclaw plugins install ./extensions/twitch
+openclaw plugins install ./path/to/local/twitch-plugin
 ```
 
 ## Install (npm)
@@ -31,7 +31,7 @@ Minimal config (simplified single-account):
       accessToken: "oauth:abc123...", // OAuth Access Token (add oauth: prefix)
       clientId: "xyz789...", // Client ID from Token Generator
       channel: "vevisk", // Channel to join (required)
-      allowFrom: ["123456789"], // (recommended) Your Twitch user ID only (Convert your twitch username to ID at https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/)
+      allowFrom: ["123456789"], // (recommended) Your Twitch user ID only (Convert your twitch username to ID at https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
     },
   },
 }
@@ -74,7 +74,7 @@ Multi-account config (advanced):
 1. Create a dedicated Twitch account for the bot, then generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
-   - Copy the **Access Token** to `token` property
+   - Copy the **Access Token** to `accessToken` property
    - Copy the **Client ID** to `clientId` property
 2. Start the gateway
 

@@ -1,131 +1,269 @@
-import JSZip from "jszip";
+// Media store remote-source tests cover canonical guarded-fetch delegation.
 import fs from "node:fs/promises";
-import path from "node:path";
-import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "./store-network.test-support.js";
+import { saveMediaSource } from "./store.js";
 
-const realOs = await vi.importActual<typeof import("node:os")>("node:os");
-const HOME = path.join(realOs.tmpdir(), "openclaw-home-redirect");
-const mockRequest = vi.fn();
+const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
+const runtimeFetchMock = vi.hoisted(() => vi.fn());
 
-vi.doMock("node:os", () => ({
-  default: { homedir: () => HOME, tmpdir: () => realOs.tmpdir() },
-  homedir: () => HOME,
-  tmpdir: () => realOs.tmpdir(),
+vi.mock("./fetch.js", () => ({
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
+vi.mock("../infra/net/runtime-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/runtime-fetch.js")>()),
+  fetchWithRuntimeDispatcherOrMockedGlobal: runtimeFetchMock,
 }));
 
-vi.doMock("node:https", () => ({
-  request: (...args: unknown[]) => mockRequest(...args),
-}));
-vi.doMock("node:dns/promises", () => ({
-  lookup: async () => [{ address: "93.184.216.34", family: 4 }],
-}));
+async function useActualSaveRemoteMedia(url: string): Promise<void> {
+  const actual = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
+  const save = wrapStoreSaveRemoteMedia(actual.saveRemoteMedia);
+  saveRemoteMediaMock.mockImplementationOnce((options) =>
+    withStoreRemoteFixture(
+      { url, lookupFn: async () => [{ address: "93.184.216.34", family: 4 }] },
+      () => save(options),
+    ),
+  );
+}
 
-const loadStore = async () => await import("./store.js");
+describe("media store remote sources", () => {
+  let testState: OpenClawTestState;
 
-describe("media store redirects", () => {
   beforeAll(async () => {
-    await fs.rm(HOME, { recursive: true, force: true });
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-media-store-remote-",
+    });
   });
 
   beforeEach(() => {
-    mockRequest.mockReset();
-    vi.resetModules();
+    saveRemoteMediaMock.mockReset();
+    runtimeFetchMock.mockReset();
   });
 
   afterAll(async () => {
-    await fs.rm(HOME, { recursive: true, force: true });
-    vi.clearAllMocks();
+    disposeStoreRemoteFixtures();
+    await testState.cleanup();
   });
 
-  it("follows redirects and keeps detected mime/extension", async () => {
-    const { saveMediaSource } = await loadStore();
-    let call = 0;
-    mockRequest.mockImplementation((_url, _opts, cb) => {
-      call += 1;
-      const res = new PassThrough();
-      const req = {
-        on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") {
-            res.on("error", handler);
-          }
-          return req;
-        },
-        end: () => undefined,
-        destroy: () => res.destroy(),
-      } as const;
-
-      if (call === 1) {
-        res.statusCode = 302;
-        res.headers = { location: "https://example.com/final" };
-        setImmediate(() => {
-          cb(res as unknown);
-          res.end();
-        });
-      } else {
-        res.statusCode = 200;
-        res.headers = { "content-type": "text/plain" };
-        setImmediate(() => {
-          cb(res as unknown);
-          res.write("redirected");
-          res.end();
-        });
-      }
-
-      return req;
+  it("forwards the source contract to guarded fetch and keeps the SavedMedia shape", async () => {
+    const source = "https://example.com/files/report.txt";
+    const headers = { Authorization: "Bearer secret", Accept: "text/plain" };
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "stored.txt",
+      path: "/tmp/stored.txt",
+      size: 6,
+      contentType: "text/plain",
+      fileName: "report.txt",
     });
 
-    const saved = await saveMediaSource("https://example.com/start");
+    const saved = await saveMediaSource(source, headers, "remote", 1234);
 
-    expect(mockRequest).toHaveBeenCalledTimes(2);
-    expect(saved.contentType).toBe("text/plain");
-    expect(path.extname(saved.path)).toBe(".txt");
-    expect(await fs.readFile(saved.path, "utf8")).toBe("redirected");
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+      url: source,
+      requestInit: { headers },
+      filePathHint: source,
+      maxBytes: 1234,
+      maxRedirects: 5,
+      fetchImpl: expect.any(Function),
+      responseHeaderTimeoutMs: 30_000,
+      readIdleTimeoutMs: 30_000,
+      originalFilename: "_.txt",
+      subdir: "remote",
+    });
+    expect(saved).toStrictEqual({
+      id: "stored.txt",
+      path: "/tmp/stored.txt",
+      size: 6,
+      contentType: "text/plain",
+    });
   });
 
-  it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
-    const { saveMediaSource } = await loadStore();
-    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const res = new PassThrough();
-      const req = {
-        on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") {
-            res.on("error", handler);
-          }
-          return req;
-        },
-        end: () => undefined,
-        destroy: () => res.destroy(),
-      } as const;
+  it("rejects unsafe subdirectories before starting a remote fetch", async () => {
+    await expect(
+      saveMediaSource("https://example.com/file.bin", undefined, "../outside"),
+    ).rejects.toThrow("unsafe media subdir");
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+  });
 
-      res.statusCode = 200;
-      res.headers = {};
-      setImmediate(() => {
-        cb(res as unknown);
-        const zip = new JSZip();
-        zip.file(
-          "[Content_Types].xml",
-          '<Types><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
-        );
-        zip.file("xl/workbook.xml", "<workbook/>");
-        void zip
-          .generateAsync({ type: "nodebuffer" })
-          .then((buf) => {
-            res.write(buf);
-            res.end();
-          })
-          .catch((err) => {
-            res.destroy(err);
-          });
-      });
-
-      return req;
-    });
-
-    const saved = await saveMediaSource("https://example.com/download");
-    expect(saved.contentType).toBe(
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  it("preserves an unmapped URL suffix through the canonical public flow", async () => {
+    await useActualSaveRemoteMedia("https://example.com/files/report.custom?token=secret");
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("custom", {
+        status: 200,
+        headers: { "content-type": "application/x-custom" },
+      }),
     );
-    expect(path.extname(saved.path)).toBe(".xlsx");
+
+    const saved = await saveMediaSource(
+      "https://example.com/files/report.custom?token=secret",
+      undefined,
+      "remote",
+      1024,
+    );
+
+    expect(saved.id).toMatch(/^[a-f0-9-]{36}\.custom$/);
+    expect(saved.id).not.toContain("report");
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("custom");
   });
+
+  it("reports HTTP failure while cancelling a nonempty never-ending body", async () => {
+    await useActualSaveRemoteMedia("https://example.com/stalled-error.bin");
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("synthetic upstream failure"));
+          },
+          cancel,
+        }),
+        {
+          status: 500,
+          statusText: "Internal Server Error",
+        },
+      ),
+    );
+
+    await expect(saveMediaSource("https://example.com/stalled-error.bin")).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "http_error",
+      status: 500,
+      message:
+        "Failed to fetch media from https://example.com/stalled-error.bin: HTTP 500 Internal Server Error",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("reports real HTTP failures while closing discarded bodies and retaining readable bodies", async () => {
+    const media = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
+    const transport = await vi.importActual<typeof import("../infra/net/runtime-fetch.js")>(
+      "../infra/net/runtime-fetch.js",
+    );
+    saveRemoteMediaMock.mockImplementationOnce(wrapStoreSaveRemoteMedia(media.saveRemoteMedia));
+    runtimeFetchMock.mockImplementation(transport.fetchWithRuntimeDispatcher);
+    const responseClosed = createDeferredCore<boolean>();
+    const socketClosed = createDeferredCore();
+    const body = "synthetic upstream unavailable";
+
+    await withEnvAsync({ no_proxy: "127.0.0.1" }, () =>
+      withServer(
+        (request, response) => {
+          const leaveOpen = request.url === "/open-error";
+          if (leaveOpen) {
+            response.once("close", () => responseClosed.resolve(response.writableFinished));
+            request.socket.once("close", () => socketClosed.resolve());
+          }
+          response.writeHead(503, "Service Unavailable", { "content-type": "text/plain" });
+          if (leaveOpen) {
+            response.write(body);
+          } else {
+            response.end(body);
+          }
+        },
+        async (baseUrl) => {
+          const openUrl = `${baseUrl}/open-error`;
+          const matchedUrls: string[] = [];
+          const failure = await withStoreRemoteFixture(
+            { url: openUrl, onMatch: (url) => matchedUrls.push(url) },
+            () => saveMediaSource(openUrl, undefined, "real-http-error", 64),
+          ).catch((error: unknown) => error);
+          expect(matchedUrls).toEqual([openUrl]);
+          expect(failure).toMatchObject({
+            name: "MediaFetchError",
+            code: "http_error",
+            status: 503,
+          });
+          // The helper destroys remaining sockets on exit; observe closure before checking the message.
+          const [finished] = await Promise.all([responseClosed.promise, socketClosed.promise]);
+          expect(finished).toBe(false);
+          await expect(
+            fs.readdir(testState.statePath("media", "real-http-error")),
+          ).resolves.toEqual([]);
+
+          const closedUrl = `${baseUrl}/closed-error`;
+          await expect(
+            media.readRemoteMediaBuffer({
+              url: closedUrl,
+              fetchImpl: transport.fetchWithRuntimeDispatcher,
+              ssrfPolicy: { allowedOrigins: [baseUrl] },
+            }),
+          ).rejects.toMatchObject({
+            name: "MediaFetchError",
+            code: "http_error",
+            status: 503,
+            message: `Failed to fetch media from ${closedUrl}: HTTP 503 Service Unavailable; body: ${body}`,
+          });
+          expect(failure).toMatchObject({
+            message: `Failed to fetch media from ${openUrl}: HTTP 503 Service Unavailable`,
+          });
+        },
+      ),
+    );
+  });
+
+  it("keeps redirect cancellation and cross-origin header stripping in the guard", async () => {
+    await useActualSaveRemoteMedia("https://example.com/start");
+    const cancel = vi.fn();
+    runtimeFetchMock
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "https://cdn.example.com/asset.txt" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("redirected", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
+
+    const saved = await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+      Accept: "text/plain",
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    const secondInit = runtimeFetchMock.mock.calls[1]?.[1] as RequestInit;
+    const secondHeaders = new Headers(secondInit.headers);
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("text/plain");
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected");
+    const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
+    expect((await fs.stat(saved.path)).mode & 0o777).toBe(expectedMode);
+  });
+
+  it.each([
+    { name: "missing", location: undefined, expected: /missing location header/i },
+    { name: "malformed", location: "http://[", expected: /invalid url/i },
+  ])(
+    "rejects a $name redirect location after cancelling its body",
+    async ({ location, expected }) => {
+      await useActualSaveRemoteMedia("https://example.com/start");
+      const cancel = vi.fn();
+      runtimeFetchMock.mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: location ? { location } : undefined,
+        }),
+      );
+
+      await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(expected);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(runtimeFetchMock).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -1,3 +1,6 @@
+/**
+ * Gateway server discovery tests.
+ */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const getTailnetHostname = vi.hoisted(() => vi.fn());
@@ -12,7 +15,7 @@ describe("resolveTailnetDnsHint", () => {
   beforeEach(() => {
     prevTailnetDns.value = process.env.OPENCLAW_TAILNET_DNS;
     delete process.env.OPENCLAW_TAILNET_DNS;
-    getTailnetHostname.mockReset();
+    getTailnetHostname.mockClear();
   });
 
   afterEach(() => {

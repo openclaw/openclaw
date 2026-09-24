@@ -1,33 +1,50 @@
-import crypto from "node:crypto";
-import type { SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+/**
+ * Stable sandbox config hashing.
+ *
+ * Normalizes hash inputs so container reuse changes only when security, mount, workspace, or image policy changes.
+ */
+import { hashTextSha256 } from "./hash.js";
+import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+
+/**
+ * Stable sandbox config hashing for container reuse decisions.
+ *
+ * Undefined values and object key order are normalized so semantically equal
+ * configs keep the same hash while security epoch changes force recreation.
+ */
+export const SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH = "explicit-config-env-v1";
 
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
+  dockerEnvPolicyEpoch?: string;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  mountFormatVersion: number;
+  createArgsEpoch: string;
+  managedMounts?: readonly string[];
 };
 
-function isPrimitive(value: unknown): value is string | number | boolean | bigint | symbol | null {
-  return value === null || (typeof value !== "object" && typeof value !== "function");
-}
+type SandboxBrowserHashInput = SandboxHashInput & {
+  browser: Pick<
+    SandboxBrowserConfig,
+    | "cdpPort"
+    | "cdpSourceRange"
+    | "vncPort"
+    | "noVncPort"
+    | "headless"
+    | "noVncEnabled"
+    | "autoStartTimeoutMs"
+  >;
+  securityEpoch: string;
+};
+
 function normalizeForHash(value: unknown): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
   if (Array.isArray(value)) {
-    const normalized = value
-      .map(normalizeForHash)
-      .filter((item): item is unknown => item !== undefined);
-    const primitives = normalized.filter(isPrimitive);
-    if (primitives.length === normalized.length) {
-      return [...primitives].toSorted((a, b) =>
-        primitiveToString(a).localeCompare(primitiveToString(b)),
-      );
-    }
-    return normalized;
+    return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
   }
   if (value && typeof value === "object") {
+    // Sort object keys recursively so JSON serialization is deterministic.
     const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
     const normalized: Record<string, unknown> = {};
     for (const [key, entryValue] of entries) {
@@ -41,24 +58,18 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
-function primitiveToString(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  return JSON.stringify(value);
+/** Computes the sandbox container config hash. */
+export function computeSandboxConfigHash(input: SandboxHashInput): string {
+  return computeHash(input);
 }
 
-export function computeSandboxConfigHash(input: SandboxHashInput): string {
+/** Computes the browser-enabled sandbox container config hash. */
+export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
+  return computeHash(input);
+}
+
+function computeHash(input: unknown): string {
   const payload = normalizeForHash(input);
   const raw = JSON.stringify(payload);
-  return crypto.createHash("sha1").update(raw).digest("hex");
+  return hashTextSha256(raw);
 }

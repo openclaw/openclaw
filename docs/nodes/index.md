@@ -1,342 +1,131 @@
 ---
-summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/system"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
-  - Pairing iOS/Android nodes to a gateway
-  - Using node canvas/camera for agent context
+  - Pairing iOS/watchOS/Android nodes to a gateway
+  - Enabling isolated OpenClaw session hosting on a paired node
+  - Using node camera or screen capture for agent context
+  - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
 title: "Nodes"
+doc-schema-version: 1
 ---
 
-# Nodes
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
-A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
+macOS can also run in **node mode**: the menu bar app connects to the Gateway's
+WS server as one node (so `openclaw nodes …` works against this Mac). The app
+adds native widget-panel, camera, screen, notification, and computer-control commands
+to the same node-host command surface used by `openclaw node run`. Do not start a
+second CLI node on that Mac; the app runs the matching CLI node-host runtime as
+an internal worker and remains the sole Gateway connection and node identity.
+The app's **Instances** UI shows each device under a friendly hardware name; see
+[Device model database](/reference/device-models) for how Apple model
+identifiers are vendored and mapped.
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
+Nodes are **peripherals**, not gateways: they don't run the gateway service, and channel messages (Telegram, WhatsApp, etc.) land on the gateway, not on nodes.
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
-Notes:
+## Node pages
 
-- Nodes are **peripherals**, not gateways. They don’t run the gateway service.
-- Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
-- Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
+Set up a node:
 
-## Pairing + status
+- [Node pairing and status](/nodes/pairing-and-status) - Approve a node, read its status and host stats, and upgrade a fleet in order.
+- [Run a node host](/nodes/node-host) - Foreground, service, SSH-tunnel, and headless hosts, their identity state, and system commands.
 
-**WS nodes use device pairing.** Nodes present a device identity during `connect`; the Gateway
-creates a device pairing request for `role: node`. Approve via the devices CLI (or UI).
+Give a node work:
 
-Quick CLI:
+- [Run commands on a node](/nodes/node-exec) - Allowlist commands, point exec at a node, invoke raw RPC, and bind a target.
+- [Node-hosted MCP servers and skills](/nodes/mcp-and-skills) - Publish MCP tools, skills, and local model inference from the node machine.
+- [Host OpenClaw sessions on a node](/nodes/session-hosting) - Worker session hosting, device placement, capacity, and container isolation.
+- [Node session catalogs](/nodes/session-catalogs) - Codex, Claude, OpenCode, and Pi sessions discovered on the Gateway and paired nodes.
+- [Node file transfers](/nodes/file-transfers) - Terminal uploads and the File Transfer plugin's directory listing, fetch, and write tools.
 
-```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
-openclaw nodes status
-openclaw nodes describe --node <idOrNameOrIp>
-```
+Govern and invoke device capabilities:
 
-Notes:
+- [Node command policy](/nodes/command-policy) - Platform default allowlists, dangerous-command opt-ins, and the `gateway.nodes` config.
+- [Node device commands](/nodes/device-commands) - Widget panel, camera, screen recording, location, SMS, and device data helpers.
 
-- `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
-  node pairing store; it does **not** gate the WS `connect` handshake.
+Node capabilities in depth:
 
-## Remote node host (system.run)
+- [Active computer presence](/nodes/presence) - Which Mac the Gateway treats as active, and where node alerts land.
+- [Camera capture](/nodes/camera) - Per-platform photo and clip limits and the capture pipeline.
+- [Computer use](/nodes/computer-use) - Desktop control on a paired node, and the gates around it.
+- [Location command](/nodes/location-command) - Full parameter and response shape for `location.get`.
+- [Talk mode](/nodes/talk) - Live voice conversation on a node.
+- [Voice wake](/nodes/voicewake) - Wake-word capture on a node.
+- [Media understanding](/nodes/media-understanding) - How the agent reads node-captured media.
+- [Media playback](/nodes/media-playback) - Playing audio and video through a node.
+- [Image and media support](/nodes/images) - Image formats and attachment handling.
+- [Audio and voice notes](/nodes/audio) - Audio capture and voice-note handling.
+- [Node troubleshooting](/nodes/troubleshooting) - Pairing, foreground, permission, and tool failures.
+- [`openclaw nodes`](/cli/nodes) - CLI reference for listing, inspecting, and managing nodes.
 
-Use a **node host** when your Gateway runs on one machine and you want commands
-to execute on another. The model still talks to the **gateway**; the gateway
-forwards `exec` calls to the **node host** when `host=node` is selected.
+## Where each section moved
 
-### What runs where
+Every anchor this page used to publish still resolves here. Each entry below carries the original anchor and links to its new home.
 
-- **Gateway host**: receives messages, runs the model, routes tool calls.
-- **Node host**: executes `system.run`/`system.which` on the node machine.
-- **Approvals**: enforced on the node host via `~/.openclaw/exec-approvals.json`.
+**[Node pairing and status](/nodes/pairing-and-status)**
 
-### Start a node host (foreground)
+- <a id="pairing-%2B-status" /><a id="pairing-+-status" />[Pairing + status](/nodes/pairing-and-status#pairing-+-status)
+- <a id="version-skew-and-upgrade-order" />[Version skew and upgrade order](/nodes/pairing-and-status#version-skew-and-upgrade-order)
 
-On the node machine:
+**[Run a node host](/nodes/node-host)**
 
-```bash
-openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
-```
+- <a id="remote-node-host-(system.run)" /><a id="remote-node-host-system-run" />[Remote node host (system.run)](/nodes/node-host#remote-node-host-system-run)
+- <a id="gateway-deployments-that-cannot-host-nodes" />[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes)
+- <a id="start-a-node-host-(foreground)" /><a id="start-a-node-host-foreground" />[Start a node host (foreground)](/nodes/node-host#start-a-node-host-foreground)
+- <a id="remote-gateway-via-ssh-tunnel-(loopback-bind)" /><a id="remote-gateway-via-ssh-tunnel-loopback-bind" />[Remote gateway via SSH tunnel (loopback bind)](/nodes/node-host#remote-gateway-via-ssh-tunnel-loopback-bind)
+- <a id="restrict-the-node-command-surface" />[Restrict the node command surface](/nodes/node-host#restrict-the-node-command-surface)
+- <a id="start-a-node-host-(service)" /><a id="start-a-node-host-service" />[Start a node host (service)](/nodes/node-host#start-a-node-host-service)
+- <a id="pair-%2B-name" /><a id="pair-+-name" />[Pair + name](/nodes/node-host#pair-+-name)
+- <a id="headless-identity-state" />[Headless identity state](/nodes/node-host#headless-identity-state)
+- <a id="system-commands-(node-host-%2F-mac-node)" /><a id="system-commands-node-host-/-mac-node" />[System commands (node host / mac node)](/nodes/node-host#system-commands-node-host-/-mac-node)
+- <a id="headless-node-host-(cross-platform)" /><a id="headless-node-host-cross-platform" />[Headless node host (cross-platform)](/nodes/node-host#headless-node-host-cross-platform)
+- <a id="mac-node-mode" />[Mac node mode](/nodes/node-host#mac-node-mode)
 
-### Remote gateway via SSH tunnel (loopback bind)
+**[Node-hosted MCP servers and skills](/nodes/mcp-and-skills)**
 
-If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode),
-remote node hosts cannot connect directly. Create an SSH tunnel and point the
-node host at the local end of the tunnel.
+- <a id="node-hosted-mcp-servers" />[Node-hosted MCP servers](/nodes/mcp-and-skills#node-hosted-mcp-servers)
+- <a id="node-hosted-skills" />[Node-hosted skills](/nodes/mcp-and-skills#node-hosted-skills)
+- <a id="local-model-inference" />[Local model inference](/nodes/mcp-and-skills#local-model-inference)
 
-Example (node host -> gateway host):
+**[Run commands on a node](/nodes/node-exec)**
 
-```bash
-# Terminal A (keep running): forward local 18790 -> gateway 127.0.0.1:18789
-ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
+- <a id="allowlist-the-commands" />[Allowlist the commands](/nodes/node-exec#allowlist-the-commands)
+- <a id="point-exec-at-the-node" />[Point exec at the node](/nodes/node-exec#point-exec-at-the-node)
+- <a id="invoking-commands" />[Invoking commands](/nodes/node-exec#invoking-commands)
+- <a id="exec-node-binding" />[Exec node binding](/nodes/node-exec#exec-node-binding)
 
-# Terminal B: export the gateway token and connect through the tunnel
-export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
-```
+**[Node session catalogs](/nodes/session-catalogs)**
 
-Notes:
+- <a id="codex-sessions-and-transcripts" />[Codex sessions and transcripts](/nodes/session-catalogs#codex-sessions-and-transcripts)
+- <a id="claude-sessions-and-transcripts" />[Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
+- <a id="opencode-and-pi-sessions" />[OpenCode and Pi sessions](/nodes/session-catalogs#opencode-and-pi-sessions)
 
-- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
-- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
+- <a id="openclaw-sessions-and-transcripts" />[OpenClaw sessions and transcripts](/nodes/session-catalogs#openclaw-sessions-and-transcripts)
 
-### Start a node host (service)
+**[Host OpenClaw sessions on a node](/nodes/session-hosting)**
 
-```bash
-openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
-openclaw node restart
-```
+- <a id="host-openclaw-sessions" />[Host OpenClaw sessions](/nodes/session-hosting#host-openclaw-sessions)
+- <a id="isolate-hosted-worker-sessions-in-containers" />[Isolate hosted worker sessions in containers](/nodes/session-hosting#isolate-hosted-worker-sessions-in-containers)
 
-### Pair + name
+**[Node file transfers](/nodes/file-transfers)**
 
-On the gateway host:
+- <a id="terminal-file-uploads" />[Terminal file uploads](/nodes/file-transfers#terminal-file-uploads)
+- <a id="agent-file-transfers" />[Agent file transfers](/nodes/file-transfers#agent-file-transfers)
 
-```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes list
-```
+**[Node command policy](/nodes/command-policy)**
 
-Naming options:
+- <a id="command-policy" />[Command policy](/nodes/command-policy#command-policy)
+- <a id="config-(openclaw.json)" /><a id="config-openclaw-json" />[Config (`openclaw.json`)](/nodes/command-policy#config-openclaw-json)
+- <a id="permissions-map" />[Permissions map](/nodes/command-policy#permissions-map)
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node).
-- `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
+**[Node device commands](/nodes/device-commands)**
 
-### Allowlist the commands
-
-Exec approvals are **per node host**. Add allowlist entries from the gateway:
-
-```bash
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
-openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
-```
-
-Approvals live on the node host at `~/.openclaw/exec-approvals.json`.
-
-### Point exec at the node
-
-Configure defaults (gateway config):
-
-```bash
-openclaw config set tools.exec.host node
-openclaw config set tools.exec.security allowlist
-openclaw config set tools.exec.node "<id-or-name>"
-```
-
-Or per session:
-
-```
-/exec host=node security=allowlist node=<id-or-name>
-```
-
-Once set, any `exec` call with `host=node` runs on the node host (subject to the
-node allowlist/approvals).
-
-Related:
-
-- [Node host CLI](/cli/node)
-- [Exec tool](/tools/exec)
-- [Exec approvals](/tools/exec-approvals)
-
-## Invoking commands
-
-Low-level (raw RPC):
-
-```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
-```
-
-Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
-
-## Screenshots (canvas snapshots)
-
-If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
-
-CLI helper (writes to a temp file and prints `MEDIA:<path>`):
-
-```bash
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format png
-openclaw nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
-```
-
-### Canvas controls
-
-```bash
-openclaw nodes canvas present --node <idOrNameOrIp> --target https://example.com
-openclaw nodes canvas hide --node <idOrNameOrIp>
-openclaw nodes canvas navigate https://example.com --node <idOrNameOrIp>
-openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
-```
-
-Notes:
-
-- `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
-- `canvas eval` accepts inline JS (`--js`) or a positional arg.
-
-### A2UI (Canvas)
-
-```bash
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --text "Hello"
-openclaw nodes canvas a2ui push --node <idOrNameOrIp> --jsonl ./payload.jsonl
-openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
-```
-
-Notes:
-
-- Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
-
-## Photos + videos (node camera)
-
-Photos (`jpg`):
-
-```bash
-openclaw nodes camera list --node <idOrNameOrIp>
-openclaw nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
-openclaw nodes camera snap --node <idOrNameOrIp> --facing front
-```
-
-Video clips (`mp4`):
-
-```bash
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 10s
-openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
-```
-
-Notes:
-
-- The node must be **foregrounded** for `canvas.*` and `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
-- Clip duration is clamped (currently `<= 60s`) to avoid oversized base64 payloads.
-- Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
-
-## Screen recordings (nodes)
-
-Nodes expose `screen.record` (mp4). Example:
-
-```bash
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
-```
-
-Notes:
-
-- `screen.record` requires the node app to be foregrounded.
-- Android will show the system screen-capture prompt before recording.
-- Screen recordings are clamped to `<= 60s`.
-- `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
-- Use `--screen <index>` to select a display when multiple screens are available.
-
-## Location (nodes)
-
-Nodes expose `location.get` when Location is enabled in settings.
-
-CLI helper:
-
-```bash
-openclaw nodes location get --node <idOrNameOrIp>
-openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
-```
-
-Notes:
-
-- Location is **off by default**.
-- “Always” requires system permission; background fetch is best-effort.
-- The response includes lat/lon, accuracy (meters), and timestamp.
-
-## SMS (Android nodes)
-
-Android nodes can expose `sms.send` when the user grants **SMS** permission and the device supports telephony.
-
-Low-level invoke:
-
-```bash
-openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from OpenClaw"}'
-```
-
-Notes:
-
-- The permission prompt must be accepted on the Android device before the capability is advertised.
-- Wi-Fi-only devices without telephony will not advertise `sms.send`.
-
-## System commands (node host / mac node)
-
-The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`.
-The headless node host exposes `system.run`, `system.which`, and `system.execApprovals.get/set`.
-
-Examples:
-
-```bash
-openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
-```
-
-Notes:
-
-- `system.run` returns stdout/stderr/exit code in the payload.
-- `system.notify` respects notification permission state on the macOS app.
-- `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
-- `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- macOS nodes drop `PATH` overrides; headless node hosts only accept `PATH` when it prepends the node host PATH.
-- On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
-  Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
-- On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).
-
-## Exec node binding
-
-When multiple nodes are available, you can bind exec to a specific node.
-This sets the default node for `exec host=node` (and can be overridden per agent).
-
-Global default:
-
-```bash
-openclaw config set tools.exec.node "node-id-or-name"
-```
-
-Per-agent override:
-
-```bash
-openclaw config get agents.list
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
-```
-
-Unset to allow any node:
-
-```bash
-openclaw config unset tools.exec.node
-openclaw config unset agents.list[0].tools.exec.node
-```
-
-## Permissions map
-
-Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by permission name (e.g. `screenRecording`, `accessibility`) with boolean values (`true` = granted).
-
-## Headless node host (cross-platform)
-
-OpenClaw can run a **headless node host** (no UI) that connects to the Gateway
-WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
-or for running a minimal node alongside a server.
-
-Start it:
-
-```bash
-openclaw node run --host <gateway-host> --port 18789
-```
-
-Notes:
-
-- Pairing is still required (the Gateway will show a node approval prompt).
-- The node host stores its node id, token, display name, and gateway connection info in `~/.openclaw/node.json`.
-- Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json`
-  (see [Exec approvals](/tools/exec-approvals)).
-- On macOS, the headless node host prefers the companion app exec host when reachable and falls
-  back to local execution if the app is unavailable. Set `OPENCLAW_NODE_EXEC_HOST=app` to require
-  the app, or `OPENCLAW_NODE_EXEC_FALLBACK=0` to disable fallback.
-- Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
-
-## Mac node mode
-
-- The macOS menubar app connects to the Gateway WS server as a node (so `openclaw nodes …` works against this Mac).
-- In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.
+- <a id="macos-widget-panel" />[macOS widget panel](/nodes/device-commands#macos-widget-panel)
+- <a id="photos-%2B-videos-(node-camera)" /><a id="photos-+-videos-node-camera" />[Photos + videos (node camera)](/nodes/device-commands#photos-+-videos-node-camera)
+- <a id="screen-recordings-(nodes)" /><a id="screen-recordings-nodes" />[Screen recordings (nodes)](/nodes/device-commands#screen-recordings-nodes)
+- <a id="location-(nodes)" /><a id="location-nodes" />[Location (nodes)](/nodes/device-commands#location-nodes)
+- <a id="sms-(android-nodes)" /><a id="sms-android-nodes" />[SMS (Android nodes)](/nodes/device-commands#sms-android-nodes)
+- <a id="device-and-personal-data-commands" />[Device and personal data commands](/nodes/device-commands#device-and-personal-data-commands)

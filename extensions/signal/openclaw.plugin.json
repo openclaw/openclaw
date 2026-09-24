@@ -1,6 +1,18 @@
 {
   "id": "signal",
+  "categories": ["channels"],
+  "name": "Signal",
+  "description": "OpenClaw Signal channel plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["signal"],
+  "channelAccountKeyPolicies": {
+    "signal": { "canonicalAliasesRequireOwnField": "account" }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

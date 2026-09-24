@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawChatUI
 import SwiftUI
 
 struct TalkOverlayView: View {
@@ -30,14 +31,16 @@ struct TalkOverlayView: View {
                         TalkModeController.shared.exitTalkMode()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Color.white.opacity(0.95))
-                            .frame(width: 18, height: 18)
+                            .frame(width: 28, height: 28)
                             .background(Color.black.opacity(0.4))
                             .clipShape(Circle())
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
-                    .contentShape(Circle())
+                    .help("Stop Talk Mode")
+                    .accessibilityLabel("Stop Talk Mode")
                     .offset(x: -2, y: -2)
                     .opacity(self.hoveringWindow ? 1 : 0)
                     .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
@@ -53,18 +56,7 @@ struct TalkOverlayView: View {
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private var seamColor: Color {
-        Self.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
-    }
-
-    private static func color(fromHex raw: String?) -> Color? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
+        ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex) ?? Self.defaultSeamColor
     }
 }
 
@@ -99,8 +91,13 @@ private final class OrbInteractionNSView: NSView {
     private var didDrag = false
     private var suppressSingleClick = false
 
-    override var acceptsFirstResponder: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func mouseDown(with event: NSEvent) {
         self.mouseDownEvent = event
@@ -140,32 +137,39 @@ private struct TalkOrbView: View {
     let isPaused: Bool
 
     var body: some View {
-        if self.isPaused {
+        ZStack {
             Circle()
                 .fill(self.orbGradient)
-                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
-                .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 5)
-        } else {
-            TimelineView(.animation) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let listenScale = self.phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
-                let pulse = self.phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
+                .overlay(Circle().stroke(Color.white.opacity(self.isPaused ? 0.35 : 0.45), lineWidth: 1))
+                .shadow(color: Color.black.opacity(self.isPaused ? 0.18 : 0.22), radius: 10, x: 0, y: 5)
+                .scaleEffect(self.orbScale)
 
-                ZStack {
-                    Circle()
-                        .fill(self.orbGradient)
-                        .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1))
-                        .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 5)
-                        .scaleEffect(pulse * listenScale)
-
-                    TalkWaveRings(phase: self.phase, level: self.level, time: t, accent: self.accent)
-
-                    if self.phase == .thinking {
-                        TalkOrbitArcs(time: t)
-                    }
-                }
+            if !self.isPaused {
+                // The universal talk waveform (shared with iOS/watchOS/Android)
+                // rendered inside the orb; the level is real mic/playback audio.
+                // 0.82 x 0.56 keeps the wave rect's corners inside the orb circle.
+                TalkWaveformView(phase: self.wavePhase, palette: .talkOrb)
+                    .frame(
+                        width: TalkOverlayController.orbSize * 0.82,
+                        height: TalkOverlayController.orbSize * 0.56)
+                    .accessibilityHidden(true)
             }
         }
+        .animation(.easeOut(duration: 0.12), value: self.orbScale)
+    }
+
+    private var wavePhase: TalkWaveformPhase {
+        switch self.phase {
+        case .idle: .idle
+        case .thinking: .thinking
+        case .listening: .listening(level: self.level, speechActive: false)
+        case .speaking: .speaking(level: self.level)
+        }
+    }
+
+    private var orbScale: CGFloat {
+        guard !self.isPaused, self.phase == .listening || self.phase == .speaking else { return 1 }
+        return 1 + CGFloat(self.level) * 0.08
     }
 
     private var orbGradient: RadialGradient {
@@ -177,44 +181,17 @@ private struct TalkOrbView: View {
     }
 }
 
-private struct TalkWaveRings: View {
-    let phase: TalkModePhase
-    let level: Double
-    let time: TimeInterval
-    let accent: Color
-
-    var body: some View {
-        ZStack {
-            ForEach(0..<3, id: \.self) { idx in
-                let speed = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : 0.6
-                let progress = (time * speed + Double(idx) * 0.28).truncatingRemainder(dividingBy: 1)
-                let amplitude = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self
-                    .level * 0.7 : 0.35
-                let scale = 0.75 + progress * amplitude + (self.phase == .listening ? self.level * 0.15 : 0)
-                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : 0.4
-                Circle()
-                    .stroke(self.accent.opacity(alpha - progress * 0.3), lineWidth: 1.6)
-                    .scaleEffect(scale)
-                    .opacity(alpha - progress * 0.6)
-            }
-        }
-    }
-}
-
-private struct TalkOrbitArcs: View {
-    let time: TimeInterval
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .trim(from: 0.08, to: 0.26)
-                .stroke(Color.white.opacity(0.88), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-                .rotationEffect(.degrees(self.time * 42))
-            Circle()
-                .trim(from: 0.62, to: 0.86)
-                .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                .rotationEffect(.degrees(-self.time * 35))
-        }
-        .scaleEffect(1.08)
-    }
+extension TalkWaveformPalette {
+    /// High-contrast wave tones for the tinted orb background.
+    fileprivate static let talkOrb = TalkWaveformPalette(
+        active: [
+            Color.white,
+            Color(white: 0.9),
+            Color(white: 0.72),
+        ],
+        inactive: [
+            Color.white.opacity(0.7),
+            Color.white.opacity(0.55),
+            Color.white.opacity(0.4),
+        ])
 }

@@ -1,36 +1,23 @@
-export type PluginEntryConfig = {
-  enabled?: boolean;
-  config?: Record<string, unknown>;
-};
+// Defines plugin entry and install configuration types.
 
-export type PluginSlotsConfig = {
-  /** Select which plugin owns the memory slot ("none" disables memory plugins). */
-  memory?: string;
-};
+import type { z } from "zod";
+import type { PluginAcceptedDeclaredSurface, PluginInstallRecord } from "./zod-schema.installs.js";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
+export type { PluginAcceptedDeclaredSurface, PluginInstallRecord };
 
-export type PluginsLoadConfig = {
-  /** Additional plugin/extension paths to load. */
-  paths?: string[];
-};
+type PluginsSchemaInput = NonNullable<z.input<typeof OpenClawSchemaShape.plugins>>;
 
-export type PluginInstallRecord = {
-  source: "npm" | "archive" | "path";
-  spec?: string;
-  sourcePath?: string;
-  installPath?: string;
-  version?: string;
-  installedAt?: string;
-};
+export type PluginEntryConfig = NonNullable<PluginsSchemaInput["entries"]>[string];
 
-export type PluginsConfig = {
-  /** Enable or disable plugin loading. */
-  enabled?: boolean;
-  /** Optional plugin allowlist (plugin ids). */
-  allow?: string[];
-  /** Optional plugin denylist (plugin ids). */
-  deny?: string[];
-  load?: PluginsLoadConfig;
-  slots?: PluginSlotsConfig;
-  entries?: Record<string, PluginEntryConfig>;
+export type PluginSlotsConfig = NonNullable<PluginsSchemaInput["slots"]>;
+
+export type PluginsLoadConfig = NonNullable<PluginsSchemaInput["load"]>;
+
+export type PluginsConfig = PluginsSchemaInput & {
+  /**
+   * Internal transient carrier for plugin install records during command flows.
+   * This is intentionally omitted from the config schema and must not be
+   * persisted to openclaw.json.
+   */
   installs?: Record<string, PluginInstallRecord>;
 };

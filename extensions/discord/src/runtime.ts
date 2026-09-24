@@ -1,14 +1,12 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setDiscordRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getDiscordRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Discord runtime not initialized");
-  }
-  return runtime;
-}
+const {
+  setRuntime: setDiscordRuntime,
+  tryGetRuntime: getOptionalDiscordRuntime,
+  getRuntime: getDiscordRuntime,
+} = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "discord",
+  errorMessage: "Discord runtime not initialized",
+});
+export { getDiscordRuntime, getOptionalDiscordRuntime, setDiscordRuntime };

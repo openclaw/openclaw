@@ -1,0 +1,336 @@
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveEffectiveAgentRuntime,
+  resolveStoredModelOverride,
+  serializeCommandArgs,
+  type ChatCommandDefinition,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  Container,
+  TextDisplay,
+  type AutocompleteInteraction,
+  type ButtonInteraction,
+  type CommandInteraction,
+  type StringSelectMenuInteraction,
+} from "../internal/discord.js";
+import {
+  readDiscordModelPickerRecentModels,
+  type DiscordModelPickerPreferenceScope,
+} from "./model-picker-preferences.js";
+import {
+  findProviderBucketLocation,
+  loadDiscordModelPickerData,
+  resolveDiscordModelPickerPageForModel,
+  type DiscordModelPickerCommandContext,
+} from "./model-picker.state.js";
+import { renderDiscordModelPickerModelsView } from "./model-picker.view.js";
+import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
+import type { SafeDiscordInteractionCall } from "./native-command-ui.types.js";
+import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
+import type { ThreadBindingManager } from "./thread-bindings.js";
+
+type DiscordNativeChoiceInteraction =
+  | AutocompleteInteraction
+  | CommandInteraction
+  | ButtonInteraction
+  | StringSelectMenuInteraction;
+
+export function shouldOpenDiscordModelPickerFromCommand(params: {
+  command: ChatCommandDefinition;
+  commandArgs?: CommandArgs;
+}): DiscordModelPickerCommandContext | null {
+  const context = normalizeLowercaseStringOrEmpty(params.command.nativeName ?? params.command.key);
+  if (context !== "model" && context !== "models") {
+    return null;
+  }
+
+  const serializedArgs =
+    normalizeOptionalString(serializeCommandArgs(params.command, params.commandArgs)) ?? "";
+  if (context === "model") {
+    const modelValue = normalizeOptionalString(params.commandArgs?.values?.model);
+    return !modelValue && !serializedArgs ? context : null;
+  }
+
+  return serializedArgs ? null : context;
+}
+
+export function buildDiscordModelPickerAllowedModelRefs(
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const provider of data.providers) {
+    const models = data.byProvider.get(provider);
+    if (!models) {
+      continue;
+    }
+    for (const model of models) {
+      out.add(`${provider}/${model}`);
+    }
+  }
+  return out;
+}
+
+export function resolveDiscordModelPickerPreferenceScope(params: {
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  accountId: string;
+  userId: string;
+}): DiscordModelPickerPreferenceScope {
+  return {
+    accountId: params.accountId,
+    guildId: params.interaction.guild?.id ?? undefined,
+    userId: params.userId,
+  };
+}
+
+export function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+  return {
+    components: [new Container([new TextDisplay(message)])],
+  };
+}
+
+export async function resolveDiscordModelPickerRoute(params: {
+  interaction: DiscordNativeChoiceInteraction;
+  cfg: OpenClawConfig;
+  accountId: string;
+  threadBindings: ThreadBindingManager;
+}) {
+  const { interaction, cfg, accountId } = params;
+  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
+    await resolveDiscordNativeInteractionChannelContext({
+      channel: interaction.channel,
+      client: interaction.client,
+      hasGuild: Boolean(interaction.guild),
+      channelIdFallback: interaction.rawData.channel_id ?? "unknown",
+    });
+  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
+    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    : [];
+
+  const threadBinding = isThreadChannel
+    ? params.threadBindings.getByThreadId(rawChannelId)
+    : undefined;
+  return resolveDiscordNativeInteractionRouteState({
+    cfg,
+    accountId,
+    guildId: interaction.guild?.id ?? undefined,
+    memberRoleIds,
+    isDirectMessage,
+    isGroupDm,
+    directUserId: interaction.user?.id ?? rawChannelId,
+    conversationId: rawChannelId,
+    parentConversationId: threadParentId,
+    threadBinding,
+  }).effectiveRoute;
+}
+
+export async function resolveDiscordNativeChoiceContext(params: {
+  interaction: DiscordNativeChoiceInteraction;
+  cfg: OpenClawConfig;
+  accountId: string;
+  threadBindings: ThreadBindingManager;
+  route?: ResolvedAgentRoute;
+}): Promise<{
+  provider?: string;
+  model?: string;
+  agentRuntime?: string;
+  agentId: string;
+} | null> {
+  try {
+    const route = params.route ?? (await resolveDiscordModelPickerRoute(params));
+    const fallback = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: route.agentId,
+    });
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const sessionEntry = getSessionEntry({ storePath, sessionKey: route.sessionKey });
+    const override = resolveStoredModelOverride({
+      sessionEntry,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+      sessionKey: route.sessionKey,
+      defaultProvider: fallback.provider,
+    });
+    const provider = override?.provider || fallback.provider;
+    const model = override?.model || fallback.model;
+    return {
+      provider,
+      model,
+      agentId: route.agentId,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider,
+        modelId: model,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        sessionEntry,
+      }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function resolveDiscordModelPickerCurrentModel(params: {
+  cfg: OpenClawConfig;
+  route: ResolvedAgentRoute;
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
+}): string {
+  const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionEntry = getSessionEntry({
+      storePath,
+      sessionKey: params.route.sessionKey,
+      readConsistency: "latest",
+    });
+    const override = resolveStoredModelOverride({
+      sessionEntry,
+      loadSessionEntry: (sessionKey) =>
+        getSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+      sessionKey: params.route.sessionKey,
+      defaultProvider: params.data.resolvedDefault.provider,
+    });
+    if (!override?.model) {
+      return fallback;
+    }
+    const provider = (override.provider || params.data.resolvedDefault.provider).trim();
+    if (!provider) {
+      return fallback;
+    }
+    return `${provider}/${override.model}`;
+  } catch {
+    return fallback;
+  }
+}
+
+export function resolveDiscordModelPickerCurrentRuntime(params: {
+  cfg: OpenClawConfig;
+  route: ResolvedAgentRoute;
+}): string {
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionRuntime = normalizeOptionalString(
+      getSessionEntry({
+        storePath,
+        sessionKey: params.route.sessionKey,
+        readConsistency: "latest",
+      })?.agentRuntimeOverride,
+    );
+    if (sessionRuntime) {
+      return sessionRuntime;
+    }
+  } catch {}
+
+  return "auto";
+}
+
+export async function replyWithDiscordModelPickerProviders(params: {
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  cfg: OpenClawConfig;
+  command: DiscordModelPickerCommandContext;
+  userId: string;
+  accountId: string;
+  threadBindings: ThreadBindingManager;
+  preferFollowUp: boolean;
+  safeInteractionCall: SafeDiscordInteractionCall;
+}) {
+  const route = await resolveDiscordModelPickerRoute({
+    interaction: params.interaction,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    threadBindings: params.threadBindings,
+  });
+  const sessionEntry = getSessionEntry({
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: route.agentId }),
+    sessionKey: route.sessionKey,
+    readConsistency: "latest",
+  });
+  const data = await loadDiscordModelPickerData(params.cfg, route.agentId, { sessionEntry });
+  const currentModel = resolveDiscordModelPickerCurrentModel({
+    cfg: params.cfg,
+    route,
+    data,
+  });
+  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
+    cfg: params.cfg,
+    route,
+  });
+  const quickModels = await readDiscordModelPickerRecentModels({
+    scope: resolveDiscordModelPickerPreferenceScope({
+      interaction: params.interaction,
+      accountId: params.accountId,
+      userId: params.userId,
+    }),
+    allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
+    limit: 5,
+  });
+  const parsedCurrentRef = splitDiscordModelRef(currentModel ?? "");
+  const initialProvider =
+    parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
+      ? parsedCurrentRef.provider
+      : (data.providers[0] ?? data.resolvedDefault.provider);
+  const initialResolved =
+    parsedCurrentRef && parsedCurrentRef.provider === initialProvider
+      ? resolveDiscordModelPickerPageForModel({
+          data,
+          provider: initialProvider,
+          model: parsedCurrentRef.model,
+        })
+      : { page: 1 };
+  const initialPage = initialResolved.page;
+  const initialModelBucket = initialResolved.bucket;
+  const initialProviderLocation = findProviderBucketLocation(data, initialProvider);
+
+  const rendered = renderDiscordModelPickerModelsView({
+    command: params.command,
+    userId: params.userId,
+    data,
+    provider: initialProvider,
+    page: initialPage,
+    providerPage: initialProviderLocation?.page ?? 1,
+    providerBucket: initialProviderLocation?.bucket,
+    modelBucket: initialModelBucket,
+    currentModel,
+    currentRuntime,
+    quickModels,
+  });
+  const payload = {
+    ...rendered,
+    ephemeral: true,
+  };
+
+  await params.safeInteractionCall("model picker reply", async () => {
+    if (params.preferFollowUp) {
+      await params.interaction.followUp(payload);
+      return;
+    }
+    await params.interaction.reply(payload);
+  });
+}
+
+export function splitDiscordModelRef(modelRef: string): { provider: string; model: string } | null {
+  const trimmed = modelRef.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
+    return null;
+  }
+  const provider = trimmed.slice(0, slashIndex).trim();
+  const model = trimmed.slice(slashIndex + 1).trim();
+  if (!provider || !model) {
+    return null;
+  }
+  return { provider, model };
+}

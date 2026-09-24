@@ -1,130 +1,2294 @@
-import { describe, expect, test } from "vitest";
+// Session patch tests cover model/provider edits, subagent patching, provider
+// aliases, model catalog validation, and rejected invalid patch payloads.
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
+import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
+import { projectSessionsPatchEntry } from "./sessions-patch.js";
+
+async function applySessionsPatchToStore(
+  params: Omit<
+    Parameters<typeof projectSessionsPatchEntry>[0],
+    "existingEntry" | "isLabelInUse"
+  > & {
+    store: Record<string, SessionEntry>;
+    loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  },
+) {
+  const load = params.loadGatewayModelCatalog;
+  const projected = await projectSessionsPatchEntry({
+    ...params,
+    loadGatewayModelCatalogSnapshot: load
+      ? async () => {
+          const entries = await load();
+          return { entries, routeVariants: entries };
+        }
+      : undefined,
+    existingEntry: params.store[params.storeKey],
+    isLabelInUse: (label) =>
+      Object.entries(params.store).some(
+        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
+      ),
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
+}
+
+const acpSessionMetaMocks = vi.hoisted(() => ({
+  readAcpSessionMetaForEntry: vi.fn(),
+}));
+const providerThinkingMocks = vi.hoisted(() => ({
+  resolveProviderThinkingProfile:
+    vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
+}));
+
+vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
+  readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
+}));
+
+// This suite owns patch projection; provider policy artifacts have dedicated contract coverage.
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+}));
+
+const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.7-Code";
+const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
+const MAIN_SESSION_KEY = "agent:main:main";
+const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
+const ANTHROPIC_SONNET_ID = "claude-sonnet-4-6";
+const ANTHROPIC_OPUS_MODEL = "anthropic/claude-opus-4-6";
+const ANTHROPIC_OPUS_ID = "claude-opus-4-6";
+const OPENAI_GPT_MODEL = "openai/gpt-5.4";
+const OPENAI_GPT_ID = "gpt-5.4";
+const EMPTY_CFG = {} as OpenClawConfig;
+
+type ApplySessionsPatchArgs = Parameters<typeof applySessionsPatchToStore>[0];
+type ProviderAuthMetadataSnapshot = NonNullable<
+  ApplySessionsPatchArgs["providerAuthMetadataSnapshot"]
+>;
+
+const EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [],
+} satisfies ProviderAuthMetadataSnapshot;
+const BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT = {
+  plugins: [
+    {
+      id: "byteplus",
+      channels: [],
+      providers: ["byteplus", "byteplus-plan"],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/plugins/byteplus",
+      source: "test",
+      manifestPath: "/plugins/byteplus/openclaw.plugin.json",
+      providerAuthAliases: { "byteplus-plan": "byteplus" },
+    } satisfies PluginManifestRecord,
+  ],
+} satisfies ProviderAuthMetadataSnapshot;
+
+async function runPatch(params: {
+  patch: ApplySessionsPatchArgs["patch"];
+  store?: Record<string, SessionEntry>;
+  cfg?: OpenClawConfig;
+  storeKey?: string;
+  agentId?: string;
+  loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  providerAuthMetadataSnapshot?: ApplySessionsPatchArgs["providerAuthMetadataSnapshot"];
+  archivedBy?: SessionCreatedActor;
+}) {
+  return applySessionsPatchToStore({
+    cfg: params.cfg ?? EMPTY_CFG,
+    store: params.store ?? {},
+    storeKey: params.storeKey ?? MAIN_SESSION_KEY,
+    agentId: params.agentId,
+    patch: params.patch,
+    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
+    archivedBy: params.archivedBy,
+  });
+}
+
+function expectPatchOk(
+  result: Awaited<ReturnType<typeof applySessionsPatchToStore>>,
+): SessionEntry {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.error.message);
+  }
+  return result.entry;
+}
+
+function expectPatchError(
+  result: Awaited<ReturnType<typeof applySessionsPatchToStore>>,
+  message: string,
+): void {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error(`Expected patch failure containing: ${message}`);
+  }
+  expect(result.error.message).toContain(message);
+}
+
+function mainStoreEntry(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
+  return {
+    [MAIN_SESSION_KEY]: {
+      sessionId: "sess",
+      updatedAt: 1,
+      ...overrides,
+    } as SessionEntry,
+  };
+}
+
+function mainAuthOverrideStore(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
+  return mainStoreEntry({
+    providerOverride: "anthropic",
+    modelOverride: ANTHROPIC_OPUS_ID,
+    authProfileOverrideSource: "user",
+    ...overrides,
+  });
+}
+
+function catalogEntry(ref: string, name?: string) {
+  const separator = ref.indexOf("/");
+  if (separator < 0) {
+    throw new Error(`model ref must include provider: ${ref}`);
+  }
+  const id = ref.slice(separator + 1);
+  return {
+    provider: ref.slice(0, separator),
+    id,
+    name: name ?? id,
+  };
+}
+
+function loadCatalog(...refs: string[]): ApplySessionsPatchArgs["loadGatewayModelCatalog"] {
+  return async () => refs.map((ref) => catalogEntry(ref));
+}
+
+function expectModelSelection(
+  entry: SessionEntry,
+  providerOverride: string | undefined,
+  modelOverride: string | undefined,
+) {
+  expect(entry.providerOverride).toBe(providerOverride);
+  expect(entry.modelOverride).toBe(modelOverride);
+}
+
+async function applyMainModelPatch(params: {
+  store?: Record<string, SessionEntry>;
+  cfg?: OpenClawConfig;
+  model: string | null;
+  catalogRefs?: string[];
+  providerAuthMetadataSnapshot?: ProviderAuthMetadataSnapshot;
+}) {
+  return expectPatchOk(
+    await runPatch({
+      store: params.store,
+      cfg: params.cfg,
+      patch: { key: MAIN_SESSION_KEY, model: params.model },
+      loadGatewayModelCatalog:
+        params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
+      providerAuthMetadataSnapshot:
+        params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
+    }),
+  );
+}
+
+async function expectProviderChangeClearsAuthOverride(store: Record<string, SessionEntry>) {
+  const entry = await applyMainModelPatch({
+    store,
+    model: OPENAI_GPT_MODEL,
+    catalogRefs: [OPENAI_GPT_MODEL],
+  });
+  expectModelSelection(entry, "openai", OPENAI_GPT_ID);
+  expectAuthOverride(entry, { profile: undefined });
+}
+
+function expectAuthOverride(
+  entry: SessionEntry,
+  expected: {
+    profile: string | undefined;
+    source?: string;
+    compactionCount?: number;
+  },
+) {
+  expect(entry.authProfileOverride).toBe(expected.profile);
+  if (expected.profile === undefined) {
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+    return;
+  }
+  expect(entry.authProfileOverrideSource).toBe(expected.source ?? "user");
+  if (expected.compactionCount === undefined) {
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  } else {
+    expect(entry.authProfileOverrideCompactionCount).toBe(expected.compactionCount);
+  }
+}
+
+async function applySubagentModelPatch(cfg: OpenClawConfig, store: Record<string, SessionEntry>) {
+  return runPatch({
+    cfg,
+    store,
+    storeKey: KIMI_SUBAGENT_KEY,
+    patch: {
+      key: KIMI_SUBAGENT_KEY,
+      model: SUBAGENT_MODEL,
+    },
+    loadGatewayModelCatalog: async () => [
+      { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
+      { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.7-Code", name: "kimi" },
+    ],
+  });
+}
+
+function makeKimiSubagentCfg(params: {
+  allowModel: boolean;
+  agentPrimaryModel?: string;
+  agentSubagentModel?: string;
+  defaultsSubagentModel?: string;
+}): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+        modelPolicy: { allow: [ANTHROPIC_SONNET_MODEL] },
+        subagents: params.defaultsSubagentModel
+          ? { model: params.defaultsSubagentModel }
+          : undefined,
+        models: {
+          "anthropic/claude-sonnet-4-6": { alias: "default" },
+        },
+      },
+      entries: {
+        kimi: {
+          ...(params.allowModel ? { modelPolicy: { allow: [SUBAGENT_MODEL] } } : {}),
+          model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
+          subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
+        },
+      },
+    },
+  };
+}
+
+function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: OPENAI_GPT_MODEL },
+        models: {
+          [ANTHROPIC_SONNET_MODEL]: { alias: "sonnet" },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
 
 describe("gateway sessions patch", () => {
-  test("persists thinkingLevel=off (does not clear)", async () => {
-    const store: Record<string, SessionEntry> = {};
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { thinkingLevel: "off" },
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.entry.thinkingLevel).toBe("off");
+  beforeEach(() => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockReset();
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) => {
+        if (provider !== "openai") {
+          return undefined;
+        }
+        if (context.modelId === "gpt-5.5") {
+          return {
+            levels: (["off", "minimal", "low", "medium", "high", "xhigh"] as const).map((id) => ({
+              id,
+            })),
+          };
+        }
+        if (context.modelId === "gpt-5.6-luna") {
+          const levels =
+            context.agentRuntime === "openclaw"
+              ? (["off", "minimal", "low", "medium", "high", "max", "ultra"] as const)
+              : (["off", "minimal", "low", "medium", "high", "max"] as const);
+          return { levels: levels.map((id) => ({ id })) };
+        }
+        return undefined;
+      },
+    );
   });
 
-  test("clears thinkingLevel when patch sets null", async () => {
+  afterEach(() => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
+    clearPluginMetadataLifecycleCaches();
+    resetPluginRuntimeStateForTest();
+  });
+
+  test("keeps a custom SVG icon through store normalization, unrelated patches, and clearing", async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>';
+    const icon = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    const store = mainStoreEntry({ label: "Night watch", color: "purple" });
+    const patch = async (fields: { icon?: string | null; label?: string }) =>
+      runPatch({ store, patch: { key: MAIN_SESSION_KEY, ...fields } });
+    const entry = expectPatchOk(await patch({ icon: svg }));
+    expect(entry).toMatchObject({ icon, color: "purple" });
+    store[MAIN_SESSION_KEY] = projectCanonicalSessionEntryShape({ ...entry });
+    expect(expectPatchOk(await patch({ label: "Updated night watch" }))).toMatchObject({ icon });
+    expectPatchError(await patch({ icon: "https://example.com/icon.svg" }), "icon must be");
+    expect(store[MAIN_SESSION_KEY].icon).toBe(icon);
+    expect(expectPatchOk(await patch({ icon: null })).icon).toBeUndefined();
+    expect(store[MAIN_SESSION_KEY].color).toBe("purple");
+  });
+
+  test("keeps manual renames independent of automatic device-label writes and clears", async () => {
+    const key = "agent:main:node-1234567890ab";
+    const autoLabel = "OpenClaw App · Pixel · 1234567890ab";
+    const label = "OpenClaw App · Release planning · 1234567890ab";
+    const store: Record<string, SessionEntry> = {};
+    const patch = async (fields: { label?: string | null; autoLabel?: string | null }) =>
+      expectPatchOk(await runPatch({ store, storeKey: key, patch: { key, ...fields } }));
+
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+    await patch({ label });
+    // A reconnect can finish after a manual rename; the automatic writer owns a different field.
+    expect(await patch({ autoLabel: "Updated device" })).toMatchObject({
+      label,
+      autoLabel: "Updated device",
+    });
+    const cleared = await patch({ label: null });
+    expect(cleared.label).toBeUndefined();
+    expect(cleared.autoLabel).toBe("Updated device");
+    expect((await patch({ autoLabel: null })).autoLabel).toBeUndefined();
+
+    // Automatic names do not participate in unique custom-label lookup.
+    store.other = { sessionId: "other", updatedAt: 1, label: autoLabel, autoLabel };
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+  });
+
+  test("rejects creating a missing agent harness session through patch", async () => {
+    const key = "agent:main:harness:codex:supervision:missing";
+    const store: Record<string, SessionEntry> = {};
+
+    expectPatchError(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "squat" },
+      }),
+      AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+    );
+    expect(store[key]).toBeUndefined();
+  });
+
+  test("allows patching an existing agent harness session", async () => {
+    const key = "agent:main:harness:codex:supervision:existing";
     const store: Record<string, SessionEntry> = {
-      "agent:main:main": { thinkingLevel: "low" } as SessionEntry,
+      [key]: {
+        sessionId: "harness-session",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
     };
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { thinkingLevel: null },
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "kept" },
+      }),
+    );
+    expect(entry.label).toBe("kept");
+    expect(store[key]).toMatchObject({
+      sessionId: "harness-session",
+      label: "kept",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
     });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.entry.thinkingLevel).toBeUndefined();
   });
 
-  test("persists elevatedLevel=off (does not clear)", async () => {
-    const store: Record<string, SessionEntry> = {};
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { elevatedLevel: "off" },
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.entry.elevatedLevel).toBe("off");
+  test("attributes the archive transition and clears attribution on restore", async () => {
+    const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ pinnedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
+        archivedBy,
+      }),
+    );
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toEqual(archivedBy);
+    expect(archived.archiveReason).toBe("manual");
+    expect(archived.pinnedAt).toBeUndefined();
+
+    const idempotent = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
+        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      }),
+    );
+    expect(idempotent.archivedAt).toBe(archived.archivedAt);
+    expect(idempotent.archivedBy).toEqual(archivedBy);
+    expect(idempotent.archiveReason).toBe("manual");
+
+    const restored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          archivedAt: archived.archivedAt,
+          archivedBy,
+          archiveReason: "manual",
+        }),
+        patch: { key: MAIN_SESSION_KEY, archived: false, expectedSessionId: "sess" },
+      }),
+    );
+    expect(restored.archivedAt).toBeUndefined();
+    expect(restored.archivedBy).toBeUndefined();
+    expect(restored.archiveReason).toBeUndefined();
   });
 
-  test("persists elevatedLevel=on", async () => {
-    const store: Record<string, SessionEntry> = {};
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { elevatedLevel: "on" },
+  test.each([
+    { action: "archive", archived: true, sessionId: undefined },
+    { action: "archive", archived: true, sessionId: "" },
+    { action: "restore", archived: false, sessionId: undefined },
+    { action: "restore", archived: false, sessionId: "" },
+  ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
+    const entry = { sessionId, updatedAt: 1 } as SessionEntry;
+    const store = { [MAIN_SESSION_KEY]: entry };
+
+    expectPatchError(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, archived },
+      }),
+      `session not found: ${MAIN_SESSION_KEY}`,
+    );
+    expect(store[MAIN_SESSION_KEY]).toBe(entry);
+  });
+
+  test("requires the caller-observed durable identity for lifecycle patches", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+      "expectedSessionId required for session lifecycle patch",
+    );
+  });
+
+  test("does not fabricate archive attribution without an actor", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, archived: true, expectedSessionId: "sess" },
+      }),
+    );
+
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.archivedBy).toBeUndefined();
+  });
+
+  test("pins active sessions and rejects pinned archived sessions", async () => {
+    const pinned = expectPatchOk(
+      await runPatch({ patch: { key: MAIN_SESSION_KEY, pinned: true } }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true },
+      }),
+      "restore it first",
+    );
+  });
+
+  test.each([
+    ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:dashboard:parent" }],
+    ["agent:main:subagent:child", {}],
+  ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
+    const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
+    expectPatchError(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { ...original } },
+        patch: { key, pinned: true },
+      }),
+      "cannot pin a child session; pin its parent session instead",
+    );
+  });
+
+  test.each([{ pinned: false }, { label: "Child task" }] as const)(
+    "clears stale child pins on a metadata or unpin patch: %j",
+    async (patch) => {
+      const key = "agent:main:dashboard:child";
+      const updated = expectPatchOk(
+        await runPatch({
+          storeKey: key,
+          store: {
+            [key]: { sessionId: "child", updatedAt: 1, pinnedAt: 10, spawnedBy: MAIN_SESSION_KEY },
+          },
+          patch: { key, ...patch },
+        }),
+      );
+      expect(updated.pinnedAt).toBeUndefined();
+    },
+  );
+
+  test.each([
+    ["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }],
+    ["agent:main:acp:root", {}],
+    ["agent:main:cron:root", {}],
+    [
+      "agent:main:dashboard:fork",
+      { forkSource: { sessionKey: MAIN_SESSION_KEY, sessionId: "parent" } },
+    ],
+  ] as const)("allows root pins on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "root", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test.each([
+    ["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:other:dashboard:work", { parentSessionKey: "agent:other:main" }],
+  ] as const)("allows pins on Home-parented sessions on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "work", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test("preserves existing pins on Home-parented sessions through metadata patches", async () => {
+    const key = "agent:main:dashboard:work";
+    const updated = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: {
+          [key]: {
+            sessionId: "work",
+            updatedAt: 1,
+            pinnedAt: 10,
+            parentSessionKey: MAIN_SESSION_KEY,
+          },
+        },
+        patch: { key, label: "Work session" },
+      }),
+    );
+    expect(updated.pinnedAt).toBe(10);
+  });
+
+  test("marks archived sessions unread and clears the marker when read", async () => {
+    const store = mainStoreEntry({
+      archivedAt: 10,
+      lastReadAt: 20,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
     });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.entry.elevatedLevel).toBe("on");
+    const unread = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
+    );
+    expect(unread.archivedAt).toBe(10);
+    expect(unread.lastReadAt).toBe(20);
+    expect(unread.markedUnreadAt).toEqual(expect.any(Number));
+
+    const read = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: false } }),
+    );
+    expect(read.archivedAt).toBe(10);
+    expect(read.lastReadAt).toEqual(expect.any(Number));
+    expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
+    expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+  });
+
+  test("stores sanitized agent status with attention and a bounded TTL", async () => {
+    const before = Date.now();
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          statusNote: "  Blocked:\n need the staging password  ",
+          attention: "key",
+        },
+      }),
+    );
+    expect(entry.agentStatus).toMatchObject({
+      note: "Blocked: need the staging password",
+      attention: "key",
+    });
+    expect(entry.agentStatus?.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60_000);
+    expect(entry.agentStatus?.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, statusNote: "Waiting", ttlMinutes: 121 },
+      }),
+      "use 1-120",
+    );
+  });
+
+  test("clears the whole agent status explicitly", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          agentStatus: { note: "Waiting", attention: "flag", expiresAt: Date.now() + 60_000 },
+        }),
+        patch: { key: MAIN_SESSION_KEY, attention: null },
+      }),
+    );
+    expect(entry.agentStatus).toBeUndefined();
+  });
+
+  test.each([
+    { field: "thinkingLevel", value: "off" },
+    { field: "responseUsage", value: "off" },
+    { field: "reasoningLevel", value: "off" },
+    { field: "fastMode", value: false },
+    { field: "fastMode", value: true },
+    { field: "verboseLevel", value: "full" },
+    { field: "elevatedLevel", value: "off" },
+    { field: "elevatedLevel", value: "on" },
+  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, [field]: value },
+      }),
+    );
+    // Explicit off values must survive configured defaults, including messages.responseUsage.
+    expect(entry[field]).toBe(value);
+  });
+
+  test.each(["thinkingLevel", "contextWindow"] as const)(
+    "clears %s without loading the catalog",
+    async (field) => {
+      const store = mainStoreEntry({ thinkingLevel: "low", contextWindow: "extended" });
+      const loadGatewayModelCatalog = vi.fn(async () => {
+        throw new Error("Catalog must not be needed for a clear");
+      });
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, [field]: null },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expect(entry[field]).toBeUndefined();
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    },
+  );
+
+  test("clears responseUsage when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, responseUsage: null },
+      }),
+    );
+    expect(entry.responseUsage).toBeUndefined();
+  });
+
+  test("clears reasoningLevel when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { reasoningLevel: "stream" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, reasoningLevel: null },
+      }),
+    );
+    expect(entry.reasoningLevel).toBeUndefined();
+  });
+
+  test("recreates partial rows without dropping session settings", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        updatedAt: 1,
+        sessionFile: "stale.jsonl",
+        label: "Stale Session",
+        sendPolicy: "deny",
+        modelOverride: OPENAI_GPT_ID,
+        liveModelSwitchPending: true,
+        responseUsage: "tokens",
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: true },
+      }),
+    );
+
+    expect(entry.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(entry.sessionFile).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+    expect(entry.sendPolicy).toBe("deny");
+    expect(entry.modelOverride).toBe(OPENAI_GPT_ID);
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+    expect(entry.responseUsage).toBe("tokens");
+    expect(entry.parentSessionKey).toBe("agent:main:main");
+    expect(entry.fastMode).toBe(true);
+  });
+
+  test("persists, trims, and clears category", async () => {
+    const store = mainStoreEntry({});
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "  Research  " },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ category: "Research" }),
+        patch: { key: MAIN_SESSION_KEY, category: null },
+      }),
+    );
+    expect(cleared.category).toBeUndefined();
+  });
+
+  test("persists, normalizes, and clears color", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "  Blue " },
+      }),
+    );
+    expect(entry.color).toBe("blue");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ color: "blue" }),
+        patch: { key: MAIN_SESSION_KEY, color: null },
+      }),
+    );
+    expect(cleared.color).toBeUndefined();
+  });
+
+  test("rejects unknown color names", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, color: "crimson" },
+      }),
+      "color must be one of: red, blue, green, yellow, purple, orange, pink, cyan",
+    );
+  });
+
+  test("allows duplicate categories across sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      ...mainStoreEntry({}),
+      "agent:main:discord:channel:123": {
+        sessionId: "other",
+        updatedAt: 1,
+        category: "Research",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "Research" },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+  });
+
+  test("rejects empty category", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, category: "   " },
+      }),
+      "invalid category: empty",
+    );
+  });
+
+  test("clears fastMode when patch sets null", async () => {
+    const store = mainStoreEntry({ fastMode: true });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: null },
+      }),
+    );
+    expect(entry.fastMode).toBeUndefined();
+  });
+
+  test("sets fastMode to auto", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {} as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: "auto" },
+      }),
+    );
+
+    expect(entry.fastMode).toBe("auto");
+  });
+
+  test("sets, replaces, clears, and normalizes tool overrides", async () => {
+    const store = mainStoreEntry({});
+    const set = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolOverrides: {
+            mcpServers: { zeta: false, alpha: true },
+            mcpToolsDeny: { zeta: [], alpha: ["write", "read", "write"] },
+            skills: {},
+            webSearch: true,
+          },
+        },
+      }),
+    );
+    expect(set.toolOverrides).toEqual({
+      mcpServers: { alpha: true, zeta: false },
+      mcpToolsDeny: { alpha: ["read", "write"] },
+    });
+
+    const replaced = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { skills: { release: false } } },
+      }),
+    );
+    expect(replaced.toolOverrides).toEqual({ skills: { release: false } });
+
+    const normalizedEmpty = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { mcpToolsDeny: { docs: [] } } },
+      }),
+    );
+    expect(normalizedEmpty.toolOverrides).toBeUndefined();
+
+    store[MAIN_SESSION_KEY] = {
+      ...normalizedEmpty,
+      toolOverrides: { webSearch: false },
+    };
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: null },
+      }),
+    );
+    expect(cleared.toolOverrides).toBeUndefined();
+  });
+
+  test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
+    });
+    expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
   });
 
   test("clears elevatedLevel when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
-      "agent:main:main": { elevatedLevel: "off" } as SessionEntry,
+      [MAIN_SESSION_KEY]: { elevatedLevel: "off" } as SessionEntry,
     };
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { elevatedLevel: null },
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.entry.elevatedLevel).toBeUndefined();
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, elevatedLevel: null },
+      }),
+    );
+    expect(entry.elevatedLevel).toBeUndefined();
   });
 
   test("rejects invalid elevatedLevel values", async () => {
-    const store: Record<string, SessionEntry> = {};
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { elevatedLevel: "maybe" },
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, elevatedLevel: "maybe" },
     });
-    expect(res.ok).toBe(false);
-    if (res.ok) {
-      return;
-    }
-    expect(res.error.message).toContain("invalid elevatedLevel");
+    expectPatchError(result, "invalid elevatedLevel");
   });
 
-  test("clears auth overrides when model patch changes", async () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess",
-        updatedAt: 1,
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-5",
+  test("preserves same-provider auth overrides when model patch changes", async () => {
+    const store = mainAuthOverrideStore({
+      authProfileOverride: "anthropic:default",
+      authProfileOverrideCompactionCount: 3,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "anthropic:default", compactionCount: 3 });
+  });
+
+  test("preserves auth overrides for provider-auth aliases when model patch changes", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-alias",
+      providerOverride: "byteplus",
+      modelOverride: "seedance-1-0-lite-t2v-250428",
+      authProfileOverride: "byteplus:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: "byteplus-plan/ark-code-latest",
+      catalogRefs: ["byteplus-plan/ark-code-latest"],
+      providerAuthMetadataSnapshot: BYTEPLUS_PROVIDER_AUTH_METADATA_SNAPSHOT,
+    });
+    expectModelSelection(entry, "byteplus-plan", "ark-code-latest");
+    expectAuthOverride(entry, { profile: "byteplus:work", compactionCount: 2 });
+  });
+
+  test("preserves unprefixed auth overrides when existing provider matches model patch", async () => {
+    const store = mainAuthOverrideStore({
+      sessionId: "sess-unprefixed-same-provider",
+      authProfileOverride: "work",
+      authProfileOverrideCompactionCount: 4,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "work", compactionCount: 4 });
+  });
+
+  test("preserves unprefixed auth overrides when existing provider is the default", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-unprefixed-default-provider",
+      authProfileOverride: "work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 4,
+    });
+    const entry = await applyMainModelPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: `anthropic/${ANTHROPIC_OPUS_ID}` },
+          },
+        },
+      } as OpenClawConfig,
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "work", compactionCount: 4 });
+  });
+
+  test("clears unprefixed auth overrides when model patch changes provider", async () => {
+    await expectProviderChangeClearsAuthOverride(
+      mainAuthOverrideStore({
+        sessionId: "sess-unprefixed-provider-change",
+        authProfileOverride: "work",
+        authProfileOverrideCompactionCount: 4,
+      }),
+    );
+  });
+
+  test("clears provider-prefixed auth overrides when model patch changes provider", async () => {
+    await expectProviderChangeClearsAuthOverride(
+      mainAuthOverrideStore({
+        sessionId: "sess-provider-change",
         authProfileOverride: "anthropic:default",
-        authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: 3,
+      }),
+    );
+  });
+
+  test.each([
+    { name: "change", model: ANTHROPIC_SONNET_MODEL },
+    { name: "reset", model: null },
+  ])("rejects locked model $name patches before catalog loading", async ({ model }) => {
+    const store = mainStoreEntry({
+      sessionId: "sess-model-locked",
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+      modelSelectionLocked: true,
+    });
+    const before = { ...store[MAIN_SESSION_KEY] };
+    const loadGatewayModelCatalog = vi.fn(loadCatalog(ANTHROPIC_SONNET_MODEL));
+
+    const result = await runPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      patch: { key: MAIN_SESSION_KEY, model },
+      loadGatewayModelCatalog,
+    });
+
+    expectPatchError(result, MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(store[MAIN_SESSION_KEY]).toEqual(before);
+  });
+
+  test("allows non-model metadata patches for model-locked sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ modelSelectionLocked: true }),
+        patch: { key: MAIN_SESSION_KEY, label: "Remote Codex task" },
+      }),
+    );
+
+    expect(entry.modelSelectionLocked).toBe(true);
+    expect(entry.label).toBe("Remote Codex task");
+  });
+
+  test.each(["fresh", "placeholder", "existing"] as const)(
+    "queues model switches only for existing sessions (%s)",
+    async (sessionState) => {
+      const store =
+        sessionState === "fresh"
+          ? undefined
+          : mainStoreEntry({
+              sessionId: sessionState === "existing" ? "sess-live" : undefined,
+              providerOverride: "openai",
+              modelOverride: OPENAI_GPT_ID,
+            });
+      const entry = await applyMainModelPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        model: ANTHROPIC_SONNET_MODEL,
+        catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+      });
+
+      expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+      expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
+    },
+  );
+
+  test("clears an agent model rollback marker on explicit model patches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-agent-model-patch",
+      modelFallback: {
+        prevModel: OPENAI_GPT_ID,
+        prevProvider: "openai",
+        ts: 1,
+        source: "agent-patch",
+      },
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+    });
+
+    expect(entry.modelFallback).toBeUndefined();
+  });
+
+  test("atomically snapshots prior selection for agent model patches", async () => {
+    const store = mainStoreEntry({
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-primary",
+      authProfileOverride: "openai:good",
+      authProfileOverrideSource: "user",
+      thinkingLevel: "high",
+    });
+    const entry = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store,
+          cfg: createAllowlistedAnthropicModelCfg(),
+          model: ANTHROPIC_SONNET_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+        }),
+    );
+
+    expect(entry.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+      prevModelOverrideSource: "auto",
+      prevModelOverrideFallbackOriginProvider: "openai",
+      prevModelOverrideFallbackOriginModel: "gpt-primary",
+      prevAuthProfileOverride: "openai:good",
+      prevThinkingLevel: "high",
+      source: "agent-patch",
+    });
+  });
+
+  test("keeps the last validated model across consecutive agent patches", async () => {
+    const cfg = createAllowlistedAnthropicModelCfg();
+    cfg.agents!.defaults!.models![ANTHROPIC_OPUS_MODEL] = { alias: "opus" };
+    const first = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store: mainStoreEntry({
+            providerOverride: "openai",
+            modelOverride: OPENAI_GPT_ID,
+          }),
+          cfg,
+          model: ANTHROPIC_SONNET_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+        }),
+    );
+    const firstMarker = first.modelFallback;
+    expect(firstMarker).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+    });
+
+    const second = await withAgentSessionModelPatchOrigin(
+      async () =>
+        await applyMainModelPatch({
+          store: { [MAIN_SESSION_KEY]: first },
+          cfg,
+          model: ANTHROPIC_OPUS_MODEL,
+          catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL, ANTHROPIC_OPUS_MODEL],
+        }),
+    );
+
+    expect(second.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+    });
+    expect(second.modelFallback?.ts).toBeGreaterThan(firstMarker?.ts ?? 0);
+  });
+
+  test("realigns the model-revert marker with an independent thinkingLevel change", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        thinkingLevel: "high",
+        modelOverride: ANTHROPIC_SONNET_ID,
+        providerOverride: "anthropic",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          ts: 1,
+          source: "agent-patch",
+        },
       } as SessionEntry,
     };
-    const res = await applySessionsPatchToStore({
-      cfg: {} as OpenClawConfig,
-      store,
-      storeKey: "agent:main:main",
-      patch: { model: "openai/gpt-5.2" },
-      loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-5.2" }],
+    const input = store[MAIN_SESSION_KEY]!;
+    const before = structuredClone(input);
+    const entry = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: "low" } }),
+    );
+    // The model-revert target still points at the pre-switch model, but its
+    // thinkingLevel restore now honors the user's newer choice instead of "high".
+    expect(entry.thinkingLevel).toBe("low");
+    expect(entry.modelFallback).toMatchObject({
+      prevModel: OPENAI_GPT_ID,
+      prevProvider: "openai",
+      prevThinkingLevel: "low",
+      ts: 1,
+      source: "agent-patch",
     });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
+    expect(input).toEqual(before);
+  });
+
+  test("clears the marker thinkingLevel restore when the user clears thinkingLevel", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        thinkingLevel: "high",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          ts: 1,
+          source: "agent-patch",
+        },
+      } as SessionEntry,
+    };
+    const input = store[MAIN_SESSION_KEY]!;
+    const before = structuredClone(input);
+    const entry = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: null } }),
+    );
+    expect(entry.thinkingLevel).toBeUndefined();
+    expect(entry.modelFallback?.prevThinkingLevel).toBeUndefined();
+    expect(entry.modelFallback?.prevModel).toBe(OPENAI_GPT_ID);
+    expect(input).toEqual(before);
+  });
+
+  test.each([false, true])(
+    "projects context rollback metadata without mutating its input (clear thinking=%s)",
+    async (clearThinking) => {
+      const store = mainStoreEntry({
+        thinkingLevel: "high",
+        contextWindow: "extended",
+        modelFallback: {
+          prevModel: OPENAI_GPT_ID,
+          prevProvider: "openai",
+          prevThinkingLevel: "high",
+          prevContextWindow: "extended",
+          ts: 1,
+          source: "agent-patch",
+        },
+      });
+      const input = store[MAIN_SESSION_KEY]!;
+      const before = structuredClone(input);
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            contextWindow: null,
+            ...(clearThinking ? { thinkingLevel: null } : {}),
+          },
+        }),
+      );
+      expect(entry.contextWindow).toBeUndefined();
+      expect(entry.modelFallback?.prevContextWindow).toBeUndefined();
+      expect(entry.modelFallback?.prevThinkingLevel).toBe(clearThinking ? undefined : "high");
+      expect(input).toEqual(before);
+    },
+  );
+
+  test("pins a concrete model selection that equals the configured default", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: { agents: { defaults: { model: { primary: OPENAI_GPT_MODEL } } } },
+        patch: { key: MAIN_SESSION_KEY, model: OPENAI_GPT_MODEL },
+        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
+      }),
+    );
+
+    expectModelSelection(entry, "openai", OPENAI_GPT_ID);
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
+  });
+
+  test("clears pending live model switches for model reset patches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-live-reset",
+      providerOverride: "anthropic",
+      modelOverride: ANTHROPIC_SONNET_ID,
+      modelOverrideSource: "user",
+      liveModelSwitchPending: true,
+    });
+    const loadGatewayModelCatalog = vi.fn(async () => {
+      throw new Error("Catalog must not be needed for an unqualified reset");
+    });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: null },
+        loadGatewayModelCatalog,
+      }),
+    );
+
+    expectModelSelection(entry, undefined, undefined);
+    expect(entry.modelOverrideSource).toBe("default");
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test.each([true, false])(
+    "model reset revalidates retained selections once (context supported: %s)",
+    async (supported) => {
+      const loadGatewayModelCatalog = vi.fn(async () => [
+        {
+          ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+          reasoning: true,
+          contextWindows: supported
+            ? [{ id: "extended", label: "Extended", contextWindow: 200_000 }]
+            : [],
+        },
+      ]);
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: { agents: { defaults: { model: ANTHROPIC_SONNET_MODEL } } },
+          store: mainStoreEntry({
+            providerOverride: "anthropic",
+            modelOverride: ANTHROPIC_OPUS_ID,
+            thinkingLevel: "high",
+            contextWindow: "extended",
+          }),
+          patch: { key: MAIN_SESSION_KEY, model: null },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expectModelSelection(entry, undefined, undefined);
+      expect(entry.thinkingLevel).toBe("high");
+      expect(entry.contextWindow).toBe(supported ? "extended" : undefined);
+      expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+    },
+  );
+
+  test("one catalog prepares a combined model, thinking, and context-window patch", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+        reasoning: true,
+        contextWindows: [{ id: "extended", label: "Extended", contextWindow: 200_000 }],
+      },
+    ]);
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        store: mainStoreEntry({}),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: ANTHROPIC_SONNET_MODEL,
+          thinkingLevel: "high",
+          contextWindow: "extended",
+        },
+        loadGatewayModelCatalog,
+      }),
+    );
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expect(entry).toMatchObject({ thinkingLevel: "high", contextWindow: "extended" });
+    expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  test.each([
+    { patch: { category: "" }, message: "invalid category" },
+    { patch: { model: "" }, message: "invalid model: empty" },
+  ])(
+    "preserves early validation before catalog preparation: $message",
+    async ({ patch, message }) => {
+      const loadGatewayModelCatalog = vi.fn(async () => {
+        throw new Error("Catalog failure must not replace early validation");
+      });
+      const store = mainStoreEntry({ label: "Original" });
+      expectPatchError(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, contextWindow: "extended", ...patch },
+          loadGatewayModelCatalog,
+        }),
+        message,
+      );
+      expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(store[MAIN_SESSION_KEY]).toEqual({
+        sessionId: "sess",
+        updatedAt: 1,
+        label: "Original",
+      });
+    },
+  );
+
+  test.each([
+    {
+      name: "accepts explicit allowlisted provider/model refs from sessions.patch",
+      catalog: [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
+      ],
+    },
+    {
+      name: "accepts explicit allowlisted refs absent from bundled catalog",
+      catalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.2" }],
+    },
+  ])("$name", async ({ catalog }) => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: ANTHROPIC_SONNET_MODEL },
+        loadGatewayModelCatalog: async () => catalog,
+      }),
+    );
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+  });
+
+  test.each([false, true])(
+    "supports uncataloged refs with agent policy=%s",
+    async (agentPolicy) => {
+      const primary = "synthetic/primary";
+      const override = "synthetic/uncataloged";
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary },
+                modelPolicy: { allow: agentPolicy ? [primary] : [] },
+              },
+              entries: { main: agentPolicy ? { modelPolicy: { allow: [] } } : {} },
+            },
+          } as OpenClawConfig,
+          storeKey: "global",
+          patch: { key: "global", model: override },
+          loadGatewayModelCatalog: async () => [],
+        }),
+      );
+
+      expectModelSelection(entry, "synthetic", "uncataloged");
+      expect(entry.modelOverrideSource).toBe("user");
+    },
+  );
+
+  test("enforces the default agent policy without an explicit agent or qualified key", async () => {
+    const key = "global";
+    const existing: SessionEntry = { sessionId: "default-policy", updatedAt: 1, label: "Original" };
+    const store = { [key]: existing };
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: { model: "synthetic/primary", modelPolicy: { allow: [] } },
+          entries: { main: { modelPolicy: { allow: ["synthetic/allowed"] } } },
+        },
+      },
+      store,
+      storeKey: key,
+      patch: { key, model: "synthetic/outside", label: "Changed" },
+      loadGatewayModelCatalog: loadCatalog("synthetic/allowed", "synthetic/outside"),
+    });
+
+    expectPatchError(result, "model not allowed: synthetic/outside");
+    expect(store[key]).toEqual(existing);
+  });
+
+  test("persists provider-qualified aliases without cross-provider collisions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: OPENAI_GPT_MODEL },
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "lmstudio-moe/Local" },
+        loadGatewayModelCatalog: loadCatalog(
+          "lmstudio-moe/qwen3.6-35b-a3b",
+          "lmstudio-dense/qwen3.6-27b",
+        ),
+      }),
+    );
+
+    expectModelSelection(entry, "lmstudio-moe", "qwen3.6-35b-a3b");
+    expect(entry.modelOverrideSource).toBe("user");
+  });
+
+  test("validates thinking patches with live catalog reasoning metadata", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "ollama",
+      source: "test",
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "ollama/qwen3:0.6b" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "medium",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "ollama",
+            id: "qwen3:0.6b",
+            name: "qwen3:0.6b",
+            reasoning: true,
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("medium");
+  });
+
+  test.each(["fresh", "placeholder", "existing"] as const)(
+    "validates context-window initialization without queuing fresh-session switches (%s)",
+    async (sessionState) => {
+      const cfg = {
+        agents: { defaults: { model: { primary: "claude-cli/claude-fable-5" } } },
+      } as OpenClawConfig;
+      const loadGatewayModelCatalog = async () => [
+        {
+          provider: "claude-cli",
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ];
+
+      const entry = expectPatchOk(
+        await runPatch({
+          cfg,
+          store:
+            sessionState === "fresh"
+              ? undefined
+              : mainStoreEntry({
+                  sessionId: sessionState === "existing" ? "sess-context" : undefined,
+                  contextBudgetStatus: contextBudgetStatusFixture(),
+                }),
+          patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
+          loadGatewayModelCatalog,
+        }),
+      );
+      expect(entry.contextWindow).toBe("200k");
+      expect(entry.contextBudgetStatus).toBeUndefined();
+      expect(entry.liveModelSwitchPending).toBe(sessionState === "existing" ? true : undefined);
+
+      const invalid = await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, contextWindow: "2m" },
+        loadGatewayModelCatalog,
+      });
+      expectPatchError(invalid, 'contextWindow "2m" is not supported');
+    },
+  );
+
+  test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "claude-cli"
+        ? { levels: [{ id: "off" }], defaultLevel: "off" }
+        : {
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          },
+    );
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-mythos-5" },
+          },
+        },
+      } as OpenClawConfig,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        thinkingLevel: "medium",
+      },
+      loadGatewayModelCatalog: async () => [
+        {
+          provider: "anthropic",
+          id: "claude-mythos-5",
+          name: "Claude Mythos 5",
+          reasoning: false,
+          thinkingPolicyProvider: "claude-cli",
+        },
+      ],
+    });
+
+    expectPatchError(result, 'thinkingLevel "medium" is not supported');
+  });
+
+  test("accepts xhigh thinking patches from configured catalog compat", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "gmn/gpt-5.4" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "gmn",
+            id: "gpt-5.4",
+            name: "GPT 5.4 via GMN",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test.each([
+    { requested: "max", nativeEffort: "max", accepted: true },
+    { requested: "max", nativeEffort: "high", accepted: false },
+  ] as const)(
+    "validates thinking against the selected runtime variant ($nativeEffort, accepted=$accepted)",
+    async ({ requested, nativeEffort, accepted }) => {
+      const host: ModelCatalogEntry = {
+        provider: "runtime-fixture",
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [accepted ? "high" : "max"] },
+      };
+      const native: ModelCatalogEntry = {
+        ...host,
+        nativeRuntime: "fixture-native",
+        compat: { supportedReasoningEfforts: [nativeEffort] },
+      };
+      const result = await projectSessionsPatchEntry({
+        cfg: { agents: { defaults: { model: "runtime-fixture/reasoner" } } },
+        storeKey: MAIN_SESSION_KEY,
+        existingEntry: mainStoreEntry({})[MAIN_SESSION_KEY],
+        isLabelInUse: () => false,
+        preparedAgentRuntime: "fixture-native",
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: requested },
+        loadGatewayModelCatalogSnapshot: async () => ({
+          entries: [host],
+          routeVariants: [host, native],
+        }),
+      });
+
+      if (accepted) {
+        expect(expectPatchOk(result).thinkingLevel).toBe(requested);
+      } else {
+        expectPatchError(result, 'thinkingLevel "max" is not supported');
+      }
+    },
+  );
+
+  test("validates global patches against the selected agent", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                model: { primary: "gmn/gpt-5.4" },
+              },
+              {
+                id: "work",
+                model: { primary: "openai/gpt-5.5" },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+        storeKey: "global",
+        agentId: "work",
+        patch: {
+          key: "global",
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test("accepts xhigh thinking patches from bundled startup-lazy provider policy without catalog", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test("persists OpenClaw Luna Ultra through the runtime-aware provider profile", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-luna" },
+              models: {
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("preserves stored Ultra when a model patch selects Codex Luna", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: {
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        store: mainStoreEntry({ thinkingLevel: "ultra" }),
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.6-luna" },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-sol", "openai/gpt-5.6-luna"),
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+        } as OpenClawConfig,
+        store: mainStoreEntry({
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
+        }),
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("ultra");
+  });
+
+  test("clearing a runtime pin preserves supported thinking and invalidates derived context", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
+        store: mainStoreEntry({
+          agentRuntimeOverride: "openclaw",
+          thinkingLevel: "ultra",
+          contextTokens: 1000,
+        }),
+        patch: { key: MAIN_SESSION_KEY, agentRuntime: null },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-luna"),
+      }),
+    );
+    expect(entry).toMatchObject({ thinkingLevel: "ultra", liveModelSwitchPending: true });
+    expect(entry).not.toHaveProperty("agentRuntimeOverride");
+    expect(entry).not.toHaveProperty("contextTokens");
+  });
+
+  test.each([null, "openclaw"])(
+    "retains locked model and runtime ownership (%s)",
+    async (agentRuntime) => {
+      const store = mainStoreEntry({ modelSelectionLocked: true, agentRuntimeOverride: "codex" });
+      expectPatchError(
+        await runPatch({
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            agentRuntime,
+            ...(agentRuntime ? { model: "openai/gpt-5.6-sol" } : {}),
+          },
+        }),
+        MODEL_SELECTION_LOCKED_MESSAGE,
+      );
+      expect(store[MAIN_SESSION_KEY]?.agentRuntimeOverride).toBe("codex");
+    },
+  );
+
+  test("does not persist a misleading runtime pin on an ACP-owned session", async () => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue({
+      backend: "codex",
+      agent: "main",
+      state: "idle",
+    });
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, agentRuntime: null },
+      }),
+      "owned by this ACP session",
+    );
+  });
+
+  test("uses ACP backend metadata on canonical agent keys for thinking validation", async () => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue({
+      backend: "codex",
+      agent: "main",
+      runtimeSessionName: MAIN_SESSION_KEY,
+      mode: "persistent",
+      state: "idle",
+      lastActivityAt: 1,
+    });
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      store: mainStoreEntry({}),
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
+      loadGatewayModelCatalog: async () => [],
+    });
+
+    expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
+    expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
+      sessionKey: MAIN_SESSION_KEY,
+      agentId: "main",
+      entry: expect.objectContaining({ sessionId: "sess" }),
+    });
+  });
+
+  test("treats the persisted harness id as observational when validating unsupported Luna XHigh", async () => {
+    const result = await runPatch({
+      cfg: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      } as OpenClawConfig,
+      store: mainStoreEntry({ agentHarnessId: "openclaw" }),
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
+      loadGatewayModelCatalog: async () => [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("not supported");
+    }
+  });
+
+  test("preserves an incompatible stored thinkingLevel without loading the catalog for unrelated patches", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { provider: "synthetic", id: "plain", name: "plain", reasoning: false },
+    ]);
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: { defaults: { model: { primary: "synthetic/plain" } } },
+        } as OpenClawConfig,
+        store: mainStoreEntry({ thinkingLevel: "max" }),
+        patch: { key: MAIN_SESSION_KEY, label: "new label" },
+        loadGatewayModelCatalog,
+      }),
+    );
+
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
+  });
+
+  test("sets an immutable completion owner for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          completionOwnerSessionKey: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.completionOwnerSessionKey).toBe("agent:main:main");
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: {
+        key: "agent:main:acp:child",
+        completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      },
+    });
+    expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
+  });
+
+  test("sets an immutable requester policy snapshot version for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: 1 },
+      }),
+    );
+    expect(entry.inheritedToolPolicyVersion).toBe(1);
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: null },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion cannot be cleared once set");
+  });
+
+  test("sets inheritedToolDeny for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", inheritedToolDeny: ["bash", "read", "bash"] },
+      }),
+    );
+    expect(entry.inheritedToolDeny).toEqual(["exec", "read"]);
+  });
+
+  test("sets inheritedToolAllow for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          inheritedToolAllow: ["sessions_spawn", "read", "sessions_spawn"],
+        },
+      }),
+    );
+    expect(entry.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
+  });
+
+  test("preserves inheritedToolDeny entries beyond large configured lists", async () => {
+    const configuredDeny = Array.from({ length: 150 }, (_, index) => `custom_${index}`);
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:subagent:child",
+        patch: {
+          key: "agent:main:subagent:child",
+          inheritedToolDeny: [...configuredDeny, "exec"],
+        },
+      }),
+    );
+    expect(entry.inheritedToolDeny).toHaveLength(151);
+    expect(entry.inheritedToolDeny?.at(-1)).toBe("exec");
+  });
+
+  test("rejects inheritedToolDeny on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
+    });
+    expectPatchError(result, "inheritedToolDeny is only supported");
+  });
+
+  test("rejects inheritedToolPolicyVersion on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolPolicyVersion: 1 },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion is only supported");
+  });
+
+  test("rejects inheritedToolAllow on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolAllow: ["read"] },
+    });
+    expectPatchError(result, "inheritedToolAllow is only supported");
+  });
+
+  test("normalizes exec/send/group patches", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          execHost: " AUTO ",
+          execNode: " worker-1 ",
+          sendPolicy: "DENY" as unknown as "allow",
+          groupActivation: "Always" as unknown as "mention",
+        },
+      }),
+    );
+    expect(entry.execHost).toBe("auto");
+    expect(entry.execNode).toBe("worker-1");
+    expect(entry.sendPolicy).toBe("deny");
+    expect(entry.groupActivation).toBe("always");
+  });
+
+  test("stores and clears the session permission mode", async () => {
+    const stored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ sessionRoot: "/workspace/project" }),
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBe("/workspace/project");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: { [MAIN_SESSION_KEY]: stored },
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBe("/workspace/project");
+  });
+
+  test.each([
+    { execSecurity: "deny" },
+    { execSecurity: null },
+    { execAsk: "always" },
+    { execAsk: null },
+  ])("rejects retired session policy patch %j without writing", async (retiredPatch) => {
+    for (const store of [{}, mainStoreEntry({ label: "Original", permissionMode: "read-only" })]) {
+      const before = structuredClone(store);
+      const result = await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          label: "Changed",
+          permissionMode: "guarded",
+          ...retiredPatch,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+        },
+      });
+      expect(store).toEqual(before);
+    }
+  });
+
+  test("stores and clears a session permission mode without a recorded root", async () => {
+    const store = mainStoreEntry({});
+    const stored = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBeUndefined();
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBeUndefined();
+  });
+
+  test("clears a node cwd when changing or clearing the node binding", async () => {
+    const store = mainStoreEntry({
+      execHost: "node",
+      execNode: "worker-1",
+      execCwd: "/workspace/on-worker-1",
+    });
+    const changed = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, execNode: "worker-2" } }),
+    );
+    expect(changed.execNode).toBe("worker-2");
+    expect(changed.execCwd).toBeUndefined();
+    expect(changed.execHost).toBe("node");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          execHost: "node",
+          execNode: "worker-1",
+          execCwd: "/workspace/on-worker-1",
+        }),
+        patch: { key: MAIN_SESSION_KEY, execNode: null },
+      }),
+    );
+    expect(cleared.execNode).toBeUndefined();
+    expect(cleared.execCwd).toBeUndefined();
+    expect(cleared.execHost).toBeUndefined();
+  });
+
+  test.each(["auto", "gateway", "sandbox"] as const)(
+    "preserves explicit %s exec hosting when clearing a stale node binding",
+    async (execHost) => {
+      const cleared = expectPatchOk(
+        await runPatch({
+          store: mainStoreEntry({
+            execHost,
+            execNode: "worker-1",
+            execCwd: "/workspace/on-worker-1",
+          }),
+          patch: { key: MAIN_SESSION_KEY, execNode: null },
+        }),
+      );
+
+      expect(cleared.execHost).toBe(execHost);
+      expect(cleared.execNode).toBeUndefined();
+      expect(cleared.execCwd).toBeUndefined();
+    },
+  );
+
+  test("rejects invalid execHost values", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, execHost: "edge" },
+    });
+    expectPatchError(result, "invalid execHost");
+  });
+
+  test("rejects invalid sendPolicy values", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, sendPolicy: "ask" as unknown as "allow" },
+    });
+    expectPatchError(result, "invalid sendPolicy");
+  });
+
+  test("rejects invalid groupActivation values", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, groupActivation: "never" as unknown as "mention" },
+    });
+    expectPatchError(result, "invalid groupActivation");
+  });
+
+  test.each(
+    [
+      { source: "target agent primary", agentPrimaryModel: SUBAGENT_MODEL },
+      {
+        source: "target agent subagents.model",
+        agentPrimaryModel: ANTHROPIC_SONNET_MODEL,
+        agentSubagentModel: SUBAGENT_MODEL,
+      },
+      { source: "global subagents.model", defaultsSubagentModel: SUBAGENT_MODEL },
+    ].flatMap((config) => [
+      { ...config, allowModel: false },
+      { ...config, allowModel: true },
+    ]),
+  )("requires manual permission for $source (allowed: $allowModel)", async (config) => {
+    const cfg = makeKimiSubagentCfg(config);
+    const store: Record<string, SessionEntry> = {
+      [KIMI_SUBAGENT_KEY]: {
+        sessionId: "subagent-policy",
+        updatedAt: 1,
+        delivery: { kind: "none" },
+      },
+    };
+    const before = structuredClone(store);
+    const result = await applySubagentModelPatch(cfg, store);
+    if (!config.allowModel) {
+      expectPatchError(result, "model not allowed");
+      expect(store).toEqual(before);
       return;
     }
-    expect(res.entry.providerOverride).toBe("openai");
-    expect(res.entry.modelOverride).toBe("gpt-5.2");
-    expect(res.entry.authProfileOverride).toBeUndefined();
-    expect(res.entry.authProfileOverrideSource).toBeUndefined();
-    expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
+    const entry = expectPatchOk(result);
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
+    expect(entry.modelOverrideSource).toBe("user");
+  });
+
+  test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@myprofile`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "myprofile" });
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+  });
+
+  test("marks same-model @profile patches as pending live model switches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-live-profile-only",
+      providerOverride: "anthropic",
+      modelOverride: ANTHROPIC_SONNET_ID,
+      authProfileOverride: "oldprofile",
+      authProfileOverrideSource: "user",
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@newprofile`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "newprofile" });
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("does not set authProfileOverride when profile suffix is missing", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: undefined });
+  });
+
+  test("persists full provider:profile authProfileOverride on model patch", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@openai:user@example.com`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "openai:user@example.com" });
+  });
+
+  test("resolves bare allowlisted model ids before persisting @profile suffix", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+              models: {
+                "opencode-go/kimi-k2.6": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "kimi-k2.6@work" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "opencode-go", id: "kimi-k2.6", name: "kimi-k2.6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("opencode-go");
+    expect(entry.modelOverride).toBe("kimi-k2.6");
+    expect(entry.authProfileOverride).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

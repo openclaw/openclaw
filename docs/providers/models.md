@@ -3,22 +3,10 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You want quick setup examples for LLM auth + model selection
-title: "Model Provider Quickstart"
+title: "Model provider quickstart"
 ---
 
-# Model Providers
-
-OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
-model as `provider/model`.
-
-## Highlight: Venice (Venice AI)
-
-Venice is our recommended Venice AI setup for privacy-first inference with an option to use Opus for the hardest tasks.
-
-- Default: `venice/llama-3.3-70b`
-- Best overall: `venice/claude-opus-45` (Opus remains the strongest)
-
-See [Venice AI](/providers/venice).
+Pick a provider, authenticate, then set the default model as `provider/model`.
 
 ## Quick start (two steps)
 
@@ -33,20 +21,49 @@ See [Venice AI](/providers/venice).
 
 ## Supported providers (starter set)
 
-- [OpenAI (API + Codex)](/providers/openai)
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
-- [OpenRouter](/providers/openrouter)
-- [Vercel AI Gateway](/providers/vercel-ai-gateway)
-- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-- [Synthetic](/providers/synthetic)
-- [OpenCode Zen](/providers/opencode)
-- [Z.AI](/providers/zai)
-- [GLM models](/providers/glm)
-- [MiniMax](/providers/minimax)
-- [Venice (Venice AI)](/providers/venice)
+- [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Chutes](/providers/chutes)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [Cohere](/providers/cohere)
+- [ComfyUI](/providers/comfy)
+- [DeepInfra](/providers/deepinfra)
+- [fal](/providers/fal)
+- [Fireworks](/providers/fireworks)
+- [MiniMax](/providers/minimax)
+- [Mistral](/providers/mistral)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [NovitaAI](/providers/novita)
+- [OpenAI (API + Codex)](/providers/openai)
+- [OpenCode (Zen + Go)](/providers/opencode)
+- [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
+- [Qwen](/providers/qwen)
+- [Runway](/providers/runway)
+- [StepFun](/providers/stepfun)
+- [Synthetic](/providers/synthetic)
+- [Venice (Venice AI)](/providers/venice)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [xAI](/providers/xai)
+- [Z.AI (GLM)](/providers/zai)
 
-For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
-see [Model providers](/concepts/model-providers).
+For the full provider catalog and advanced configuration, see
+[Provider directory](/providers/index) and [Model providers](/concepts/model-providers).
+
+<a id="additional-bundled-provider-variants" />
+
+## Additional provider variants
+
+- `anthropic-vertex` - install `@openclaw/anthropic-vertex-provider` for implicit Anthropic on Google Vertex support. That support applies when Vertex credentials are available. There is no separate onboarding auth choice.
+- `copilot-proxy` - local VS Code Copilot Proxy bridge. Use `openclaw onboard --auth-choice copilot-proxy`.
+- `google-gemini-cli` - optional explicit runtime for canonical `google/*` models. It requires a local `gemini` install and a supported Google AI Studio API-key profile. New Gemini CLI or Antigravity OAuth setup is not offered.
+
+## Related
+
+- [Provider directory](/providers/index)
+- [Model selection](/concepts/model-providers)
+- [Model failover](/concepts/model-failover)
+- [Models CLI](/cli/models)

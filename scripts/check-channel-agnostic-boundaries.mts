@@ -1,0 +1,377 @@
+#!/usr/bin/env node
+
+// Checks channel-agnostic core surfaces for channel-specific coupling.
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import {
+  collectTypeScriptFiles,
+  getPropertyNameText,
+  runAsScript,
+  toLine,
+  visitModuleSpecifiers,
+} from "./lib/ts-guard-utils.mts";
+
+const repoRoot = resolveRepoRoot(import.meta.url);
+
+const acpCoreProtectedSources = [
+  path.join(repoRoot, "src", "acp"),
+  path.join(repoRoot, "src", "agents", "subagents", "spawn", "acp-spawn.ts"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+  path.join(repoRoot, "src", "infra", "outbound", "conversation-id.ts"),
+];
+
+const channelCoreProtectedSources = [
+  path.join(repoRoot, "src", "channels", "thread-bindings-policy.ts"),
+  path.join(repoRoot, "src", "channels", "thread-bindings-messages.ts"),
+  path.join(repoRoot, "src", "sessions", "send-policy.ts"),
+  path.join(repoRoot, "src", "sessions", "session-chat-type-shared.ts"),
+  path.join(repoRoot, "src", "utils", "delivery-context.shared.ts"),
+];
+const acpUserFacingTextSources = [
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+];
+const systemMarkLiteralGuardSources = [
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "dispatch-acp.ts"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "directive-handling.shared.ts"),
+  path.join(repoRoot, "src", "channels", "thread-bindings-messages.ts"),
+];
+
+const channelIds = [
+  "discord",
+  "googlechat",
+  "imessage",
+  "irc",
+  "line",
+  "mattermost",
+  "matrix",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "qqbot",
+  "signal",
+  "slack",
+  "synology-chat",
+  "telegram",
+  "tlon",
+  "twitch",
+  "web",
+  "whatsapp",
+  "zalo",
+  "zalouser",
+];
+
+const channelIdSet = new Set(channelIds);
+const channelSegmentRe = new RegExp(`(^|[._/-])(?:${channelIds.join("|")})([._/-]|$)`);
+const comparisonOperators: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+]);
+
+const allowedViolations = new Set<string>();
+
+type BoundaryViolation = { line: number; reason: string };
+type BoundaryOptions = {
+  checkModuleSpecifiers?: boolean;
+  checkConfigPaths?: boolean;
+  checkChannelComparisons?: boolean;
+  checkChannelAssignments?: boolean;
+  moduleSpecifierMatcher?: (specifier: string) => boolean;
+};
+type ModuleSpecifierVisit = {
+  kind: string;
+  node: ts.Node;
+  specifier: string;
+  specifierNode: ts.Node;
+};
+function isChannelsPropertyAccess(node: ts.Node) {
+  if (ts.isPropertyAccessExpression(node)) {
+    return node.name.text === "channels";
+  }
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) {
+    return node.argumentExpression.text === "channels";
+  }
+  return false;
+}
+
+function readStringLiteral(node: ts.Node) {
+  if (ts.isStringLiteral(node)) {
+    return node.text;
+  }
+  if (ts.isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  return null;
+}
+
+function isChannelLiteralNode(node: ts.Node) {
+  const text = readStringLiteral(node);
+  return text ? channelIdSet.has(text) : false;
+}
+
+function matchesChannelModuleSpecifier(specifier: string) {
+  return channelSegmentRe.test(specifier.replaceAll("\\", "/"));
+}
+
+const userFacingChannelNameRe =
+  /\b(?:discord|telegram|slack|signal|imessage|whatsapp|google\s*chat|irc|line|zalo|matrix|msteams)\b/i;
+const systemMarkLiteral = "⚙️";
+
+function isModuleSpecifierStringNode(node: ts.Node) {
+  const parent = node.parent;
+  if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) {
+    return true;
+  }
+  return (
+    ts.isCallExpression(parent) &&
+    parent.expression.kind === ts.SyntaxKind.ImportKeyword &&
+    parent.arguments[0] === node
+  );
+}
+
+/**
+ * Finds channel-specific references inside channel-agnostic protected sources.
+ */
+export function findChannelAgnosticBoundaryViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+  options: BoundaryOptions = {},
+) {
+  const checkModuleSpecifiers = options.checkModuleSpecifiers ?? true;
+  const checkConfigPaths = options.checkConfigPaths ?? true;
+  const checkChannelComparisons = options.checkChannelComparisons ?? true;
+  const checkChannelAssignments = options.checkChannelAssignments ?? true;
+  const moduleSpecifierMatcher = options.moduleSpecifierMatcher ?? matchesChannelModuleSpecifier;
+
+  const violations: BoundaryViolation[] = [];
+  const moduleViolations = new Map<ts.Node, BoundaryViolation>();
+  if (checkModuleSpecifiers) {
+    visitModuleSpecifiers(
+      sourceFile,
+      ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
+        if (moduleSpecifierMatcher(specifier)) {
+          const verb =
+            kind === "export"
+              ? "re-exports"
+              : kind === "dynamic-import"
+                ? "dynamically imports"
+                : "imports";
+          moduleViolations.set(node, {
+            line: toLine(sourceFile, specifierNode),
+            reason: verb + ' channel module "' + specifier + '"',
+          });
+        }
+      },
+      { includeCommonJs: true, includeImportMetaUrl: true, includeImportTypes: true },
+    );
+  }
+
+  const visit = (node: ts.Node): void => {
+    const moduleViolation = moduleViolations.get(node);
+    if (moduleViolation) {
+      violations.push(moduleViolation);
+    }
+
+    if (
+      checkConfigPaths &&
+      ts.isPropertyAccessExpression(node) &&
+      channelIdSet.has(node.name.text)
+    ) {
+      if (isChannelsPropertyAccess(node.expression)) {
+        violations.push({
+          line: toLine(sourceFile, node.name),
+          reason: `references config path "channels.${node.name.text}"`,
+        });
+      }
+    }
+
+    if (
+      checkConfigPaths &&
+      ts.isElementAccessExpression(node) &&
+      ts.isStringLiteral(node.argumentExpression) &&
+      channelIdSet.has(node.argumentExpression.text)
+    ) {
+      if (isChannelsPropertyAccess(node.expression)) {
+        violations.push({
+          line: toLine(sourceFile, node.argumentExpression),
+          reason: `references config path "channels[${JSON.stringify(node.argumentExpression.text)}]"`,
+        });
+      }
+    }
+
+    if (
+      checkChannelComparisons &&
+      ts.isBinaryExpression(node) &&
+      comparisonOperators.has(node.operatorToken.kind)
+    ) {
+      if (isChannelLiteralNode(node.left) || isChannelLiteralNode(node.right)) {
+        const leftText = node.left.getText(sourceFile);
+        const rightText = node.right.getText(sourceFile);
+        violations.push({
+          line: toLine(sourceFile, node.operatorToken),
+          reason: `compares with channel id literal (${leftText} ${node.operatorToken.getText(sourceFile)} ${rightText})`,
+        });
+      }
+    }
+
+    if (checkChannelAssignments && ts.isPropertyAssignment(node)) {
+      const propName = getPropertyNameText(node.name);
+      if (propName === "channel" && isChannelLiteralNode(node.initializer)) {
+        violations.push({
+          line: toLine(sourceFile, node.initializer),
+          reason: `assigns channel id literal to "channel" (${node.initializer.getText(sourceFile)})`,
+        });
+      }
+    }
+
+    node.forEachChild(visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+}
+
+/**
+ * Finds reverse dependencies from channel core into plugin/runtime surfaces.
+ */
+export function findChannelCoreReverseDependencyViolations(
+  content: string,
+  fileName: string,
+  sourceFile: ts.SourceFile,
+) {
+  return findChannelAgnosticBoundaryViolations(content, fileName, sourceFile, {
+    checkModuleSpecifiers: true,
+    checkConfigPaths: false,
+    checkChannelComparisons: false,
+    checkChannelAssignments: false,
+    moduleSpecifierMatcher: matchesChannelModuleSpecifier,
+  });
+}
+
+/**
+ * Finds user-facing channel names in ACP-owned text sources.
+ */
+export function findAcpUserFacingChannelNameViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
+  const violations: BoundaryViolation[] = [];
+
+  const visit = (node: ts.Node): void => {
+    const text = readStringLiteral(node);
+    if (text && userFacingChannelNameRe.test(text) && !isModuleSpecifierStringNode(node)) {
+      violations.push({
+        line: toLine(sourceFile, node),
+        reason: `user-facing text references channel name (${JSON.stringify(text)})`,
+      });
+    }
+    node.forEachChild(visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+}
+
+/**
+ * Finds raw system mark literals where shared constants should be used.
+ */
+export function findSystemMarkLiteralViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
+  const violations: BoundaryViolation[] = [];
+
+  const visit = (node: ts.Node): void => {
+    const text = readStringLiteral(node);
+    if (text && text.includes(systemMarkLiteral) && !isModuleSpecifierStringNode(node)) {
+      violations.push({
+        line: toLine(sourceFile, node),
+        reason: `hardcoded system mark literal (${JSON.stringify(text)})`,
+      });
+    }
+    node.forEachChild(visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+}
+
+const boundaryRuleSets = [
+  {
+    id: "acp-core",
+    sources: acpCoreProtectedSources,
+    scan: findChannelAgnosticBoundaryViolations,
+  },
+  {
+    id: "channel-core-reverse-deps",
+    sources: channelCoreProtectedSources,
+    scan: findChannelCoreReverseDependencyViolations,
+  },
+  {
+    id: "acp-user-facing-text",
+    sources: acpUserFacingTextSources,
+    scan: findAcpUserFacingChannelNameViolations,
+  },
+  {
+    id: "system-mark-literal-usage",
+    sources: systemMarkLiteralGuardSources,
+    scan: findSystemMarkLiteralViolations,
+  },
+];
+
+/**
+ * Runs all channel-agnostic boundary checks.
+ */
+export async function main() {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  const violations: string[] = [];
+  for (const ruleSet of boundaryRuleSets) {
+    const files = (
+      await Promise.all(
+        ruleSet.sources.map(
+          async (sourcePath) =>
+            await collectTypeScriptFiles(sourcePath, {
+              ignoreMissing: true,
+            }),
+        ),
+      )
+    ).flat();
+    for (const filePath of files) {
+      const relativeFile = path.relative(repoRoot, filePath);
+      if (
+        allowedViolations.has(`${ruleSet.id}:${relativeFile}`) ||
+        allowedViolations.has(relativeFile)
+      ) {
+        continue;
+      }
+      const content = await fs.readFile(filePath, "utf8");
+      const sourceFile = parser.parseSourceFile(filePath, content);
+      for (const violation of ruleSet.scan(content, relativeFile, sourceFile)) {
+        violations.push(`${ruleSet.id} ${relativeFile}:${violation.line}: ${violation.reason}`);
+      }
+    }
+  }
+
+  if (violations.length === 0) {
+    return;
+  }
+
+  console.error("Found channel-specific references in channel-agnostic sources:");
+  for (const violation of violations) {
+    console.error(`- ${violation}`);
+  }
+  console.error(
+    "Move channel-specific logic to channel adapters or add a justified allowlist entry.",
+  );
+  process.exitCode = 1;
+}
+
+runAsScript(import.meta.url, main);

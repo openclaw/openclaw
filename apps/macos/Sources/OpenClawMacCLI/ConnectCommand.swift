@@ -1,9 +1,8 @@
+import CryptoKit
+import Foundation
+import OpenClawDiscovery
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
 
 struct ConnectOptions {
     var url: String?
@@ -17,7 +16,8 @@ struct ConnectOptions {
     var clientMode: String = "ui"
     var displayName: String?
     var role: String = "operator"
-    var scopes: [String] = ["operator.admin", "operator.approvals", "operator.pairing"]
+    var scopes: [String] = defaultOperatorConnectScopes
+    var scopesAreExplicit: Bool = false
     var help: Bool = false
 
     static func parse(_ args: [String]) -> ConnectOptions {
@@ -45,6 +45,7 @@ struct ConnectOptions {
             "--scopes": { opts, raw in
                 opts.scopes = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
+                opts.scopesAreExplicit = true
             },
         ]
         var i = 0
@@ -55,7 +56,7 @@ struct ConnectOptions {
                 i += 1
                 continue
             }
-            if let handler = valueHandlers[arg], let value = self.nextValue(args, index: &i) {
+            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
                 i += 1
                 continue
@@ -63,12 +64,6 @@ struct ConnectOptions {
             i += 1
         }
         return opts
-    }
-
-    private static func nextValue(_ args: [String], index: inout Int) -> String? {
-        guard index + 1 < args.count else { return nil }
-        index += 1
-        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -86,18 +81,59 @@ struct ConnectOutput: Encodable {
 }
 
 actor SnapshotStore {
-    private var value: HelloOk?
+    private var value: (snapshot: HelloOk, generation: UInt64)?
+    // The channel awaits retirement before reconnecting. Keep that socket epoch
+    // so a queued old callback cannot overwrite the replacement snapshot.
+    private var activeGeneration: UInt64?
+    private var lastRetiredGeneration: UInt64?
 
-    func set(_ snapshot: HelloOk) {
-        self.value = snapshot
+    func set(_ snapshot: HelloOk, generation: UInt64) {
+        guard self.admitGeneration(generation) else { return }
+        self.value = (snapshot, generation)
+    }
+
+    func retire(generation: UInt64) {
+        guard self.retireGeneration(generation) else { return }
+        if self.value?.generation == generation {
+            self.value = nil
+        }
     }
 
     func get() -> HelloOk? {
-        self.value
+        self.value?.snapshot
+    }
+
+    private func admitGeneration(_ generation: UInt64) -> Bool {
+        if let lastRetiredGeneration,
+           generation <= lastRetiredGeneration
+        {
+            return false
+        }
+        if let activeGeneration {
+            return generation == activeGeneration
+        }
+        self.activeGeneration = generation
+        return true
+    }
+
+    private func retireGeneration(_ generation: UInt64) -> Bool {
+        if let lastRetiredGeneration,
+           generation <= lastRetiredGeneration
+        {
+            return false
+        }
+        if let activeGeneration,
+           generation != activeGeneration
+        {
+            return false
+        }
+        self.activeGeneration = nil
+        self.lastRetiredGeneration = generation
+        return true
     }
 }
 
-func runConnect(_ args: [String]) async {
+func runConnect(_ args: [String], configURL: URL) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
@@ -110,6 +146,7 @@ func runConnect(_ args: [String]) async {
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -127,31 +164,29 @@ func runConnect(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
-        let connectOptions = GatewayConnectOptions(
-            role: opts.role,
-            scopes: opts.scopes,
-            caps: [],
-            commands: [],
-            permissions: [:],
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            clientDisplayName: displayName)
+        let connectOptions = makeGatewayConnectOptions(
+            opts: opts,
+            endpoint: endpoint,
+            displayName: displayName)
 
         let snapshotStore = SnapshotStore()
         let channel = GatewayChannelActor(
             url: endpoint.url,
             token: endpoint.token,
             password: endpoint.password,
-            pushHandler: { push in
+            pushHandler: { push, socketGeneration in
                 if case let .snapshot(ok) = push {
-                    await snapshotStore.set(ok)
+                    await snapshotStore.set(ok, generation: socketGeneration)
                 }
             },
-            connectOptions: connectOptions)
+            connectOptions: connectOptions,
+            disconnectHandler: { _, socketGeneration in
+                await snapshotStore.retire(generation: socketGeneration)
+            })
 
         let params: [String: KitAnyCodable]? = opts.probe ? ["probe": KitAnyCodable(true)] : nil
         let data = try await channel.request(
@@ -232,17 +267,15 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     }
 }
 
-private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
+func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
     if let raw = opts.url, !raw.isEmpty {
-        guard let url = URL(string: raw) else {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
-        }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
-            mode: resolvedMode)
+        return try gatewayEndpoint(
+            fromRawURL: raw,
+            opts: opts,
+            mode: resolvedMode,
+            config: config,
+            inheritConfigCredentials: false)
     }
 
     if resolvedMode == "remote" {
@@ -254,14 +287,7 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
-        guard let url = URL(string: raw) else {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
-        }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
-            mode: resolvedMode)
+        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
     }
 
     let port = config.port ?? 18789
@@ -274,8 +300,16 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-        password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
+        token: resolvedCredential(
+            opts.token,
+            mode: resolvedMode,
+            local: config.token,
+            remote: config.remoteToken),
+        password: resolvedCredential(
+            opts.password,
+            mode: resolvedMode,
+            local: config.password,
+            remote: config.remotePassword),
         mode: resolvedMode)
 }
 
@@ -283,71 +317,110 @@ private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> 
     try? resolveGatewayEndpoint(opts: opts, config: config)
 }
 
-private func resolvedToken(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
-    if let token = opts.token, !token.isEmpty { return token }
-    if mode == "remote" {
-        return config.remoteToken
+private func gatewayEndpoint(
+    fromRawURL raw: String,
+    opts: ConnectOptions,
+    mode: String,
+    config: GatewayConfig,
+    inheritConfigCredentials: Bool = true) throws -> GatewayEndpoint
+{
+    guard let url = URL(string: raw) else {
+        throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
     }
-    return config.token
+    return GatewayEndpoint(
+        url: url,
+        token: resolvedCredential(
+            opts.token,
+            mode: mode,
+            local: config.token,
+            remote: config.remoteToken,
+            inheritConfigCredentials: inheritConfigCredentials),
+        password: resolvedCredential(
+            opts.password,
+            mode: mode,
+            local: config.password,
+            remote: config.remotePassword,
+            inheritConfigCredentials: inheritConfigCredentials),
+        mode: mode)
 }
 
-private func resolvedPassword(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
-    if let password = opts.password, !password.isEmpty { return password }
-    if mode == "remote" {
-        return config.remotePassword
+private func resolvedCredential(
+    _ explicit: String?,
+    mode: String,
+    local: String?,
+    remote: String?,
+    inheritConfigCredentials: Bool = true) -> String?
+{
+    if let explicit, !explicit.isEmpty { return explicit }
+    guard inheritConfigCredentials else { return nil }
+    return mode == "remote" ? remote : local
+}
+
+func makeGatewayConnectOptions(
+    opts: ConnectOptions,
+    endpoint: GatewayEndpoint,
+    displayName: String) -> GatewayConnectOptions
+{
+    let hasExplicitURL = opts.url?.isEmpty == false
+    let deviceAuthGatewayID = gatewayURLDeviceAuthOwner(
+        endpoint.url,
+        mode: endpoint.mode)
+    return GatewayConnectOptions(
+        role: opts.role,
+        scopes: opts.scopes,
+        scopesAreExplicit: opts.scopesAreExplicit,
+        caps: [],
+        commands: [],
+        permissions: [:],
+        clientId: opts.clientId,
+        clientMode: opts.clientMode,
+        clientDisplayName: displayName,
+        allowStoredDeviceAuth: !hasExplicitURL,
+        // Explicit endpoints never consume stored auth. Every route still owns
+        // newly issued tokens so config-selected endpoints never fall back to
+        // the legacy role-global namespace either.
+        deviceAuthGatewayID: deviceAuthGatewayID)
+}
+
+func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.user = nil
+    components?.password = nil
+    let queryItems = components?.queryItems
+    components?.queryItems = queryItems?.filter { queryItem in
+        !isSensitiveGatewayQueryItem(queryItem.name)
     }
-    return config.password
+    if components?.queryItems?.isEmpty == true {
+        components?.query = nil
+    }
+    components?.fragment = nil
+    let endpoint = components?.string ?? "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
+    let route = "\(mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(endpoint)"
+    let digest = SHA256.hash(data: Data(route.utf8))
+    let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
+    return "openclaw-mac-cli:route:\(fingerprint)"
+}
+
+private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {
+    let normalized = value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .replacingOccurrences(of: "-", with: "_")
+    return [
+        "access_token", "api_key", "apikey", "app_secret", "auth", "auth_token",
+        "authorization", "client_secret", "code", "credential", "hook_token", "id_token",
+        "jwt", "key", "pass", "passwd", "password", "private_key", "refresh_token",
+        "secret", "session", "signature", "token", "x_amz_security_token", "x_amz_signature",
+    ].contains(normalized)
 }
 
 private func resolveLocalHost(bind: String?) -> String {
     let normalized = (bind ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let tailnetIP = detectTailnetIPv4()
+    let tailnetIP = TailscaleNetwork.detectTailnetIPv4()
     switch normalized {
     case "tailnet":
         return tailnetIP ?? "127.0.0.1"
     default:
         return "127.0.0.1"
     }
-}
-
-private func detectTailnetIPv4() -> String? {
-    var addrList: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
-    defer { freeifaddrs(addrList) }
-
-    for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
-        let flags = Int32(ptr.pointee.ifa_flags)
-        let isUp = (flags & IFF_UP) != 0
-        let isLoopback = (flags & IFF_LOOPBACK) != 0
-        let family = ptr.pointee.ifa_addr.pointee.sa_family
-        if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
-
-        var addr = ptr.pointee.ifa_addr.pointee
-        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        let result = getnameinfo(
-            &addr,
-            socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
-            &buffer,
-            socklen_t(buffer.count),
-            nil,
-            0,
-            NI_NUMERICHOST)
-        guard result == 0 else { continue }
-        let len = buffer.prefix { $0 != 0 }
-        let bytes = len.map { UInt8(bitPattern: $0) }
-        guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-        if isTailnetIPv4(ip) { return ip }
-    }
-
-    return nil
-}
-
-private func isTailnetIPv4(_ address: String) -> Bool {
-    let parts = address.split(separator: ".")
-    guard parts.count == 4 else { return false }
-    let octets = parts.compactMap { Int($0) }
-    guard octets.count == 4 else { return false }
-    let a = octets[0]
-    let b = octets[1]
-    return a == 100 && b >= 64 && b <= 127
 }

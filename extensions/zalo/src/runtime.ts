@@ -1,14 +1,10 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+// Zalo plugin module implements runtime behavior.
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setZaloRuntime(next: PluginRuntime): void {
-  runtime = next;
-}
-
-export function getZaloRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Zalo runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setZaloRuntime, getRuntime: getZaloRuntime } =
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "zalo",
+    errorMessage: "Zalo runtime not initialized",
+  });
+export { getZaloRuntime, setZaloRuntime };

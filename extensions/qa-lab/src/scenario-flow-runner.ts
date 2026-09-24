@@ -1,0 +1,457 @@
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
+import type { QaTransportState } from "./qa-transport.js";
+import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import type { QaSuiteScenarioResult, QaSuiteStep, QaSuiteStepOutcome } from "./suite-types.js";
+
+type QaFlowApi = Record<string, unknown> & {
+  signal?: AbortSignal;
+  state: QaTransportState;
+  scenario: QaSeedScenarioWithSource;
+  config: Record<string, unknown>;
+  runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
+};
+
+type QaFlowVars = Record<string, unknown>;
+type QaFlowImportLoader = () => Promise<unknown>;
+
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+  ...args: string[]
+) => (...fnArgs: unknown[]) => Promise<unknown>;
+
+const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
+  "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
+  "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./errors.js": () => import("./errors.js"),
+  "./gateway-log-redaction.js": () => import("./gateway-log-redaction.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-approval.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-config.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-config.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-dm.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-dm.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-edit.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-media.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-message-actions.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-message-actions.js"),
+  "./voice-preflight.fixture.js": () => import("./voice-preflight.fixture.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-policy.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-policy.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-reaction.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-reaction.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-restart.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-restart.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-room.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-room.js"),
+  "./live-transports/discord/scenario-runtime.js": () =>
+    import("./live-transports/discord/scenario-runtime.js"),
+  "./live-transports/slack/scenario-runtime.js": () =>
+    import("./live-transports/slack/scenario-runtime.js"),
+  "./live-transports/whatsapp/scenario-runtime.js": () =>
+    import("./live-transports/whatsapp/scenario-runtime.js"),
+  "./suite-artifacts.js": () => import("./suite-artifacts.js"),
+  "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
+};
+
+function formatFlowDetails(details: unknown) {
+  if (details === undefined) {
+    return undefined;
+  }
+  if (typeof details === "string") {
+    return details;
+  }
+  if (typeof details === "number" || typeof details === "boolean" || typeof details === "bigint") {
+    return String(details);
+  }
+  return JSON.stringify(details, null, 2);
+}
+
+function resolveFlowRttMeasurement(value: unknown): QaEvidenceRttMeasurement | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const { finalMatchedReplyRttMs, requestStartedAt, responseObservedAt, source } = value;
+  if (
+    typeof finalMatchedReplyRttMs !== "number" ||
+    !Number.isFinite(finalMatchedReplyRttMs) ||
+    finalMatchedReplyRttMs <= 0 ||
+    typeof requestStartedAt !== "string" ||
+    !requestStartedAt.trim() ||
+    typeof responseObservedAt !== "string" ||
+    !responseObservedAt.trim() ||
+    typeof source !== "string" ||
+    !source.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    finalMatchedReplyRttMs,
+    requestStartedAt: requestStartedAt.trim(),
+    responseObservedAt: responseObservedAt.trim(),
+    source: source.trim(),
+  };
+}
+
+function resolveFlowResultRtt(result: unknown) {
+  if (!isPlainObject(result)) {
+    return undefined;
+  }
+  const timing = isPlainObject(result.timing) ? result.timing : undefined;
+  const measurement = resolveFlowRttMeasurement(result.rttMeasurement);
+  const rawMeasurement = isPlainObject(result.rttMeasurement) ? result.rttMeasurement : undefined;
+  const fallbackRttMs = timing?.rttMs ?? rawMeasurement?.finalMatchedReplyRttMs ?? result.rttMs;
+  const rttMs = measurement?.finalMatchedReplyRttMs ?? fallbackRttMs;
+  if (typeof rttMs !== "number" || !Number.isFinite(rttMs) || rttMs <= 0) {
+    return undefined;
+  }
+  return {
+    timing: { rttMs },
+    ...(measurement ? { rttMeasurement: measurement } : {}),
+  } satisfies Pick<QaSuiteStepOutcome, "timing" | "rttMeasurement">;
+}
+
+function getPathWithParent(
+  root: Record<string, unknown>,
+  ref: string,
+): { parent: Record<string, unknown> | null; value: unknown } {
+  const parts = ref.split(".").filter(Boolean);
+  let current: unknown = root;
+  let parent: Record<string, unknown> | null = null;
+  for (const part of parts) {
+    if (!isPlainObject(current)) {
+      return { parent: null, value: undefined };
+    }
+    parent = current;
+    current = current[part];
+  }
+  return { parent, value: current };
+}
+
+function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
+  return {
+    ...api,
+    qaImport: (specifier: string) => {
+      const loader = qaFlowImportLoaders[specifier];
+      return loader ? loader() : import(specifier);
+    },
+    vars,
+    ...vars,
+  };
+}
+
+async function evalExpr(expr: string, api: QaFlowApi, vars: QaFlowVars) {
+  const context = createEvalContext(api, vars);
+  const names = Object.keys(context);
+  const values = Object.values(context);
+  const fn = new AsyncFunction(...names, `return (${expr});`);
+  return await fn(...values);
+}
+
+function buildLambda(
+  spec: { params?: string[]; expr: string; async?: boolean },
+  api: QaFlowApi,
+  vars: QaFlowVars,
+) {
+  const context = createEvalContext(api, vars);
+  const names = Object.keys(context);
+  const values = Object.values(context);
+  const params = spec.params ?? [];
+  const Factory = spec.async ? AsyncFunction : Function;
+  const fn = new Factory(...names, ...params, `return (${spec.expr});`) as (
+    ...fnArgs: unknown[]
+  ) => unknown;
+  return (...lambdaArgs: unknown[]) => fn(...values, ...lambdaArgs);
+}
+
+async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Promise<unknown> {
+  if (Array.isArray(node)) {
+    return await Promise.all(node.map((entry) => resolveValue(entry, api, vars)));
+  }
+  if (!isPlainObject(node)) {
+    return node;
+  }
+  const keys = Object.keys(node);
+  if (keys.length === 1 && typeof node.ref === "string") {
+    return getPathWithParent(createEvalContext(api, vars), node.ref).value;
+  }
+  if (keys.length === 1 && typeof node.expr === "string") {
+    return await evalExpr(node.expr, api, vars);
+  }
+  if (keys.length === 1 && isPlainObject(node.lambda) && typeof node.lambda.expr === "string") {
+    return buildLambda(
+      {
+        expr: node.lambda.expr,
+        params: Array.isArray(node.lambda.params)
+          ? node.lambda.params.filter((entry): entry is string => typeof entry === "string")
+          : [],
+        async: node.lambda.async === true,
+      },
+      api,
+      vars,
+    );
+  }
+  const entries = await Promise.all(
+    Object.entries(node).map(async ([key, value]) => [key, await resolveValue(value, api, vars)]),
+  );
+  return Object.fromEntries(entries);
+}
+
+function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
+  const { parent, value } = getPathWithParent(createEvalContext(api, vars), path);
+  if (typeof value !== "function") {
+    if (path.startsWith("transport.")) {
+      const method = path.slice("transport.".length);
+      throw new Error(
+        `QA scenario "${api.scenario.id}" cannot run "${method}": the active transport adapter does not implement this method.`,
+      );
+    }
+    throw new Error(`qa flow callable not found: ${path}`);
+  }
+  return parent ? value.bind(parent) : value;
+}
+
+type QaFlowActionOptions = { allowAfterAbort?: boolean; cleanupApi?: QaFlowApi };
+
+function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
+  if (!options.allowAfterAbort) {
+    api.signal?.throwIfAborted();
+  }
+}
+
+async function runFlowAction(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions = {},
+) {
+  throwIfFlowAborted(api, options);
+  try {
+    await runFlowActionBody(action, api, vars, options);
+  } finally {
+    throwIfFlowAborted(api, options);
+  }
+}
+
+async function runFlowActionBody(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions,
+) {
+  if (!isPlainObject(action)) {
+    throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
+  }
+  const transportAction = [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ].find((name) => name in action);
+  const call = typeof action.call === "string" ? action.call : undefined;
+  if (call !== undefined || transportAction) {
+    const callable = resolveCallable(call ?? `transport.${transportAction}`, api, vars);
+    const inputs =
+      call === undefined
+        ? [action[transportAction!]]
+        : Array.isArray(action.args)
+          ? action.args
+          : [];
+    const args = await Promise.all(inputs.map((entry) => resolveValue(entry, api, vars)));
+    // Value resolution may cross the deadline, so fence every callable at invocation time.
+    throwIfFlowAborted(api, options);
+    const result = await callable(...args);
+    if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+      vars[action.saveAs.trim()] = result;
+    }
+    return;
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
+    await reset();
+    return;
+  }
+  if (typeof action.set === "string") {
+    vars[action.set] = await resolveValue(action.value, api, vars);
+    return;
+  }
+  if (typeof action.assert === "string" || isPlainObject(action.assert)) {
+    const spec =
+      typeof action.assert === "string"
+        ? { expr: action.assert, message: undefined }
+        : {
+            expr: typeof action.assert.expr === "string" ? action.assert.expr : "",
+            message: action.assert.message,
+          };
+    if (!spec.expr) {
+      throw new Error(`invalid qa flow assertion: ${JSON.stringify(action.assert)}`);
+    }
+    const passed = Boolean(await evalExpr(spec.expr, api, vars));
+    if (!passed) {
+      const message =
+        spec.message === undefined ? undefined : await resolveValue(spec.message, api, vars);
+      throw new Error(
+        typeof message === "string" && message.trim()
+          ? message
+          : `qa flow assertion failed: ${spec.expr}`,
+      );
+    }
+    return;
+  }
+  if (typeof action.throw === "string" || isPlainObject(action.throw)) {
+    const spec =
+      typeof action.throw === "string"
+        ? { expr: undefined, message: action.throw }
+        : {
+            expr: typeof action.throw.expr === "string" ? action.throw.expr : undefined,
+            message: action.throw.message,
+          };
+    const evaluated = spec.expr ? await evalExpr(spec.expr, api, vars) : undefined;
+    const message =
+      spec.message === undefined ? undefined : await resolveValue(spec.message, api, vars);
+    if (evaluated instanceof Error) {
+      throw evaluated;
+    }
+    if (typeof evaluated === "string" && evaluated.trim()) {
+      throw new Error(evaluated);
+    }
+    if (typeof message === "string" && message.trim()) {
+      throw new Error(message);
+    }
+    throw new Error("qa flow throw");
+  }
+  if (isPlainObject(action.if)) {
+    const ifAction = action.if as { expr: string; then: unknown[]; else?: unknown[] };
+    const passed = Boolean(await evalExpr(ifAction.expr, api, vars));
+    const branch = passed ? ifAction.then : (ifAction.else ?? []);
+    for (const nested of branch) {
+      await runFlowAction(nested, api, vars, options);
+    }
+    return;
+  }
+  if (isPlainObject(action.forEach)) {
+    const forEachAction = action.forEach as {
+      items: unknown;
+      item: string;
+      index?: string;
+      actions: unknown[];
+    };
+    const items = await resolveValue(forEachAction.items, api, vars);
+    if (!Array.isArray(items)) {
+      throw new Error(`qa flow forEach items must resolve to array: ${JSON.stringify(items)}`);
+    }
+    for (const [index, item] of items.entries()) {
+      vars[forEachAction.item] = item;
+      if (forEachAction.index) {
+        vars[forEachAction.index] = index;
+      }
+      for (const nested of forEachAction.actions) {
+        await runFlowAction(nested, api, vars, options);
+      }
+    }
+    return;
+  }
+  if (isPlainObject(action.try)) {
+    const tryAction = action.try as {
+      actions: unknown[];
+      catchAs?: string;
+      catch?: unknown[];
+      finally?: unknown[];
+    };
+    try {
+      for (const nested of tryAction.actions) {
+        await runFlowAction(nested, api, vars, options);
+      }
+    } catch (error) {
+      if (!tryAction.catch && !tryAction.finally) {
+        throw error;
+      }
+      if (tryAction.catchAs) {
+        vars[tryAction.catchAs] = error;
+      }
+      if (tryAction.catch) {
+        for (const nested of tryAction.catch) {
+          await runFlowAction(nested, api, vars, options);
+        }
+      } else {
+        throw error;
+      }
+    } finally {
+      if (tryAction.finally) {
+        for (const nested of tryAction.finally) {
+          // Keep this view local to finally; normal actions retain their scenario signal.
+          await runFlowAction(nested, options.cleanupApi ?? api, vars, {
+            ...options,
+            allowAfterAbort: true,
+          });
+        }
+      }
+    }
+    return;
+  }
+  throw new Error(`unknown qa flow action: ${JSON.stringify(action)}`);
+}
+
+export async function runScenarioFlow(params: {
+  api: QaFlowApi;
+  cleanupApi?: QaFlowApi;
+  flow: QaScenarioFlow;
+  scenarioTitle: string;
+  vars?: QaFlowVars;
+}) {
+  const vars = params.vars ?? {};
+  const steps: QaSuiteStep[] = params.flow.steps.map((step) => ({
+    name: step.name,
+    run: async () => {
+      for (const action of step.actions) {
+        await runFlowAction(action, params.api, vars, { cleanupApi: params.cleanupApi });
+      }
+      if (!step.detailsExpr && !step.resultExpr) {
+        return undefined;
+      }
+      throwIfFlowAborted(params.api);
+      try {
+        const details = step.detailsExpr
+          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+          : undefined;
+        const rtt = step.resultExpr
+          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+          : undefined;
+        if (!rtt) {
+          return details === undefined ? undefined : { details };
+        }
+        return {
+          ...(details === undefined ? {} : { details }),
+          ...rtt,
+        } satisfies QaSuiteStepOutcome;
+      } finally {
+        throwIfFlowAborted(params.api);
+      }
+    },
+  }));
+  const result = await params.api.runScenario(params.scenarioTitle, steps);
+  return isPlainObject(vars.modelSwitchEvidence)
+    ? { ...result, modelSwitchEvidence: vars.modelSwitchEvidence }
+    : result;
+}

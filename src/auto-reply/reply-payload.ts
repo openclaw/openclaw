@@ -1,0 +1,514 @@
+import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+  readNonBlankString as normalizeTtsSupplementSpokenText,
+} from "@openclaw/normalization-core/string-coerce";
+/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type { ReplyToMode } from "../config/types.base.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { BlockReplySource } from "./reply/block-reply-source.types.js";
+
+export type {
+  ReplyMediaAttachment,
+  ReplyPayload,
+  ReplyPayloadTtsSupplement,
+} from "../shared/reply-payload.types.js";
+
+export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+/** Adds the BTW question banner for channels that only accept plain text bodies. */
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = normalizeOptionalString(payload.text);
+  if (!text) {
+    return payload.text;
+  }
+  const question = normalizeOptionalString(payload.btw?.question);
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
+
+/** True when a payload has visible or playable content for delivery. */
+export function isRenderablePayload(payload: ReplyPayload): boolean {
+  return hasReplyPayloadContent(payload, {
+    extraContent:
+      payload.audioAsVoice || payload.location != null || hasReplyPayloadSpeechContent(payload),
+  });
+}
+
+/** True when a payload should stay internal as reasoning-only output. */
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
+
+/** Producer-owned outcome for one attachment that could not be delivered. */
+export type ReplyMediaFailure = {
+  code: ReplyMediaFailureCode;
+  kind: "image" | "audio" | "video" | "document";
+  label: string;
+  mimeType?: string;
+};
+
+export function readAskUserQuestionId(
+  payload: Pick<ReplyPayload, "channelData">,
+): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+    return undefined;
+  }
+  const questionId = (askUser as { questionId?: unknown }).questionId;
+  return typeof questionId === "string" && questionId ? questionId : undefined;
+}
+
+// Private device-pair -> Gateway live-display envelope key. Do not re-export
+// through Plugin SDK; this is not a third-party plugin contract.
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+
+type PairingQrReplyChannelData = {
+  setupCode: string;
+  expiresAtMs: number;
+};
+
+export function readPairingQrReplyChannelData(
+  payload: Pick<ReplyPayload, "channelData">,
+): PairingQrReplyChannelData | undefined {
+  const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const setupCode = readNonBlankString(record.setupCode);
+  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
+}
+
+/** Metadata for fast-auto progress notices. */
+export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
+
+export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
+  return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
+}
+
+/** Reply policy facts that provider adapters use to resolve the final transport route. */
+export type ReplyDeliveryContext = {
+  chatType?: "direct" | "group" | "channel" | null;
+  replyToMode: ReplyToMode;
+};
+
+const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
+  "file-not-found": "File not found. Check the path and try again.",
+  "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
+  "delivery-failed": "Delivery failed. Try sending this file again.",
+};
+
+function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {
+  return failures
+    .map((failure) => `⚠️ ${failure.label}: ${REPLY_MEDIA_FAILURE_MESSAGES[failure.code]}`)
+    .join("\n");
+}
+
+/** Appends one named, actionable fallback receipt per failed attachment. */
+export function appendReplyMediaFailures(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (failures.length === 0) {
+    return text;
+  }
+  const receipt = formatReplyMediaFailures(failures);
+  return text?.trim() ? `${text}\n${receipt}` : receipt;
+}
+
+/** Removes producer-authored fallback receipts when structured display cards supersede them. */
+export function stripReplyMediaFailureFallback(
+  text: string | undefined,
+  failures: readonly ReplyMediaFailure[],
+): string | undefined {
+  if (!text || failures.length === 0) {
+    return text;
+  }
+  const receipt = formatReplyMediaFailures(failures);
+  if (text === receipt) {
+    return undefined;
+  }
+  const suffix = `\n${receipt}`;
+  return text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
+}
+
+function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
+  return Boolean(
+    readNonBlankString(payload.mediaUrl) ||
+    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+  );
+}
+
+/** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
+export function getReplyPayloadTtsSupplement(
+  payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
+): ReplyPayloadTtsSupplement | undefined {
+  const spokenText = normalizeTtsSupplementSpokenText(payload.ttsSupplement?.spokenText);
+  if (!spokenText || !hasReplyPayloadMedia(payload)) {
+    return undefined;
+  }
+  return {
+    spokenText,
+    ...(payload.ttsSupplement?.visibleTextAlreadyDelivered === true
+      ? { visibleTextAlreadyDelivered: true }
+      : {}),
+  };
+}
+
+/** Returns true when the payload is a valid TTS supplement media payload. */
+export function isReplyPayloadTtsSupplement(
+  payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
+): boolean {
+  return Boolean(getReplyPayloadTtsSupplement(payload));
+}
+
+/** Marks a reply payload as supplemental TTS media while preserving the original shape. */
+export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
+  payload: T,
+  spokenText: string = payload.spokenText ?? payload.text ?? "",
+  options?: { visibleTextAlreadyDelivered?: boolean },
+): T {
+  const normalizedSpokenText = normalizeTtsSupplementSpokenText(spokenText);
+  if (!normalizedSpokenText) {
+    return payload;
+  }
+  return {
+    ...payload,
+    spokenText: normalizedSpokenText,
+    ttsSupplement: {
+      spokenText: normalizedSpokenText,
+      ...(options?.visibleTextAlreadyDelivered === true
+        ? { visibleTextAlreadyDelivered: true }
+        : {}),
+    },
+  };
+}
+
+/** Removes visible-only fields from a payload that should be delivered as TTS supplement media. */
+export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayload {
+  const supplement = getReplyPayloadTtsSupplement(payload);
+  if (!supplement) {
+    return payload;
+  }
+  const {
+    text: _text,
+    presentation: _presentation,
+    interactive: _interactive,
+    btw: _btw,
+    ...mediaPayload
+  } = payload;
+  return copyReplyPayloadMetadata(payload, {
+    ...mediaPayload,
+    spokenText: supplement.spokenText,
+    ttsSupplement: supplement,
+  });
+}
+
+/** WeakMap-backed metadata attached to payload objects without changing wire shape. */
+export type SessionWriterDeliveryAuthority = {
+  agentId?: string;
+  /** Captured admitted completion authority, retained by the durable queue. */
+  harnessCompletion?: HarnessCompletionRecovery;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  expectedWriterRunId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
+export type ReplyPayloadMetadata = {
+  /** Raw parsing classified the text as silent before removing its control token. */
+  silentReply?: true;
+  /** The model failed after a committed recovery compaction in the same turn. */
+  postCompactionModelFailure?: true;
+  assistantMessageIndex?: number;
+  /** Answer to a preceding user input in the same run. */
+  precedingInputAnswer?: true;
+  /** Visible source represented by this block, excluding synthetic chunk wrappers. */
+  blockSourceText?: string;
+  /** UTF-16 source range represented by this block within one assistant message. */
+  blockSourceRange?: readonly [start: number, end: number];
+  /** Live source receipts retained until final text recovery settles. */
+  blockReplySources?: readonly BlockReplySource[];
+  /** Persisted assistant speech facts; never serialized into channel payloads. */
+  tts?: AssistantDeliveryTtsFacts;
+  /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
+  ttsExplicit?: true;
+  /** Original runtime MEDIA references used to identify the persisted assistant row. */
+  assistantTranscriptMediaUrls?: string[];
+  /** Original references associated with each successfully normalized media URL. */
+  replyMediaSourceUrls?: ReadonlyMap<string, readonly string[]>;
+  /** A delivery modifier selected the current payload media for this operation. */
+  replyMediaSelectionChanged?: true;
+  /** Ordered per-source failures retained until transcript/display projection. */
+  assistantMediaFailures?: ReplyMediaFailure[];
+  /** The runtime owns the transcript decision for this assistant payload. */
+  assistantTranscriptOwned?: boolean;
+  /** Exact channel/account transform owner that already accepted this payload. */
+  channelReplyTransformOwner?: object;
+  /** Exact dispatcher that already ran its full normalization before side effects. */
+  replyDispatcherNormalizationOwner?: object;
+  /** The command owner produced this terminal reply without starting an agent run. */
+  commandReply?: true;
+  /** A read-only status command exchange belongs in history, not model context. */
+  contextFreeCommand?: true;
+  /** Host-owned acknowledgement after this final payload is confirmed delivered. */
+  onFinalDeliverySuccess?: () => void;
+  /** Host-projected monitoring final; notification policy already normalized its text. */
+  heartbeatReply?: true;
+  /** Exact key for replacing a runtime-owned assistant row after media materialization. */
+  assistantTranscriptIdempotencyKey?: string;
+  /** Original session-writer claim that must still hold at final delivery. */
+  sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+  /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
+  finalDeliveryCapture?: object;
+  /** One host-visible status gates a child-completion wake for this exact turn. */
+  continuationStatus?: true;
+  /** One-shot transfer of an identified ongoing progress surface to its core task owner. */
+  progressContinuation?: ProgressContinuationCapability;
+  /** Exact persisted delivery owner; WeakMap-only and never serialized. */
+  pendingFinalDeliveryCompletion?: {
+    agentId?: string;
+    deliveryId: string;
+    intentId: string;
+    recoveryRunId?: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
+  /** replyToId existed before reply threading could inject an implicit target. */
+  replyToIdExplicit?: boolean;
+  /** The host's single-use reply policy already consumed its target. */
+  replyTargetSuppressed?: true;
+  /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
+  replyDelivery?: ReplyDeliveryContext;
+  /** Route identity that produced replyDelivery, used to reject stale cross-route policy. */
+  replyDeliverySource?: {
+    channel: string;
+    accountId?: string;
+  };
+  /**
+   * Internal OpenClaw notices and host-owned artifacts are not assistant source
+   * replies. Dispatch may deliver them even when normal assistant source replies
+   * are message-tool-only; sendPolicy deny still wins.
+   */
+  deliverDespiteSourceReplySuppression?: boolean;
+  /**
+   * A message-tool reply to the active internal UI source. The final payload is
+   * still the live delivery vehicle; this mirror makes the reply durable for
+   * chat.history and page reloads without turning the internal UI into an
+   * outbound channel.
+   */
+  sourceReplyTranscriptMirror?: {
+    sessionKey: string;
+    agentId?: string;
+    expectedSessionId?: string;
+    /** Delivery stays live, but neither side may be appended to a transcript. */
+    transcriptWriteBlocked?: boolean;
+    /** The visible reply already owns its durable transcript row. */
+    transcriptOwner?: boolean;
+    text?: string;
+    mediaUrls?: string[];
+    idempotencyKey?: string;
+  };
+  beforeAgentRunBlocked?: boolean;
+  /** Payload preparation generated this provider error; it is not an authored answer. */
+  terminalProviderError?: true;
+  /** The warning owner observed this tool failure; presentation text is not evidence. */
+  toolErrorWarning?: { toolName: string };
+  /** Warning synthesized from an observed tool error after the run produced assistant output. */
+  nonTerminalToolErrorWarning?: boolean;
+  /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
+  heartbeatTerminalToolFailure?: {
+    toolName: string;
+  };
+  /** Private scratch must survive reply copies without becoming serializable channel data. */
+  heartbeatScratchProposal?: string;
+};
+
+// Source Gateways and native plugin SDK chunks must share the same payload identity.
+const replyPayloadMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.replyPayloadMetadata"),
+  () => new WeakMap<object, ReplyPayloadMetadata>(),
+);
+
+/** Adds internal metadata to a reply payload object. */
+export function setReplyPayloadMetadata<T extends object>(
+  payload: T,
+  metadata: ReplyPayloadMetadata,
+): T {
+  const previous = replyPayloadMetadata.get(payload);
+  replyPayloadMetadata.set(payload, { ...previous, ...metadata });
+  return payload;
+}
+
+/** Reads internal metadata attached to a reply payload object. */
+export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
+  return replyPayloadMetadata.get(payload);
+}
+
+/** Exact source occurrence represented by one emitted block reply. */
+export type ReplyPayloadSourceOccurrence = {
+  assistantMessageIndex: number;
+  sourceText: string;
+  sourceRange: readonly [start: number, end: number];
+};
+
+/** Reads a complete, internally consistent source occurrence from reply metadata. */
+export function readReplyPayloadSourceOccurrence(
+  payload: object,
+): ReplyPayloadSourceOccurrence | undefined {
+  const metadata = getReplyPayloadMetadata(payload);
+  const assistantMessageIndex = metadata?.assistantMessageIndex;
+  const sourceText = metadata?.blockSourceText;
+  const sourceRange = metadata?.blockSourceRange;
+  if (
+    typeof assistantMessageIndex !== "number" ||
+    !Number.isSafeInteger(assistantMessageIndex) ||
+    assistantMessageIndex < 0 ||
+    typeof sourceText !== "string" ||
+    !Array.isArray(sourceRange) ||
+    sourceRange.length !== 2
+  ) {
+    return undefined;
+  }
+  const [start, end] = sourceRange;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end - start !== sourceText.length
+  ) {
+    return undefined;
+  }
+  return {
+    assistantMessageIndex,
+    sourceText,
+    sourceRange: [start, end],
+  };
+}
+
+/** Explicit speech remains content while the payload waits for TTS admission. */
+export function hasReplyPayloadSpeechContent(payload: object): boolean {
+  return Boolean(readNonBlankString(getReplyPayloadMetadata(payload)?.tts?.text));
+}
+
+export function isReplyPayloadTargetSuppressed(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.replyTargetSuppressed === true;
+}
+
+/** Keep derived reply fields consistent with the host's recorded target decision. */
+export function applyReplyPayloadTargetPolicy(payload: ReplyPayload): ReplyPayload {
+  if (!isReplyPayloadTargetSuppressed(payload)) {
+    return payload;
+  }
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    replyToId: undefined,
+    replyToCurrent: false,
+    replyToTag: false,
+  });
+}
+
+/** Revalidates an authority-bearing payload against a freshly loaded session row. */
+export function isReplyPayloadSessionWriterDeliveryAuthorized(
+  payload: object,
+  entry:
+    | {
+        activeWriterRunId?: string;
+        lifecycleRevision?: string;
+        sessionId?: string;
+      }
+    | undefined,
+): boolean {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!authority) {
+    return true;
+  }
+  return Boolean(
+    entry &&
+    entry.sessionId === authority.expectedSessionId &&
+    (authority.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === authority.expectedLifecycleRevision) &&
+    (authority.expectedWriterRunId === undefined ||
+      entry.activeWriterRunId === authority.expectedWriterRunId),
+  );
+}
+
+/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
+export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
+}
+
+/** Copies internal payload metadata when cloning or transforming payload objects. */
+export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
+  const metadata = getReplyPayloadMetadata(source);
+  return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
+}
+
+/** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
+export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
+  return setReplyPayloadMetadata(payload, {
+    deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+export function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  const markPayload = (payload: ReplyPayload): ReplyPayload =>
+    setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+      commandReply: true,
+    });
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map(markPayload);
+  }
+  return markPayload(reply);
+}
+
+/** Returns true only when a command owner produced every payload in a non-empty reply. */
+export function isCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): boolean {
+  const payloads = Array.isArray(reply) ? reply : reply ? [reply] : [];
+  return (
+    payloads.length > 0 &&
+    payloads.every((payload) => getReplyPayloadMetadata(payload)?.commandReply === true)
+  );
+}
+
+/** Returns true for internal status/notice payloads, not assistant answer content. */
+export function isReplyPayloadStatusNotice(
+  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
+): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
+/** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */
+export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
+  const supplement = getReplyPayloadTtsSupplement(payload);
+  return (
+    payload.isReasoning !== true &&
+    payload.isCommentary !== true &&
+    (!isReplyPayloadStatusNotice(payload) ||
+      getReplyPayloadMetadata(payload)?.commandReply === true) &&
+    (!supplement ||
+      (supplement.visibleTextAlreadyDelivered !== true &&
+        Boolean(readNonBlankString(payload.text))))
+  );
+};

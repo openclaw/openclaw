@@ -1,18 +1,75 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { symlinkSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+// Covers Tailscale whois, Serve, and Funnel helpers.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
+import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
 import * as tailscale from "./tailscale.js";
 
 const {
-  ensureGoInstalled,
-  ensureTailscaledInstalled,
   getTailnetHostname,
-  enableTailscaleServe,
-  disableTailscaleServe,
-  ensureFunnel,
+  getTailnetHostnameAfterServe,
+  readTailscaleWhoisIdentity,
+  claimTailscaleRoute,
+  hasTailscaleFunnelRouteForPort,
 } = tailscale;
-const tailscaleBin = expect.stringMatching(/tailscale$/i);
+const tailscaleBin = "tailscale";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function useTailscaleSudoFixture(mode: "password" | "route-error" | "conflict") {
+  const fixture = fileURLToPath(
+    new URL("../../test/fixtures/tailscale-sudo-fixture.mjs", import.meta.url),
+  );
+  const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
+  symlinkSync(fixture, path.join(fakeBin, "sudo"));
+  process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+  process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+  process.env.OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE = mode;
+}
+
+function expectExecCall(
+  exec: ReturnType<typeof vi.fn>,
+  callNumber: number,
+  command: string,
+  args: readonly string[],
+  options?: Record<string, unknown>,
+) {
+  const call = exec.mock.calls[callNumber - 1];
+  if (!call) {
+    throw new Error(`Expected exec call ${callNumber}`);
+  }
+  expect(call[0]).toBe(command);
+  expect(call[1]).toEqual(args);
+  if (options) {
+    expect(call).toHaveLength(3);
+    expect(call[2]).toEqual(options);
+  } else {
+    expect(call).toHaveLength(2);
+  }
+}
 
 describe("tailscale helpers", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_TEST_TAILSCALE_BINARY",
+      "OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE",
+      "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+      "NODE_ENV",
+      "PATH",
+      "VITEST",
+    ]);
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
+    process.env.VITEST ??= "true";
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
@@ -34,158 +91,432 @@ describe("tailscale helpers", () => {
     expect(host).toBe("100.2.2.2");
   });
 
-  it("ensureGoInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
-    const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
-    await ensureGoInstalled(exec as never, prompt, runtime);
-    expect(exec).toHaveBeenCalledWith("brew", ["install", "go"]);
-  });
-
-  it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
-    const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
-    const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
-    await ensureTailscaledInstalled(exec as never, prompt, runtime);
-    expect(exec).toHaveBeenCalledWith("brew", ["install", "tailscale"]);
-  });
-
-  it("enableTailscaleServe attempts normal first, then sudo", async () => {
-    // 1. First attempt fails
-    // 2. Second attempt (sudo) succeeds
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
-
-    await enableTailscaleServe(3000, exec as never);
-
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
-
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
-  });
-
-  it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const exec = vi.fn().mockResolvedValue({ stdout: "" });
-
-    await enableTailscaleServe(3000, exec as never);
-
-    expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith(
-      tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
-  });
-
-  it("disableTailscaleServe uses fallback", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("permission denied"))
-      .mockResolvedValueOnce({ stdout: "" });
-
-    await disableTailscaleServe(exec as never);
-
-    expect(exec).toHaveBeenCalledTimes(2);
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "reset"]),
-      expect.any(Object),
-    );
-  });
-
-  it("ensureFunnel uses fallback for enabling", async () => {
-    // Mock exec:
-    // 1. status (success)
-    // 2. enable (fails)
-    // 3. enable sudo (success)
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const exec = vi
-      .fn()
-      .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
-      .mockRejectedValueOnce(new Error("permission denied")) // enable normal
-      .mockResolvedValueOnce({ stdout: "" }); // enable sudo
-
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: vi.fn() as unknown as (code: number) => never,
-    };
-    const prompt = vi.fn();
-
-    await ensureFunnel(8080, exec as never, runtime, prompt);
-
-    // 1. status
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "status", "--json"]),
-    );
-
-    // 2. enable normal
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
-
-    // 3. enable sudo
-    expect(exec).toHaveBeenNthCalledWith(
-      3,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
-  });
-
-  it("enableTailscaleServe skips sudo on non-permission errors", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
-
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
-
-    expect(exec).toHaveBeenCalledTimes(1);
-  });
-
-  it("enableTailscaleServe rethrows original error if sudo fails", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
-    const originalError = Object.assign(new Error("permission denied"), {
-      stderr: "permission denied",
+  it("parses noisy JSON output from tailscale status", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout:
+        'warning: stale state\n{"Self":{"DNSName":"noisy.tailnet.ts.net.","TailscaleIPs":["100.9.9.9"]}}\n',
     });
+    const host = await getTailnetHostname(exec);
+    expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it.each([
+    [new Error("Failed to connect to local Tailscale daemon; not running?")],
+    [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
+    [
+      new Error(
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ),
+    ],
+    [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
+  ])("retries post-Serve status after a transient failure", async (failure) => {
+    vi.useFakeTimers();
     const exec = vi
       .fn()
-      .mockRejectedValueOnce(originalError)
-      .mockRejectedValueOnce(new Error("sudo: a password is required"));
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          Self: { DNSName: "retry.tailnet.ts.net.", TailscaleIPs: ["100.7.7.7"] },
+        }),
+      });
 
-    await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
+    const hostPromise = getTailnetHostnameAfterServe(exec);
+    await vi.runAllTimersAsync();
+    const host = await hostPromise;
+
+    expect(host).toBe("retry.tailnet.ts.net");
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+      logOutput: false,
+    });
+    expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+      logOutput: false,
+    });
+  });
+
+  it.each([
+    ["missing binary", new Error("spawn tailscale ENOENT")],
+    ["permission failure", new Error("permission denied")],
+  ])("does not retry post-Serve status after a permanent %s", async (_name, failure) => {
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(failure.message);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry malformed post-Serve status JSON", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "{not json}" });
+
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(SyntaxError);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary hostname lookup single-attempt", async () => {
+    const failure = new Error("Failed to connect to local Tailscale daemon; not running?");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(getTailnetHostname(exec, tailscaleBin)).rejects.toThrow(failure.message);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses noisy JSON output from tailscale whois", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout:
+        'warning: stale state\n{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}\n',
+    });
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.11", exec)).resolves.toEqual({
+      login: "operator@example.com",
+      name: "Operator",
+    });
+  });
+
+  it("caches malformed tailscale whois output on the short error TTL path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: "warning: stale state\n{not json}\n" })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "after@example.com" } }),
+      });
+
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toBeNull();
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1_001);
+
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toEqual({
+      login: "after@example.com",
+    });
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses existing whois results when the cache TTL is zero", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "before@example.com" } }),
+      })
+      .mockRejectedValueOnce(new Error("no longer authorized"));
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.13", exec)).resolves.toEqual({
+      login: "before@example.com",
+    });
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.13", exec, { cacheTtlMs: 0, errorTtlMs: 0 }),
+    ).resolves.toBeNull();
+
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache whois results when the cache expiry would exceed Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "first@example.com" } }),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "second@example.com" } }),
+      });
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "first@example.com",
+    });
+    await expect(readTailscaleWhoisIdentity("100.64.0.10", exec)).resolves.toEqual({
+      login: "second@example.com",
+    });
+
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  describe("waitForTailscaleBackendReady", () => {
+    const status = (BackendState: string) => ({ stdout: JSON.stringify({ BackendState }) });
+    const statusArgs = ["status", "--json"];
+    const execOptions = { timeoutMs: 5000, maxBuffer: 400_000, logOutput: false };
+
+    it("waits through boot-time backend states and announces each once", async () => {
+      const exec = vi
+        .fn()
+        .mockResolvedValueOnce(status("NoState"))
+        .mockResolvedValueOnce(status("NoState"))
+        .mockResolvedValueOnce(status("Starting"))
+        .mockResolvedValueOnce(status("Running"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+      expect(exec).toHaveBeenCalledTimes(4);
+      expectExecCall(exec, 1, tailscaleBin, statusArgs, execOptions);
+      expect(info.mock.calls).toEqual([
+        ["waiting for the local Tailscale daemon (NoState)"],
+        ["waiting for the local Tailscale daemon (Starting)"],
+      ]);
+    });
+
+    // Connect-failure wording as emitted by the tailscale CLI (cmd/tailscale/cli/diag.go),
+    // which differs by platform and by whether a tailscaled process was found.
+    it.each([
+      ["older daemon wording", "failed to connect to local tailscale daemon"],
+      [
+        "linux 1.102 with no daemon process",
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ],
+      [
+        "windows 1.102 with no daemon process",
+        "failed to connect to local tailscaled process; is the Tailscale service running?",
+      ],
+      [
+        "macos 1.102 with no daemon process",
+        "failed to connect to local Tailscale service; is Tailscale running?",
+      ],
+      [
+        "daemon process found but not listening yet",
+        "failed to connect to local tailscaled (which appears to be running as /usr/sbin/tailscaled, pid 812). Got error: dial unix /var/run/tailscale/tailscaled.sock: connect: no such file or directory",
+      ],
+    ])("waits while the daemon is not accepting connections yet (%s)", async (_label, stderr) => {
+      const exec = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("status failed"), { stderr }))
+        .mockResolvedValueOnce(status("Running"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+      expect(exec).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "waiting for the local Tailscale daemon (daemon not reachable)",
+      );
+    });
+
+    it.each(["Running", "Stopped", "NeedsLogin", "NeedsMachineAuth"])(
+      "does not wait on the settled backend state %s",
+      async (state) => {
+        const exec = vi.fn().mockResolvedValue(status(state));
+        const info = vi.fn();
+
+        await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+        expect(exec).toHaveBeenCalledTimes(1);
+        expect(info).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not wait on an unreadable or failed status", async () => {
+      for (const exec of [
+        vi.fn().mockResolvedValue({ stdout: "{}" }),
+        vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("exit 2"), { stderr: "unexpected arguments" }),
+          ),
+      ]) {
+        const info = vi.fn();
+
+        await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+        expect(exec).toHaveBeenCalledTimes(1);
+        expect(info).not.toHaveBeenCalled();
+      }
+    });
+
+    it("hands over to the route claim once the deadline passes", async () => {
+      const exec = vi.fn().mockResolvedValue(status("NoState"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({
+        bin: tailscaleBin,
+        prefix: ["-n", "sudo"],
+        info,
+        exec,
+        pollMs: 1,
+        deadlineMs: 20,
+      });
+
+      expect(exec.mock.calls.length).toBeGreaterThan(1);
+      expectExecCall(exec, 1, tailscaleBin, ["-n", "sudo", ...statusArgs], execOptions);
+      expect(info).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "holds a foreground route claim until cleanup stops its owner",
+    async () => {
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+
+      const claim = await claimTailscaleRoute("serve", 18789, 18789, vi.fn());
+      expect(claim.isActive()).toBe(true);
+
+      await claim.stop();
+      await expect(claim.exited).resolves.toBeUndefined();
+      expect(claim.isActive()).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "names the operator fix when the sudo fallback cannot run without a TTY",
+    async () => {
+      useTailscaleSudoFixture("password");
+
+      await expect(claimTailscaleRoute("serve", 18791, 18791, vi.fn())).rejects.toThrow(
+        /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/,
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an operational error from an authorized sudo retry",
+    async () => {
+      useTailscaleSudoFixture("route-error");
+
+      await expect(claimTailscaleRoute("funnel", 18792, 18792, vi.fn())).rejects.toMatchObject({
+        message: "Funnel is not enabled on your tailnet.",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an ownership conflict from the privileged route retry",
+    async () => {
+      useTailscaleSudoFixture("conflict");
+
+      await expect(claimTailscaleRoute("serve", 18789, 18789, vi.fn())).rejects.toThrow(
+        "ownership OpenClaw cannot prove; it was not modified",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves route diagnostics when startup readiness times out",
+    async () => {
+      const fixture = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+      const marker = path.join(tempDirs.make("openclaw-tailscale-fixture-"), "ready");
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+      process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER = marker;
+      const schedule = globalThis.setTimeout;
+      let fireDeadline: (() => void) | undefined;
+      let fires = 0;
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, ms, ...args) => {
+          const timer = schedule(callback, ms, ...args);
+          if (ms === 15_000) {
+            timerSpy.mockRestore();
+            fireDeadline = () => {
+              expect(timer.hasRef()).toBe(false);
+              expect(fires).toBe(0);
+              clearTimeout(timer);
+              fires += 1;
+              callback(...args);
+            };
+          }
+          return timer;
+        });
+      const claim = claimTailscaleRoute("funnel", 18790, 18790, vi.fn());
+      let settled = false;
+      const completion = claim.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await waitForFixtureFile(marker, completion, "ready");
+        expect(settled).toBe(false);
+        if (!fireDeadline) {
+          throw new Error("expected the native 15000ms startup deadline");
+        }
+        fireDeadline();
+        await expect(claim).rejects.toThrow("Funnel is not enabled on your tailnet.");
+        expect(fires).toBe(1);
+      } finally {
+        // Leave the native deadline armed if fixture readiness fails; await real worker cleanup.
+        await completion;
+        timerSpy.mockRestore();
+      }
+    },
+  );
+
+  it("hasTailscaleFunnelRouteForPort accepts noisy JSON status output", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout:
+        'warning: stale state\n{"AllowFunnel":{"device.tailnet.ts.net:443":true},"Web":{"device.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:18789"}}}}}\n',
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(true);
+  });
+
+  it.each([
+    { proxy: "http://127.0.0.1:18789", expected: true },
+    { proxy: "http://127.0.0.1:18789/", expected: true },
+    { proxy: "http://127.0.0.1:18789/api", expected: true },
+    { proxy: "http://localhost:18789", expected: true },
+    { proxy: "http://[::1]:18789", expected: true },
+    { proxy: "https+insecure://localhost:18789", expected: true },
+    { proxy: "https+insecure://127.0.0.1:18789/api", expected: true },
+    { proxy: "18789", expected: true },
+    { proxy: "http://127.0.0.1:9000", expected: false },
+    { proxy: "http://10.0.0.5:18789", expected: false },
+    { proxy: "https+insecure://10.0.0.5:18789", expected: false },
+  ])("validates Funnel loopback proxy $proxy", async ({ proxy, expected }) => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: true },
+        Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(expected);
+  });
+
+  it("ignores Funnel handlers whose host is not allowed", async () => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: false },
+        Web: { [host]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
+  });
+
+  it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      stdout: "warning: stale state\n{not json}\n",
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+  });
+
+  it("hasTailscaleFunnelRouteForPort preserves status command failures", async () => {
+    const failure = new Error("tailscale status unavailable");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
   });
 });

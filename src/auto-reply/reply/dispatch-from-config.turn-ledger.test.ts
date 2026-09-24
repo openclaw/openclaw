@@ -1,0 +1,277 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createReplyTurnLedger,
+  requireQueuedReplyDelivery,
+} from "./dispatch-from-config.turn-ledger.js";
+import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
+import { createReplyDispatcher, type ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+
+function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): ReplyDispatcher {
+  return {
+    sendToolResult: () => true,
+    sendBlockReply: () => true,
+    sendFinalReply: () => true,
+    waitForIdle: async () => {},
+    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    markComplete: () => {},
+    ...overrides,
+  };
+}
+
+describe("requireQueuedReplyDelivery", () => {
+  it("rejects a branded delivery error with an invalid outcome", () => {
+    expect(
+      isReplyDispatchDeliveryError({
+        code: "REPLY_DISPATCH_DELIVERY_ERROR",
+        outcome: "invalid",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["delivered", true],
+    ["delivered-not-visible", false],
+    ["channel-transform", false],
+    ["cancelled", false],
+    ["failed-before-deliver", false],
+    ["failed-deliver", false],
+  ] satisfies Array<[ReplyDispatchDeliveryOutcome, boolean]>)(
+    "requires canonical %s delivery",
+    async (outcome, accepted) => {
+      const delivery = requireQueuedReplyDelivery({
+        delivery: { queued: true, outcome: Promise.resolve(outcome) },
+        dispatcher: { waitForIdle: async () => undefined },
+        abortSignal: undefined,
+      });
+
+      if (accepted) {
+        await expect(delivery).resolves.toBeUndefined();
+        return;
+      }
+      const error = await delivery.catch((caught: unknown) => caught);
+      expect(isReplyDispatchDeliveryError(error)).toBe(true);
+      if (isReplyDispatchDeliveryError(error)) {
+        expect(error.outcome).toBe(outcome);
+      }
+    },
+  );
+});
+
+describe("createReplyTurnLedger", () => {
+  it("distinguishes visible progress from a settled terminal reply", async () => {
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("tool", { text: "Checking the request." });
+    ledger.sendQueued("block", { text: "Still working.", isCommentary: true });
+    await ledger.settleQueued();
+    expect(ledger.hasObservedDelivery()).toBe(true);
+    expect(ledger.resolveTerminalDelivery()).toBe("missing");
+    const send = ledger.sendQueued("final", { text: "hello" });
+    expect(send.queued).toBe(true);
+    expect(send.outcome).toBeDefined();
+    await ledger.settleQueued();
+    expect(ledger.mayHaveDelivered()).toBe(true);
+    expect(ledger.hasObservedDelivery()).toBe(true);
+    expect(ledger.resolveTerminalDelivery()).toBe("delivered");
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
+  it("does not count a beforeDeliver-cancelled payload as visible", async () => {
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
+    const ledger = createReplyTurnLedger(dispatcher);
+    expect(ledger.sendQueued("final", { text: "hello" }).queued).toBe(true);
+    await ledger.settleQueued();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(ledger.mayHaveDelivered()).toBe(false);
+    expect(ledger.resolveTerminalDelivery()).toBe("missing");
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
+  it("does not count a pre-transport failure as visible", async () => {
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async () => {
+        throw new Error("hook exploded");
+      },
+    });
+    const ledger = createReplyTurnLedger(dispatcher);
+    expect(ledger.sendQueued("block", { text: "streamed" }).queued).toBe(true);
+    await ledger.settleQueued();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(ledger.mayHaveDelivered()).toBe(false);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
+  it.each([
+    { kind: "tool", payload: { text: "Tool progress." }, expected: "missing" },
+    { kind: "block", payload: { text: "Still working.", isCommentary: true }, expected: "missing" },
+    { kind: "block", payload: { text: "Final answer." }, expected: "pending" },
+  ] as const)(
+    "retains ambiguous $kind custody without completing progress: $expected",
+    async ({ kind, payload, expected }) => {
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => {
+          throw new Error("transport down mid-send");
+        },
+      });
+      const ledger = createReplyTurnLedger(dispatcher);
+      expect(ledger.sendQueued(kind, payload).queued).toBe(true);
+      await ledger.settleQueued();
+      expect(ledger.mayHaveDelivered()).toBe(true);
+      expect(ledger.hasObservedDelivery()).toBe(false);
+      expect(ledger.resolveTerminalDelivery()).toBe(expected);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    },
+  );
+
+  it("times out instead of waiting forever on a transport that never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseDeliver!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        releaseDeliver = resolve;
+      });
+      const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+      const ledger = createReplyTurnLedger(dispatcher);
+      ledger.sendQueued("final", { text: "hello" });
+      const settle = ledger.settleQueued();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(settle).resolves.toBe("timed-out");
+      releaseDeliver();
+      dispatcher.markComplete();
+      await vi.runAllTimersAsync();
+      await dispatcher.waitForIdle();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps legacy accepted sends visible when settlement has no receipt", async () => {
+    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
+    const send = ledger.sendQueued("final", { text: "hello" });
+    expect(send.outcome).toBeUndefined();
+    await ledger.settleQueued();
+    expect(ledger.mayHaveDelivered()).toBe(true);
+    expect(ledger.hasObservedDelivery()).toBe(false);
+    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+  });
+
+  it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({ supportsSettledReceipt: true }),
+    );
+    ledger.sendQueued("final", { text: "hello" });
+    await ledger.settleQueued();
+    expect(ledger.hasObservedDelivery()).toBe(false);
+    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+  });
+
+  it("does not authorize another final after an adapter copies a terminal payload", async () => {
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    const sendFinalReply = dispatcher.sendFinalReply.bind(dispatcher);
+    dispatcher.sendFinalReply = (payload) => sendFinalReply({ ...payload });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("final", { text: "The requested answer." });
+    await ledger.settleQueued();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      { text: "The requested answer." },
+      { kind: "final" },
+    );
+    expect(ledger.hasObservedDelivery()).toBe(true);
+    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+  });
+
+  it("records routed settlements only when delivered and contentful", () => {
+    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
+    ledger.recordRoutedDelivery(
+      "final",
+      { text: "suppressed" },
+      { ok: true, delivered: false, reason: "channel_transform" },
+    );
+    ledger.recordRoutedDelivery("final", { text: "" }, { ok: true, delivered: true });
+    expect(ledger.mayHaveDelivered()).toBe(false);
+    ledger.recordRoutedDelivery(
+      "final",
+      { mediaUrl: "https://example.com/seatmap.png" },
+      { ok: true, delivered: true },
+    );
+    expect(ledger.mayHaveDelivered()).toBe(true);
+  });
+
+  it("keeps routed progress custody separate from terminal delivery", () => {
+    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
+    ledger.recordRoutedDelivery(
+      "tool",
+      { text: "Tool progress." },
+      { ok: false, delivered: false, queueCustody: "held" },
+    );
+    ledger.recordRoutedDelivery(
+      "block",
+      { text: "Still working.", isCommentary: true },
+      { ok: false, delivered: false, ambiguous: true },
+    );
+    expect(ledger.resolveTerminalDelivery()).toBe("missing");
+    ledger.recordRoutedDelivery(
+      "final",
+      { text: "Final answer." },
+      { ok: false, delivered: false, queueCustody: "held" },
+    );
+    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+    ledger.recordRoutedDelivery("final", { text: "Final answer." }, { ok: true, delivered: true });
+    expect(ledger.resolveTerminalDelivery()).toBe("delivered");
+  });
+
+  it("stops settling when the abort signal fires", async () => {
+    // A stalled deliver models a hung transport; abort must release the gate
+    // instead of wedging finalization.
+    let releaseDeliver!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      releaseDeliver = resolve;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("final", { text: "hello" });
+    const abortController = new AbortController();
+    const settled = ledger.settleQueued(abortController.signal);
+    abortController.abort();
+    await expect(settled).resolves.toBe("aborted");
+    expect(ledger.mayHaveDelivered()).toBe(false);
+    releaseDeliver();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
+  it("settles immediately when the abort signal already fired", async () => {
+    let releaseDeliver!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      releaseDeliver = resolve;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("final", { text: "hello" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const settled = ledger.settleQueued(abortController.signal);
+
+    try {
+      await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toBe("aborted");
+      expect(ledger.mayHaveDelivered()).toBe(false);
+    } finally {
+      releaseDeliver();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      await settled;
+    }
+  });
+});

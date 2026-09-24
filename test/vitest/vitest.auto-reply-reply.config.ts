@@ -1,0 +1,15 @@
+// Vitest auto reply reply config wires the auto reply reply test shard.
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { autoReplyReplySubtreeTestInclude } from "./vitest.test-shards.mjs";
+
+export function createAutoReplyReplyVitestConfig(env?: Record<string, string | undefined>) {
+  return createScopedVitestConfig([...autoReplyReplySubtreeTestInclude], {
+    dir: "src/auto-reply",
+    env,
+    exclude: databaseWorkerCoreTestFiles,
+    name: "auto-reply-reply",
+  });
+}
+
+export default createAutoReplyReplyVitestConfig();

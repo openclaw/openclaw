@@ -1,58 +1,41 @@
 import Foundation
-import UserNotifications
+import OpenClawKit
 
-enum NotificationAuthorizationStatus: Sendable {
-    case notDetermined
-    case denied
-    case authorized
-    case provisional
-    case ephemeral
+/// Keeps notification failures Sendable across the system prompt and timeout tasks.
+struct NotificationCallError: Error {
+    let message: String
 }
 
-protocol NotificationCentering: Sendable {
-    func authorizationStatus() async -> NotificationAuthorizationStatus
-    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
-    func add(_ request: UNNotificationRequest) async throws
+@MainActor
+enum NotificationOperationRunner {
+    /// Permission callbacks may ignore cancellation. The shared race retires their task
+    /// before returning so late callbacks cannot start a notification for a cancelled caller.
+    static func run<Value: Sendable>(
+        timeoutSeconds: Double,
+        operation: @escaping @Sendable () async throws -> Value) async -> Result<Value, NotificationCallError>
+    {
+        do {
+            let value = try await AsyncTimeout.withTimeout(
+                seconds: timeoutSeconds,
+                onTimeout: { NotificationCallError(message: "notification request timed out") },
+                operation: operation)
+            return .success(value)
+        } catch let error as NotificationCallError {
+            return .failure(error)
+        } catch {
+            return .failure(NotificationCallError(message: error.localizedDescription))
+        }
+    }
 }
 
-struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable {
-    private let center: UNUserNotificationCenter
+enum NotificationServingPreference {
+    static let storageKey = "notifications.serving.enabled"
+    static let defaultEnabled = true
 
-    init(center: UNUserNotificationCenter = .current()) {
-        self.center = center
-    }
-
-    func authorizationStatus() async -> NotificationAuthorizationStatus {
-        let settings = await self.center.notificationSettings()
-        return switch settings.authorizationStatus {
-        case .authorized:
-            .authorized
-        case .provisional:
-            .provisional
-        case .ephemeral:
-            .ephemeral
-        case .denied:
-            .denied
-        case .notDetermined:
-            .notDetermined
-        @unknown default:
-            .denied
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: self.storageKey) != nil else {
+            return self.defaultEnabled
         }
-    }
-
-    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
-        try await self.center.requestAuthorization(options: options)
-    }
-
-    func add(_ request: UNNotificationRequest) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            self.center.add(request) { error in
-                if let error {
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume(returning: ())
-                }
-            }
-        }
+        return defaults.bool(forKey: self.storageKey)
     }
 }

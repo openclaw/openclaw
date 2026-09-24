@@ -1,0 +1,126 @@
+/**
+ * Private runtime facade for memory host storage, indexing, and search primitives.
+ */
+export {
+  ensureMemoryEntryOriginsSchema,
+  readMemoryEntryOriginsInDatabase,
+  recordMemoryEntryOriginsInDatabase,
+  type MemoryEntryOrigin,
+} from "../../packages/memory-host-sdk/src/memory-entry-origins.js";
+
+export {
+  buildFileEntry,
+  buildMemoryReadResult,
+  buildMemoryReadResultFromSlice,
+  buildMultimodalChunkForIndexing,
+  chunkMarkdown,
+  closeMemorySqliteWalMaintenance,
+  configureMemorySqliteWalMaintenance,
+  cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
+  createMemorySearchDeadlineControl,
+  extractProjectKeysFromCuratedEntry,
+  DEFAULT_MEMORY_READ_LINES,
+  DEFAULT_MEMORY_READ_MAX_CHARS,
+  dropMemoryPathFtsTriggers,
+  ensureDir,
+  ensureMemoryChunkProvenance,
+  ensureMemoryIndexSchema,
+  ensureMemoryRecallMetadataSchema,
+  ensureMemoryPathFtsTriggers,
+  hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
+  isFileMissingError,
+  isTransientMemoryReadError,
+  listMemoryFiles,
+  loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
+  matchesExtraMemoryPathEntry,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  MEMORY_CHUNKING_VERSION,
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_INDEX_STATE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
+  normalizeProjectAnnotationKey,
+  normalizeExtraMemoryPathEntries,
+  normalizeExtraMemoryPaths,
+  parseEmbedding,
+  readMemoryFile,
+  readCuratedProjectMemoryCandidates,
+  readCuratedMemoryTriggerCandidates,
+  readMemoryRecallMetadata,
+  retryTransientMemoryRead,
+  remapChunkLines,
+  requireNodeSqlite,
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryBackendConfig,
+  resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexIdentityReason,
+  resolveMemoryIndexSearchDiagnostic,
+  resolveMemorySearchStaleness,
+  runWithConcurrency,
+  splitCuratedMarkdownEntries,
+  statRegularFile,
+  stripMemoryAnnotationCarriers,
+} from "../../packages/memory-host-sdk/src/engine-storage.js";
+
+export type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
+  CuratedMarkdownEntry,
+  CuratedProjectAnnotations,
+  MemoryEntryProvenance,
+  MemoryExtraPath,
+  MemoryOriginClass,
+  MemorySearchResult,
+  MemorySessionKind,
+  MemorySource,
+} from "../../packages/memory-host-sdk/src/engine-storage.js";
+
+export {
+  openOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentDatabaseReadOnlyOpenResult,
+  type OpenClawAgentReadOnlyDatabase,
+  type OpenClawAgentReadOnlyDatabaseHandle,
+} from "../state/openclaw-agent-db-readonly.js";
+
+/** Health probe result for embedding provider availability checks. */
+export type MemoryEmbeddingProbeResult = {
+  ok: boolean;
+  error?: string;
+  checked?: boolean;
+  cached?: boolean;
+  checkedAtMs?: number;
+  cacheExpiresAtMs?: number;
+};
+
+export type {
+  MemoryChunk,
+  MemoryFileEntry,
+  LegacyMemoryReadResult,
+  MemoryIndexIdentityDiagnostic,
+  MemoryIndexIdentityState,
+  MemoryProviderStatus,
+  MemoryReadResult,
+  MemorySearchDeadlineControl,
+  MemorySearchDeadlineControlAction,
+  MemorySearchDeadlineControlOptions,
+  MemorySearchManager,
+  MemorySearchRuntimeDebug,
+  MemorySyncProgressUpdate,
+  MemorySessionSyncTarget,
+  MemorySyncParams,
+  ResolvedMemoryBackendConfig,
+  MemoryVectorIndexState,
+} from "../../packages/memory-host-sdk/src/engine-storage.js";

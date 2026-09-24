@@ -1,1288 +1,519 @@
-import { spawn } from "node:child_process";
-import crypto from "node:crypto";
-import fs from "node:fs";
-import fsPromises from "node:fs/promises";
-import path from "node:path";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { resolveBrowserConfig } from "../browser/config.js";
+/** CLI runner for node-host stdin/stdout command dispatch. */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "../browser/control-service.js";
-import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
-import { loadConfig } from "../config/config.js";
-import { GatewayClient } from "../gateway/client.js";
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
+import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import {
-  addAllowlistEntry,
-  analyzeArgvCommand,
-  evaluateExecAllowlist,
-  evaluateShellAllowlist,
-  requiresExecApproval,
-  normalizeExecApprovals,
-  recordAllowlistUse,
-  resolveExecApprovals,
-  resolveSafeBins,
-  ensureExecApprovals,
-  readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
-  saveExecApprovals,
-  type ExecAsk,
-  type ExecSecurity,
-  type ExecApprovalsFile,
-  type ExecAllowlistEntry,
-  type ExecCommandSegment,
-} from "../infra/exec-approvals.js";
-import {
-  requestExecHostViaSocket,
-  type ExecHostRequest,
-  type ExecHostResponse,
-  type ExecHostRunResult,
-} from "../infra/exec-host.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { detectMime } from "../media/mime.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { logInfo } from "../logger.js";
+import { getExistingOpenClawStateSchemaPath } from "../state/openclaw-state-db-schema-policy.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { withTimeout } from "./with-timeout.js";
+import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { startNodeHostConnection } from "./connection.js";
+import {
+  createNodeHostGatewayCandidateConnection,
+  formatGatewayCandidateUrl,
+} from "./gateway-candidate-connection.js";
+import {
+  resolveNodeHostCloudflareAccess,
+  type NodeHostCloudflareAccessConfig,
+} from "./gateway-cloudflare-access.js";
+import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
+import {
+  coerceNodeInvokeCancelPayload,
+  coerceNodeInvokeInputPayload,
+  coerceNodeInvokePayload,
+} from "./invoke-payload.js";
+import {
+  isNodeHostLauncherChild,
+  notifyNodeHostLauncherReady,
+  setNodeHostLauncherRestartArguments,
+  watchNodeHostParentStdin,
+} from "./launcher-client.js";
+import { prepareNodeHostRuntime } from "./runtime.js";
+import { runStartupMigrations } from "./startup-state-migrations.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: NodeHostCloudflareAccessConfig;
+  gatewayCandidates?: NodeHostGatewayConfig[];
+  gatewayBootstrapToken?: string;
+  preferGatewayBootstrapToken?: boolean;
+  /** Stop cleanly after the first authenticated hello (used before service install). */
+  stopAfterFirstConnect?: boolean;
+  /** Host worker sessions for this process even when durable node config is disabled. */
+  forceWorkerRuns?: boolean;
+  /** Disposable cloud host: computer control stays on the private environment carrier. */
+  ephemeral?: boolean;
+  /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
+  gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
+  desktopSharingEnabled?: boolean;
+  gatewayAuthFromEnv?: boolean;
+  parentStdin?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
-type SystemRunParams = {
-  command: string[];
-  rawCommand?: string | null;
-  cwd?: string | null;
-  env?: Record<string, string>;
-  timeoutMs?: number | null;
-  needsScreenRecording?: boolean | null;
-  agentId?: string | null;
-  sessionKey?: string | null;
-  approved?: boolean | null;
-  approvalDecision?: string | null;
-  runId?: string | null;
-};
-
-type SystemWhichParams = {
-  bins: string[];
-};
-
-type BrowserProxyParams = {
-  method?: string;
-  path?: string;
-  query?: Record<string, string | number | boolean | null | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-};
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
-
-type SystemExecApprovalsSetParams = {
-  file: ExecApprovalsFile;
-  baseHash?: string | null;
-};
-
-type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
-  file: ExecApprovalsFile;
-};
-
-type RunResult = {
-  exitCode?: number;
-  timedOut: boolean;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  error?: string | null;
-  truncated: boolean;
-};
-
-function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
 }
 
-function isCmdExeInvocation(argv: string[]): boolean {
-  const token = argv[0]?.trim();
-  if (!token) {
-    return false;
-  }
-  const base = path.win32.basename(token).toLowerCase();
-  return base === "cmd.exe" || base === "cmd";
-}
-
-function resolveExecAsk(value?: string): ExecAsk {
-  return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
-}
-
-type ExecEventPayload = {
-  sessionKey: string;
-  runId: string;
-  host: string;
-  command?: string;
-  exitCode?: number;
-  timedOut?: boolean;
-  success?: boolean;
-  output?: string;
-  reason?: string;
-};
-
-type NodeInvokeRequestPayload = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string | null;
-  timeoutMs?: number | null;
-  idempotencyKey?: string | null;
-};
-
-const OUTPUT_CAP = 200_000;
-const OUTPUT_EVENT_TAIL = 20_000;
-const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
-
-const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
-const execHostFallbackAllowed =
-  process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
-
-const blockedEnvKeys = new Set([
-  "NODE_OPTIONS",
-  "PYTHONHOME",
-  "PYTHONPATH",
-  "PERL5LIB",
-  "PERL5OPT",
-  "RUBYOPT",
+const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+  ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
-const blockedEnvPrefixes = ["DYLD_", "LD_"];
-
-class SkillBinsCache {
-  private bins = new Set<string>();
-  private lastRefresh = 0;
-  private readonly ttlMs = 90_000;
-  private readonly fetch: () => Promise<string[]>;
-
-  constructor(fetch: () => Promise<string[]>) {
-    this.fetch = fetch;
-  }
-
-  async current(force = false): Promise<Set<string>> {
-    if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
-    }
-    return this.bins;
-  }
-
-  private async refresh() {
-    try {
-      const bins = await this.fetch();
-      this.bins = new Set(bins);
-      this.lastRefresh = Date.now();
-    } catch {
-      if (!this.lastRefresh) {
-        this.bins = new Set();
-      }
-    }
-  }
-}
-
-function sanitizeEnv(
-  overrides?: Record<string, string> | null,
-): Record<string, string> | undefined {
-  if (!overrides) {
-    return undefined;
-  }
-  const merged = { ...process.env } as Record<string, string>;
-  const basePath = process.env.PATH ?? DEFAULT_NODE_PATH;
-  for (const [rawKey, value] of Object.entries(overrides)) {
-    const key = rawKey.trim();
-    if (!key) {
-      continue;
-    }
-    const upper = key.toUpperCase();
-    if (upper === "PATH") {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (!basePath || trimmed === basePath) {
-        merged[key] = trimmed;
-        continue;
-      }
-      const suffix = `${path.delimiter}${basePath}`;
-      if (trimmed.endsWith(suffix)) {
-        merged[key] = trimmed;
-      }
-      continue;
-    }
-    if (blockedEnvKeys.has(upper)) {
-      continue;
-    }
-    if (blockedEnvPrefixes.some((prefix) => upper.startsWith(prefix))) {
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
-}
-
-function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
-}
-
-function resolveBrowserProxyConfig() {
-  const cfg = loadConfig();
-  const proxy = cfg.nodeHost?.browserProxy;
-  const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
-  const enabled = proxy?.enabled !== false;
-  return { enabled, allowProfiles };
-}
-
-let browserControlReady: Promise<void> | null = null;
-
-async function ensureBrowserControlService(): Promise<void> {
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  browserControlReady = (async () => {
-    const cfg = loadConfig();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error("browser control disabled");
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error("browser control disabled");
-    }
-  })();
-  return browserControlReady;
-}
-
-function isProfileAllowed(params: { allowProfiles: string[]; profile?: string | null }) {
-  const { allowProfiles, profile } = params;
-  if (!allowProfiles.length) {
-    return true;
-  }
-  if (!profile) {
-    return false;
-  }
-  return allowProfiles.includes(profile.trim());
-}
-
-function collectBrowserProxyPaths(payload: unknown): string[] {
-  const paths = new Set<string>();
-  const obj =
-    typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
-  if (!obj) {
-    return [];
-  }
-  if (typeof obj.path === "string" && obj.path.trim()) {
-    paths.add(obj.path.trim());
-  }
-  if (typeof obj.imagePath === "string" && obj.imagePath.trim()) {
-    paths.add(obj.imagePath.trim());
-  }
-  const download = obj.download;
-  if (download && typeof download === "object") {
-    const dlPath = (download as Record<string, unknown>).path;
-    if (typeof dlPath === "string" && dlPath.trim()) {
-      paths.add(dlPath.trim());
-    }
-  }
-  return [...paths];
-}
-
-async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile | null> {
-  const stat = await fsPromises.stat(filePath).catch(() => null);
-  if (!stat || !stat.isFile()) {
-    return null;
-  }
-  if (stat.size > BROWSER_PROXY_MAX_FILE_BYTES) {
-    throw new Error(
-      `browser proxy file exceeds ${Math.round(BROWSER_PROXY_MAX_FILE_BYTES / (1024 * 1024))}MB`,
-    );
-  }
-  const buffer = await fsPromises.readFile(filePath);
-  const mimeType = await detectMime({ buffer, filePath });
-  return { path: filePath, base64: buffer.toString("base64"), mimeType };
-}
-
-function formatCommand(argv: string[]): string {
-  return argv
-    .map((arg) => {
-      const trimmed = arg.trim();
-      if (!trimmed) {
-        return '""';
-      }
-      const needsQuotes = /\s|"/.test(trimmed);
-      if (!needsQuotes) {
-        return trimmed;
-      }
-      return `"${trimmed.replace(/"/g, '\\"')}"`;
-    })
-    .join(" ");
-}
-
-function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
-  if (raw.length <= maxChars) {
-    return { text: raw, truncated: false };
-  }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
-}
-
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
-}
-
-function requireExecApprovalsBaseHash(
-  params: SystemExecApprovalsSetParams,
-  snapshot: ExecApprovalsSnapshot,
-) {
-  if (!snapshot.exists) {
-    return;
-  }
-  if (!snapshot.hash) {
-    throw new Error("INVALID_REQUEST: exec approvals base hash unavailable; reload and retry");
-  }
-  const baseHash = typeof params.baseHash === "string" ? params.baseHash.trim() : "";
-  if (!baseHash) {
-    throw new Error("INVALID_REQUEST: exec approvals base hash required; reload and retry");
-  }
-  if (baseHash !== snapshot.hash) {
-    throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
-  }
-}
-
-async function runCommand(
-  argv: string[],
-  cwd: string | undefined,
-  env: Record<string, string> | undefined,
-  timeoutMs: number | undefined,
-): Promise<RunResult> {
-  return await new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let outputLen = 0;
-    let truncated = false;
-    let timedOut = false;
-    let settled = false;
-
-    const child = spawn(argv[0], argv.slice(1), {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+async function resolveNodeHostGatewayCredentials(params: {
+  config: OpenClawConfig;
+  savedGateway?: NodeHostGatewayConfig;
+  gatewayCandidates: readonly NodeHostGatewayConfig[];
+  deviceId: string;
+  env?: NodeJS.ProcessEnv;
+  envOnly?: boolean;
+}): Promise<{ token?: string; password?: string }> {
+  const env = params.env ?? process.env;
+  if (params.envOnly) {
+    return resolveExplicitGatewayAuth({
+      token: env.OPENCLAW_GATEWAY_TOKEN,
+      password: env.OPENCLAW_GATEWAY_PASSWORD,
     });
-
-    const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
-      if (outputLen >= OUTPUT_CAP) {
-        truncated = true;
-        return;
-      }
-      const remaining = OUTPUT_CAP - outputLen;
-      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-      const str = slice.toString("utf8");
-      outputLen += slice.length;
-      if (target === "stdout") {
-        stdout += str;
-      } else {
-        stderr += str;
-      }
-      if (chunk.length > remaining) {
-        truncated = true;
-      }
-    };
-
-    child.stdout?.on("data", (chunk) => onChunk(chunk as Buffer, "stdout"));
-    child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
-
-    let timer: NodeJS.Timeout | undefined;
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
-
-    const finalize = (exitCode?: number, error?: string | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      resolve({
-        exitCode,
-        timedOut,
-        success: exitCode === 0 && !timedOut && !error,
-        stdout,
-        stderr,
-        error: error ?? null,
-        truncated,
-      });
-    };
-
-    child.on("error", (err) => {
-      finalize(undefined, err.message);
+  }
+  const savedGatewayScope = params.savedGateway
+    ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
+    : undefined;
+  if (
+    savedGatewayScope &&
+    params.gatewayCandidates.every(
+      (candidate) => gatewayOriginScope(formatGatewayCandidateUrl(candidate)) === savedGatewayScope,
+    ) &&
+    (await loadDeviceAuthTokenReadOnly({ deviceId: params.deviceId, role: "node", env }))?.token
+  ) {
+    // A co-located Gateway's shared password must not displace the paired node
+    // credential. GatewayClient rereads the current token when connecting.
+    return resolveExplicitGatewayAuth({
+      token: env.OPENCLAW_GATEWAY_TOKEN,
+      password: env.OPENCLAW_GATEWAY_PASSWORD,
     });
-    child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, null);
-    });
+  }
+  const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
+  const configForResolution =
+    mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
+  return await resolveGatewayCredentialsWithSecretInputs({
+    config: configForResolution,
+    env,
+    localPrecedence: "env-first",
+    remoteTokenPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
   });
 }
 
-function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw =
-    env?.PATH ??
-    (env as Record<string, string>)?.Path ??
-    process.env.PATH ??
-    process.env.Path ??
-    DEFAULT_NODE_PATH;
-  return raw.split(path.delimiter).filter(Boolean);
-}
-
-function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
-  const current = process.env.PATH ?? "";
-  if (current.trim()) {
-    return current;
+function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!config.gateway?.remote?.token && !config.gateway?.remote?.password) {
+    return config;
   }
-  process.env.PATH = DEFAULT_NODE_PATH;
-  return DEFAULT_NODE_PATH;
-}
-
-function resolveExecutable(bin: string, env?: Record<string, string>) {
-  if (bin.includes("/") || bin.includes("\\")) {
-    return null;
+  const nextConfig = structuredClone(config);
+  copyConfigResolutionFactsExcept(config, nextConfig, [
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ]);
+  if (nextConfig.gateway?.remote) {
+    // Local node-host must not inherit gateway.remote.* auth material, which can
+    // suppress GatewayClient device-token fallback and cause local token mismatches.
+    nextConfig.gateway.remote.token = undefined;
+    nextConfig.gateway.remote.password = undefined;
   }
-  const extensions =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const dir of resolveEnvPath(env)) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, bin + ext);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
-
-async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
-  const found: Record<string, string> = {};
-  for (const bin of bins) {
-    const path = resolveExecutable(bin, env);
-    if (path) {
-      found[bin] = path;
-    }
-  }
-  return { bins: found };
-}
-
-function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
-  if (!payload.output) {
-    return payload;
-  }
-  const trimmed = payload.output.trim();
-  if (!trimmed) {
-    return payload;
-  }
-  const { text } = truncateOutput(trimmed, OUTPUT_EVENT_TAIL);
-  return { ...payload, output: text };
-}
-
-async function runViaMacAppExecHost(params: {
-  approvals: ReturnType<typeof resolveExecApprovals>;
-  request: ExecHostRequest;
-}): Promise<ExecHostResponse | null> {
-  const { approvals, request } = params;
-  return await requestExecHostViaSocket({
-    socketPath: approvals.socketPath,
-    token: approvals.token,
-    request,
-  });
+  return nextConfig;
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
-  if (nodeId !== config.nodeId) {
-    config.nodeId = nodeId;
+  // Operator-approved startup is a second authorized entry point for Doctor-owned
+  // state migrators. Runtime invokes those owners here and never migrates inline.
+  if (!getExistingOpenClawStateSchemaPath()) {
+    await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
   }
-  const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
-  const gateway: NodeHostGatewayConfig = {
+  const cfg = getRuntimeConfig();
+  const savedConfig = await loadNodeHostConfig();
+  const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? cfg.gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
+    contextPath: opts.gatewayContextPath,
+    cloudflareAccess: opts.gatewayCloudflareAccess,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  const fallbackDisplayName = await getMachineDisplayName();
+  const config = await configureNodeHost({
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    fallbackDisplayName,
+    gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+  });
+  const nodeId = config.nodeId;
+  const displayName = config.displayName ?? fallbackDisplayName;
+  const gateway = config.gateway ?? plannedGateway;
+  const gatewayCandidates = opts.gatewayCandidates?.length
+    ? opts.gatewayCandidates.map((candidate, index) =>
+        index === 0 && gateway.cloudflareAccess && !candidate.cloudflareAccess
+          ? { ...candidate, cloudflareAccess: gateway.cloudflareAccess }
+          : candidate,
+      )
+    : [gateway];
 
-  const cfg = loadConfig();
-  const browserProxy = resolveBrowserProxyConfig();
-  const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
-  const browserProxyEnabled = browserProxy.enabled && resolvedBrowser.enabled;
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const plaintextAccessCandidate = gatewayCandidates.find(
+    (candidate) => candidate.cloudflareAccess && candidate.tls !== true,
+  );
+  if (plaintextAccessCandidate) {
+    throw new Error("Cloudflare Access credentials require a TLS Gateway connection");
+  }
 
-  const host = gateway.host ?? "127.0.0.1";
-  const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
-  const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
+  const resolvedCloudflareAccess = await Promise.all(
+    gatewayCandidates.map(
+      async (candidate) =>
+        await resolveNodeHostCloudflareAccess({
+          value: candidate.cloudflareAccess,
+          config: cfg,
+          env: process.env,
+        }),
+    ),
+  );
+  const cloudflareAccessByCandidate = new Map<NodeHostGatewayConfig, CloudflareAccessCredentials>();
+  gatewayCandidates.forEach((candidate, index) => {
+    const credentials = resolvedCloudflareAccess[index];
+    if (credentials) {
+      cloudflareAccessByCandidate.set(candidate, credentials);
+    }
+  });
+  const preparedRuntime = await prepareNodeHostRuntime({
+    config: cfg,
+    env: process.env,
+    enableAgentRuns: true,
+    enableWorkerRuns: true,
+    forceWorkerRuns: opts.forceWorkerRuns,
+    ephemeral: opts.ephemeral,
+    installedAppsSharingEnabled: config.installedAppsSharing,
+    desktopSharingEnabled: opts.desktopSharingEnabled,
+    commands: config.commands,
+  });
+  logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
+  const deviceIdentity = loadOrCreateDeviceIdentity();
+  const { token, password } = opts.gatewayBootstrapToken
+    ? {}
+    : await resolveNodeHostGatewayCredentials({
+        config: cfg,
+        envOnly: opts.gatewayAuthFromEnv,
+        savedGateway: savedConfig?.gateway,
+        gatewayCandidates,
+        deviceId: deviceIdentity.deviceId,
+        env: process.env,
+      });
 
-  const client = new GatewayClient({
-    url,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
-    instanceId: nodeId,
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: displayName,
-    clientVersion: VERSION,
-    platform: process.platform,
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    role: "node",
-    scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
-    commands: [
-      "system.run",
-      "system.which",
-      "system.execApprovals.get",
-      "system.execApprovals.set",
-      ...(browserProxyEnabled ? ["browser.proxy"] : []),
-    ],
-    pathEnv,
-    permissions: undefined,
-    deviceIdentity: loadOrCreateDeviceIdentity(),
-    tlsFingerprint: gateway.tlsFingerprint,
+  let consecutivePermanentGatewayRejections = 0;
+  const autoUpdateAbort = new AbortController();
+  let autoUpdateStart: Promise<void> | undefined;
+  let autoUpdater: { stop: () => Promise<void> } | undefined;
+  const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
+    void configureNodeHost({
+      nodeId,
+      displayName,
+      fallbackDisplayName,
+      gateway: winningGateway,
+      installedAppsSharing: config.installedAppsSharing,
+    }).catch((error: unknown) => {
+      writeStderrLine(`node host gateway endpoint persistence failed: ${String(error)}`);
+    });
+  };
+
+  const client = createNodeHostGatewayCandidateConnection({
+    candidates: gatewayCandidates,
+    cloudflareAccessByCandidate,
+    clientOptions: {
+      token: token || undefined,
+      bootstrapToken: opts.gatewayBootstrapToken,
+      preferBootstrapToken: opts.preferGatewayBootstrapToken,
+      password: password || undefined,
+      instanceId: nodeId,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: displayName,
+      clientVersion: VERSION,
+      ...resolveNodeHostGatewayPlatformIdentity(process.platform),
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      role: "node",
+      scopes: [],
+      // Pair the built-in MCP command family up front. Server inventory is
+      // restart-scoped availability, not a capability upgrade requiring re-pairing.
+      caps: preparedRuntime.manifest.caps,
+      commands: preparedRuntime.manifest.commands,
+      computerUse: preparedRuntime.manifest.computerUse,
+      pathEnv: preparedRuntime.manifest.pathEnv,
+      permissions: undefined,
+      deviceIdentity,
+    },
     onEvent: (evt) => {
+      if (evt.event === "node.pair.resolved") {
+        if (
+          isRecord(evt.payload) &&
+          evt.payload.nodeId === deviceIdentity.deviceId &&
+          evt.payload.decision === "approved"
+        ) {
+          activeRuntime.refreshRunnerInventory();
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.cancel") {
+        const payload = coerceNodeInvokeCancelPayload(evt.payload);
+        if (payload) {
+          activeRuntime.cancel(payload.invokeId);
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.input") {
+        const payload = coerceNodeInvokeInputPayload(evt.payload);
+        if (payload) {
+          activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
+        }
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }
       const payload = coerceNodeInvokePayload(evt.payload);
-      if (!payload) {
+      if (payload) {
+        void activeRuntime.invoke(payload);
+      }
+    },
+    onHelloOk: (hello, url, tlsFingerprint, cloudflareAccess) => {
+      consecutivePermanentGatewayRejections = 0;
+      writeStderrLine(`node host gateway connected: ${url}`);
+      if (opts.stopAfterFirstConnect) {
+        void finish(0);
         return;
       }
-      void handleInvoke(payload, client, skillBins);
+      activeRuntime.connect({
+        url,
+        protocol: hello.protocol,
+        capabilities: hello.features?.capabilities ?? [],
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
+        ...(cloudflareAccess ? { cloudflareAccess } : {}),
+      });
+      void announceLauncherReady(url, tlsFingerprint).catch((error: unknown) => {
+        writeStderrLine(`node host update supervisor readiness failed: ${String(error)}`);
+      });
     },
-    onConnectError: (err) => {
-      // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+    onConnectError: (error) => {
+      writeStderrLine(`node host gateway connect failed: ${error.message}`);
+      const rejection =
+        error instanceof GatewayClientRequestError && isRecord(error.details)
+          ? error.details
+          : undefined;
+      if (
+        rejection?.reason !== "websocket-upgrade-rejected" ||
+        rejection.httpStatus !== 403 ||
+        rejection.gatewayErrorType !== "proxy_attribution_required"
+      ) {
+        consecutivePermanentGatewayRejections = 0;
+        return;
+      }
+      if (++consecutivePermanentGatewayRejections < 3) {
+        return;
+      }
+      const remediation =
+        typeof rejection.gatewayErrorMessage === "string"
+          ? rejection.gatewayErrorMessage
+          : error.message;
+      writeStderrLine(
+        `node host gateway permanently rejected connection (${rejection.gatewayErrorType}): ${remediation}; exiting`,
+      );
+      void finish(1);
+    },
+    onReconnectPaused: (info) => {
+      const shouldExit =
+        info.detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(info.detailCode);
+      const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
+      const reason = info.reason.trim() || "no close reason";
+      const action = shouldExit ? "exiting for supervisor restart" : "waiting for operator action";
+      writeStderrLine(
+        `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`,
+      );
+      if (shouldExit) {
+        // Terminal auth/version pauses restart under a supervisor; close MCP
+        // subprocesses first so restart loops cannot orphan server processes.
+        void finish(1).finally(() => requestExitAfterOneShotOutput(undefined, 1));
+      }
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      activeRuntime.disconnect();
+      writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
+    onWinningCandidate: persistWinningGateway,
+  });
+  const activeRuntime = startNodeHostConnection({
+    prepared: preparedRuntime,
+    client,
+    writeStderrLine,
+    onManifestChanged: (manifest) => client.updateNodeManifest(manifest),
   });
 
-  const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
-    const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
-    return bins;
-  });
-
-  client.start();
-  await new Promise(() => {});
-}
-
-async function handleInvoke(
-  frame: NodeInvokeRequestPayload,
-  client: GatewayClient,
-  skillBins: SkillBinsCache,
-) {
-  const command = String(frame.command ?? "");
-  if (command === "system.execApprovals.get") {
-    try {
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
-        path: snapshot.path,
-        exists: snapshot.exists,
-        hash: snapshot.hash,
-        file: redactExecApprovals(snapshot.file),
-      };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
-    } catch (err) {
-      const message = String(err);
-      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code, message },
-      });
+  async function announceLauncherReady(url: string, tlsFingerprint?: string) {
+    if (!isNodeHostLauncherChild() || opts.ephemeral || autoUpdateAbort.signal.aborted) {
+      return;
     }
-    return;
-  }
-
-  if (command === "system.execApprovals.set") {
-    try {
-      const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
-      if (!params.file || typeof params.file !== "object") {
-        throw new Error("INVALID_REQUEST: exec approvals file required");
-      }
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
-      requireExecApprovalsBaseHash(params, snapshot);
-      const normalized = normalizeExecApprovals(params.file);
-      const currentSocketPath = snapshot.file.socket?.path?.trim();
-      const currentToken = snapshot.file.socket?.token?.trim();
-      const socketPath =
-        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-      const next: ExecApprovalsFile = {
-        ...normalized,
-        socket: {
-          path: socketPath,
-          token,
-        },
-      };
-      saveExecApprovals(next);
-      const nextSnapshot = readExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
-        path: nextSnapshot.path,
-        exists: nextSnapshot.exists,
-        hash: nextSnapshot.hash,
-        file: redactExecApprovals(nextSnapshot.file),
-      };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
-    } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+    const endpoint = new URL(url);
+    const args = [
+      "node",
+      "run",
+      "--host",
+      endpoint.hostname.replace(/^\[|\]$/g, ""),
+      "--port",
+      endpoint.port || (endpoint.protocol === "wss:" ? "443" : "80"),
+      "--node-id",
+      nodeId,
+      "--display-name",
+      displayName,
+      endpoint.protocol === "wss:" ? "--tls" : "--no-tls",
+      config.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps",
+    ];
+    if (endpoint.pathname !== "/") {
+      args.push("--context-path", endpoint.pathname);
     }
-    return;
-  }
-
-  if (command === "system.which") {
-    try {
-      const params = decodeParams<SystemWhichParams>(frame.paramsJSON);
-      if (!Array.isArray(params.bins)) {
-        throw new Error("INVALID_REQUEST: bins required");
-      }
-      const env = sanitizeEnv(undefined);
-      const payload = await handleSystemWhich(params, env);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
-    } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+    if (tlsFingerprint) {
+      args.push("--tls-fingerprint", tlsFingerprint);
     }
-    return;
-  }
-
-  if (command === "browser.proxy") {
-    try {
-      const params = decodeParams<BrowserProxyParams>(frame.paramsJSON);
-      const pathValue = typeof params.path === "string" ? params.path.trim() : "";
-      if (!pathValue) {
-        throw new Error("INVALID_REQUEST: path required");
-      }
-      const proxyConfig = resolveBrowserProxyConfig();
-      if (!proxyConfig.enabled) {
-        throw new Error("UNAVAILABLE: node browser proxy disabled");
-      }
-      await ensureBrowserControlService();
-      const cfg = loadConfig();
-      const resolved = resolveBrowserConfig(cfg.browser, cfg);
-      const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
-      const allowedProfiles = proxyConfig.allowProfiles;
-      if (allowedProfiles.length > 0) {
-        if (pathValue !== "/profiles") {
-          const profileToCheck = requestedProfile || resolved.defaultProfile;
-          if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
-            throw new Error("INVALID_REQUEST: browser profile not allowed");
-          }
-        } else if (requestedProfile) {
-          if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: requestedProfile })) {
-            throw new Error("INVALID_REQUEST: browser profile not allowed");
-          }
-        }
-      }
-
-      const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
-      const path = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
-      const body = params.body;
-      const query: Record<string, unknown> = {};
-      if (requestedProfile) {
-        query.profile = requestedProfile;
-      }
-      const rawQuery = params.query ?? {};
-      for (const [key, value] of Object.entries(rawQuery)) {
-        if (value === undefined || value === null) {
-          continue;
-        }
-        query[key] = typeof value === "string" ? value : String(value);
-      }
-      const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
-      const response = await withTimeout(
-        (signal) =>
-          dispatcher.dispatch({
-            method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
-            path,
-            query,
-            body,
-            signal,
-          }),
-        params.timeoutMs,
-        "browser proxy request",
-      );
-      if (response.status >= 400) {
-        const message =
-          response.body && typeof response.body === "object" && "error" in response.body
-            ? String((response.body as { error?: unknown }).error)
-            : `HTTP ${response.status}`;
-        throw new Error(message);
-      }
-      const result = response.body;
-      if (allowedProfiles.length > 0 && path === "/profiles") {
-        const obj =
-          typeof result === "object" && result !== null ? (result as Record<string, unknown>) : {};
-        const profiles = Array.isArray(obj.profiles) ? obj.profiles : [];
-        obj.profiles = profiles.filter((entry) => {
-          if (!entry || typeof entry !== "object") {
-            return false;
-          }
-          const name = (entry as Record<string, unknown>).name;
-          return typeof name === "string" && allowedProfiles.includes(name);
-        });
-      }
-      let files: BrowserProxyFile[] | undefined;
-      const paths = collectBrowserProxyPaths(result);
-      if (paths.length > 0) {
-        const loaded = await Promise.all(
-          paths.map(async (p) => {
-            try {
-              const file = await readBrowserProxyFile(p);
-              if (!file) {
-                throw new Error("file not found");
-              }
-              return file;
-            } catch (err) {
-              throw new Error(`browser proxy file read failed for ${p}: ${String(err)}`, {
-                cause: err,
-              });
-            }
-          }),
-        );
-        if (loaded.length > 0) {
-          files = loaded;
-        }
-      }
-      const payload: BrowserProxyResult = files ? { result, files } : { result };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
-    } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+    if (config.commands) {
+      args.push("--commands", config.commands.join(","));
     }
-    return;
-  }
-
-  if (command !== "system.run") {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "command not supported" },
-    });
-    return;
-  }
-
-  let params: SystemRunParams;
-  try {
-    params = decodeParams<SystemRunParams>(frame.paramsJSON);
-  } catch (err) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: String(err) },
-    });
-    return;
-  }
-
-  if (!Array.isArray(params.command) || params.command.length === 0) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
-    return;
-  }
-
-  const argv = params.command.map((item) => String(item));
-  const rawCommand = typeof params.rawCommand === "string" ? params.rawCommand.trim() : "";
-  const cmdText = rawCommand || formatCommand(argv);
-  const agentId = params.agentId?.trim() || undefined;
-  const cfg = loadConfig();
-  const agentExec = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.exec : undefined;
-  const configuredSecurity = resolveExecSecurity(agentExec?.security ?? cfg.tools?.exec?.security);
-  const configuredAsk = resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
-  const approvals = resolveExecApprovals(agentId, {
-    security: configuredSecurity,
-    ask: configuredAsk,
-  });
-  const security = approvals.agent.security;
-  const ask = approvals.agent.ask;
-  const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const sessionKey = params.sessionKey?.trim() || "node";
-  const runId = params.runId?.trim() || crypto.randomUUID();
-  const env = sanitizeEnv(params.env ?? undefined);
-  const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
-  const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
-  let analysisOk = false;
-  let allowlistMatches: ExecAllowlistEntry[] = [];
-  let allowlistSatisfied = false;
-  let segments: ExecCommandSegment[] = [];
-  if (rawCommand) {
-    const allowlistEval = evaluateShellAllowlist({
-      command: rawCommand,
-      allowlist: approvals.allowlist,
-      safeBins,
-      cwd: params.cwd ?? undefined,
-      env,
-      skillBins: bins,
-      autoAllowSkills,
-      platform: process.platform,
-    });
-    analysisOk = allowlistEval.analysisOk;
-    allowlistMatches = allowlistEval.allowlistMatches;
-    allowlistSatisfied =
-      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-    segments = allowlistEval.segments;
-  } else {
-    const analysis = analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: approvals.allowlist,
-      safeBins,
-      cwd: params.cwd ?? undefined,
-      skillBins: bins,
-      autoAllowSkills,
-    });
-    analysisOk = analysis.ok;
-    allowlistMatches = allowlistEval.allowlistMatches;
-    allowlistSatisfied =
-      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-    segments = analysis.segments;
-  }
-  const isWindows = process.platform === "win32";
-  const cmdInvocation = rawCommand
-    ? isCmdExeInvocation(segments[0]?.argv ?? [])
-    : isCmdExeInvocation(argv);
-  if (security === "allowlist" && isWindows && cmdInvocation) {
-    analysisOk = false;
-    allowlistSatisfied = false;
-  }
-
-  const useMacAppExec = process.platform === "darwin";
-  if (useMacAppExec) {
-    const approvalDecision =
-      params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
-        ? params.approvalDecision
-        : null;
-    const execRequest: ExecHostRequest = {
-      command: argv,
-      rawCommand: rawCommand || null,
-      cwd: params.cwd ?? null,
-      env: params.env ?? null,
-      timeoutMs: params.timeoutMs ?? null,
-      needsScreenRecording: params.needsScreenRecording ?? null,
-      agentId: agentId ?? null,
-      sessionKey: sessionKey ?? null,
-      approvalDecision,
-    };
-    const response = await runViaMacAppExecHost({ approvals, request: execRequest });
-    if (!response) {
-      if (execHostEnforced || !execHostFallbackAllowed) {
-        await sendNodeEvent(
-          client,
-          "exec.denied",
-          buildExecEventPayload({
-            sessionKey,
-            runId,
-            host: "node",
-            command: cmdText,
-            reason: "companion-unavailable",
-          }),
-        );
-        await sendInvokeResult(client, frame, {
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
+    if (opts.forceWorkerRuns) {
+      args.push("--session-host");
+    }
+    if (opts.desktopSharingEnabled !== undefined) {
+      args.push(opts.desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing");
+    }
+    if (opts.gatewayAuthFromEnv) {
+      args.push("--auth-from-env");
+    }
+    if (opts.parentStdin) {
+      args.push("--parent-stdin");
+    }
+    // One-use pairing credentials are replaced by the authenticated device state.
+    await setNodeHostLauncherRestartArguments(args);
+    if (autoUpdateAbort.signal.aborted) {
+      return;
+    }
+    await notifyNodeHostLauncherReady(VERSION);
+    autoUpdateStart ??= import("./auto-update.js").then(({ startNodeHostAutoUpdate }) => {
+      if (!autoUpdateAbort.signal.aborted) {
+        autoUpdater = startNodeHostAutoUpdate({
+          runtime: activeRuntime,
+          signal: autoUpdateAbort.signal,
+          log: writeStderrLine,
+          onRestartAccepted: () => {
+            void finish(0);
           },
         });
-        return;
       }
-    } else if (!response.ok) {
-      const reason = response.error.reason ?? "approval-required";
-      await sendNodeEvent(
-        client,
-        "exec.denied",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          reason,
-        }),
-      );
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: response.error.message },
-      });
-      return;
-    } else {
-      const result: ExecHostRunResult = response.payload;
-      const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-      await sendNodeEvent(
-        client,
-        "exec.finished",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          exitCode: result.exitCode,
-          timedOut: result.timedOut,
-          success: result.success,
-          output: combined,
-        }),
-      );
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(result),
-      });
+    });
+    await autoUpdateStart;
+  }
+
+  let stopping = false;
+  let resolveStopped: (() => void) | undefined;
+  const stopped = new Promise<void>((resolve) => {
+    resolveStopped = resolve;
+  });
+  // A pending Promise alone does not keep Node alive. Pairing pauses can close
+  // the last socket, so retain a handle until a signal finishes the foreground host.
+  const lifetimeInterval = setInterval(() => {}, 1_000_000);
+  let stopWatchingParent = () => {};
+  const removeSignalHandlers = () => {
+    stopWatchingParent();
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+  };
+  const stopClientAndMcp = async () => {
+    try {
+      autoUpdateAbort.abort();
+      // A failed lazy import was already reported by the hello handler; shutdown
+      // still owns client and runtime cleanup.
+      await autoUpdateStart?.catch(() => undefined);
+      await autoUpdater?.stop();
+      client.stop();
+      await activeRuntime.close();
+    } finally {
+      clearInterval(lifetimeInterval);
+    }
+  };
+  const finish = async (exitCode: number) => {
+    if (stopping) {
       return;
     }
-  }
-
-  if (security === "deny") {
-    await sendNodeEvent(
-      client,
-      "exec.denied",
-      buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "security=deny",
-      }),
-    );
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DISABLED: security=deny" },
-    });
-    return;
-  }
-
-  const requiresAsk = requiresExecApproval({
-    ask,
-    security,
-    analysisOk,
-    allowlistSatisfied,
-  });
-
-  const approvalDecision =
-    params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
-      ? params.approvalDecision
-      : null;
-  const approvedByAsk = approvalDecision !== null || params.approved === true;
-  if (requiresAsk && !approvedByAsk) {
-    await sendNodeEvent(
-      client,
-      "exec.denied",
-      buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "approval-required",
-      }),
-    );
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
-    });
-    return;
-  }
-  if (approvalDecision === "allow-always" && security === "allowlist") {
-    if (analysisOk) {
-      for (const segment of segments) {
-        const pattern = segment.resolution?.resolvedPath ?? "";
-        if (pattern) {
-          addAllowlistEntry(approvals.file, agentId, pattern);
-        }
-      }
+    stopping = true;
+    let finalExitCode = exitCode;
+    try {
+      await stopClientAndMcp();
+    } catch (error) {
+      finalExitCode = 1;
+      writeStderrLine(`node host shutdown failed: ${String(error)}`);
+    } finally {
+      removeSignalHandlers();
+      process.exitCode = finalExitCode;
+      resolveStopped?.();
     }
-  }
-
-  if (security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
-    await sendNodeEvent(
-      client,
-      "exec.denied",
-      buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "allowlist-miss",
-      }),
-    );
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: allowlist miss" },
-    });
-    return;
-  }
-
-  if (allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of allowlistMatches) {
-      if (!match?.pattern || seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        approvals.file,
-        agentId,
-        match,
-        cmdText,
-        segments[0]?.resolution?.resolvedPath,
-      );
-    }
-  }
-
-  if (params.needsScreenRecording === true) {
-    await sendNodeEvent(
-      client,
-      "exec.denied",
-      buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "permission:screenRecording",
-      }),
-    );
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "PERMISSION_MISSING: screenRecording" },
-    });
-    return;
-  }
-
-  let execArgv = argv;
-  if (
-    security === "allowlist" &&
-    isWindows &&
-    !approvedByAsk &&
-    rawCommand &&
-    analysisOk &&
-    allowlistSatisfied &&
-    segments.length === 1 &&
-    segments[0]?.argv.length > 0
-  ) {
-    // Avoid cmd.exe in allowlist mode on Windows; run the parsed argv directly.
-    execArgv = segments[0].argv;
-  }
-
-  const result = await runCommand(
-    execArgv,
-    params.cwd?.trim() || undefined,
-    env,
-    params.timeoutMs ?? undefined,
-  );
-  if (result.truncated) {
-    const suffix = "... (truncated)";
-    if (result.stderr.trim().length > 0) {
-      result.stderr = `${result.stderr}\n${suffix}`;
-    } else {
-      result.stdout = `${result.stdout}\n${suffix}`;
-    }
-  }
-  const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
-  await sendNodeEvent(
-    client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey,
-      runId,
-      host: "node",
-      command: cmdText,
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      success: result.success,
-      output: combined,
-    }),
-  );
-
-  await sendInvokeResult(client, frame, {
-    ok: true,
-    payloadJSON: JSON.stringify({
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      success: result.success,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      error: result.error ?? null,
-    }),
-  });
-}
-
-function decodeParams<T>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  return JSON.parse(raw) as T;
-}
-
-function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const obj = payload as Record<string, unknown>;
-  const id = typeof obj.id === "string" ? obj.id.trim() : "";
-  const nodeId = typeof obj.nodeId === "string" ? obj.nodeId.trim() : "";
-  const command = typeof obj.command === "string" ? obj.command.trim() : "";
-  if (!id || !nodeId || !command) {
-    return null;
-  }
-  const paramsJSON =
-    typeof obj.paramsJSON === "string"
-      ? obj.paramsJSON
-      : obj.params !== undefined
-        ? JSON.stringify(obj.params)
-        : null;
-  const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
-  const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
-  return {
-    id,
-    nodeId,
-    command,
-    paramsJSON,
-    timeoutMs,
-    idempotencyKey,
   };
-}
+  const onSigint = AsyncLocalStorage.bind(() => void finish(130));
+  const onSigterm = AsyncLocalStorage.bind(() => void finish(143));
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  if (opts.parentStdin && !isNodeHostLauncherChild()) {
+    stopWatchingParent = watchNodeHostParentStdin(onSigterm);
+  }
 
-async function sendInvokeResult(
-  client: GatewayClient,
-  frame: NodeInvokeRequestPayload,
-  result: {
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  },
-) {
+  const readinessPromise = startGatewayClientWhenEventLoopReady(client);
+  let readiness;
   try {
-    await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
-  } catch {
-    // ignore: node invoke responses are best-effort
+    readiness = await readinessPromise;
+  } catch (error) {
+    if (stopping) {
+      await stopped;
+      return;
+    }
+    removeSignalHandlers();
+    await stopClientAndMcp();
+    throw error;
   }
-}
-
-export function buildNodeInvokeResultParams(
-  frame: NodeInvokeRequestPayload,
-  result: {
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  },
-): {
-  id: string;
-  nodeId: string;
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string;
-  error?: { code?: string; message?: string };
-} {
-  const params: {
-    id: string;
-    nodeId: string;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string;
-    error?: { code?: string; message?: string };
-  } = {
-    id: frame.id,
-    nodeId: frame.nodeId,
-    ok: result.ok,
-  };
-  if (result.payload !== undefined) {
-    params.payload = result.payload;
+  if (!readiness.ready) {
+    if (stopping) {
+      await stopped;
+      return;
+    }
+    removeSignalHandlers();
+    await stopClientAndMcp();
+    throw new Error("node host gateway event loop readiness timeout");
   }
-  if (typeof result.payloadJSON === "string") {
-    params.payloadJSON = result.payloadJSON;
-  }
-  if (result.error) {
-    params.error = result.error;
-  }
-  return params;
-}
-
-async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
-  try {
-    await client.request("node.event", {
-      event,
-      payloadJSON: payload ? JSON.stringify(payload) : null,
-    });
-  } catch {
-    // ignore: node events are best-effort
-  }
+  await stopped;
 }

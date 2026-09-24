@@ -1,0 +1,348 @@
+import { compareToolCallShape, stableHash } from "./parity-shared.js";
+// Qa Lab plugin module implements harness parity behavior.
+import type {
+  RuntimeId,
+  RuntimeParityCell,
+  RuntimeParityDrift,
+  RuntimeParityToolCall,
+  RuntimeParityUsage,
+} from "./runtime-parity.js";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
+
+type HarnessVariant = {
+  id: string;
+  label: string;
+  runtime?: RuntimeId;
+  model?: string;
+  configPatch?: Record<string, unknown>;
+  systemPromptOverlay?: string;
+  toolDescriptionOverlay?: Record<string, string>;
+};
+
+export type HarnessParityDrift =
+  | RuntimeParityDrift
+  | "system-prompt"
+  | "tool-description"
+  | "tool-schema";
+
+type HarnessParityPromptStats = {
+  systemPromptChars: number;
+  projectContextChars: number;
+  nonProjectContextChars: number;
+  skillPromptChars: number;
+  toolSummaryChars: number;
+  toolSchemaChars: number;
+  toolCount: number;
+};
+
+export type RuntimeParitySystemPromptReport = {
+  systemPrompt?: {
+    chars?: number;
+    projectContextChars?: number;
+    nonProjectContextChars?: number;
+    text?: string;
+    hash?: string;
+    contentHash?: string;
+  };
+  skills?: {
+    promptChars?: number;
+    prompt?: string;
+    hash?: string;
+    contentHash?: string;
+  };
+  tools?: {
+    listChars?: number;
+    schemaChars?: number;
+    entries?: Array<{
+      name?: string;
+      summary?: string;
+      summaryHash?: string;
+      summaryChars?: number;
+      schema?: unknown;
+      schemaHash?: string;
+      schemaChars?: number;
+      propertiesCount?: number;
+    }>;
+  };
+};
+
+export type HarnessRuntimeParityCell = RuntimeParityCell & {
+  systemPromptReport?: RuntimeParitySystemPromptReport;
+};
+
+type HarnessParityCell = HarnessRuntimeParityCell & {
+  variant: HarnessVariant;
+  promptStats: HarnessParityPromptStats;
+  systemPromptHash: string;
+  toolDescriptionHash: string;
+  toolSchemaHash: string;
+  tokenUsage: RuntimeParityUsage;
+  tokenUsageSource: "live-usage" | "mock-estimate";
+};
+
+type HarnessParityResult = {
+  scenarioId: string;
+  left: HarnessParityCell;
+  right: HarnessParityCell;
+  drift: HarnessParityDrift;
+  driftDetails?: string;
+  promptDelta: {
+    systemPromptChars: number;
+    projectContextChars: number;
+    skillPromptChars: number;
+    toolSummaryChars: number;
+    toolSchemaChars: number;
+    toolCount: number;
+  };
+  tokenDeltaPercent: number;
+  firstDriftTurn?: number;
+};
+
+function countComparableTranscriptRecords(transcriptBytes: string) {
+  let count = 0;
+  for (const line of transcriptBytes.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        message?: { role?: unknown };
+        role?: unknown;
+      };
+      if (
+        (parsed.message && typeof parsed.message.role === "string") ||
+        typeof parsed.role === "string"
+      ) {
+        count += 1;
+      }
+    } catch {
+      // Ignore malformed QA transcript rows and keep parity classification deterministic.
+    }
+  }
+  return count;
+}
+
+function readPositiveNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
+  const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
+  return {
+    systemPromptChars: readPositiveNumber(report?.systemPrompt?.chars),
+    projectContextChars: readPositiveNumber(report?.systemPrompt?.projectContextChars),
+    nonProjectContextChars: readPositiveNumber(report?.systemPrompt?.nonProjectContextChars),
+    skillPromptChars: readPositiveNumber(report?.skills?.promptChars),
+    toolSummaryChars: toolEntries.reduce(
+      (sum, entry) => sum + readPositiveNumber(entry.summaryChars),
+      0,
+    ),
+    toolSchemaChars: readPositiveNumber(report?.tools?.schemaChars),
+    toolCount: toolEntries.length,
+  };
+}
+
+function estimateUsage(
+  cell: RuntimeParityCell,
+  stats: HarnessParityPromptStats,
+): RuntimeParityUsage {
+  const inputChars =
+    stats.systemPromptChars +
+    stats.skillPromptChars +
+    stats.toolSummaryChars +
+    stats.toolSchemaChars +
+    cell.transcriptBytes.length;
+  const outputChars = cell.finalText.length + cell.toolCalls.length * 80;
+  const inputTokens = Math.ceil(inputChars / 4);
+  const outputTokens = Math.ceil(outputChars / 4);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
+function normalizeTextForParity(text: string) {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+function compareToolResultShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
+  const total = Math.min(left.length, right.length);
+  for (let index = 0; index < total; index += 1) {
+    const leftCall = left[index];
+    const rightCall = right[index];
+    if (!leftCall || !rightCall) {
+      continue;
+    }
+    if (
+      leftCall.resultHash !== rightCall.resultHash ||
+      (leftCall.errorClass ?? "") !== (rightCall.errorClass ?? "")
+    ) {
+      return `tool result ${index + 1} differs (${leftCall.tool})`;
+    }
+  }
+  return undefined;
+}
+
+function firstDriftTurn(leftTranscript: string, rightTranscript: string): number | undefined {
+  const leftLines = leftTranscript.trim().length ? leftTranscript.trim().split(/\r?\n/u) : [];
+  const rightLines = rightTranscript.trim().length ? rightTranscript.trim().split(/\r?\n/u) : [];
+  const total = Math.max(leftLines.length, rightLines.length);
+  for (let index = 0; index < total; index += 1) {
+    if ((leftLines[index] ?? "") !== (rightLines[index] ?? "")) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+export function buildHarnessParityCell(params: {
+  variant: HarnessVariant;
+  cell: HarnessRuntimeParityCell;
+  tokenUsageSource: HarnessParityCell["tokenUsageSource"];
+}): HarnessParityCell {
+  const report = params.cell.systemPromptReport;
+  const promptStats = buildPromptStats(report);
+  const toolEntries = report?.tools?.entries ?? [];
+  const tokenUsage =
+    params.tokenUsageSource === "live-usage"
+      ? params.cell.usage
+      : estimateUsage(params.cell, promptStats);
+  return {
+    ...params.cell,
+    variant: params.variant,
+    ...(report ? { systemPromptReport: report } : {}),
+    promptStats,
+    systemPromptHash: stableHash({
+      systemPrompt: report?.systemPrompt ?? null,
+      skills: report?.skills ?? null,
+    }),
+    toolDescriptionHash: stableHash(
+      toolEntries.map((entry) => {
+        return {
+          name: entry.name,
+          summary: entry.summary,
+          summaryHash: entry.summaryHash,
+          summaryChars: entry.summaryChars,
+        };
+      }),
+    ),
+    toolSchemaHash: stableHash({
+      listChars: report?.tools?.listChars,
+      schemaChars: report?.tools?.schemaChars,
+      entries: toolEntries.map((entry) => {
+        return {
+          name: entry.name,
+          schema: entry.schema,
+          schemaHash: entry.schemaHash,
+          schemaChars: entry.schemaChars,
+          propertiesCount: entry.propertiesCount,
+        };
+      }),
+    }),
+    tokenUsage,
+    tokenUsageSource: params.tokenUsageSource,
+  };
+}
+
+export function buildHarnessParityResult(params: {
+  scenarioId: string;
+  left: HarnessParityCell;
+  right: HarnessParityCell;
+  comparisonMode?: RuntimeParityComparisonMode;
+}): HarnessParityResult {
+  const promptDelta = {
+    systemPromptChars:
+      params.right.promptStats.systemPromptChars - params.left.promptStats.systemPromptChars,
+    projectContextChars:
+      params.right.promptStats.projectContextChars - params.left.promptStats.projectContextChars,
+    skillPromptChars:
+      params.right.promptStats.skillPromptChars - params.left.promptStats.skillPromptChars,
+    toolSummaryChars:
+      params.right.promptStats.toolSummaryChars - params.left.promptStats.toolSummaryChars,
+    toolSchemaChars:
+      params.right.promptStats.toolSchemaChars - params.left.promptStats.toolSchemaChars,
+    toolCount: params.right.promptStats.toolCount - params.left.promptStats.toolCount,
+  };
+  const tokenDeltaPercent =
+    params.left.tokenUsage.totalTokens === 0
+      ? params.right.tokenUsage.totalTokens === 0
+        ? 0
+        : 100
+      : ((params.right.tokenUsage.totalTokens - params.left.tokenUsage.totalTokens) /
+          params.left.tokenUsage.totalTokens) *
+        100;
+  const driftResult = (
+    drift: Exclude<HarnessParityDrift, "none">,
+    driftDetails: string,
+  ): HarnessParityResult => ({
+    scenarioId: params.scenarioId,
+    left: params.left,
+    right: params.right,
+    drift,
+    driftDetails,
+    promptDelta,
+    tokenDeltaPercent,
+    firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
+  });
+  const failDetails =
+    params.left.transportErrorClass || params.right.transportErrorClass
+      ? "at least one harness variant hit a transport failure"
+      : params.left.runtimeErrorClass || params.right.runtimeErrorClass
+        ? "at least one harness variant hit a runtime failure"
+        : undefined;
+  if (failDetails) {
+    return driftResult("failure-mode", failDetails);
+  }
+  if (params.left.systemPromptHash !== params.right.systemPromptHash) {
+    return driftResult("system-prompt", "system prompt report differs");
+  }
+  if (params.left.toolDescriptionHash !== params.right.toolDescriptionHash) {
+    return driftResult("tool-description", "tool description summary shape differs");
+  }
+  if (params.left.toolSchemaHash !== params.right.toolSchemaHash) {
+    return driftResult("tool-schema", "tool schema shape differs");
+  }
+  const compareToolShapes =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+  const compareTranscriptStructure =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+
+  if (compareToolShapes) {
+    const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
+    if (toolCallDrift) {
+      return driftResult("tool-call-shape", toolCallDrift);
+    }
+    const toolResultDrift = compareToolResultShape(params.left.toolCalls, params.right.toolCalls);
+    if (toolResultDrift) {
+      return driftResult("tool-result-shape", toolResultDrift);
+    }
+  }
+  const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
+  const rightTranscriptRecords = countComparableTranscriptRecords(params.right.transcriptBytes);
+  if (
+    compareTranscriptStructure &&
+    (leftTranscriptRecords !== rightTranscriptRecords ||
+      (!params.left.finalText && Boolean(params.right.finalText)) ||
+      (Boolean(params.left.finalText) && !params.right.finalText))
+  ) {
+    return driftResult(
+      "structural",
+      `transcript/final-text structure differs (${leftTranscriptRecords} message records vs ${rightTranscriptRecords} message records)`,
+    );
+  }
+  if (
+    normalizeTextForParity(params.left.finalText) !== normalizeTextForParity(params.right.finalText)
+  ) {
+    return driftResult("text-only", "final text differs after whitespace normalization");
+  }
+  return {
+    scenarioId: params.scenarioId,
+    left: params.left,
+    right: params.right,
+    drift: "none",
+    promptDelta,
+    tokenDeltaPercent,
+  };
+}

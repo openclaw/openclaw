@@ -1,15 +1,22 @@
-import type { ChannelGroupContext } from "openclaw/plugin-sdk";
+// Mattermost plugin module implements group mentions behavior.
+import {
+  buildChannelGroupsScopeTree,
+  resolveScopeRequireMention,
+} from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelGroupContext } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
 
 export function resolveMattermostGroupRequireMention(
-  params: ChannelGroupContext,
+  params: ChannelGroupContext & { requireMentionOverride?: boolean },
 ): boolean | undefined {
   const account = resolveMattermostAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  if (typeof account.requireMention === "boolean") {
-    return account.requireMention;
-  }
-  return true;
+  return resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "mattermost", params.accountId),
+    path: params.groupId ? [params.groupId] : [],
+    requireMentionOverride: params.requireMentionOverride ?? account.requireMention,
+    overrideOrder: "after-config",
+  });
 }

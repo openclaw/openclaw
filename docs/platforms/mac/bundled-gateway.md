@@ -7,54 +7,261 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-# Gateway on macOS (external launchd)
+OpenClaw.app bundles a private Node runtime and matching OpenClaw package for
+its app-owned `node worker` helper and a fixed local Chrome-extension setup
+entry point. The private package does not expose the full CLI or start a Gateway.
+Rebuilding or replacing the app replaces these helpers too, including rebuilds
+with the same public version. They run from the signed bundle, so moving the app
+or removing its build checkout does not change which runtime they use.
 
-OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
-expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
-child process, and manages a per‑user launchd service to keep the Gateway
-running (or attaches to an existing local Gateway if one is already running).
+The **Gateway remains external**. The app uses an external `openclaw` CLI to
+manage a per-user launchd service, or attaches to an already-running Gateway.
+It does not start the Gateway inside its private worker runtime. Packaging the
+worker never installs, updates, or restarts a Gateway service.
 
-## Install the CLI (required for local mode)
+The private worker validates core and node configuration through a read-only
+bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
+Node plugins still validate their own settings before publishing commands, and
+the node runtime owns its MCP clients. Node startup retains the Doctor-owned
+device-auth, device-identity, and exec-approval migrations; this is not a promise
+that all worker startup is read-only. Public `node run`, Gateway, and Doctor
+retain their existing startup policies.
 
-You need Node 22+ on the Mac, then install `openclaw` globally:
+When the native app creates identity, device-auth, or approval tables before
+the worker starts, node startup completes that recognized version-zero database
+through the canonical initializer before plugins read their state. Existing
+native rows are preserved. This does not migrate an already-versioned shared
+Gateway database or adopt unknown or occupied bootstrap state.
+
+## Automatic setup
+
+On a fresh Mac, choose **This Mac** during onboarding. The app runs its
+signed, bundled installer script before the Gateway wizard: it installs a
+user-space Node runtime and the matching `openclaw` CLI under `~/.openclaw`,
+then installs and starts the per-user launchd service. This path needs no
+Terminal, Homebrew, or administrator access.
+
+The installer uses a private temporary directory for downloads and build tools.
+If the app's inherited temporary directory is inaccessible, setup automatically
+uses a private directory under `/tmp` and removes it when the installer exits.
+This also avoids macOS temporary-directory permission errors without installing
+the CLI as root.
+
+Gateway setup still needs an internet connection to download its separate
+runtime and matching OpenClaw package. The bundled installer owns that setup;
+the private worker is not a replacement for a CLI or Gateway installation.
+
+Remote connections and attachment to an independently managed local Gateway
+skip this installation. Attach-only mode never prompts for a CLI to run the
+app's node. Pausing preserves who manages the Gateway, even when stopping an
+app-managed service removes its LaunchAgent record. If an independent endpoint
+is no longer available on reattachment, local setup becomes available again.
+An unreadable service ownership record blocks automatic installation instead
+of being treated as a missing service; check the LaunchAgent and retry.
+
+Chrome-extension preparation also runs automatically for the default app
+profile, including remote-only and attach-only Macs. It uses the validated
+private runtime, registers the native helper before requesting the Store
+extension, and leaves Chrome’s permission approval to you. Browser setup does not
+run Gateway-wide Doctor or migrate Gateway state. The Dashboard’s **Set up Chrome
+on this device** action retries the same serialized operation. See
+[Chrome extension](/tools/chrome-extension).
+
+## Manual recovery
+
+Read the version to install from the app: choose **About OpenClaw** in the
+menu bar, or run `openclaw-mac status --json`, which reports the app version
+and build.
+
+For a manual install, use Node 26 (recommended) or another supported release:
+Node 24.16+ or Node 26.1+. Install `openclaw` globally:
+
+The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
 
 ```bash
-npm install -g openclaw@<version>
+npm install -g openclaw@<version> --allow-scripts=openclaw
 ```
 
-The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun not recommended for Gateway runtime).
+Use **Retry setup** after a failed automatic setup. If that still fails,
+install the CLI manually with the command above, then choose **Check again**
+in onboarding.
 
 ## Launchd (Gateway as LaunchAgent)
 
-Label:
+Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`
+for a named profile.
 
-- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may remain)
+Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
+(or `ai.openclaw.<profile>.plist`).
 
-Plist location (per‑user):
-
-- `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
-
-Manager:
-
-- The macOS app owns LaunchAgent install/update in Local mode.
-- The CLI can also install it: `openclaw gateway install`.
+The macOS app owns LaunchAgent install/update for the default profile in
+Local mode. The CLI can also install it directly: `openclaw gateway install`
+(named profiles are selected via the `OPENCLAW_PROFILE` env var).
 
 Behavior:
 
-- “OpenClaw Active” enables/disables the LaunchAgent.
-- App quit does **not** stop the gateway (launchd keeps it alive).
+- "OpenClaw Active" enables/disables the LaunchAgent.
+- Quitting the app does **not** stop the Gateway (launchd keeps it alive).
 - If a Gateway is already running on the configured port, the app attaches to
   it instead of starting a new one.
+- Other listeners are left running. Resolve port conflicts through the process
+  or service that owns them; automatic cleanup only reaps recorded orphaned SSH tunnels.
+- If service inspection is inconclusive, the app defers installation and uses
+  its existing readiness checks. A service confirmed absent can still be installed.
+
+Use the CLI for lifecycle checks and recovery:
+
+```bash
+openclaw gateway status --deep
+openclaw gateway restart
+```
+
+When **Also run a Gateway on this Mac** is enabled with a remote primary, the
+managed launch agent includes `--allow-unconfigured` so it can run while
+`gateway.mode` remains `remote`. Switching the primary to local removes that
+argument. See [local hosting alongside a remote primary](/platforms/mac/remote#run-a-local-gateway-alongside-a-remote-primary).
+
+Launchd provides auto-start at login, crash restarts, and one predictable log
+location without tying the Gateway lifetime to the app process.
+
+### Unexpected repeated restarts
+
+Run these commands if the Gateway repeatedly restarts after an update:
+
+```bash
+openclaw gateway status
+openclaw doctor
+```
+
+On macOS, both commands report foreign loaded jobs in the `ai.openclaw.*`
+namespace, including jobs submitted without a plist. The report shows each
+label, program, KeepAlive flag, and detected `openclaw gateway restart`,
+`start`, or `stop` invocation. Plain-text status shows the list as a warning when
+at least one job has KeepAlive or a verified lifecycle invocation. Otherwise,
+the list appears informationally under "Other OpenClaw launchd jobs (macOS)".
+Status JSON includes all these jobs under
+`service.foreignLaunchdJobs`. For warnings, recent external forced restarts in
+the lifecycle log provide a possible correlation; the count alone does not
+identify which job caused a restart.
+After three external forced restarts within ten minutes, the managed Gateway
+logs an actionable warning naming likely KeepAlive jobs when available. It
+does not suppress an operator's restart command.
+
+To remove confirmed stray Gateway lifecycle jobs and verify recovery:
+
+```bash
+openclaw doctor --fix
+openclaw gateway status
+openclaw health
+```
+
+Doctor removes a foreign job only when its literal, straight-line script or
+direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
+subcommand. Shell jobs must also have no launchd environment entries that alter
+shell execution. Everything outside this contract is reported and left unchanged.
+This is command-metadata verification; it does not probe binary executability,
+interpreter availability, or quarantine state.
+
+Doctor preserves managed LaunchAgents, unrelated labels,
+and jobs whose purpose cannot be established, and names every removal even
+in noninteractive runs. Service repair remains disabled for an isolated install
+identity, external supervision, or an update in progress.
+
+Never use `launchctl submit` or an ad-hoc KeepAlive job for updates or Gateway
+lifecycle commands. Such a job can repeatedly run `openclaw gateway restart`
+whenever its script exits, as described in
+[#114967](https://github.com/openclaw/openclaw/issues/114967). Use the managed
+update workflow and its suspension fence, then verify status and health.
+
+### Attach-only development
+
+When another process already owns the local Gateway, run the development app
+without installing or changing its LaunchAgent:
+
+```bash
+scripts/restart-mac.sh --attach-only
+```
+
+Launching the app directly with `--attach-only` or `--no-launchd` has the same
+effect. The override persists in `~/.openclaw/disable-launchagent`; remove that
+file to restore app-managed launchd behavior.
+
+Named profiles still require the listener to belong to that profile's Gateway
+service. Attach-only mode does not permit attaching another process or profile.
+If a port ownership conflict occurs, automatic recovery preserves the failure
+instead of repeatedly reopening the dashboard. Resolve the conflict, then
+relaunch the app.
 
 Logging:
 
-- launchd stdout/err: `/tmp/openclaw/openclaw-gateway.log`
+- launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
+  `gateway-<profile>.log`)
+- launchd stderr: merged into the same `gateway.log` file, so startup failures
+  that happen before the logger starts are still recorded
+- If the host loops with repeated `EADDRINUSE` or fast restarts, check for
+  duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
+  launchd-marker workaround in
+  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
 ## Version compatibility
 
-The macOS app checks the gateway version against its own version. If they’re
-incompatible, update the global CLI to match the app version.
+The private worker must match the app's build provenance, not merely its
+version number. A missing or incompatible worker payload produces a visible
+worker error; rebuild or reinstall the app. Changing CLI channels or updating
+a global CLI does not repair this private payload. Unbundled Swift development
+builds can use the checkout's freshness-aware source runner instead.
+
+For an app-owned local Gateway, the macOS app checks the external CLI against
+its install policy. Onboarding runs managed setup when that CLI is missing or
+incompatible. An attached Gateway uses connection and health checks instead of
+local CLI installation diagnostics. Use **Retry setup** after a failed managed
+installation, or open **Connection… → Connection** from the menu bar and choose
+**Recheck** after repairing it. The Connection window remains available when
+the Dashboard cannot reach the Gateway.
+
+## State directory on macOS
+
+Keep OpenClaw state on a local, non-synced disk. Avoid iCloud Drive and other
+cloud-synced folders; sync latency and file locks can affect sessions,
+credentials, and Gateway state.
+
+Set `OPENCLAW_STATE_DIR` to a local path only when you need an override.
+`openclaw doctor` warns about common cloud-synced state paths and recommends
+moving back to local storage. See
+[environment variables](/help/environment#path-related-env-vars) and
+[Doctor](/gateway/doctor).
+
+## Debug app connectivity
+
+Inspect the running app with the bundled macOS CLI:
+
+```bash
+openclaw-mac status --json
+openclaw-mac primary show --json
+openclaw-mac gateway list --json
+```
+
+The app's CLI installer links `openclaw-mac` beside its profile-managed
+`openclaw` command. You can also run
+`/Applications/OpenClaw.app/Contents/MacOS/openclaw-mac` directly. See
+[remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
+saved-Gateway commands, profiles, and credential input.
+
+For standalone Gateway WebSocket handshake and discovery probes from a source
+checkout, the existing debug commands remain available:
+
+```bash
+cd apps/macos
+swift run openclaw-mac connect --json
+swift run openclaw-mac discover --timeout 3000 --json
+```
+
+`connect` accepts `--url`, `--token`, `--timeout`, `--probe`, and `--json`
+(plus client-identity overrides; run with `--help` for the full list).
+`discover` accepts `--timeout`, `--json`, and `--include-local`. Compare
+discovery output with `openclaw gateway discover --json` when you need to
+separate CLI discovery from app-side connection issues.
 
 ## Smoke check
 
@@ -69,5 +276,10 @@ openclaw gateway --port 18999 --bind loopback
 Then:
 
 ```bash
-openclaw gateway call health --url ws://127.0.0.1:18999 --timeout 3000
+openclaw gateway call health --port 18999 --timeout 3000
 ```
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Gateway runbook](/gateway)

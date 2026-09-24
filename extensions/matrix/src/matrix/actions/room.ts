@@ -1,18 +1,20 @@
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomId } from "../send.js";
-import { resolveActionClient } from "./client.js";
+import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
 import { EventType, type MatrixActionClientOpts } from "./types.js";
 
 export async function getMatrixMemberInfo(
   userId: string,
-  opts: MatrixActionClientOpts & { roomId?: string } = {},
+  opts: MatrixActionClientOpts & { roomId: string },
 ) {
-  const { client, stopOnDone } = await resolveActionClient(opts);
-  try {
-    const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
-    // @vector-im/matrix-bot-sdk uses getUserProfile
+  return await withResolvedActionClient(opts, async (client) => {
+    const roomId = await resolveMatrixRoomId(client, opts.roomId);
+    const members = await client.getJoinedRoomMembers(roomId);
+    if (!members.includes(userId)) {
+      throw new Error(`User ${userId} is not a member of room ${roomId}`);
+    }
     const profile = await client.getUserProfile(userId);
-    // Note: @vector-im/matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
-    // We'd need to fetch room state separately if needed
+    // Membership and power levels are not included in profile calls; fetch state separately if needed.
     return {
       userId,
       profile: {
@@ -22,42 +24,37 @@ export async function getMatrixMemberInfo(
       membership: null, // Would need separate room state query
       powerLevel: null, // Would need separate power levels state query
       displayName: profile?.displayname ?? null,
-      roomId: roomId ?? null,
+      roomId,
     };
-  } finally {
-    if (stopOnDone) {
-      client.stop();
-    }
-  }
+  });
 }
 
 export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClientOpts = {}) {
-  const { client, stopOnDone } = await resolveActionClient(opts);
-  try {
-    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    // @vector-im/matrix-bot-sdk uses getRoomState for state events
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     let name: string | null = null;
     let topic: string | null = null;
     let canonicalAlias: string | null = null;
+    let altAliases: string[] = [];
     let memberCount: number | null = null;
 
     try {
       const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
-      name = nameState?.name ?? null;
+      name = typeof nameState?.name === "string" ? nameState.name : null;
     } catch {
       // ignore
     }
 
     try {
       const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
-      topic = topicState?.topic ?? null;
+      topic = typeof topicState?.topic === "string" ? topicState.topic : null;
     } catch {
       // ignore
     }
 
     try {
       const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
-      canonicalAlias = aliasState?.alias ?? null;
+      canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
+      altAliases = filterStringEntries(aliasState?.alt_aliases);
     } catch {
       // ignore
     }
@@ -74,12 +71,8 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
       name,
       topic,
       canonicalAlias,
-      altAliases: [], // Would need separate query
+      altAliases,
       memberCount,
     };
-  } finally {
-    if (stopOnDone) {
-      client.stop();
-    }
-  }
+  });
 }

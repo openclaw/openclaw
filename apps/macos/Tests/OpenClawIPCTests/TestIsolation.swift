@@ -1,4 +1,7 @@
 import Foundation
+import Testing
+@testable import OpenClaw
+@testable import OpenClawKit
 
 actor TestIsolationLock {
     static let shared = TestIsolationLock()
@@ -30,14 +33,66 @@ actor TestIsolationLock {
 @MainActor
 enum TestIsolation {
     static func withIsolatedState<T>(
+        launchAgentHomeDirectory: URL? = nil,
         env: [String: String?] = [:],
         defaults: [String: Any?] = [:],
         _ body: () async throws -> T) async rethrows -> T
     {
+        precondition(!env.keys.contains("OPENCLAW_PROFILE"), "Select the app profile before launching the test process")
+        // Foundation and WebKit cache user paths for the process lifetime. A
+        // per-test HOME can strand those caches in a deleted fixture directory.
+        precondition(
+            !env.keys.contains("HOME") && !env.keys.contains("CFFIXED_USER_HOME"),
+            "Keep the process home fixed; use launchAgentHomeDirectory for service fixtures")
+
+        func restoreUserDefaults(_ values: [String: Any?]) {
+            for (key, value) in values {
+                if let value {
+                    AppDefaults.standard.set(value, forKey: key)
+                } else {
+                    AppDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+
+        func restoreEnv(_ values: [String: String?]) {
+            for (key, value) in values {
+                if let value {
+                    setenv(key, value, 1)
+                } else {
+                    unsetenv(key)
+                }
+            }
+        }
+
         await TestIsolationLock.shared.acquire()
+        let previousLaunchAgentHome = LaunchAgentPlist.testingHomeDirectoryURL
+        LaunchAgentPlist.testingHomeDirectoryURL = launchAgentHomeDirectory
+        var env = env
+        // Config reads and writes also persist health/audit state. A config-only
+        // fixture must not send those writes to the process-wide state directory.
+        let ownedStateDirectory: URL? = if let configPath = env["OPENCLAW_CONFIG_PATH"] ?? nil,
+                                           !configPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                           !env.keys.contains("OPENCLAW_STATE_DIR")
+        {
+            FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-config-state-\(UUID().uuidString)", isDirectory: true)
+        } else {
+            nil
+        }
+        if let ownedStateDirectory {
+            env["OPENCLAW_STATE_DIR"] = ownedStateDirectory.path
+        }
+        defer {
+            if let ownedStateDirectory {
+                try? FileManager().removeItem(at: ownedStateDirectory)
+            }
+        }
         var previousEnv: [String: String?] = [:]
         for (key, value) in env {
-            previousEnv[key] = getenv(key).map { String(cString: $0) }
+            // Absence is captured state: subscript assignment lets map infer String??,
+            // dropping absent keys instead of preserving them for restoration.
+            previousEnv.updateValue(getenv(key).map { String(cString: $0) }, forKey: key)
             if let value {
                 setenv(key, value, 1)
             } else {
@@ -45,50 +100,27 @@ enum TestIsolation {
             }
         }
 
-        let userDefaults = UserDefaults.standard
         var previousDefaults: [String: Any?] = [:]
         for (key, value) in defaults {
-            previousDefaults[key] = userDefaults.object(forKey: key)
+            previousDefaults.updateValue(AppDefaults.standard.object(forKey: key), forKey: key)
             if let value {
-                userDefaults.set(value, forKey: key)
+                AppDefaults.standard.set(value, forKey: key)
             } else {
-                userDefaults.removeObject(forKey: key)
+                AppDefaults.standard.removeObject(forKey: key)
             }
         }
 
         do {
             let result = try await body()
-            for (key, value) in previousDefaults {
-                if let value {
-                    userDefaults.set(value, forKey: key)
-                } else {
-                    userDefaults.removeObject(forKey: key)
-                }
-            }
-            for (key, value) in previousEnv {
-                if let value {
-                    setenv(key, value, 1)
-                } else {
-                    unsetenv(key)
-                }
-            }
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
+            restoreUserDefaults(previousDefaults)
+            restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()
             return result
         } catch {
-            for (key, value) in previousDefaults {
-                if let value {
-                    userDefaults.set(value, forKey: key)
-                } else {
-                    userDefaults.removeObject(forKey: key)
-                }
-            }
-            for (key, value) in previousEnv {
-                if let value {
-                    setenv(key, value, 1)
-                } else {
-                    unsetenv(key)
-                }
-            }
+            LaunchAgentPlist.testingHomeDirectoryURL = previousLaunchAgentHome
+            restoreUserDefaults(previousDefaults)
+            restoreEnv(previousEnv)
             await TestIsolationLock.shared.release()
             throw error
         }
@@ -112,5 +144,25 @@ enum TestIsolation {
         FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-test-config-\(UUID().uuidString).json")
             .path
+    }
+}
+
+struct ExecApprovalsStateIsolationTrait: TestTrait, TestScoping {
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void) async throws
+    {
+        let stateDirectory = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-approvals-state-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: stateDirectory) }
+        try await ExecApprovalsStore.withStateDirectory(stateDirectory, operation: function)
+    }
+}
+
+extension Trait where Self == ExecApprovalsStateIsolationTrait {
+    static var execApprovalsStateIsolated: Self {
+        Self()
     }
 }

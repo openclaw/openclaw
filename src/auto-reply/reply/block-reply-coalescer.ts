@@ -1,13 +1,23 @@
+// Coalesces buffered block-streaming payloads into sendable reply parts.
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
-export type BlockReplyCoalescer = {
+/** Coalesces many streaming reply fragments into fewer outbound payloads. */
+type BlockReplyCoalescer = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
   hasBuffered: () => boolean;
   stop: () => void;
 };
 
+/** Creates a text coalescer with idle and size-based flush behavior. */
 export function createBlockReplyCoalescer(params: {
   config: BlockStreamingCoalescing;
   shouldAbort: () => boolean;
@@ -21,8 +31,9 @@ export function createBlockReplyCoalescer(params: {
   const flushOnEnqueue = config.flushOnEnqueue === true;
 
   let bufferText = "";
-  let bufferReplyToId: ReplyPayload["replyToId"];
-  let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
+  let bufferSourceText: string | undefined;
+  let bufferSourceRange: readonly [start: number, end: number] | undefined;
+  let bufferedPayload: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
@@ -35,8 +46,9 @@ export function createBlockReplyCoalescer(params: {
 
   const resetBuffer = () => {
     bufferText = "";
-    bufferReplyToId = undefined;
-    bufferAudioAsVoice = undefined;
+    bufferSourceText = undefined;
+    bufferSourceRange = undefined;
+    bufferedPayload = undefined;
   };
 
   const scheduleIdleFlush = () => {
@@ -55,30 +67,85 @@ export function createBlockReplyCoalescer(params: {
       resetBuffer();
       return;
     }
-    if (!bufferText) {
+    if (!bufferText || !bufferedPayload) {
       return;
     }
     if (!options?.force && !flushOnEnqueue && bufferText.length < minChars) {
       scheduleIdleFlush();
       return;
     }
-    const payload: ReplyPayload = {
-      text: bufferText,
-      replyToId: bufferReplyToId,
-      audioAsVoice: bufferAudioAsVoice,
-    };
+    const payload = setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(bufferedPayload, {
+        ...bufferedPayload,
+        text: bufferText,
+      }),
+      { blockSourceText: bufferSourceText, blockSourceRange: bufferSourceRange },
+    );
     resetBuffer();
     await onFlush(payload);
+  };
+
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
+    Boolean(bufferText) &&
+    bufferedPayload !== undefined &&
+    !flushOnEnqueue &&
+    !bufferedPayload.audioAsVoice &&
+    !payload.audioAsVoice &&
+    !payload.isReasoning &&
+    !payload.isCommentary &&
+    !isReplyPayloadStatusNotice(payload) &&
+    !bufferedPayload.isReasoning &&
+    !bufferedPayload.isCommentary &&
+    !isReplyPayloadStatusNotice(bufferedPayload) &&
+    (!payload.replyToId || bufferedPayload.replyToId === payload.replyToId);
+
+  /** Merges buffered text into a media payload without changing media metadata. */
+  const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
+    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const sourceText = text ? getReplyPayloadMetadata(payload)?.blockSourceText : undefined;
+    const sourceRange = text ? getReplyPayloadMetadata(payload)?.blockSourceRange : undefined;
+    const mergedSourceText =
+      bufferSourceText !== undefined || sourceText !== undefined
+        ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
+        : undefined;
+    const mergedSourceRange =
+      bufferSourceRange && sourceRange
+        ? ([bufferSourceRange[0], sourceRange[1]] as const)
+        : (bufferSourceRange ?? sourceRange);
+    const mergedPayload: ReplyPayload = {
+      ...bufferedPayload,
+      ...payload,
+      text: mergedText,
+      replyToId: payload.replyToId ?? bufferedPayload?.replyToId,
+      replyToCurrent: payload.replyToCurrent || bufferedPayload?.replyToCurrent,
+      replyToTag: payload.replyToTag || bufferedPayload?.replyToTag,
+    };
+    const metadataMergedPayload = copyReplyPayloadMetadata(
+      bufferedPayload ?? mergedPayload,
+      mergedPayload,
+    );
+    resetBuffer();
+    return setReplyPayloadMetadata(copyReplyPayloadMetadata(payload, metadataMergedPayload), {
+      blockSourceText: mergedSourceText,
+      blockSourceRange: mergedSourceRange,
+    });
   };
 
   const enqueue = (payload: ReplyPayload) => {
     if (shouldAbort()) {
       return;
     }
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const text = payload.text ?? "";
-    const hasText = text.trim().length > 0;
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const hasMedia = reply.hasMedia;
+    const text = reply.text;
+    const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
+    const sourceRange = getReplyPayloadMetadata(payload)?.blockSourceRange;
+    const hasText = reply.hasText;
     if (hasMedia) {
+      if (canMergeBufferedTextWithMedia(payload)) {
+        void onFlush(mergeBufferedTextWithMedia(payload, text));
+        return;
+      }
       void flush({ force: true });
       void onFlush(payload);
       return;
@@ -87,42 +154,59 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
 
-    // When flushOnEnqueue is set (chunkMode="newline"), each enqueued payload is treated
-    // as a separate paragraph and flushed immediately so delivery matches streaming boundaries.
+    // When flushOnEnqueue is set, treat each enqueued payload as its own outbound block
+    // and flush immediately instead of waiting for coalescing thresholds.
     if (flushOnEnqueue) {
       if (bufferText) {
         void flush({ force: true });
       }
-      bufferReplyToId = payload.replyToId;
-      bufferAudioAsVoice = payload.audioAsVoice;
+      bufferedPayload = payload;
       bufferText = text;
+      bufferSourceText = sourceText;
+      bufferSourceRange = sourceRange;
       void flush({ force: true });
       return;
     }
 
+    const replyToConflict = Boolean(
+      bufferText &&
+      payload.replyToId &&
+      (!bufferedPayload?.replyToId || bufferedPayload.replyToId !== payload.replyToId),
+    );
+    const visibilityConflict =
+      bufferText &&
+      bufferedPayload &&
+      (bufferedPayload.isReasoning !== payload.isReasoning ||
+        bufferedPayload.isCommentary !== payload.isCommentary ||
+        bufferedPayload.isCompactionNotice !== payload.isCompactionNotice ||
+        bufferedPayload.isFallbackNotice !== payload.isFallbackNotice ||
+        isReplyPayloadStatusNotice(bufferedPayload) !== isReplyPayloadStatusNotice(payload));
+    // Flush before changing reply target, audio mode, or visibility class.
     if (
       bufferText &&
-      (bufferReplyToId !== payload.replyToId || bufferAudioAsVoice !== payload.audioAsVoice)
+      (replyToConflict ||
+        bufferedPayload?.audioAsVoice !== payload.audioAsVoice ||
+        visibilityConflict)
     ) {
       void flush({ force: true });
     }
 
     if (!bufferText) {
-      bufferReplyToId = payload.replyToId;
-      bufferAudioAsVoice = payload.audioAsVoice;
+      bufferedPayload = payload;
     }
 
     const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });
-        bufferReplyToId = payload.replyToId;
-        bufferAudioAsVoice = payload.audioAsVoice;
+        bufferedPayload = payload;
         if (text.length >= maxChars) {
           void onFlush(payload);
           return;
         }
         bufferText = text;
+        bufferSourceText = sourceText;
+        bufferSourceRange = sourceRange;
         scheduleIdleFlush();
         return;
       }
@@ -130,6 +214,15 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
 
+    // Keep source coverage separate from inserted transport joiners.
+    bufferSourceText =
+      bufferSourceText !== undefined || sourceText !== undefined
+        ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
+        : undefined;
+    bufferSourceRange =
+      bufferSourceRange && sourceRange
+        ? [bufferSourceRange[0], sourceRange[1]]
+        : (bufferSourceRange ?? sourceRange);
     bufferText = nextText;
     if (bufferText.length >= maxChars) {
       void flush({ force: true });

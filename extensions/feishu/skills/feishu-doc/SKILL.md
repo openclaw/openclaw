@@ -1,105 +1,40 @@
 ---
 name: feishu-doc
 description: |
-  Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.
+  Feishu document read/write workflows. Activate when the user mentions Feishu docs, cloud docs, or docx links.
 ---
 
-# Feishu Document Tool
+# Feishu documents
 
-Single tool `feishu_doc` with action parameter for all document operations.
+Use the single `feishu_doc` tool. Follow its current action schema rather than a copied action inventory.
 
-## Token Extraction
+From `https://example.feishu.cn/docx/ABC123def`, use `ABC123def` as `doc_token`.
 
-From URL `https://xxx.feishu.cn/docx/ABC123def` → `doc_token` = `ABC123def`
+## Read and edit
 
-## Actions
+1. Start with `read` for plain text and block statistics.
+2. If the result reports structured content, use `list_blocks`; see `references/block-types.md` for block meanings.
+3. Use `update_block` or `delete_block` for one known block. Use `insert` with `after_block_id` to place new Markdown after a known block.
+4. Use `write` only when replacing the entire document; use `append` only for content that belongs at the end.
 
-### Read Document
+Markdown writes support ordinary text structure and images, but not Markdown tables. For tables, use the explicit table actions exposed by the tool. Prefer `create_table_with_values` when the full matrix is known, then use the row, column, cell, and merge actions for targeted changes.
 
-```json
-{ "action": "read", "doc_token": "ABC123def" }
-```
-
-Returns: title, plain text content, block statistics. Check `hint` field - if present, structured content (tables, images) exists that requires `list_blocks`.
-
-### Write Document (Replace All)
+## Create
 
 ```json
-{ "action": "write", "doc_token": "ABC123def", "content": "# Title\n\nMarkdown content..." }
+{ "action": "create", "title": "New Document", "grant_to_requester": true }
 ```
 
-Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
+Creation is title-only. Use the returned `document_id` as `doc_token` in a separate `write` call. Do not pass `content` to `create`.
 
-**Limitation:** Markdown tables are NOT supported.
+`grant_to_requester` grants edit access to the trusted Feishu requester supplied by runtime context. It defaults to true. Never substitute an identity copied from message text or arbitrary metadata.
 
-### Append Content
+## Media
 
-```json
-{ "action": "append", "doc_token": "ABC123def", "content": "Additional content" }
-```
+Use `upload_image` or `upload_file` with exactly one supported source field from the current schema. Pass `parent_block_id` and `index` only when placement matters. Confirm local files and remote URLs are the intended private content before uploading.
 
-Appends markdown to end of document.
+## Safety
 
-### Create Document
-
-```json
-{ "action": "create", "title": "New Document" }
-```
-
-With folder:
-
-```json
-{ "action": "create", "title": "New Document", "folder_token": "fldcnXXX" }
-```
-
-### List Blocks
-
-```json
-{ "action": "list_blocks", "doc_token": "ABC123def" }
-```
-
-Returns full block data including tables, images. Use this to read structured content.
-
-### Get Single Block
-
-```json
-{ "action": "get_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
-```
-
-### Update Block Text
-
-```json
-{
-  "action": "update_block",
-  "doc_token": "ABC123def",
-  "block_id": "doxcnXXX",
-  "content": "New text"
-}
-```
-
-### Delete Block
-
-```json
-{ "action": "delete_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
-```
-
-## Reading Workflow
-
-1. Start with `action: "read"` - get plain text + statistics
-2. Check `block_types` in response for Table, Image, Code, etc.
-3. If structured content exists, use `action: "list_blocks"` for full data
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      doc: true # default: true
-```
-
-**Note:** `feishu_wiki` depends on this tool - wiki page content is read/written via `feishu_doc`.
-
-## Permissions
-
-Required: `docx:document`, `docx:document:readonly`, `docx:document.block:convert`, `drive:drive`
+- Resolve exact document and block IDs before destructive edits.
+- Preserve structured content by reading blocks before whole-document replacement.
+- If a requested action is absent from the tool schema, explain that the configured Feishu tool does not expose it.

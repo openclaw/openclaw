@@ -1,6 +1,9 @@
+// Message send command registration, including media and presentation/delivery options.
 import type { Command } from "commander";
+import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register `message send` and route execution through shared message helpers. */
 export function registerMessageSendCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
@@ -9,23 +12,37 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .option("-m, --message <text>", "Message body (required unless --media is set)"),
+            .option(
+              "-m, --message <text>",
+              "Message body (required unless --media or --presentation is set)",
+            ),
         )
         .option(
           "--media <path-or-url>",
-          "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+          "Attach media (image/audio/video/document). Accepts local paths or URLs. Repeat to attach multiple files.",
+          collectOption,
         )
         .option(
-          "--buttons <json>",
-          "Telegram inline keyboard buttons as JSON (array of button rows)",
+          "--presentation <json>",
+          "Shared presentation payload as JSON (text, context, dividers, charts, tables, buttons, selects)",
         )
-        .option("--card <json>", "Adaptive Card JSON object (when supported by the channel)")
+        .option("--delivery <json>", "Shared delivery preferences as JSON")
+        .option("--pin", "Request that the delivered message be pinned when supported", false)
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
-        .option("--silent", "Send message silently without notification (Telegram only)", false),
+        .option(
+          "--force-document",
+          "Preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.",
+          false,
+        )
+        .option(
+          "--silent",
+          "Send message silently without notification (Telegram + Discord)",
+          false,
+        ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("send", opts);
-    });
+    .action(({ media, ...opts }) =>
+      helpers.runMessageAction("send", { ...opts, mediaUrls: media }),
+    );
 }

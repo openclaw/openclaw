@@ -1,17 +1,23 @@
+// Hook status helpers summarize configured, installed, and plugin-provided hooks.
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
+import { hasBinary, isHookConfigPathTruthy, isHookEnvSatisfied } from "./config.js";
+import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
+import {
+  resolveHookConfig,
+  resolveHookEnableState,
+  resolveHookEntries,
+  type HookEnableStateReason,
+} from "./policy.js";
+import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = {
-  path: string;
-  value: unknown;
-  satisfied: boolean;
-};
+type HookStatusConfigCheck = RequirementConfigCheck;
 
-export type HookInstallOption = {
+type HookInstallOption = {
   id: string;
   kind: HookInstallSpec["kind"];
   label: string;
@@ -30,24 +36,16 @@ export type HookStatusEntry = {
   emoji?: string;
   homepage?: string;
   events: string[];
+  /** Declared events no core trigger site emits (likely typos; fire only if a plugin emits them). */
+  unknownEvents: string[];
   always: boolean;
-  disabled: boolean;
-  eligible: boolean;
+  enabledByConfig: boolean;
+  requirementsSatisfied: boolean;
+  loadable: boolean;
+  blockedReason?: HookEnableStateReason | "missing requirements" | "no events defined";
   managedByPlugin: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: HookStatusConfigCheck[];
   install: HookInstallOption[];
 };
@@ -98,86 +96,29 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
+  const enableState = resolveHookEnableState({ entry, config, hookConfig });
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   const events = entry.metadata?.events ?? [];
+  const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
+  const isEnvSatisfied = (envName: string) => isHookEnvSatisfied(envName, hookConfig);
+  const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
 
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  const requiredOs = entry.metadata?.os ?? [];
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    evaluateEntryRequirementsForCurrentPlatform({
+      always,
+      entry,
+      hasLocalBin: hasBinary,
+      remote: eligibility?.remote,
+      isEnvSatisfied,
+      isConfigSatisfied,
+    });
 
-  const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) {
-      return false;
-    }
-    if (eligibility?.remote?.hasBin?.(bin)) {
-      return false;
-    }
-    return true;
-  });
-
-  const missingAnyBins =
-    requiredAnyBins.length > 0 &&
-    !(
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
-    )
-      ? requiredAnyBins
-      : [];
-
-  const missingOs =
-    requiredOs.length > 0 &&
-    !requiredOs.includes(process.platform) &&
-    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
-      ? requiredOs
-      : [];
-
-  const missingEnv: string[] = [];
-  for (const envName of requiredEnv) {
-    if (process.env[envName]) {
-      continue;
-    }
-    if (hookConfig?.env?.[envName]) {
-      continue;
-    }
-    missingEnv.push(envName);
-  }
-
-  const configChecks: HookStatusConfigCheck[] = requiredConfig.map((pathStr) => {
-    const value = resolveConfigPath(config, pathStr);
-    const satisfied = isConfigPathTruthy(config, pathStr);
-    return { path: pathStr, value, satisfied };
-  });
-
-  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
-
-  const missing = always
-    ? { bins: [], anyBins: [], env: [], config: [], os: [] }
-    : {
-        bins: missingBins,
-        anyBins: missingAnyBins,
-        env: missingEnv,
-        config: missingConfig,
-        os: missingOs,
-      };
-
-  const eligible =
-    !disabled &&
-    (always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0 &&
-        missing.os.length === 0));
+  const enabledByConfig = enableState.enabled;
+  const hasEvents = events.length > 0;
+  const loadable = enabledByConfig && requirementsSatisfied && hasEvents;
+  const blockedReason =
+    enableState.reason ??
+    (!requirementsSatisfied ? "missing requirements" : hasEvents ? undefined : "no events defined");
 
   return {
     name: entry.hook.name,
@@ -191,17 +132,14 @@ function buildHookStatus(
     emoji,
     homepage,
     events,
+    unknownEvents,
     always,
-    disabled,
-    eligible,
+    enabledByConfig,
+    requirementsSatisfied,
+    loadable,
+    blockedReason,
     managedByPlugin,
-    requirements: {
-      bins: requiredBins,
-      anyBins: requiredAnyBins,
-      env: requiredEnv,
-      config: requiredConfig,
-      os: requiredOs,
-    },
+    requirements: required,
     missing,
     configChecks,
     install: normalizeInstallOptions(entry),
@@ -218,7 +156,9 @@ export function buildWorkspaceHookStatus(
   },
 ): HookStatusReport {
   const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
-  const hookEntries = opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts);
+  const hookEntries = resolveHookEntries(
+    opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts),
+  );
 
   return {
     workspaceDir,

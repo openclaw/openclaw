@@ -1,24 +1,23 @@
-export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
+import type { z } from "zod";
+// Defines gateway runtime and networking configuration types.
+import type { SecretInput } from "./types.secrets.js";
+import type { GatewayConfigSchema } from "./zod-schema.gateway.js";
+import type { TalkSchema } from "./zod-schema.root-support.js";
 
-export type GatewayTlsConfig = {
-  /** Enable TLS for the gateway server. */
-  enabled?: boolean;
-  /** Auto-generate a self-signed cert if cert/key are missing (default: true). */
-  autoGenerate?: boolean;
-  /** PEM certificate path for the gateway server. */
-  certPath?: string;
-  /** PEM private key path for the gateway server. */
-  keyPath?: string;
-  /** Optional PEM CA bundle for TLS clients (mTLS or custom roots). */
-  caPath?: string;
-};
+type GatewayConfigInput = NonNullable<z.input<typeof GatewayConfigSchema>>;
+type TalkConfigInput = z.input<typeof TalkSchema>;
+
+/** Gateway bind-address policy for local server startup. */
+export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
+
+export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
 export type WideAreaDiscoveryConfig = {
-  enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
 
+/** mDNS/Bonjour metadata exposure level for local gateway discovery. */
 export type MdnsDiscoveryMode = "off" | "minimal" | "full";
 
 export type MdnsDiscoveryConfig = {
@@ -32,217 +31,171 @@ export type MdnsDiscoveryConfig = {
 };
 
 export type DiscoveryConfig = {
+  /** Wide-area DNS-SD discovery settings. */
   wideArea?: WideAreaDiscoveryConfig;
+  /** Local mDNS/Bonjour discovery settings. */
   mdns?: MdnsDiscoveryConfig;
 };
 
-export type CanvasHostConfig = {
-  enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
-  root?: string;
-  /** HTTP port to listen on (default: 18793). */
-  port?: number;
-  /** Enable live-reload file watching + WS reloads (default: true). */
-  liveReload?: boolean;
+export type TalkProviderConfig = NonNullable<TalkConfigInput["providers"]>[string];
+export type TalkRealtimeConfig = NonNullable<TalkConfigInput["realtime"]>;
+
+export type ResolvedTalkConfig = {
+  /** Active Talk TTS provider resolved from the current config payload. */
+  provider: string;
+  /** Provider config for the active Talk provider. */
+  config: TalkProviderConfig;
 };
 
-export type TalkConfig = {
-  /** Default ElevenLabs voice ID for Talk mode. */
-  voiceId?: string;
-  /** Optional voice name -> ElevenLabs voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default ElevenLabs model ID for Talk mode. */
-  modelId?: string;
-  /** Default ElevenLabs output format (e.g. mp3_44100_128). */
-  outputFormat?: string;
-  /** ElevenLabs API key (optional; falls back to ELEVENLABS_API_KEY). */
-  apiKey?: string;
-  /** Stop speaking when user starts talking (default: true). */
-  interruptOnSpeech?: boolean;
+export type TalkConfig = TalkConfigInput;
+
+export type TalkConfigResponse = TalkConfig & {
+  /** Canonical active Talk payload for clients. */
+  resolved?: ResolvedTalkConfig;
 };
 
-export type GatewayControlUiConfig = {
-  /** If false, the Gateway will not serve the Control UI (default /). */
-  enabled?: boolean;
-  /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
-  basePath?: string;
-  /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
-  root?: string;
-  /** Allowed browser origins for Control UI/WebChat websocket connections. */
-  allowedOrigins?: string[];
-  /** Allow token-only auth over insecure HTTP (default: false). */
-  allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
+export type GatewayControlUiConfig = Omit<
+  NonNullable<GatewayConfigInput["controlUi"]>,
+  "github" | "dangerouslyDisableDeviceAuth"
+> & {
+  /** @deprecated Doctor-only legacy input. */
+  chatMessageMaxWidth?: string;
+  /**
+   * @deprecated Upgrade-only transport input. Retained so releases that shipped
+   * this break-glass flag can migrate an unpaired browser safely.
+   */
   dangerouslyDisableDeviceAuth?: boolean;
+  github?: { token?: SecretInput };
 };
 
-export type GatewayAuthMode = "token" | "password";
+/** Gateway authentication strategy for WebSocket and HTTP clients. */
+export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
-export type GatewayAuthConfig = {
-  /** Authentication mode for Gateway connections. Defaults to token when set. */
-  mode?: GatewayAuthMode;
-  /** Shared token for token mode (stored locally for CLI auth). */
-  token?: string;
-  /** Shared password for password mode (consider env instead). */
-  password?: string;
-  /** Allow Tailscale identity headers when serve mode is enabled. */
-  allowTailscale?: boolean;
+/**
+ * Configuration for trusted reverse proxy authentication.
+ * Used when Clawdbot runs behind an identity-aware proxy (Pomerium, Caddy + OAuth, etc.)
+ * that handles authentication and passes user identity via headers.
+ */
+export type GatewayTrustedProxyConfig = NonNullable<GatewayAuthConfig["trustedProxy"]>;
+
+export type GatewayAuthConfig = Omit<
+  NonNullable<GatewayConfigInput["auth"]>,
+  "token" | "password"
+> & {
+  token?: SecretInput;
+  password?: SecretInput;
 };
 
+export type GatewayAuthRateLimitConfig = NonNullable<GatewayAuthConfig["rateLimit"]>;
+
+/** Tailscale exposure mode for gateway HTTP/WebSocket surfaces. */
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 
-export type GatewayTailscaleConfig = {
-  /** Tailscale exposure mode for the Gateway control UI. */
-  mode?: GatewayTailscaleMode;
-  /** Reset serve/funnel configuration on shutdown. */
-  resetOnExit?: boolean;
+export type GatewayTailscaleConfig = Omit<
+  NonNullable<GatewayConfigInput["tailscale"]>,
+  "preserveFunnel"
+> & {
+  /** @deprecated Migrate to `mode="funnel"`, which uses managed ingress. */
+  preserveFunnel?: boolean;
 };
 
-export type GatewayRemoteConfig = {
-  /** Remote Gateway WebSocket URL (ws:// or wss://). */
-  url?: string;
-  /** Transport for macOS remote connections (ssh tunnel or direct WS). */
-  transport?: "ssh" | "direct";
-  /** Token for remote auth (when the gateway requires token auth). */
-  token?: string;
-  /** Password for remote auth (when the gateway requires password auth). */
-  password?: string;
-  /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
-  tlsFingerprint?: string;
-  /** SSH target for tunneling remote Gateway (user@host). */
-  sshTarget?: string;
-  /** SSH identity file path for tunneling remote Gateway. */
-  sshIdentity?: string;
-};
+/** Operator-provisioned private HTTPS wildcard portal ingress. */
+export type GatewayPortalIngressConfig = NonNullable<
+  NonNullable<GatewayConfigInput["portals"]>["ingress"]
+>;
 
+export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
+
+/**
+ * Operator terminal surface served to Control UI and mobile clients.
+ *
+ * The terminal opens a PTY-backed shell on the gateway host, gated to
+ * admin-scope operator sessions. It starts in the target agent's workspace; if
+ * that agent is fully sandboxed (`sandbox.mode: "all"`) the terminal is refused
+ * rather than handed an unconfined host shell (workspace isolation is
+ * fail-closed). Under "non-main" the agent's main session runs on the host, so a
+ * host terminal is allowed.
+ */
+export type GatewayTerminalConfig = NonNullable<GatewayConfigInput["terminal"]>;
+
+/** External CLI session targets in the Control UI. */
+export type GatewayCliAgentsConfig = NonNullable<GatewayConfigInput["cliAgents"]>;
+
+/** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
-  /** Debounce window for config reloads (ms). Default: 300. */
-  debounceMs?: number;
 };
 
-export type GatewayHttpChatCompletionsConfig = {
-  /**
-   * If false, the Gateway will not serve `POST /v1/chat/completions`.
-   * Default: false when absent.
-   */
-  enabled?: boolean;
-};
+type GatewayHttpConfigInput = NonNullable<GatewayConfigInput["http"]>;
+type GatewayHttpEndpointsConfigInput = NonNullable<GatewayHttpConfigInput["endpoints"]>;
 
-export type GatewayHttpResponsesConfig = {
-  /**
-   * If false, the Gateway will not serve `POST /v1/responses` (OpenResponses API).
-   * Default: false when absent.
-   */
-  enabled?: boolean;
-  /**
-   * Max request body size in bytes for `/v1/responses`.
-   * Default: 20MB.
-   */
-  maxBodyBytes?: number;
-  /** File inputs (input_file). */
-  files?: GatewayHttpResponsesFilesConfig;
-  /** Image inputs (input_image). */
-  images?: GatewayHttpResponsesImagesConfig;
-};
+export type GatewayHttpChatCompletionsConfig = NonNullable<
+  GatewayHttpEndpointsConfigInput["chatCompletions"]
+>;
+export type GatewayHttpChatCompletionsImagesConfig = NonNullable<
+  GatewayHttpChatCompletionsConfig["images"]
+>;
 
-export type GatewayHttpResponsesFilesConfig = {
-  /** Allow URL fetches for input_file. Default: true. */
-  allowUrl?: boolean;
-  /** Allowed MIME types (case-insensitive). */
-  allowedMimes?: string[];
-  /** Max bytes per file. Default: 5MB. */
-  maxBytes?: number;
-  /** Max decoded characters per file. Default: 200k. */
-  maxChars?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
-  /** PDF handling (application/pdf). */
-  pdf?: GatewayHttpResponsesPdfConfig;
-};
+export type GatewayHttpResponsesConfig = NonNullable<GatewayHttpEndpointsConfigInput["responses"]>;
 
-export type GatewayHttpResponsesPdfConfig = {
-  /** Max pages to parse/render. Default: 4. */
-  maxPages?: number;
-  /** Max pixels per rendered page. Default: 4M. */
-  maxPixels?: number;
-  /** Minimum extracted text length to skip rasterization. Default: 200 chars. */
-  minTextChars?: number;
-};
+export type GatewayHttpResponsesFilesConfig = NonNullable<GatewayHttpResponsesConfig["files"]>;
 
-export type GatewayHttpResponsesImagesConfig = {
-  /** Allow URL fetches for input_image. Default: true. */
-  allowUrl?: boolean;
-  /** Allowed MIME types (case-insensitive). */
-  allowedMimes?: string[];
-  /** Max bytes per image. Default: 10MB. */
-  maxBytes?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
-};
+export type GatewayHttpResponsesPdfConfig = NonNullable<GatewayHttpResponsesFilesConfig["pdf"]>;
 
-export type GatewayHttpEndpointsConfig = {
-  chatCompletions?: GatewayHttpChatCompletionsConfig;
-  responses?: GatewayHttpResponsesConfig;
-};
+export type GatewayHttpResponsesImagesConfig = NonNullable<GatewayHttpResponsesConfig["images"]>;
 
-export type GatewayHttpConfig = {
-  endpoints?: GatewayHttpEndpointsConfig;
-};
+export type GatewayHttpEndpointsConfig = GatewayHttpEndpointsConfigInput;
 
-export type GatewayNodesConfig = {
-  /** Browser routing policy for node-hosted browser proxies. */
-  browser?: {
-    /** Routing mode (default: auto). */
-    mode?: "auto" | "manual" | "off";
-    /** Pin to a specific node id/name (optional). */
-    node?: string;
-  };
-  /** Additional node.invoke commands to allow on the gateway. */
+export type GatewayHttpSecurityHeadersConfig = NonNullable<
+  GatewayHttpConfigInput["securityHeaders"]
+>;
+
+export type GatewayHttpConfig = GatewayHttpConfigInput;
+
+export type GatewayPushConfig = NonNullable<GatewayConfigInput["push"]>;
+export type GatewayPushApnsConfig = NonNullable<GatewayPushConfig["apns"]>;
+export type GatewayPushApnsRelayConfig = NonNullable<GatewayPushApnsConfig["relay"]>;
+
+export type GatewayNodePairingConfig = NonNullable<
+  NonNullable<GatewayConfigInput["nodes"]>["pairing"]
+>;
+
+export type GatewayNodesConfig = NonNullable<GatewayConfigInput["nodes"]> & {
+  /** @deprecated Doctor-only legacy input. */
+  skills?: { enabled?: boolean };
+  /** @deprecated Doctor-only legacy input. */
   allowCommands?: string[];
-  /** Commands to deny even if they appear in the defaults or node claims. */
+  /** @deprecated Doctor-only legacy input. */
   denyCommands?: string[];
 };
 
-export type GatewayConfig = {
-  /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
-  port?: number;
-  /**
-   * Explicit gateway mode. When set to "remote", local gateway start is disabled.
-   * When set to "local", the CLI may start the gateway locally.
-   */
-  mode?: "local" | "remote";
-  /**
-   * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
-   * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
-   * - lan: 0.0.0.0 (all interfaces, no fallback)
-   * - loopback: 127.0.0.1 (local-only)
-   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
-   * Default: loopback (127.0.0.1).
-   */
-  bind?: GatewayBindMode;
-  /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
-  customBindHost?: string;
-  controlUi?: GatewayControlUiConfig;
+export type GatewayToolsConfig = NonNullable<GatewayConfigInput["tools"]>;
+
+/** Closed session, sandbox, agent, model, and operator-scope policy for one named team role. */
+export type GatewayOperatorRoleDefinition = NonNullable<
+  GatewayConfigInput["roles"]
+>["definitions"][string];
+
+/** Optional named operator-role policies for Gateway deployments shared by a team. */
+export type GatewayOperatorRolesConfig = Omit<
+  NonNullable<GatewayConfigInput["roles"]>,
+  "default"
+> & {
+  /** Required validated default for profiles without a valid assigned role. */
+  default?: string;
+};
+
+export type GatewayConfig = Omit<
+  GatewayConfigInput,
+  "controlUi" | "nodes" | "roles" | "reload" | "auth" | "tailscale"
+> & {
   auth?: GatewayAuthConfig;
-  tailscale?: GatewayTailscaleConfig;
-  remote?: GatewayRemoteConfig;
-  reload?: GatewayReloadConfig;
-  tls?: GatewayTlsConfig;
-  http?: GatewayHttpConfig;
+  controlUi?: GatewayControlUiConfig;
   nodes?: GatewayNodesConfig;
-  /**
-   * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
-   * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or
-   * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
-   */
-  trustedProxies?: string[];
+  roles?: GatewayOperatorRolesConfig;
+  reload?: GatewayReloadConfig;
+  tailscale?: GatewayTailscaleConfig;
 };

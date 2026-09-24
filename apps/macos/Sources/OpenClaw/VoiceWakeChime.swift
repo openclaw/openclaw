@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import OSLog
 
-enum VoiceWakeChime: Codable, Equatable, Sendable {
+enum VoiceWakeChime: Codable, Equatable {
     case none
     case system(name: String)
     case custom(displayName: String, bookmark: Data)
@@ -19,30 +19,16 @@ enum VoiceWakeChime: Codable, Equatable, Sendable {
         case .none:
             "No Sound"
         case let .system(name):
-            VoiceWakeChimeCatalog.displayName(for: name)
+            name
         case let .custom(displayName, _):
             displayName
         }
     }
 }
 
-enum VoiceWakeChimeCatalog {
-    /// Options shown in the picker.
-    static var systemOptions: [String] { SoundEffectCatalog.systemOptions }
-
-    static func displayName(for raw: String) -> String {
-        SoundEffectCatalog.displayName(for: raw)
-    }
-
-    static func url(for name: String) -> URL? {
-        SoundEffectCatalog.url(for: name)
-    }
-}
-
 @MainActor
 enum VoiceWakeChimePlayer {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.chime")
-    private static var lastSound: NSSound?
 
     static func play(_ chime: VoiceWakeChime, reason: String? = nil) {
         guard let sound = self.sound(for: chime) else { return }

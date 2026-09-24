@@ -1,58 +1,121 @@
-import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+// Shared Gateway session projection types.
+// Keeps server methods and Control UI payloads aligned.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type {
+  SessionPlacement,
+  SessionPlacementMove,
+  SessionRow,
+} from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
+import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
+import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
+import type { FastModeSource } from "../shared/fast-mode.js";
+import type {
+  GatewayAgentRuntime,
+  GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
+  GatewayThinkingLevelOption,
+  SessionsListResultBase,
+  SessionsPatchResultBase,
+} from "../shared/session-types.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
+// Shared Gateway session response contracts. Server methods, UI adapters, and
+// tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
+  agentRuntime?: GatewayAgentRuntime;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+  modelSelectionTarget?: StickyModelSelectionTarget;
 };
 
-export type GatewaySessionRow = {
-  key: string;
-  kind: "direct" | "group" | "global" | "unknown";
-  label?: string;
-  displayName?: string;
-  derivedTitle?: string;
-  lastMessagePreview?: string;
-  channel?: string;
+type SubagentRunState = "active" | "interrupted" | "historical";
+
+export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
+  worktree?: SessionEntry["worktree"];
+  category?: string;
   subject?: string;
   groupChannel?: string;
   space?: string;
-  chatType?: ChatType;
-  origin?: SessionEntry["origin"];
+  origin?: Omit<SessionOrigin, "avatar">;
   updatedAt: number | null;
-  sessionId?: string;
+  archivedBy?: SessionEntry["archivedBy"];
+  agentStatus?: SessionEntry["agentStatus"];
+  activitySummary?: import("../../packages/gateway-protocol/src/schema/sessions-activity-summary.js").SessionActivitySummary;
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
+  placement?: SessionPlacement;
+  placementMove?: SessionPlacementMove;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
+  goal?: SessionGoal;
+  hasActiveRun?: boolean;
+  activeRunIds?: string[];
+  hasAutomation?: boolean;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
   responseUsage?: "on" | "off" | "tokens" | "full";
-  modelProvider?: string;
-  model?: string;
-  contextTokens?: number;
+  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+  queueMode?: QueueMode;
+  effectiveQueueMode?: QueueMode;
+  modelSelectionLocked?: boolean;
+  runtimeSelectionLocked?: boolean;
+  agentRuntime?: GatewayAgentRuntime;
+  contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
+  pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-    avatar?: string;
-    avatarUrl?: string;
-  };
+/**
+ * Compile-time drift guard: fails typecheck when the Gateway projection stops
+ * matching the protocol schema's documented row fields. Value-level so the
+ * unused-export scan sees a consumer.
+ */
+const sessionRowSchemaDriftGuard: Pick<GatewaySessionRow, keyof SessionRow> extends SessionRow
+  ? true
+  : false = true;
+void sessionRowSchemaDriftGuard;
+
+export type GatewayAgentRow = SharedGatewayAgentRow;
+
+export type SessionTitleFields = {
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
 };
 
 export type SessionPreviewItem = {
@@ -62,7 +125,7 @@ export type SessionPreviewItem = {
 
 export type SessionsPreviewEntry = {
   key: string;
-  status: "ok" | "empty" | "missing" | "error";
+  status: "ok" | "empty" | "missing" | "cold" | "error";
   items: SessionPreviewItem[];
 };
 
@@ -71,21 +134,25 @@ export type SessionsPreviewResult = {
   previews: SessionsPreviewEntry[];
 };
 
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
+export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
+/**
+ * Per-agent completed model catalogs for a session listing. Scoped listings
+ * carry exactly one agent's catalog; unscoped listings carry one per configured
+ * agent so row projections stay owner-scoped.
+ */
+export type SessionListModelCatalog = ReadonlyMap<string, PreparedGatewayModelCatalog | undefined>;
+
+export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
   resolved?: {
     modelProvider?: string;
     model?: string;
+    agentRuntime?: GatewayAgentRuntime;
+    runtimeSelectionLocked?: boolean;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };

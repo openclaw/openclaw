@@ -1,0 +1,275 @@
+// Status command report data tests cover report data assembly from shared status fixtures.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { SqliteWalHealth } from "../infra/sqlite-wal.js";
+import * as backupRunRecords from "../state/backup-run-records.js";
+import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
+import { buildStatusCommandReportData } from "./status.command-report-data.ts";
+import { createStatusCommandReportDataParams } from "./status.test-support.ts";
+
+describe("buildStatusCommandReportData", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    {
+      ageMs: 300_000,
+      channel: "quietchat",
+      accountId: "acct",
+      expected: "ok-token · 5m ago · quietchat · account acct",
+    },
+    {
+      ageMs: 15_000,
+      channel: "quietchat",
+      accountId: "acct",
+      expected: "ok-token · just now · quietchat · account acct",
+    },
+    { ageMs: 300_000, expected: "ok-token · 5m ago" },
+  ])(
+    "formats the last heartbeat age once for $ageMs ms",
+    async ({ ageMs, channel, accountId, expected }) => {
+      const now = Date.parse("2026-09-01T12:00:00.000Z");
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const result = await buildStatusCommandReportData(
+        createStatusCommandReportDataParams({
+          lastHeartbeat: {
+            ts: now - ageMs,
+            status: "ok-token",
+            channel,
+            accountId,
+          },
+        }),
+      );
+
+      const row = expectDefined(
+        result.overviewRows.find(({ Item }) => Item === "Last heartbeat"),
+        "last heartbeat row",
+      );
+      expect(stripAnsi(row.Value)).toBe(expected);
+    },
+  );
+
+  it("awaits backup freshness before assembling the overview", async () => {
+    const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
+    vi.spyOn(backupRunRecords, "readBackupRunFreshness").mockReturnValueOnce(freshness.promise);
+    const pending = buildStatusCommandReportData(createStatusCommandReportDataParams());
+    freshness.resolve({
+      latest: {
+        id: "failed-backup",
+        createdAt: Date.now(),
+        archivePath: "/backups/archive.tar.gz",
+        status: "failed",
+        kind: "archive",
+      },
+    });
+    const report = await pending;
+    expect(report.overviewRows.find(({ Item }) => Item === "Backups")?.Value).toBe(
+      "last attempt failed just now (archive)",
+    );
+  });
+
+  it("keeps pending startup guidance distinct from reachability failure", async () => {
+    const params = createStatusCommandReportDataParams();
+    const report = await buildStatusCommandReportData({
+      ...params,
+      surface: {
+        ...params.surface,
+        gatewayReachable: false,
+        gatewayProbe: { startupPhase: "plugins", error: null },
+      },
+      health: undefined,
+      lastHeartbeat: null,
+    });
+
+    expect(
+      stripAnsi(report.overviewRows.find(({ Item }) => Item === "Last heartbeat")?.Value ?? ""),
+    ).toBe("not checked (gateway still starting; phase plugins)");
+    expect(report.footerLines.at(-1)).toBe("  Retry after startup: openclaw status --deep");
+    expect(report.footerLines.join("\n")).not.toContain("Fix reachability first");
+  });
+
+  it("builds report inputs from shared status surfaces", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        surface: {
+          ...baseParams.surface,
+          gatewayProbe: { connectLatencyMs: 123, error: null },
+        },
+        summary: {
+          ...baseParams.summary,
+          sessions: {
+            ...baseParams.summary.sessions,
+            recent: [
+              {
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
+                key: "session-key",
+                kind: "direct",
+                updatedAt: 1,
+                age: 5_000,
+                model: "gpt-5.4",
+                inputTokens: 3_000,
+                cacheRead: 1_000,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.overviewRows[0]).toEqual({
+      Item: "OS",
+      Value: "macOS · node " + process.versions.node,
+    });
+    expect(result.taskMaintenanceHint).toBe("Task maintenance: openclaw tasks maintenance --apply");
+    expect(result.pluginCompatibilityLines.map(stripAnsi)).toEqual(["  WARN a legacy"]);
+    const pairingTitle = expectDefined(result.pairingRecoveryLines[0], "pairing recovery title");
+    expect(stripAnsi(pairingTitle)).toBe("Gateway pairing approval required.");
+    expect(result.modelSelectionLines).toEqual([]);
+    expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
+    expect(result.sessionsRows[0]?.Cache).toBe("25% hit · read 1.0k");
+    const gatewayHealth = expectDefined(result.healthRows?.[0], "Gateway health row");
+    expect({ ...gatewayHealth, Status: stripAnsi(gatewayHealth.Status) }).toEqual({
+      Item: "Gateway",
+      Status: "reachable",
+      Detail: "42ms",
+    });
+    expect(result.footerLines.at(-1)).toBe("  Need to test channels? openclaw status --deep");
+  });
+
+  it("shows skipped audit text when fast status omits the security audit", async () => {
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        securityAudit: undefined,
+      }),
+    );
+
+    expect(result.securityAuditLines.map(stripAnsi)).toEqual([
+      "Skipped in fast status. Full report: openclaw security audit",
+      "Deep probe: openclaw status --deep",
+    ]);
+  });
+
+  it.each([
+    { state: "blocked", warning: true, consecutiveBlocked: 2 },
+    { state: "error", warning: true, consecutiveBlocked: 0 },
+    { state: "complete", warning: false, consecutiveBlocked: 0 },
+    { state: "blocked", warning: false, consecutiveBlocked: 1 },
+  ] satisfies Array<Pick<SqliteWalHealth, "state" | "warning" | "consecutiveBlocked">>)(
+    "renders recorded SQLite $state warning=$warning in deep status",
+    async (observation) => {
+      const baseParams = createStatusCommandReportDataParams();
+      const sqliteWal = createSqliteWalHealth({
+        ...observation,
+        observedAtMs: Date.parse("2026-09-13T12:00:00.000Z"),
+        walBytes:
+          observation.state === "blocked" && !observation.warning ? 1024 : 128 * 1024 * 1024,
+        checkpointedFrames: observation.state === "complete" ? 4000 : 100,
+        lastCompletedAtMs: Date.parse("2026-09-13T11:00:00.000Z"),
+      });
+      const result = await buildStatusCommandReportData(
+        createStatusCommandReportDataParams({
+          summary: { ...baseParams.summary, sqliteWal },
+          opts: { deep: true },
+        }),
+      );
+      const row = result.healthRows?.find(({ Item }) => Item === "SQLite WAL");
+      if (!observation.warning) {
+        expect(row).toBeUndefined();
+        return;
+      }
+      expect(row).toMatchObject({
+        Detail: expect.stringContaining(`checkpoint ${observation.state}`),
+      });
+      expect(stripAnsi(expectDefined(row, "SQLite WAL warning").Status)).toBe("WARN");
+      expect(row?.Detail).toContain("WAL 128.0 MiB");
+      expect(row?.Detail).toContain("frames 100/4000 checkpointed");
+      expect(row?.Detail).toContain("last complete 2026-09-13T11:00:00.000Z");
+      expect(row?.Detail).toContain("observed 2026-09-13T12:00:00.000Z");
+      expect(row?.Detail).toContain("openclaw gateway restart");
+    },
+  );
+
+  it("surfaces retained lost task cleanup timing only for detailed reports", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const summary = {
+      ...baseParams.summary,
+      taskAuditRetainedLost: {
+        count: 1,
+        nextCleanupAfter: Date.parse("2026-03-30T01:00:00.000Z"),
+      },
+    };
+
+    const deepResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: { deep: true } }),
+    );
+    const fastResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: {} }),
+    );
+
+    expect(stripAnsi(expectDefined(deepResult.retainedLostTaskLine, "retained lost task"))).toBe(
+      "1 lost task retained until 2026-03-30T01:00:00.000Z",
+    );
+    expect(fastResult.retainedLostTaskLine).toBeNull();
+  });
+
+  it("falls back when retained lost task cleanup timing is Date-invalid", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        summary: {
+          ...baseParams.summary,
+          taskAuditRetainedLost: {
+            count: 2,
+            nextCleanupAfter: 8_700_000_000_000_000,
+          },
+        },
+        opts: { deep: true },
+      }),
+    );
+
+    expect(stripAnsi(expectDefined(result.retainedLostTaskLine, "retained lost task"))).toBe(
+      "2 lost tasks retained until cleanupAfter",
+    );
+  });
+
+  it("adds pinned-session model selection lines", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        summary: {
+          ...baseParams.summary,
+          sessions: {
+            ...baseParams.summary.sessions,
+            recent: [
+              {
+                ...expectDefined(
+                  baseParams.summary.sessions.recent[0],
+                  "baseParams.summary.sessions.recent[0] test invariant",
+                ),
+                configuredModel: "zhipu/glm-4.5-air",
+                selectedModel: "deepseek/deepseek-v4-flash",
+                modelSelectionReason: "session override",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.modelSelectionLines).toContain("  Configured default: zhipu/glm-4.5-air");
+    expect(result.modelSelectionLines).toContain("  Session selected: deepseek/deepseek-v4-flash");
+    expect(result.modelSelectionLines).toContain("  Reason: session override");
+  });
+});

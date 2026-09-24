@@ -1,10 +1,78 @@
+// Ios Node E2E script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
-import WebSocket from "ws";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.js";
 
-type GatewayReqFrame = { type: "req"; id: string; method: string; params?: unknown };
-type GatewayResFrame = { type: "res"; id: string; ok: boolean; payload?: unknown; error?: unknown };
-type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
-type GatewayFrame = GatewayReqFrame | GatewayResFrame | GatewayEventFrame | { type: string };
+function writeStdoutLine(message = ""): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStdoutJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+function usage(): string {
+  return [
+    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [options]",
+    "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
+    "",
+    "Options:",
+    "  --node <id|name-substring>  Select a connected iOS node",
+    "  --wait-seconds <n>          Seconds to wait for an iOS node (default: 25)",
+    "  --dangerous                 Include camera/screen commands",
+    "  --json                      Print JSON results",
+    "  -h, --help                  Show this help",
+  ].join("\n");
+}
+
+const argv = process.argv.slice(2);
+const getArg = (flag: string) => {
+  const index = argv.indexOf(flag);
+  return index === -1 ? undefined : argv[index + 1];
+};
+const hasFlag = (flag: string) => argv.includes(flag);
+const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
+
+function isMissingOptionValue(value: string | undefined): boolean {
+  return !value || BOOLEAN_FLAGS.has(value) || VALUE_FLAGS.has(value) || value.startsWith("--");
+}
+
+function failCli(message: string): never {
+  writeStderrLine(message);
+  process.exit(1);
+}
+
+function validateArgs(): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (isMissingOptionValue(value)) {
+        failCli(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    failCli(`Unknown argument: ${arg}`);
+  }
+}
+
+validateArgs();
+if (hasFlag("--help") || hasFlag("-h")) {
+  writeStdoutLine(usage());
+  process.exit(0);
+}
 
 type NodeListPayload = {
   ts?: number;
@@ -21,17 +89,6 @@ type NodeListPayload = {
 
 type NodeListNode = NonNullable<NodeListPayload["nodes"]>[number];
 
-const args = process.argv.slice(2);
-const getArg = (flag: string) => {
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && idx + 1 < args.length) {
-    return args[idx + 1];
-  }
-  return undefined;
-};
-
-const hasFlag = (flag: string) => args.includes(flag);
-
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 const nodeHint = getArg("--node");
@@ -39,20 +96,13 @@ const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS =
 const jsonOut = hasFlag("--json");
 
 if (!urlRaw || !token) {
-  // eslint-disable-next-line no-console
-  console.error(
-    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [--node <id|name-substring>] [--dangerous] [--json]\n" +
-      "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
-  );
+  writeStderrLine(usage());
   process.exit(1);
 }
 
-const url = new URL(urlRaw.includes("://") ? urlRaw : `wss://${urlRaw}`);
-if (!url.port) {
-  url.port = url.protocol === "wss:" ? "443" : "80";
-}
-
-const randomId = () => randomUUID();
+const waitSeconds = parseWaitSeconds(getArg("--wait-seconds"));
+const { createGatewayWsClient, resolveGatewayUrl } = await import("./gateway-ws-client.ts");
+const url = resolveGatewayUrl(urlRaw);
 
 const isoNow = () => new Date().toISOString();
 const isoMinusMs = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -82,6 +132,63 @@ function formatErr(err: unknown): string {
   }
 }
 
+function parseWaitSeconds(raw: string | undefined): number {
+  const value = raw ?? "25";
+  const text = value.trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    writeStderrLine(`--wait-seconds must be a positive integer; got: ${value}`);
+    process.exit(1);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    writeStderrLine(`--wait-seconds must be a safe positive integer; got: ${value}`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function payloadShapeError(command: string, payload: unknown): string | null {
+  if (payload == null) {
+    return `${command} returned no payload`;
+  }
+  if (Array.isArray(payload)) {
+    return `${command} returned an array payload`;
+  }
+  if (!isRecord(payload)) {
+    return `${command} returned a ${typeof payload} payload`;
+  }
+  if (Object.keys(payload).length === 0) {
+    return `${command} returned an empty object payload`;
+  }
+  if (command === "device.info") {
+    const hasSystemName =
+      typeof payload.systemName === "string" && payload.systemName.trim().length > 0;
+    const hasSystemVersion =
+      typeof payload.systemVersion === "string" && payload.systemVersion.trim().length > 0;
+    if (!hasSystemName || !hasSystemVersion) {
+      return "device.info payload missing systemName/systemVersion";
+    }
+  }
+  return null;
+}
+
+function commandPayloadFromInvokePayload(payload: unknown): unknown {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+  if (typeof payload.payloadJSON === "string") {
+    try {
+      return JSON.parse(payload.payloadJSON);
+    } catch {
+      return undefined;
+    }
+  }
+  if ("payload" in payload && ("ok" in payload || "nodeId" in payload || "command" in payload)) {
+    return commandPayloadFromInvokePayload(payload.payload);
+  }
+  return payload;
+}
+
 function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null {
   const nodes = (list.nodes ?? []).filter((n) => n && n.connected);
   const ios = nodes.filter((n) => (n.platform ?? "").toLowerCase().includes("ios"));
@@ -102,86 +209,12 @@ function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null 
 }
 
 async function main() {
-  const ws = new WebSocket(url.toString(), { handshakeTimeout: 8000 });
-  const pending = new Map<
-    string,
-    {
-      resolve: (res: GatewayResFrame) => void;
-      reject: (err: Error) => void;
-      timeout: ReturnType<typeof setTimeout>;
-    }
-  >();
-
-  const request = (method: string, params?: unknown, timeoutMs = 12_000) =>
-    new Promise<GatewayResFrame>((resolve, reject) => {
-      const id = randomId();
-      const frame: GatewayReqFrame = { type: "req", id, method, params };
-      const timeout = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`timeout waiting for ${method}`));
-      }, timeoutMs);
-      pending.set(id, { resolve, reject, timeout });
-      ws.send(JSON.stringify(frame));
-    });
-
-  const waitOpen = () =>
-    new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("ws open timeout")), 8000);
-      ws.once("open", () => {
-        clearTimeout(t);
-        resolve();
-      });
-      ws.once("error", (err) => {
-        clearTimeout(t);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
-
-  const toText = (data: WebSocket.RawData) => {
-    if (typeof data === "string") {
-      return data;
-    }
-    if (data instanceof ArrayBuffer) {
-      return Buffer.from(data).toString("utf8");
-    }
-    if (Array.isArray(data)) {
-      return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-    }
-    return Buffer.from(data as Buffer).toString("utf8");
-  };
-
-  ws.on("message", (data) => {
-    const text = toText(data);
-    let frame: GatewayFrame | null = null;
-    try {
-      frame = JSON.parse(text) as GatewayFrame;
-    } catch {
-      return;
-    }
-    if (!frame || typeof frame !== "object" || !("type" in frame)) {
-      return;
-    }
-    if (frame.type === "res") {
-      const res = frame as GatewayResFrame;
-      const waiter = pending.get(res.id);
-      if (waiter) {
-        pending.delete(res.id);
-        clearTimeout(waiter.timeout);
-        waiter.resolve(res);
-      }
-      return;
-    }
-    if (frame.type === "event") {
-      // Ignore; caller can extend to watch node.pair.* etc.
-      return;
-    }
-  });
-
+  const { request, waitOpen, close } = createGatewayWsClient({ url: url.toString() });
   await waitOpen();
 
   const connectRes = await request("connect", {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
     client: {
       id: "cli",
       displayName: "openclaw ios node e2e",
@@ -199,32 +232,33 @@ async function main() {
   });
 
   if (!connectRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("connect failed:", connectRes.error);
+    writeStderrLine(`connect failed: ${String(connectRes.error)}`);
+    close();
     process.exit(2);
   }
 
   const healthRes = await request("health");
   if (!healthRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("health failed:", healthRes.error);
+    writeStderrLine(`health failed: ${String(healthRes.error)}`);
+    close();
     process.exit(3);
   }
 
   const nodesRes = await request("node.list");
   if (!nodesRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("node.list failed:", nodesRes.error);
+    writeStderrLine(`node.list failed: ${String(nodesRes.error)}`);
+    close();
     process.exit(4);
   }
 
   const listPayload = (nodesRes.payload ?? {}) as NodeListPayload;
   let node = pickIosNode(listPayload, nodeHint);
   if (!node) {
-    const waitSeconds = Number.parseInt(getArg("--wait-seconds") ?? "25", 10);
     const deadline = Date.now() + Math.max(1, waitSeconds) * 1000;
     while (!node && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => {
+        setTimeout(r, 1000);
+      });
       const res = await request("node.list").catch(() => null);
       if (!res?.ok) {
         continue;
@@ -233,8 +267,8 @@ async function main() {
     }
   }
   if (!node) {
-    // eslint-disable-next-line no-console
-    console.error("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
+    writeStderrLine("No connected iOS nodes found. (Is the iOS app connected to the gateway?)");
+    close();
     process.exit(5);
   }
 
@@ -307,7 +341,7 @@ async function main() {
         idempotencyKey: randomUUID(),
       },
       (t.timeoutMs ?? 12_000) + 2_000,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       results.push({ id: t.id, ok: false, error: formatErr(err) });
       return null;
     });
@@ -321,27 +355,27 @@ async function main() {
       continue;
     }
 
+    const commandPayload = commandPayloadFromInvokePayload(invokeRes.payload);
+    const payloadError = payloadShapeError(t.command, commandPayload);
+    if (payloadError) {
+      results.push({ id: t.id, ok: false, error: payloadError, payload: invokeRes.payload });
+      continue;
+    }
+
     results.push({ id: t.id, ok: true, payload: invokeRes.payload });
   }
 
   if (jsonOut) {
-    // eslint-disable-next-line no-console
-    console.log(
-      JSON.stringify(
-        {
-          gateway: url.toString(),
-          node: {
-            nodeId: node.nodeId,
-            displayName: node.displayName,
-            platform: node.platform,
-          },
-          dangerous,
-          results,
-        },
-        null,
-        2,
-      ),
-    );
+    writeStdoutJson({
+      gateway: url.toString(),
+      node: {
+        nodeId: node.nodeId,
+        displayName: node.displayName,
+        platform: node.platform,
+      },
+      dangerous,
+      results,
+    });
   } else {
     const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
     const rows = results.map((r) => ({
@@ -350,20 +384,16 @@ async function main() {
       note: r.ok ? "" : formatErr(r.error ?? "error"),
     }));
     const width = Math.min(64, Math.max(12, ...rows.map((r) => r.cmd.length)));
-    // eslint-disable-next-line no-console
-    console.log(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
-    // eslint-disable-next-line no-console
-    console.log(`dangerous: ${dangerous ? "on" : "off"}`);
-    // eslint-disable-next-line no-console
-    console.log("");
+    writeStdoutLine(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
+    writeStdoutLine(`dangerous: ${dangerous ? "on" : "off"}`);
+    writeStdoutLine();
     for (const r of rows) {
-      // eslint-disable-next-line no-console
-      console.log(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
+      writeStdoutLine(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
     }
   }
 
   const failed = results.filter((r) => !r.ok);
-  ws.close();
+  close();
 
   if (failed.length > 0) {
     process.exit(10);

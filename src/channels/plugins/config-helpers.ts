@@ -1,4 +1,14 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Channel config mutation helpers.
+ *
+ * Updates account enabled state and detects configured secret-like values.
+ */
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveAccountKey,
+  resolveChannelAccountKey,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
@@ -6,108 +16,275 @@ type ChannelSection = {
   enabled?: boolean;
 };
 
+/** Replace one section; undefined removes it and prunes an empty channels object. */
+export function writeChannelSection(
+  cfg: OpenClawConfig,
+  channelKey: string,
+  section: Record<string, unknown> | undefined,
+): OpenClawConfig {
+  if (section !== undefined) {
+    return { ...cfg, channels: { ...cfg.channels, [channelKey]: section } };
+  }
+  const channels = { ...cfg.channels };
+  delete channels[channelKey];
+  const next = { ...cfg };
+  if (Object.keys(channels).length > 0) {
+    next.channels = channels;
+  } else {
+    delete next.channels;
+  }
+  return next;
+}
+
+export function setTopLevelChannelEnabledInConfigSection(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  enabled: boolean;
+}): OpenClawConfig {
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...params.cfg.channels?.[params.sectionKey],
+    enabled: params.enabled,
+  });
+}
+
+export function clearTopLevelChannelConfigFields(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  clearBaseFields: string[];
+}): OpenClawConfig {
+  const section = params.cfg.channels?.[params.sectionKey];
+  if (!section) {
+    return params.cfg;
+  }
+  const nextSection = { ...section };
+  for (const field of params.clearBaseFields) {
+    delete nextSection[field];
+  }
+  return writeChannelSection(params.cfg, params.sectionKey, nextSection);
+}
+
+function isConfiguredSecretValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return Boolean(value);
+}
+
+/**
+ * Updates an account enabled flag in a channel config section.
+ */
 export function setAccountEnabledInConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   enabled: boolean;
   allowTopLevel?: boolean;
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const storedAccountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+    { allowMissing: true },
+  );
   const hasAccounts = Boolean(base?.accounts);
-  if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...base,
-          enabled: params.enabled,
-        },
-      },
-    } as OpenClawConfig;
+  if (params.allowTopLevel && storedAccountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
+    // Legacy single-account sections store enabled at the channel root until accounts exist.
+    return setTopLevelChannelEnabledInConfigSection(params);
   }
 
   const baseAccounts = base?.accounts ?? {};
-  const existing = baseAccounts[accountKey] ?? {};
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.sectionKey]: {
-        ...base,
-        accounts: {
-          ...baseAccounts,
-          [accountKey]: {
-            ...existing,
-            enabled: params.enabled,
-          },
-        },
-      },
+  const existing = baseAccounts[storedAccountKey] ?? {};
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...base,
+    accounts: {
+      ...baseAccounts,
+      [storedAccountKey]: { ...existing, enabled: params.enabled },
     },
-  } as OpenClawConfig;
+  });
 }
 
+/**
+ * Deletes one account from a channel config section, pruning empty channel/accounts objects.
+ */
 export function deleteAccountFromConfigSection(params: {
   cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   clearBaseFields?: string[];
 }): OpenClawConfig {
-  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
+  const storedAccountKey = resolveChannelAccountKey(
+    base?.accounts,
+    accountId,
+    params.sectionKey,
+    (id) => id,
+    params.accountKeyPolicy,
+  );
   if (!base) {
     return params.cfg;
   }
 
-  const baseAccounts =
-    base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : undefined;
-
-  if (accountKey !== DEFAULT_ACCOUNT_ID) {
-    const accounts = baseAccounts ? { ...baseAccounts } : {};
-    delete accounts[accountKey];
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...base,
-          accounts: Object.keys(accounts).length ? accounts : undefined,
-        },
-      },
-    } as OpenClawConfig;
+  const accounts = base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : {};
+  if (accountId === DEFAULT_ACCOUNT_ID && Object.keys(accounts).length === 0) {
+    return writeChannelSection(params.cfg, params.sectionKey, undefined);
   }
 
-  if (baseAccounts && Object.keys(baseAccounts).length > 0) {
-    delete baseAccounts[accountKey];
-    const baseRecord = { ...(base as Record<string, unknown>) };
+  if (storedAccountKey !== undefined) {
+    delete accounts[storedAccountKey];
+    const remainingKey = resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.sectionKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    );
+    if (remainingKey !== undefined) {
+      throw new Error(
+        `Cannot delete account "${accountId}": stored keys "${storedAccountKey}" and "${remainingKey}" resolve to the same account. Resolve the collision before deleting.`,
+      );
+    }
+  }
+  const baseRecord = { ...(base as Record<string, unknown>) };
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    // Deleting the default account can also clear root-level credential fields that represented
+    // the legacy default account.
     for (const field of params.clearBaseFields ?? []) {
       if (field in baseRecord) {
         baseRecord[field] = undefined;
       }
     }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.sectionKey]: {
-          ...baseRecord,
-          accounts: Object.keys(baseAccounts).length ? baseAccounts : undefined,
-        },
-      },
-    } as OpenClawConfig;
+  }
+  return writeChannelSection(params.cfg, params.sectionKey, {
+    ...baseRecord,
+    accounts: Object.keys(accounts).length ? accounts : undefined,
+  });
+}
+
+/**
+ * Clears selected fields from one account entry and reports whether configured data was removed.
+ */
+export function clearAccountEntryFields<TAccountEntry extends object>(params: {
+  accounts?: Record<string, TAccountEntry>;
+  channelId?: string;
+  accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
+  fields: string[];
+  isValueSet?: (value: unknown) => boolean;
+  markClearedOnFieldPresence?: boolean;
+}): {
+  nextAccounts?: Record<string, TAccountEntry>;
+  changed: boolean;
+  cleared: boolean;
+} {
+  const accountId = params.accountId || DEFAULT_ACCOUNT_ID;
+  const accountKey = params.channelId
+    ? resolveChannelAccountKey(
+        params.accounts,
+        accountId,
+        params.channelId,
+        (id) => id,
+        params.accountKeyPolicy,
+      )
+    : resolveAccountKey(params.accounts, accountId, (id) => id, params.accountKeyPolicy);
+  const baseAccounts =
+    params.accounts && typeof params.accounts === "object" ? { ...params.accounts } : undefined;
+  if (!baseAccounts || accountKey === undefined) {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
   }
 
-  const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
-  delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg } as OpenClawConfig;
-  if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as OpenClawConfig["channels"];
-  } else {
-    delete nextCfg.channels;
+  const entry = baseAccounts[accountKey];
+  if (!entry || typeof entry !== "object") {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
   }
-  return nextCfg;
+
+  const nextEntry = { ...(entry as Record<string, unknown>) };
+  const hasAnyField = params.fields.some((field) => field in nextEntry);
+  if (!hasAnyField) {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
+  }
+
+  const isValueSet = params.isValueSet ?? isConfiguredSecretValue;
+  let cleared = Boolean(params.markClearedOnFieldPresence);
+  for (const field of params.fields) {
+    if (!(field in nextEntry)) {
+      continue;
+    }
+    if (isValueSet(nextEntry[field])) {
+      cleared = true;
+    }
+    // Preserve unrelated account fields; remove the account entry only if it becomes empty.
+    delete nextEntry[field];
+  }
+
+  if (Object.keys(nextEntry).length === 0) {
+    delete baseAccounts[accountKey];
+  } else {
+    baseAccounts[accountKey] = nextEntry as TAccountEntry;
+  }
+
+  const nextAccounts = Object.keys(baseAccounts).length > 0 ? baseAccounts : undefined;
+  return {
+    nextAccounts,
+    changed: true,
+    cleared,
+  };
+}
+
+/** Clear plugin-selected account fields and prune only the config branches changed by cleanup. */
+export function clearAccountFieldsFromConfigSection(params: {
+  cfg: OpenClawConfig;
+  sectionKey: string;
+  accountId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
+  fields: string[];
+  markClearedOnFieldPresence?: boolean;
+}): { nextConfig: OpenClawConfig; changed: boolean; cleared: boolean } {
+  // SAFETY: Channel sections are config objects; the account helper checks nested entries.
+  const section = params.cfg.channels?.[params.sectionKey] as
+    | (ChannelSection & Record<string, unknown>)
+    | undefined;
+  const nextSection = { ...section };
+  // Root fields clear as a group only for the explicit default account and a
+  // truthy value. Nested cleanup retains its own empty-id and presence semantics.
+  const clearedRoot =
+    params.accountId === DEFAULT_ACCOUNT_ID &&
+    params.fields.some((field) => Boolean(nextSection[field]));
+  if (clearedRoot) {
+    for (const field of params.fields) {
+      delete nextSection[field];
+    }
+  }
+  const accountCleanup = clearAccountEntryFields({
+    accounts: nextSection.accounts,
+    channelId: params.sectionKey,
+    accountKeyPolicy: params.accountKeyPolicy,
+    accountId: params.accountId,
+    fields: params.fields,
+    markClearedOnFieldPresence: params.markClearedOnFieldPresence,
+  });
+  if (!clearedRoot && !accountCleanup.changed) {
+    return { nextConfig: params.cfg, changed: false, cleared: false };
+  }
+  if (accountCleanup.changed) {
+    if (accountCleanup.nextAccounts) {
+      nextSection.accounts = accountCleanup.nextAccounts;
+    } else {
+      delete nextSection.accounts;
+    }
+  }
+  const nextConfig = writeChannelSection(
+    params.cfg,
+    params.sectionKey,
+    Object.keys(nextSection).length > 0 ? nextSection : undefined,
+  );
+  return { nextConfig, changed: true, cleared: clearedRoot || accountCleanup.cleared };
 }

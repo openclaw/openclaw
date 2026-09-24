@@ -20,7 +20,7 @@ socket_name=""
 socket_path=""
 query=""
 scan_all=false
-socket_dir="${OPENCLAW_TMUX_SOCKET_DIR:-${CLAWDBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}}"
+socket_dir="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,7 +52,9 @@ list_sessions() {
   local label="$1"; shift
   local tmux_cmd=(tmux "$@")
 
-  if ! sessions="$("${tmux_cmd[@]}" list-sessions -F '#{session_name}\t#{session_attached}\t#{session_created_string}' 2>/dev/null)"; then
+  local session_format=$'#{session_name}\t#{session_attached}\t#{t:session_created}'
+
+  if ! sessions="$("${tmux_cmd[@]}" list-sessions -F "$session_format" 2>/dev/null)"; then
     echo "No tmux server found on $label" >&2
     return 1
   fi

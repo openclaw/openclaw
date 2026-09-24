@@ -1,0 +1,259 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/primitives.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.read.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isGatewayCliClient,
+  isWebchatClient,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
+import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
+import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "main",
+  "direct",
+  "dm",
+  "group",
+  "channel",
+  "cron",
+  "run",
+  "subagent",
+  "acp",
+  "thread",
+  "topic",
+]);
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
+
+type ChatSendDeliveryEntry = Pick<SessionEntry, "delivery">;
+
+type ChatSendOriginatingRoute = {
+  originatingChannel: string;
+  originatingTo?: string;
+  accountId?: string;
+  messageThreadId?: string | number;
+  explicitDeliverRoute: boolean;
+};
+
+export type ChatSendExplicitOrigin = {
+  originatingChannel?: string;
+  originatingTo?: string;
+  accountId?: string;
+  messageThreadId?: string;
+};
+
+export function normalizeExplicitChatSendOrigin(
+  params: ChatSendExplicitOrigin,
+): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
+  const originatingChannel = normalizeOptionalChatText(params.originatingChannel);
+  const originatingTo = normalizeOptionalChatText(params.originatingTo);
+  const accountId = normalizeOptionalChatText(params.accountId);
+  const messageThreadId = normalizeOptionalChatText(params.messageThreadId);
+  const hasAnyExplicitOriginField = Boolean(
+    originatingChannel || originatingTo || accountId || messageThreadId,
+  );
+  if (!hasAnyExplicitOriginField) {
+    return { ok: true };
+  }
+  const normalizedChannel = normalizeMessageChannel(originatingChannel);
+  if (!normalizedChannel) {
+    return {
+      ok: false,
+      error: "originatingChannel is required when using originating route fields",
+    };
+  }
+  if (!originatingTo) {
+    return {
+      ok: false,
+      error: "originatingTo is required when using originating route fields",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      originatingChannel: normalizedChannel,
+      originatingTo,
+      ...(accountId ? { accountId } : {}),
+      ...(messageThreadId ? { messageThreadId } : {}),
+    },
+  };
+}
+
+export function resolveChatSendOriginatingRoute(params: {
+  client?: { mode?: string | null; id?: string | null } | null;
+  deliver?: boolean;
+  entry?: ChatSendDeliveryEntry;
+  explicitOrigin?: ChatSendExplicitOrigin;
+  hasConnectedClient?: boolean;
+  mainKey?: string;
+  sessionKey: string;
+}): ChatSendOriginatingRoute {
+  if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
+    return {
+      originatingChannel: params.explicitOrigin.originatingChannel,
+      originatingTo: params.explicitOrigin.originatingTo,
+      ...(params.explicitOrigin.accountId ? { accountId: params.explicitOrigin.accountId } : {}),
+      ...(params.explicitOrigin.messageThreadId
+        ? { messageThreadId: params.explicitOrigin.messageThreadId }
+        : {}),
+      explicitDeliverRoute: params.deliver === true,
+    };
+  }
+  // Internal WebChat bindings use the canonical session key, never a stored external route.
+  const internalRoute: ChatSendOriginatingRoute = {
+    originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+    originatingTo: params.sessionKey,
+    explicitDeliverRoute: false,
+  };
+  if (params.deliver !== true) {
+    return internalRoute;
+  }
+
+  const sessionDeliveryContext = deliveryContextFromSession(params.entry);
+  const sessionOrigin = sessionDeliveryOrigin(params.entry);
+  const routeChannelCandidate = normalizeMessageChannel(
+    sessionDeliveryContext?.channel ?? sessionOrigin?.provider,
+  );
+  const routeToCandidate = sessionDeliveryContext?.to;
+  const routeAccountIdCandidate = sessionDeliveryContext?.accountId ?? sessionOrigin?.accountId;
+  const routeThreadIdCandidate = sessionDeliveryContext?.threadId ?? sessionOrigin?.threadId;
+  if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
+    return internalRoute;
+  }
+
+  const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
+  const sessionScopeParts = (parsedSessionKey?.rest ?? params.sessionKey)
+    .split(":", 3)
+    .filter(Boolean);
+  const sessionScopeHead = sessionScopeParts[0];
+  const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+  const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+    .map((part) => (part ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+    normalizedSessionScopeHead,
+  );
+  const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+    CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+  );
+  const hasLegacyChannelPeerShape =
+    !isChannelScopedSession &&
+    typeof sessionScopeParts[1] === "string" &&
+    sessionChannelHint === routeChannelCandidate;
+  const isFromWebchatClient = isWebchatClient(params.client);
+  const isFromGatewayCliClient = isGatewayCliClient(params.client);
+  const hasClientMetadata =
+    (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
+    (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
+  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
+  const isConfiguredMainSessionScope =
+    normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
+  const canInheritConfiguredMainRoute =
+    isConfiguredMainSessionScope &&
+    params.hasConnectedClient &&
+    (isFromGatewayCliClient || !hasClientMetadata);
+
+  // Webchat never inherits external delivery. Main-session inheritance is CLI-only
+  // unless an old caller omitted client metadata entirely.
+  const canInheritDeliverableRoute = Boolean(
+    !isFromWebchatClient &&
+    sessionChannelHint &&
+    sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+      canInheritConfiguredMainRoute),
+  );
+  const hasDeliverableRoute =
+    canInheritDeliverableRoute &&
+    routeChannelCandidate &&
+    routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+    typeof routeToCandidate === "string" &&
+    routeToCandidate.trim().length > 0;
+
+  if (!hasDeliverableRoute) {
+    return internalRoute;
+  }
+
+  return {
+    originatingChannel: routeChannelCandidate,
+    originatingTo: routeToCandidate,
+    accountId: routeAccountIdCandidate,
+    messageThreadId: routeThreadIdCandidate,
+    explicitDeliverRoute: true,
+  };
+}
+
+function isAcpSessionKey(sessionKey: string | undefined): boolean {
+  return Boolean(sessionKey?.split(":").includes("acp"));
+}
+
+function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
+  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+    return undefined;
+  }
+  const channel = normalizeMessageChannel(origin.originatingChannel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return undefined;
+  }
+  return getSessionBindingService().resolveByConversation({
+    channel,
+    accountId: origin.accountId,
+    conversationId: origin.originatingTo,
+  });
+}
+
+export function explicitOriginTargetsAcpSession(
+  origin: ChatSendExplicitOrigin | undefined,
+): boolean {
+  return isAcpSessionKey(resolveExplicitOriginBinding(origin)?.targetSessionKey);
+}
+
+export function explicitOriginTargetsPluginBinding(
+  origin: ChatSendExplicitOrigin | undefined,
+): boolean {
+  return isPluginOwnedSessionBindingRecord(resolveExplicitOriginBinding(origin));
+}
+
+export function normalizeOptionalChatSystemReceipt(
+  value: unknown,
+): { ok: true; receipt?: string } | { ok: false; error: string } {
+  if (value == null) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "systemProvenanceReceipt must be a string" };
+  }
+  const sanitized = sanitizeChatSendMessageInput(value);
+  if (!sanitized.ok) {
+    return sanitized;
+  }
+  const receipt = sanitized.message.trim();
+  return { ok: true, receipt: receipt || undefined };
+}
+
+export function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const info = client?.connect?.client;
+  return (
+    info?.id === GATEWAY_CLIENT_NAMES.CLI &&
+    info?.mode === GATEWAY_CLIENT_MODES.CLI &&
+    info?.displayName === "ACP" &&
+    info?.version === "acp"
+  );
+}
+
+export function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}

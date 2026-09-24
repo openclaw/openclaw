@@ -1,0 +1,328 @@
+/**
+ * Stable storage-neutral session and transcript access API.
+ *
+ * Implementations are split by entry, lifecycle, reset, and transcript ownership.
+ * Runtime callers import this barrel instead of storage-specific modules.
+ */
+export * from "./session-history.js";
+export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputReceipts,
+  listSessionPendingInputs,
+  readSessionPendingInput,
+  readSessionSubmittedInput,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+  withSessionPendingInputRelocation,
+  type SessionPendingInput,
+  type SessionPendingInputPage,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-inputs.js";
+export type {
+  DeleteSessionEntryLifecycleParams,
+  DeleteSessionEntryLifecycleResult,
+  DeletedAgentSessionEntryPurgeParams,
+  ExactSessionEntry,
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+  ForkSessionFromParentTranscriptResult,
+  LatestTranscriptAssistantText,
+  LogicalSessionAccessScope,
+  ParentForkedSessionTranscript,
+  ReplySessionInitializationCommitContext,
+  ReplySessionInitializationCommitResult,
+  ReplySessionInitializationSnapshot,
+  ResetSessionEntryLifecycleParams,
+  ResetSessionEntryLifecycleResult,
+  ResolvedSessionEntryAccessTarget,
+  ResolvedSessionEntryCandidateTarget,
+  ResolvedSessionEntryUpdateContext,
+  ResolvedSessionEntryUpdateResult,
+  SessionAbortTargetContext,
+  SessionAbortTargetCutoff,
+  SessionAbortTargetIdentity,
+  SessionAbortTargetResult,
+  SessionAccessScope,
+  SessionArchivedTranscriptCleanupRule,
+  SessionMessageCutMutationParams,
+  SessionMessageCutMutationResult,
+  SessionBranchListParams,
+  SessionBranchListResult,
+  SessionBranchSummary,
+  SessionBranchSwitchMutationParams,
+  SessionBranchSwitchMutationResult,
+  SessionEntryCandidateAccessScope,
+  SessionEntryCreateWithTranscriptContext,
+  SessionEntryCreateWithTranscriptOptions,
+  SessionEntryCreateWithTranscriptPrepareResult,
+  SessionEntryCreateWithTranscriptResult,
+  SessionEntryLifecycleMutationResult,
+  SessionEntryLifecycleRemoval,
+  SessionEntryLifecycleUpsert,
+  SessionEntryListScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+  SessionEntryPatchResult,
+  SessionEntryReadScope,
+  SessionEntryReadSource,
+  SessionEntryReadView,
+  SessionEntryReplacement,
+  SessionEntryReplacementSnapshot,
+  SessionEntryReplacementUpdate,
+  SessionEntrySummary,
+  SessionEntryTargetPatchScope,
+  SessionEntryUpdateOptions,
+  SessionLifecycleArchivedTranscript,
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
+  SessionLifecycleStoreTarget,
+  SessionLifecycleTranscriptInfo,
+  SessionParentForkDecision,
+  SessionPatchProjectionContext,
+  SessionPatchProjectionFailure,
+  SessionPatchProjectionOperation,
+  SessionPatchProjectionResult,
+  SessionPatchProjectionSnapshot,
+  SessionPatchProjectionTarget,
+  SessionTranscriptAccessScope,
+  SessionTranscriptEventRow,
+  SessionTranscriptManualTrimPreflightResult,
+  SessionTranscriptManualTrimResult,
+  SessionTranscriptReadScope,
+  SessionTranscriptReadTarget,
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptRuntimeScope,
+  SessionTranscriptRuntimeTarget,
+  SessionTranscriptStats,
+  SessionTranscriptTurnMessageAppend,
+  SessionTranscriptTurnPersistOptions,
+  SessionTranscriptTurnPersistResult,
+  SessionTranscriptTurnUpdateMode,
+  SessionTranscriptTurnWriteContext,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+  SessionTranscriptVisibleMessageEventRow,
+  SessionTranscriptWriteLockAccessorContext,
+  SessionTranscriptWriteScope,
+  SessionTranscriptWriteTransactionContext,
+  TranscriptEvent,
+  TranscriptMessageAppendOptions,
+  TranscriptMessageAppendResult,
+  TranscriptUpdatePayload,
+} from "./session-accessor.types.js";
+export { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionIdentityMutation,
+  SessionIdentityMutationListener,
+  SessionIdentityMutationTarget,
+} from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
+export type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+  TranscriptTurnBoundary,
+} from "./transcript-entry-anchor.js";
+export type {
+  RecordInboundSessionMetaParams,
+  UpdateSessionLastRouteParams,
+} from "./runtime-types.js";
+export {
+  ensureSessionEntrySync,
+  copySessionOwnedStateForCanonicalRepair,
+  ensureTranscriptGenerationsForCanonicalRepair,
+  hasSessionEntriesByStatusReadOnly,
+  listSessionGenerationIdsForCanonicalRepair,
+  clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
+  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
+  rehomeSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
+  listSessionEntryKeysReadOnly,
+  loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
+  loadExactSessionEntryFromStoreReadOnly,
+  loadExactSessionEntryReadOnly,
+  loadSessionEntry,
+  loadSessionEntryByIdReadOnly,
+  loadSessionEntryReadOnly,
+  openSessionEntryReadView,
+  patchSessionEntryCore,
+  patchSessionEntryTarget,
+  patchSessionEntryWithKey,
+  prepareQualifiedSessionEntryTarget,
+  readSessionUpdatedAtCore,
+  readSessionStoreSummaryReadOnly,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+  resolveSessionEntryAccessTarget,
+  resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
+  updateResolvedSessionEntry,
+  upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
+} from "./session-accessor.entry.js";
+export {
+  readSessionIdentityEvidenceBatch,
+  type SessionIdentityEvidenceResult,
+} from "./session-accessor.sqlite-entry-availability.js";
+export {
+  loadSessionEntryReadOnlyInScope,
+  updateSessionLastRouteInScope,
+} from "./session-accessor.sqlite-entry.js";
+export {
+  createSessionEntryWithTranscript,
+  forkSessionEntryFromParentTarget,
+  forkSessionFromParentTranscript,
+  markSessionAbortTarget,
+  recordInboundSessionMeta,
+  resolveSessionAbortTarget,
+  resolveSessionParentForkDecision,
+  updateSessionEntry,
+  updateSessionLastRoute,
+} from "./session-accessor.entry-mutation.js";
+export {
+  recoverSessionEntryFromRestartTombstone,
+  type RestartTombstoneRecoveryResult,
+} from "./session-accessor.sqlite-recovery.js";
+export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+export { updateSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+export {
+  MAX_SESSION_PARTICIPANTS,
+  recordSessionParticipant,
+  type RecordSessionParticipantResult,
+} from "./session-accessor.sqlite-participants.js";
+export { type SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
+export {
+  listCanonicalSessionRepairFacts,
+  loadCanonicalSessionRepairEntries,
+  scanDoctorSessionEntriesStrict,
+  scanDoctorSessionEntriesTolerant,
+  type CanonicalSessionRepairFact,
+} from "./session-accessor.sqlite-canonical-inventory.js";
+export {
+  iterateDoctorSessionKeyBatches,
+  rewriteDoctorSessionEntries,
+} from "./session-accessor.sqlite-doctor-rewrite.js";
+export {
+  applySessionEntryLifecycleMutation,
+  applySessionEntryReplacements,
+  applySessionPatchProjection,
+  applySessionPatchProjections,
+  applySessionStoreProjection,
+  cleanupPluginHostSessionStore,
+  cleanupSessionLifecycleArtifactsCore,
+  deleteSessionEntryLifecycle,
+  purgeDeletedAgentSessionEntries,
+  resetSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
+} from "./session-accessor.lifecycle.js";
+export { listSessionBranches } from "./session-accessor.sqlite-branches.js";
+export {
+  forkSessionAtMessage,
+  rewindSessionToMessage,
+  switchSessionBranch,
+} from "./session-accessor.sqlite-message-cut.js";
+export {
+  commitReplySessionInitialization,
+  loadReplySessionInitializationSnapshot,
+  persistSessionResetLifecycle,
+  SessionInitializationAgentScopeMismatchError,
+} from "./session-accessor.reset.js";
+export {
+  appendTranscriptEvent,
+  appendTranscriptEventSync,
+  appendTranscriptMessage,
+  appendTranscriptMessageSync,
+  findTranscriptEvent,
+  hasSessionTranscriptEventsSync,
+  hasSessionTranscriptMessage,
+  inspectTranscriptEventsSync,
+  loadTranscriptEventRowsAfterSeqSync,
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  loadTranscriptSuffixEventsBoundedSync,
+  persistCompactionBoundaryWithSessionEntrySync,
+  preflightSessionTranscriptForManualCompact,
+  publishTranscriptUpdate,
+  readLatestTranscriptAssistantText,
+  readTranscriptEventAtSeqSync,
+  readPreviousIndexedTranscriptEventSync,
+  readTranscriptIdentityByEventId,
+  readTranscriptRawDelta,
+  readTranscriptMutationAtSync,
+  readTranscriptMutationStateSync,
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync,
+  validatePreparedAssistantAppendSync,
+  replaceTranscriptEvents,
+  replaceTranscriptEventsSync,
+  replaceSessionWithBranchedTranscript,
+  replaceTranscriptSuffixEventsSync,
+  rewriteTranscriptEventRowsExact,
+  rewriteTranscriptMessageAtAnchor,
+  rewriteAssistantTranscriptMessageForRun,
+  resolveTranscriptSessionKeyBySessionId,
+  trimSessionTranscriptForManualCompact,
+  withTranscriptWriteLock,
+  withTranscriptWriteTransaction,
+} from "./session-accessor.transcript.js";
+export {
+  appendTranscriptMessages,
+  persistSessionTranscriptTurn,
+} from "./session-accessor.transcript-turn.js";
+export {
+  readClosedTranscriptTurn,
+  type ClosedTranscriptTurnReadResult,
+} from "./session-accessor.transcript-range.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
+export {
+  isSessionTranscriptProjectionUnavailableError,
+  readLatestSessionTranscriptMessageEvent,
+  readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedMessageTailPage,
+  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActivePathEntryRelation,
+  readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEvents,
+  readSessionTranscriptVisibleMessageDeltaCore,
+  SessionTranscriptProjectionUnavailableError,
+  waitForSessionTranscriptProjection,
+  withRecentSessionTranscriptActiveEvents,
+} from "./session-accessor.sqlite-active-events.js";
+export type {
+  SessionTranscriptBoundedMessageTailPage,
+  SessionTranscriptMessageAnchorPage,
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageEventPage,
+} from "./session-accessor.sqlite-active-events.js";
+export type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+export { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
+export {
+  bindSessionTranscriptStoreScope,
+  resolveSessionTranscriptDatabasePath,
+  resolveSessionTranscriptReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
+  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
+} from "./session-accessor.transcript-target.js";
+
+export {
+  appendSessionTranscriptReport,
+  readLatestSessionTranscriptReport,
+} from "./session-accessor.sqlite-transcript-reports.js";
+export { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+export { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
+
+export { readSessionBackingFacts, type SessionBackingFact } from "./session-backing-facts.js";
+export { readSessionBackingFactsInWorker } from "./session-backing-facts-runtime.js";

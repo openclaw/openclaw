@@ -1,1327 +1,314 @@
+// Commander wiring for `openclaw update`, its status/finalize subcommands, and help text.
 import type { Command } from "commander";
-import { confirm, isCancel, select, spinner } from "@clack/prompts";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import {
-  checkShellCompletionStatus,
-  ensureCompletionCacheExists,
-} from "../commands/doctor-completion.js";
-import { doctorCommand } from "../commands/doctor.js";
-import {
-  formatUpdateAvailableHint,
-  formatUpdateOneLiner,
-  resolveUpdateAvailability,
-} from "../commands/status.update.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { trimLogTail } from "../infra/restart-sentinel.js";
-import { parseSemver } from "../infra/runtime-guard.js";
-import {
-  channelToNpmTag,
-  DEFAULT_GIT_CHANNEL,
-  DEFAULT_PACKAGE_CHANNEL,
-  formatUpdateChannelLabel,
-  normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
-} from "../infra/update-channels.js";
-import {
-  checkUpdateStatus,
-  compareSemverStrings,
-  fetchNpmTagVersion,
-  resolveNpmChannelTag,
-} from "../infra/update-check.js";
-import {
-  detectGlobalInstallManagerByPresence,
-  detectGlobalInstallManagerForRoot,
-  cleanupGlobalRenameDirs,
-  globalInstallArgs,
-  resolveGlobalPackageRoot,
-  type GlobalInstallManager,
-} from "../infra/update-global.js";
-import {
-  runGatewayUpdate,
-  type UpdateRunResult,
-  type UpdateStepInfo,
-  type UpdateStepResult,
-  type UpdateStepProgress,
-} from "../infra/update-runner.js";
-import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../plugins/update.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
-import { renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
-import { pathExists } from "../utils.js";
-import { replaceCliName, resolveCliName } from "./cli-name.js";
-import { formatCliCommand } from "./command-format.js";
-import { installCompletion } from "./completion-cli.js";
-import { runDaemonRestart } from "./daemon-cli.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
+import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { getProgramContext } from "./program/program-context.js";
+import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
+export type {
+  UpdateCommandOptions,
+  UpdateFinalizeOptions,
+  UpdateStatusOptions,
+  UpdateWizardOptions,
+} from "./update-cli/shared.js";
 
-export type UpdateCommandOptions = {
+function inheritedUpdateJson(command?: Command): boolean {
+  return Boolean(inheritOptionFromParent<boolean>(command, "json"));
+}
+
+function handleUpdateCommandError(error: unknown): void {
+  if (error instanceof ExitError || isJsonOutputModeActive(process.argv)) {
+    throw error;
+  }
+  defaultRuntime.error(formatErrorMessage(error));
+  defaultRuntime.exit(1);
+}
+
+function inheritedUpdateTimeout(
+  opts: { timeout?: unknown },
+  command?: Command,
+): string | undefined {
+  const timeout = opts.timeout as string | undefined;
+  if (timeout !== undefined) {
+    return timeout;
+  }
+  return inheritOptionFromParent<string>(command, "timeout");
+}
+
+type CommanderUpdateOptions = Record<string, unknown> & {
+  acceptCapabilities?: boolean;
+  admission?: string;
+  channel?: string;
+  dryRun?: boolean;
   json?: boolean;
   restart?: boolean;
-  channel?: string;
+  reapplyLocalOverrides?: boolean;
   tag?: string;
   timeout?: string;
   yes?: boolean;
 };
-export type UpdateStatusOptions = {
-  json?: boolean;
-  timeout?: string;
-};
-export type UpdateWizardOptions = {
-  timeout?: string;
-};
 
-const STEP_LABELS: Record<string, string> = {
-  "clean check": "Working directory is clean",
-  "upstream check": "Upstream branch exists",
-  "git fetch": "Fetching latest changes",
-  "git rebase": "Rebasing onto target commit",
-  "git rev-parse @{upstream}": "Resolving upstream commit",
-  "git rev-list": "Enumerating candidate commits",
-  "git clone": "Cloning git checkout",
-  "preflight worktree": "Preparing preflight worktree",
-  "preflight cleanup": "Cleaning preflight worktree",
-  "deps install": "Installing dependencies",
-  build: "Building",
-  "ui:build": "Building UI assets",
-  "ui:build (post-doctor repair)": "Restoring missing UI assets",
-  "ui assets verify": "Validating UI assets",
-  "openclaw doctor entry": "Checking doctor entrypoint",
-  "openclaw doctor": "Running doctor checks",
-  "git rev-parse HEAD (after)": "Verifying update",
-  "global update": "Updating via package manager",
-  "global install": "Installing global package",
-};
-
-const UPDATE_QUIPS = [
-  "Leveled up! New skills unlocked. You're welcome.",
-  "Fresh code, same lobster. Miss me?",
-  "Back and better. Did you even notice I was gone?",
-  "Update complete. I learned some new tricks while I was out.",
-  "Upgraded! Now with 23% more sass.",
-  "I've evolved. Try to keep up.",
-  "New version, who dis? Oh right, still me but shinier.",
-  "Patched, polished, and ready to pinch. Let's go.",
-  "The lobster has molted. Harder shell, sharper claws.",
-  "Update done! Check the changelog or just trust me, it's good.",
-  "Reborn from the boiling waters of npm. Stronger now.",
-  "I went away and came back smarter. You should try it sometime.",
-  "Update complete. The bugs feared me, so they left.",
-  "New version installed. Old version sends its regards.",
-  "Firmware fresh. Brain wrinkles: increased.",
-  "I've seen things you wouldn't believe. Anyway, I'm updated.",
-  "Back online. The changelog is long but our friendship is longer.",
-  "Upgraded! Peter fixed stuff. Blame him if it breaks.",
-  "Molting complete. Please don't look at my soft shell phase.",
-  "Version bump! Same chaos energy, fewer crashes (probably).",
-];
-
-const MAX_LOG_CHARS = 8000;
-const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
-const CLI_NAME = resolveCliName();
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
-
-function normalizeTag(value?: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
-  }
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
-  }
-  return trimmed;
-}
-
-function pickUpdateQuip(): string {
-  return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
-}
-
-function normalizeVersionTag(tag: string): string | null {
-  const trimmed = tag.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-  return parseSemver(cleaned) ? cleaned : null;
-}
-
-async function readPackageVersion(root: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function resolveTargetVersion(tag: string, timeoutMs?: number): Promise<string | null> {
-  const direct = normalizeVersionTag(tag);
-  if (direct) {
-    return direct;
-  }
-  const res = await fetchNpmTagVersion({ tag, timeoutMs });
-  return res.version ?? null;
-}
-
-async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readPackageName(root: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: string };
-    const name = parsed?.name?.trim();
-    return name ? name : null;
-  } catch {
-    return null;
-  }
-}
-
-async function isCorePackage(root: string): Promise<boolean> {
-  const name = await readPackageName(root);
-  return Boolean(name && CORE_PACKAGE_NAMES.has(name));
-}
-
-async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
-  const binPath = path.join(root, "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
-    return;
-  }
-  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: process.env,
-    encoding: "utf-8",
-  });
-  if (result.error) {
-    if (!jsonMode) {
-      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
-    }
-    return;
-  }
-  if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").toString().trim();
-    const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
-  }
-}
-
-/** Check if shell completion is installed and prompt user to install if not. */
-async function tryInstallShellCompletion(opts: {
-  jsonMode: boolean;
-  skipPrompt: boolean;
-}): Promise<void> {
-  if (opts.jsonMode || !process.stdin.isTTY) {
-    return;
-  }
-
-  const status = await checkShellCompletionStatus(CLI_NAME);
-
-  // Profile uses slow dynamic pattern - upgrade to cached version
-  if (status.usesSlowPattern) {
-    defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
-    // Ensure cache exists first
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
-    if (cacheGenerated) {
-      await installCompletion(status.shell, true, CLI_NAME);
-    }
-    return;
-  }
-
-  // Profile has completion but no cache - auto-fix silently
-  if (status.profileInstalled && !status.cacheExists) {
-    defaultRuntime.log(theme.muted("Regenerating shell completion cache..."));
-    await ensureCompletionCacheExists(CLI_NAME);
-    return;
-  }
-
-  // No completion at all - prompt to install
-  if (!status.profileInstalled) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Shell completion"));
-
-    const shouldInstall = await confirm({
-      message: stylePromptMessage(`Enable ${status.shell} shell completion for ${CLI_NAME}?`),
-      initialValue: true,
-    });
-
-    if (isCancel(shouldInstall) || !shouldInstall) {
-      if (!opts.skipPrompt) {
-        defaultRuntime.log(
-          theme.muted(
-            `Skipped. Run \`${replaceCliName(formatCliCommand("openclaw completion --install"), CLI_NAME)}\` later to enable.`,
-          ),
-        );
-      }
-      return;
-    }
-
-    // Generate cache first (required for fast shell startup)
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
-    if (!cacheGenerated) {
-      defaultRuntime.log(theme.warn("Failed to generate completion cache."));
-      return;
-    }
-
-    await installCompletion(status.shell, opts.skipPrompt, CLI_NAME);
-  }
-}
-
-async function isEmptyDir(targetPath: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(targetPath);
-    return entries.length === 0;
-  } catch {
-    return false;
-  }
-}
-
-function resolveGitInstallDir(): string {
-  const override = process.env.OPENCLAW_GIT_DIR?.trim();
-  if (override) {
-    return path.resolve(override);
-  }
-  return resolveDefaultGitDir();
-}
-
-function resolveDefaultGitDir(): string {
-  return resolveStateDir(process.env, os.homedir);
-}
-
-function resolveNodeRunner(): string {
-  const base = path.basename(process.execPath).toLowerCase();
-  if (base === "node" || base === "node.exe") {
-    return process.execPath;
-  }
-  return "node";
-}
-
-async function runUpdateStep(params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs: number;
-  progress?: UpdateStepProgress;
-}): Promise<UpdateStepResult> {
-  const command = params.argv.join(" ");
-  params.progress?.onStepStart?.({
-    name: params.name,
-    command,
-    index: 0,
-    total: 0,
-  });
-  const started = Date.now();
-  const res = await runCommandWithTimeout(params.argv, {
-    cwd: params.cwd,
-    timeoutMs: params.timeoutMs,
-  });
-  const durationMs = Date.now() - started;
-  const stderrTail = trimLogTail(res.stderr, MAX_LOG_CHARS);
-  params.progress?.onStepComplete?.({
-    name: params.name,
-    command,
-    index: 0,
-    total: 0,
-    durationMs,
-    exitCode: res.code,
-    stderrTail,
-  });
-  return {
-    name: params.name,
-    command,
-    cwd: params.cwd ?? process.cwd(),
-    durationMs,
-    exitCode: res.code,
-    stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
-    stderrTail,
-  };
-}
-
-async function ensureGitCheckout(params: {
-  dir: string;
-  timeoutMs: number;
-  progress?: UpdateStepProgress;
-}): Promise<UpdateStepResult | null> {
-  const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-    });
-  }
-
-  if (!(await isGitCheckout(params.dir))) {
-    const empty = await isEmptyDir(params.dir);
-    if (!empty) {
-      throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-      );
-    }
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
-      cwd: params.dir,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-    });
-  }
-
-  if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
-  }
-
-  return null;
-}
-
-async function resolveGlobalManager(params: {
-  root: string;
-  installKind: "git" | "package" | "unknown";
-  timeoutMs: number;
-}): Promise<GlobalInstallManager> {
-  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
-  if (params.installKind === "package") {
-    const detected = await detectGlobalInstallManagerForRoot(
-      runCommand,
-      params.root,
-      params.timeoutMs,
-    );
-    if (detected) {
-      return detected;
-    }
-  }
-  const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
-  return byPresence ?? "npm";
-}
-
-function formatGitStatusLine(params: {
-  branch: string | null;
-  tag: string | null;
-  sha: string | null;
-}): string {
-  const shortSha = params.sha ? params.sha.slice(0, 8) : null;
-  const branch = params.branch && params.branch !== "HEAD" ? params.branch : null;
-  const tag = params.tag;
-  const parts = [
-    branch ?? (tag ? "detached" : "git"),
-    tag ? `tag ${tag}` : null,
-    shortSha ? `@ ${shortSha}` : null,
-  ].filter(Boolean);
-  return parts.join(" · ");
-}
-
-export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  const root =
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd();
-  const configSnapshot = await readConfigFileSnapshot();
-  const configChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-
-  const update = await checkUpdateStatus({
-    root,
-    timeoutMs: timeoutMs ?? 3500,
-    fetchGit: true,
-    includeRegistry: true,
-  });
-  const channelInfo = resolveEffectiveUpdateChannel({
-    configChannel,
-    installKind: update.installKind,
-    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
-  });
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
-    gitTag: update.git?.tag ?? null,
-    gitBranch: update.git?.branch ?? null,
-  });
-  const gitLabel =
-    update.installKind === "git"
-      ? formatGitStatusLine({
-          branch: update.git?.branch ?? null,
-          tag: update.git?.tag ?? null,
-          sha: update.git?.sha ?? null,
-        })
-      : null;
-  const updateAvailability = resolveUpdateAvailability(update);
-  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
-
-  if (opts.json) {
-    defaultRuntime.log(
-      JSON.stringify(
-        {
-          update,
-          channel: {
-            value: channelInfo.channel,
-            source: channelInfo.source,
-            label: channelLabel,
-            config: configChannel,
-          },
-          availability: updateAvailability,
-        },
-        null,
-        2,
-      ),
-    );
-    return;
-  }
-
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-  const installLabel =
-    update.installKind === "git"
-      ? `git (${update.root ?? "unknown"})`
-      : update.installKind === "package"
-        ? update.packageManager
-        : "unknown";
-  const rows = [
-    { Item: "Install", Value: installLabel },
-    { Item: "Channel", Value: channelLabel },
-    ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
-    {
-      Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
-    },
-  ];
-
-  defaultRuntime.log(theme.heading("OpenClaw update status"));
-  defaultRuntime.log("");
-  defaultRuntime.log(
-    renderTable({
-      width: tableWidth,
-      columns: [
-        { key: "Item", header: "Item", minWidth: 10 },
-        { key: "Value", header: "Value", flex: true, minWidth: 24 },
-      ],
-      rows,
-    }).trimEnd(),
-  );
-  defaultRuntime.log("");
-  const updateHint = formatUpdateAvailableHint(update);
-  if (updateHint) {
-    defaultRuntime.log(theme.warn(updateHint));
-  }
-}
-
-function getStepLabel(step: UpdateStepInfo): string {
-  return STEP_LABELS[step.name] ?? step.name;
-}
-
-type ProgressController = {
-  progress: UpdateStepProgress;
-  stop: () => void;
-};
-
-function createUpdateProgress(enabled: boolean): ProgressController {
-  if (!enabled) {
-    return {
-      progress: {},
-      stop: () => {},
-    };
-  }
-
-  let currentSpinner: ReturnType<typeof spinner> | null = null;
-
-  const progress: UpdateStepProgress = {
-    onStepStart: (step) => {
-      currentSpinner = spinner();
-      currentSpinner.start(theme.accent(getStepLabel(step)));
-    },
-    onStepComplete: (step) => {
-      if (!currentSpinner) {
-        return;
-      }
-
-      const label = getStepLabel(step);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
-
-      currentSpinner.stop(`${icon} ${label} ${duration}`);
-      currentSpinner = null;
-
-      if (step.exitCode !== 0 && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(-10);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`    ${theme.error(line)}`);
-          }
-        }
-      }
-    },
-  };
-
-  return {
-    progress,
-    stop: () => {
-      if (currentSpinner) {
-        currentSpinner.stop();
-        currentSpinner = null;
-      }
-    },
-  };
-}
-
-function formatStepStatus(exitCode: number | null): string {
-  if (exitCode === 0) {
-    return theme.success("\u2713");
-  }
-  if (exitCode === null) {
-    return theme.warn("?");
-  }
-  return theme.error("\u2717");
-}
-
-const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
-  select({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
-
-type PrintResultOptions = UpdateCommandOptions & {
-  hideSteps?: boolean;
-};
-
-function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
-  if (opts.json) {
-    defaultRuntime.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
-  const statusColor =
-    result.status === "ok" ? theme.success : result.status === "skipped" ? theme.warn : theme.error;
-
-  defaultRuntime.log("");
-  defaultRuntime.log(
-    `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
-  );
-  if (result.root) {
-    defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
-  }
-  if (result.reason) {
-    defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
-  }
-
-  if (result.before?.version || result.before?.sha) {
-    const before = result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
-    defaultRuntime.log(`  Before: ${theme.muted(before)}`);
-  }
-  if (result.after?.version || result.after?.sha) {
-    const after = result.after.version ?? result.after.sha?.slice(0, 8) ?? "";
-    defaultRuntime.log(`  After: ${theme.muted(after)}`);
-  }
-
-  if (!opts.hideSteps && result.steps.length > 0) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Steps:"));
-    for (const step of result.steps) {
-      const status = formatStepStatus(step.exitCode);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
-
-      if (step.exitCode !== 0 && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(0, 5);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`      ${theme.error(line)}`);
-          }
-        }
-      }
-    }
-  }
-
-  defaultRuntime.log("");
-  defaultRuntime.log(`Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`);
-}
-
-export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
-  process.noDeprecation = true;
-  process.env.NODE_NO_WARNINGS = "1";
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  const shouldRestart = opts.restart !== false;
-
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  const root =
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd();
-
-  const updateStatus = await checkUpdateStatus({
-    root,
-    timeoutMs: timeoutMs ?? 3500,
-    fetchGit: false,
-    includeRegistry: false,
-  });
-
-  const configSnapshot = await readConfigFileSnapshot();
-  let activeConfig = configSnapshot.valid ? configSnapshot.config : null;
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
-    defaultRuntime.exit(1);
-    return;
-  }
-  if (opts.channel && !configSnapshot.valid) {
-    const issues = configSnapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`);
-    defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  const installKind = updateStatus.installKind;
-  const switchToGit = requestedChannel === "dev" && installKind !== "git";
-  const switchToPackage =
-    requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
-  const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
-  const defaultChannel =
-    updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
-  const channel = requestedChannel ?? storedChannel ?? defaultChannel;
-  const explicitTag = normalizeTag(opts.tag);
-  let tag = explicitTag ?? channelToNpmTag(channel);
-  if (updateInstallKind !== "git") {
-    const currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    let fallbackToLatest = false;
-    const targetVersion = explicitTag
-      ? await resolveTargetVersion(tag, timeoutMs)
-      : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
-          tag = resolved.tag;
-          fallbackToLatest = channel === "beta" && resolved.tag === "latest";
-          return resolved.version;
-        });
-    const cmp =
-      currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
-    const needsConfirm =
-      !fallbackToLatest &&
-      currentVersion != null &&
-      (targetVersion == null || (cmp != null && cmp > 0));
-
-    if (needsConfirm && !opts.yes) {
-      if (!process.stdin.isTTY || opts.json) {
-        defaultRuntime.error(
-          [
-            "Downgrade confirmation required.",
-            "Downgrading can break configuration. Re-run in a TTY to confirm.",
-          ].join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      const targetLabel = targetVersion ?? `${tag} (unknown)`;
-      const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
-      const ok = await confirm({
-        message: stylePromptMessage(message),
-        initialValue: false,
-      });
-      if (isCancel(ok) || !ok) {
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted("Update cancelled."));
-        }
-        defaultRuntime.exit(0);
-        return;
-      }
-    }
-  } else if (opts.tag && !opts.json) {
-    defaultRuntime.log(
-      theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
+function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): string {
+  const value = opts[key];
+  if (typeof value !== "string") {
+    throw new Error(
+      `Missing required update option --${key.replaceAll(/[A-Z]/g, "-$&").toLowerCase()}`,
     );
   }
+  return value;
+}
 
-  if (requestedChannel && configSnapshot.valid) {
-    const next = {
-      ...configSnapshot.config,
-      update: {
-        ...configSnapshot.config.update,
-        channel: requestedChannel,
-      },
-    };
-    await writeConfigFile(next);
-    activeConfig = next;
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-    }
-  }
-
-  const showProgress = !opts.json && process.stdout.isTTY;
-
-  if (!opts.json) {
-    defaultRuntime.log(theme.heading("Updating OpenClaw..."));
-    defaultRuntime.log("");
-  }
-
-  const { progress, stop } = createUpdateProgress(showProgress);
-
-  const startedAt = Date.now();
-  let result: UpdateRunResult;
-
-  if (switchToPackage) {
-    const manager = await resolveGlobalManager({
-      root,
-      installKind,
-      timeoutMs: timeoutMs ?? 20 * 60_000,
-    });
-    const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-      const res = await runCommandWithTimeout(argv, options);
-      return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-    };
-    const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, timeoutMs ?? 20 * 60_000);
-    const packageName =
-      (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(root)) ??
-      DEFAULT_PACKAGE_NAME;
-    const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
-    if (pkgRoot) {
-      await cleanupGlobalRenameDirs({
-        globalRoot: path.dirname(pkgRoot),
-        packageName,
-      });
-    }
-    const updateStep = await runUpdateStep({
-      name: "global update",
-      argv: globalInstallArgs(manager, `${packageName}@${tag}`),
-      timeoutMs: timeoutMs ?? 20 * 60_000,
-      progress,
-    });
-    const steps = [updateStep];
-    let afterVersion = beforeVersion;
-    if (pkgRoot) {
-      afterVersion = await readPackageVersion(pkgRoot);
-      const entryPath = path.join(pkgRoot, "dist", "entry.js");
-      if (await pathExists(entryPath)) {
-        const doctorStep = await runUpdateStep({
-          name: `${CLI_NAME} doctor`,
-          argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive"],
-          timeoutMs: timeoutMs ?? 20 * 60_000,
-          progress,
-        });
-        steps.push(doctorStep);
-      }
-    }
-    const failedStep = steps.find((step) => step.exitCode !== 0);
-    result = {
-      status: failedStep ? "error" : "ok",
-      mode: manager,
-      root: pkgRoot ?? root,
-      reason: failedStep ? failedStep.name : undefined,
-      before: { version: beforeVersion },
-      after: { version: afterVersion },
-      steps,
-      durationMs: Date.now() - startedAt,
-    };
-  } else {
-    const updateRoot = switchToGit ? resolveGitInstallDir() : root;
-    const cloneStep = switchToGit
-      ? await ensureGitCheckout({
-          dir: updateRoot,
-          timeoutMs: timeoutMs ?? 20 * 60_000,
-          progress,
-        })
-      : null;
-    if (cloneStep && cloneStep.exitCode !== 0) {
-      result = {
-        status: "error",
-        mode: "git",
-        root: updateRoot,
-        reason: cloneStep.name,
-        steps: [cloneStep],
-        durationMs: Date.now() - startedAt,
-      };
-      stop();
-      printResult(result, { ...opts, hideSteps: showProgress });
-      defaultRuntime.exit(1);
-      return;
-    }
-    const updateResult = await runGatewayUpdate({
-      cwd: updateRoot,
-      argv1: switchToGit ? undefined : process.argv[1],
-      timeoutMs,
-      progress,
-      channel,
-      tag,
-    });
-    const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
-    if (switchToGit && updateResult.status === "ok") {
-      const manager = await resolveGlobalManager({
-        root,
-        installKind,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
-      });
-      const installStep = await runUpdateStep({
-        name: "global install",
-        argv: globalInstallArgs(manager, updateRoot),
-        cwd: updateRoot,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
-        progress,
-      });
-      steps.push(installStep);
-      const failedStep = [installStep].find((step) => step.exitCode !== 0);
-      result = {
-        ...updateResult,
-        status: updateResult.status === "ok" && !failedStep ? "ok" : "error",
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
-    } else {
-      result = {
-        ...updateResult,
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
-    }
-  }
-
-  stop();
-
-  printResult(result, { ...opts, hideSteps: showProgress });
-
-  if (result.status === "error") {
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  if (result.status === "skipped") {
-    if (result.reason === "dirty") {
-      defaultRuntime.log(
-        theme.warn(
-          "Skipped: working directory has uncommitted changes. Commit or stash them first.",
-        ),
-      );
-    }
-    if (result.reason === "not-git-install") {
-      defaultRuntime.log(
-        theme.warn(
-          `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
-        ),
-      );
-      defaultRuntime.log(
-        theme.muted(
-          `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``,
-        ),
-      );
-    }
-    defaultRuntime.exit(0);
-    return;
-  }
-
-  if (activeConfig) {
-    const pluginLogger = opts.json
-      ? {}
-      : {
-          info: (msg: string) => defaultRuntime.log(msg),
-          warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
-          error: (msg: string) => defaultRuntime.log(theme.error(msg)),
-        };
-
-    if (!opts.json) {
-      defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Updating plugins..."));
-    }
-
-    const syncResult = await syncPluginsForUpdateChannel({
-      config: activeConfig,
-      channel,
-      workspaceDir: root,
-      logger: pluginLogger,
-    });
-    let pluginConfig = syncResult.config;
-
-    const npmResult = await updateNpmInstalledPlugins({
-      config: pluginConfig,
-      skipIds: new Set(syncResult.summary.switchedToNpm),
-      logger: pluginLogger,
-    });
-    pluginConfig = npmResult.config;
-
-    if (syncResult.changed || npmResult.changed) {
-      await writeConfigFile(pluginConfig);
-    }
-
-    if (!opts.json) {
-      const summarizeList = (list: string[]) => {
-        if (list.length <= 6) {
-          return list.join(", ");
-        }
-        return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
-      };
-
-      if (syncResult.summary.switchedToBundled.length > 0) {
-        defaultRuntime.log(
-          theme.muted(
-            `Switched to bundled plugins: ${summarizeList(syncResult.summary.switchedToBundled)}.`,
-          ),
-        );
-      }
-      if (syncResult.summary.switchedToNpm.length > 0) {
-        defaultRuntime.log(
-          theme.muted(`Restored npm plugins: ${summarizeList(syncResult.summary.switchedToNpm)}.`),
-        );
-      }
-      for (const warning of syncResult.summary.warnings) {
-        defaultRuntime.log(theme.warn(warning));
-      }
-      for (const error of syncResult.summary.errors) {
-        defaultRuntime.log(theme.error(error));
-      }
-
-      const updated = npmResult.outcomes.filter((entry) => entry.status === "updated").length;
-      const unchanged = npmResult.outcomes.filter((entry) => entry.status === "unchanged").length;
-      const failed = npmResult.outcomes.filter((entry) => entry.status === "error").length;
-      const skipped = npmResult.outcomes.filter((entry) => entry.status === "skipped").length;
-
-      if (npmResult.outcomes.length === 0) {
-        defaultRuntime.log(theme.muted("No plugin updates needed."));
-      } else {
-        const parts = [`${updated} updated`, `${unchanged} unchanged`];
-        if (failed > 0) {
-          parts.push(`${failed} failed`);
-        }
-        if (skipped > 0) {
-          parts.push(`${skipped} skipped`);
-        }
-        defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
-      }
-
-      for (const outcome of npmResult.outcomes) {
-        if (outcome.status !== "error") {
-          continue;
-        }
-        defaultRuntime.log(theme.error(outcome.message));
-      }
-    }
-  } else if (!opts.json) {
-    defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
-  }
-
-  await tryWriteCompletionCache(root, Boolean(opts.json));
-
-  // Offer to install shell completion if not already installed
-  await tryInstallShellCompletion({
-    jsonMode: Boolean(opts.json),
-    skipPrompt: Boolean(opts.yes),
-  });
-
-  // Restart service if requested
-  if (shouldRestart) {
-    if (!opts.json) {
-      defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Restarting service..."));
-    }
+// Leaves opt into dry-run explicitly; unsupported leaves reject it before owner work.
+function createUpdateLeafAction(
+  action: (opts: Record<string, unknown>, command: Command) => Promise<void>,
+  options: { supportsDryRun?: boolean } = {},
+) {
+  return async (opts: Record<string, unknown>, command: Command) => {
     try {
-      const restarted = await runDaemonRestart();
-      if (!opts.json && restarted) {
-        defaultRuntime.log(theme.success("Daemon restarted successfully."));
-        defaultRuntime.log("");
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-        try {
-          const interactiveDoctor = Boolean(process.stdin.isTTY) && !opts.json && opts.yes !== true;
-          await doctorCommand(defaultRuntime, {
-            nonInteractive: !interactiveDoctor,
-          });
-        } catch (err) {
-          defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
-        } finally {
-          delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-        }
-      }
-    } catch (err) {
-      if (!opts.json) {
-        defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
-        defaultRuntime.log(
-          theme.muted(
-            `You may need to restart the service manually: ${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}`,
-          ),
+      if (inheritOptionFromParent<boolean>(command, "reapplyLocalOverrides")) {
+        throw new Error(
+          `--reapply-local-overrides is not supported for openclaw update ${command.name()}. Use it with openclaw update.`,
         );
       }
+      if (!options.supportsDryRun && inheritOptionFromParent<boolean>(command, "dryRun")) {
+        throw new Error(
+          `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+        );
+      }
+      await action(opts, command);
+    } catch (err) {
+      handleUpdateCommandError(err);
     }
-  } else if (!opts.json) {
-    defaultRuntime.log("");
-    if (result.mode === "npm" || result.mode === "pnpm") {
-      defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
-        ),
-      );
-    } else {
-      defaultRuntime.log(
-        theme.muted(
-          `Tip: Run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,
-        ),
-      );
-    }
-  }
-
-  if (!opts.json) {
-    defaultRuntime.log(theme.muted(pickUpdateQuip()));
-  }
+  };
 }
 
-export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
-  if (!process.stdin.isTTY) {
-    defaultRuntime.error(
-      "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
+function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
+  const command = update.command(name, { hidden });
+  command
+    .description("Reconcile abandoned updates or repair post-update doctor and plugin convergence")
+    .option("--json", "Output result as JSON", false)
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
+    .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .option("--no-restart", "Skip update activation; Doctor may restore a service it stops")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw update repair", "Reconcile abandoned runs or repair post-update state."],
+          [
+            "openclaw update repair --accept-capabilities",
+            "Accept reviewed plugin capability changes during repair.",
+          ],
+          ["openclaw update repair --channel beta", "Repair against the beta update channel."],
+          ["openclaw update repair --json", "JSON output for automation."],
+        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
+          "- Reconciles abandoned runs when the Gateway is healthy; otherwise repairs post-update state",
+        )}\n${theme.muted("- Runs Doctor repair and plugin convergence; repair restores only a service it stops")}\n\n${theme.muted(
+          "Docs:",
+        )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
+    )
+    .action(
+      createUpdateLeafAction(async (opts, actionCommand) => {
+        const repair = hidden
+          ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
+          : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
+        await repair({
+          json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
+          channel:
+            (opts.channel as string | undefined) ??
+            inheritOptionFromParent<string>(actionCommand, "channel"),
+          timeout: inheritedUpdateTimeout(opts, actionCommand),
+          yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
+          acceptCapabilities:
+            Boolean(opts.acceptCapabilities) ||
+            Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
+          restart: false,
+          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
+        });
+      }),
     );
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
-    return;
-  }
-
-  const root =
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd();
-
-  const [updateStatus, configSnapshot] = await Promise.all([
-    checkUpdateStatus({
-      root,
-      timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
-    }),
-    readConfigFileSnapshot(),
-  ]);
-
-  const configChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-  const channelInfo = resolveEffectiveUpdateChannel({
-    configChannel,
-    installKind: updateStatus.installKind,
-    git: updateStatus.git
-      ? { tag: updateStatus.git.tag, branch: updateStatus.git.branch }
-      : undefined,
-  });
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
-    gitTag: updateStatus.git?.tag ?? null,
-    gitBranch: updateStatus.git?.branch ?? null,
-  });
-
-  const pickedChannel = await selectStyled({
-    message: "Update channel",
-    options: [
-      {
-        value: "keep",
-        label: `Keep current (${channelInfo.channel})`,
-        hint: channelLabel,
-      },
-      {
-        value: "stable",
-        label: "Stable",
-        hint: "Tagged releases (npm latest)",
-      },
-      {
-        value: "beta",
-        label: "Beta",
-        hint: "Prereleases (npm beta)",
-      },
-      {
-        value: "dev",
-        label: "Dev",
-        hint: "Git main",
-      },
-    ],
-    initialValue: "keep",
-  });
-
-  if (isCancel(pickedChannel)) {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
-  }
-
-  const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
-
-  if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
-    const gitDir = resolveGitInstallDir();
-    const hasGit = await isGitCheckout(gitDir);
-    if (!hasGit) {
-      const dirExists = await pathExists(gitDir);
-      if (dirExists) {
-        const empty = await isEmptyDir(gitDir);
-        if (!empty) {
-          defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
-      }
-      const ok = await confirm({
-        message: stylePromptMessage(
-          `Create a git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
-        ),
-        initialValue: true,
-      });
-      if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
-      }
-    }
-  }
-
-  const restart = await confirm({
-    message: stylePromptMessage("Restart the gateway service after update?"),
-    initialValue: true,
-  });
-  if (isCancel(restart)) {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
-  }
-
-  try {
-    await updateCommand({
-      channel: requestedChannel ?? undefined,
-      restart: Boolean(restart),
-      timeout: opts.timeout,
-    });
-  } catch (err) {
-    defaultRuntime.error(String(err));
-    defaultRuntime.exit(1);
-  }
 }
 
+/** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
+  program.enablePositionalOptions();
   const update = program
     .command("update")
-    .description("Update OpenClaw to the latest version")
-    .option("--json", "Output result as JSON", false)
-    .option("--no-restart", "Skip restarting the gateway service after a successful update")
-    .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
-    .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .description("Update OpenClaw and inspect update channel status");
+  for (const [flags, description, defaultValue] of UPDATE_OPTION_SPECS) {
+    update.option(flags, description, defaultValue);
+  }
+  update
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
+        [
+          "openclaw update --channel extended-stable",
+          "Switch to the monthly supported npm channel",
+        ],
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
+        ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],
+        ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
-      const fmtExamples = examples
-        .map(([cmd, desc]) => `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`)
-        .join("\n");
+      const fmtExamples = formatHelpExamples(examples, true);
       return `
 ${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
   - npm installs: updates via detected package manager
 
 ${theme.heading("Switch channels:")}
-  - Use --channel stable|beta|dev to persist the update channel in config
+  - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
-  - Use --tag <dist-tag|version> for a one-off npm update without persisting
+  - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
+  - Use --channel dev for the moving GitHub main checkout; package installs reject --tag main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Combine with --channel/--tag/--restart/--json/--timeout as needed
+  - Use --accept-capabilities to accept each plugin's reviewed capability changes
+  - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
+  - Use --dry-run to preview actions without writing config/installing/restarting
 
 ${theme.heading("Examples:")}
 ${fmtExamples}
 
 ${theme.heading("Notes:")}
-  - Switch channels with --channel stable|beta|dev
+  - Switch channels with --channel stable|extended-stable|beta|dev
   - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
   - Downgrades require confirmation (can break configuration)
   - Skips update if the working directory has uncommitted changes
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`;
     })
-    .action(async (opts) => {
+    .action(async (opts: CommanderUpdateOptions) => {
       try {
+        if (
+          opts.admission !== undefined &&
+          opts.admission !== "auto" &&
+          opts.admission !== "installed"
+        ) {
+          throw new Error('--admission must be "auto" or "installed".');
+        }
+        const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
+          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
-          channel: opts.channel as string | undefined,
-          tag: opts.tag as string | undefined,
-          timeout: opts.timeout as string | undefined,
+          reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),
+          dryRun: Boolean(opts.dryRun),
+          channel: opts.channel,
+          tag: opts.tag,
+          timeout: opts.timeout,
           yes: Boolean(opts.yes),
+          acceptCapabilities: Boolean(opts.acceptCapabilities),
+          admission: opts.admission,
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        handleUpdateCommandError(err);
       }
     });
+
+  setCommandJsonMode(update.command("admit", { hidden: true }), "output", () => true)
+    .description("Internal read-only candidate admission protocol")
+    .requiredOption("--context <path>", "Absolute path to the private admission context")
+    .action(async (opts: { context: string }) => {
+      const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
+      await updateAdmitCommand(opts.context);
+    });
+
+  update
+    .command("cleanup")
+    .description("Retire verified update recovery originals after acknowledging rollback loss")
+    .option("--dry-run", "Inspect recovery metadata without writes", false)
+    .option("--json", "Output one JSON result; never implies consent", false)
+    .option("--yes", "Acknowledge permanent loss of the selected rollback originals", false)
+    .action(
+      createUpdateLeafAction(
+        async (opts, command) => {
+          for (const key of ["channel", "tag", "timeout", "restart", "acceptCapabilities"]) {
+            if (
+              update.getOptionValueSource(key) &&
+              update.getOptionValueSource(key) !== "default"
+            ) {
+              throw new Error(
+                `--${key === "restart" ? "no-restart" : key === "acceptCapabilities" ? "accept-capabilities" : key} is not supported for openclaw update cleanup.`,
+              );
+            }
+          }
+          const { updateCleanupCommand } = await import("./update-cli/cleanup.js");
+          await updateCleanupCommand({
+            dryRun:
+              Boolean(opts.dryRun) || Boolean(inheritOptionFromParent<boolean>(command, "dryRun")),
+            json: Boolean(opts.json) || inheritedUpdateJson(command),
+            yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(command, "yes")),
+          });
+        },
+        { supportsDryRun: true },
+      ),
+    );
+
+  registerUpdateFinalizationCommand(update, "repair", false);
+  registerUpdateFinalizationCommand(update, "finalize", true);
+
+  update
+    .command("migration-plan", { hidden: true })
+    .description("Plan Doctor-owned state migrations against an isolated snapshot")
+    .requiredOption("--snapshot-home <path>", "Copied environment home")
+    .requiredOption("--snapshot-config <path>", "Copied OpenClaw config")
+    .requiredOption("--snapshot-state <path>", "Copied OpenClaw state directory")
+    .option("--dry-run", "Accepted for parity; migration planning is always read-only", true)
+    .option("--json", "Output result as JSON", true)
+    .action(
+      createUpdateLeafAction(
+        async (opts) => {
+          const { updateMigrationPlanCommand } =
+            await import("./update-cli/update-command-migration-plan.js");
+          await updateMigrationPlanCommand({
+            snapshotConfig: requiredUpdateLeafString(opts, "snapshotConfig"),
+            snapshotHome: requiredUpdateLeafString(opts, "snapshotHome"),
+            snapshotState: requiredUpdateLeafString(opts, "snapshotState"),
+          });
+        },
+        { supportsDryRun: true },
+      ),
+    );
 
   update
     .command("wizard")
     .description("Interactive update wizard")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
     )
-    .action(async (opts) => {
-      try {
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateWizardCommand } = await import("./update-cli/wizard.js");
         await updateWizardCommand({
-          timeout: opts.timeout as string | undefined,
+          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
+          timeout: inheritedUpdateTimeout(opts, command),
+          acceptCapabilities:
+            Boolean(opts.acceptCapabilities) ||
+            Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 
   update
     .command("status")
@@ -1336,20 +323,18 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           ["openclaw update status --json", "JSON output."],
           ["openclaw update status --timeout 10", "Custom timeout."],
         ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
-          "- Shows current update channel (stable/beta/dev) and source",
+          "- Shows current update channel (stable/extended-stable/beta/dev) and source",
         )}\n${theme.muted("- Includes git tag/branch/SHA for source checkouts")}\n\n${theme.muted(
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts) => {
-      try {
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateStatusCommand } = await import("./update-cli/status.js");
         await updateStatusCommand({
-          json: Boolean(opts.json),
-          timeout: opts.timeout as string | undefined,
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+          timeout: inheritedUpdateTimeout(opts, command),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
+      }),
+    );
 }

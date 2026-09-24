@@ -1,27 +1,28 @@
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
+/**
+ * Live Anthropic setup-token validation.
+ * Exercises token discovery, profile storage, and model access only when live
+ * setup-token credentials are explicitly provided.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
-  validateAnthropicSetupToken,
-} from "../commands/auth-token.js";
-import { loadConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { validateAnthropicSetupToken } from "../commands/auth-token.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   type AuthProfileCredential,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
@@ -37,7 +38,7 @@ type TokenSource = {
 };
 
 function isSetupToken(value: string): boolean {
-  return value.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX);
+  return validateAnthropicSetupToken(value) === undefined;
 }
 
 function listSetupTokenProfiles(store: {
@@ -51,7 +52,7 @@ function listSetupTokenProfiles(store: {
       if (normalizeProviderId(cred.provider) !== "anthropic") {
         return false;
       }
-      return isSetupToken(cred.token);
+      return isSetupToken(cred.token ?? "");
     })
     .map(([id]) => id);
 }
@@ -95,7 +96,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     };
   }
 
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(await readLiveTestConfig());
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -125,7 +126,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
   return { agentDir, profileId: pickSetupTokenProfile(candidates) };
 }
 
-function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
+function pickModel(models: Array<Model>, raw?: string): Model | null {
   const normalized = raw?.trim() ?? "";
   if (normalized) {
     const parsed = parseModelRef(normalized, "anthropic");
@@ -141,8 +142,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   }
 
   const preferred = [
-    "claude-opus-4-5",
-    "claude-sonnet-4-5",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-0",
     "claude-haiku-3-5",
   ];
@@ -155,13 +157,35 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   return models[0] ?? null;
 }
 
+function buildTestModel(id: string, provider = "anthropic"): Model {
+  return { id, provider } as Model;
+}
+
+describe("pickModel", () => {
+  it("resolves sonnet-4.6 aliases to claude-sonnet-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-opus-4-6"), buildTestModel("claude-sonnet-4-6")],
+      "sonnet-4.6",
+    );
+    expect(model?.id).toBe("claude-sonnet-4-6");
+  });
+
+  it("resolves opus-4.6 aliases to claude-opus-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-sonnet-4-6"), buildTestModel("claude-opus-4-6")],
+      "opus-4.6",
+    );
+    expect(model?.id).toBe("claude-opus-4-6");
+  });
+});
+
 describeLive("live anthropic setup-token", () => {
   it(
     "completes using a setup-token profile",
     async () => {
       const tokenSource = await resolveTokenSource();
       try {
-        const cfg = loadConfig();
+        const cfg = await readLiveTestConfig();
         await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);
@@ -169,7 +193,7 @@ describeLive("live anthropic setup-token", () => {
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
           (model) => normalizeProviderId(model.provider) === "anthropic",
-        ) as Array<Model<Api>>;
+        ) as Array<Model>;
         expect(candidates.length).toBeGreaterThan(0);
 
         const model = pickModel(candidates, SETUP_TOKEN_MODEL);
@@ -181,7 +205,7 @@ describeLive("live anthropic setup-token", () => {
           );
         }
 
-        const apiKeyInfo = await getApiKeyForModel({
+        const apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
           profileId: tokenSource.profileId,

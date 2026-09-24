@@ -1,0 +1,316 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { cellAuthSecretDir } from "./cell-profile.js";
+import { getFleetCell, reserveFleetCell } from "./registry.js";
+import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+import {
+  createContainerMock,
+  fleetLabels,
+  runningInspection,
+  setFleetSuiteRoot,
+  TEST_ATTEMPT_ID,
+} from "./service.runtime.test-helpers.js";
+
+type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
+
+let root: string;
+
+function createFleetService(options: FleetServiceOptions = {}) {
+  return createFleetServiceRuntime({
+    fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+    probePort: async () => true,
+    ...options,
+  });
+}
+
+describe("fleet service filesystem and removal", () => {
+  let env: NodeJS.ProcessEnv;
+
+  const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-service-" });
+
+  beforeEach(async () => {
+    root = await tempRoot.setup();
+    setFleetSuiteRoot(root);
+    env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  });
+
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    await tempRoot.cleanup();
+  });
+
+  it("maps rootless users and SELinux mounts for Docker and Podman", async () => {
+    const docker = createContainerMock();
+    docker.isDockerRootless.mockResolvedValue(true);
+    await createFleetService({
+      env,
+      containers: docker.runtime,
+      getuid: () => 1001,
+      getgid: () => 1002,
+      selinuxEnabled: async () => true,
+    }).create({ tenant: "docker-cell", gatewayToken: "token" });
+    expect(docker.run.mock.calls[0]?.[0].containerUser).toEqual({
+      mode: "numeric",
+      uid: 0,
+      gid: 0,
+    });
+    expect(docker.run.mock.calls[0]?.[0].selinuxRelabel).toBe(true);
+    expect(docker.run.mock.calls[0]?.[0].environment.XDG_CACHE_HOME).toBe(
+      "/home/node/.openclaw/cache",
+    );
+    expect(docker.run.mock.calls[0]?.[0].userEnvironmentKeys).toEqual([]);
+
+    const podman = createContainerMock();
+    await createFleetService({
+      env,
+      containers: podman.runtime,
+      getuid: () => 1001,
+      getgid: () => 1002,
+      selinuxEnabled: async () => true,
+    }).create({ tenant: "podman-cell", runtime: "podman", gatewayToken: "token" });
+    expect(podman.isDockerRootless).not.toHaveBeenCalled();
+    expect(podman.run.mock.calls[0]?.[0]).toMatchObject({
+      containerUser: { mode: "podman-keep-id", uid: 1001, gid: 1002 },
+      selinuxRelabel: true,
+      environment: { XDG_CACHE_HOME: "/home/node/.openclaw/cache" },
+      userEnvironmentKeys: [],
+    });
+  });
+
+  it("refuses a realpath escape before container or registry removal", async () => {
+    const containers = createContainerMock();
+    const cellsRoot = path.join(root, "fleet", "cells");
+    const outside = path.join(root, "outside-cell");
+    await fs.mkdir(cellsRoot, { recursive: true });
+    await fs.mkdir(outside);
+    await reserveFleetCell(env, {
+      tenantId: "escape",
+      createdAtMs: 1000,
+      image: "ghcr.io/openclaw/openclaw:latest",
+      runtime: "docker",
+      containerName: "openclaw-cell-escape",
+      dataDir: outside,
+    });
+    const service = createFleetService({ env, containers: containers.runtime });
+
+    await expect(
+      service.remove({ tenant: "escape", purgeData: true, force: true }),
+    ).rejects.toThrow(/outside its fleet-owned directory/iu);
+    expect(containers.inspect).not.toHaveBeenCalled();
+    expect(await getFleetCell(env, "escape")).toBeDefined();
+    await expect(fs.stat(outside)).resolves.toBeDefined();
+  });
+
+  it("refuses to purge a tenant symlinked to a sibling cell", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    await service.create({ tenant: "beta", gatewayToken: "token" });
+    const acmeDir = path.join(root, "fleet", "cells", "acme");
+    const betaDir = path.join(root, "fleet", "cells", "beta");
+    await fs.rm(acmeDir, { recursive: true });
+    await fs.symlink(betaDir, acmeDir, "dir");
+    containers.inspect.mockClear();
+
+    await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).rejects.toThrow(
+      /symlinked fleet tenant directory/iu,
+    );
+
+    expect(containers.inspect).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(betaDir, "openclaw.json"))).resolves.toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
+  });
+
+  it("refuses a tenant-controlled config symlink during recreate", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    await service.create({ tenant: "beta", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    await service.remove({ tenant: "acme" });
+    const acmeConfig = path.join(root, "fleet", "cells", "acme", "openclaw.json");
+    const betaConfig = path.join(root, "fleet", "cells", "beta", "openclaw.json");
+    const betaBefore = await fs.readFile(betaConfig, "utf8");
+    await fs.rm(acmeConfig);
+    await fs.symlink("../beta/openclaw.json", acmeConfig);
+    const runCount = containers.run.mock.calls.length;
+    containers.inspect.mockResolvedValue(runningInspection({ state: "created", running: false }));
+    const retryService = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+      generateAttemptId: () => TEST_ATTEMPT_ID,
+    });
+
+    await expect(retryService.create({ tenant: "acme", gatewayToken: "token" })).rejects.toThrow(
+      /unsafe cell config/iu,
+    );
+
+    expect(containers.run).toHaveBeenCalledTimes(runCount + 1);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+    await expect(fs.readFile(betaConfig, "utf8")).resolves.toBe(betaBefore);
+  });
+
+  it("validates rejected recreate input before rewriting retained config", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    await service.remove({ tenant: "acme" });
+    const configPath = path.join(root, "fleet", "cells", "acme", "openclaw.json");
+    const configBefore = await fs.readFile(configPath, "utf8");
+    const runCount = containers.run.mock.calls.length;
+
+    await expect(
+      service.create({ tenant: "acme", gatewayToken: "token", env: ["INVALID"] }),
+    ).rejects.toThrow(/expected KEY=VAL/iu);
+
+    expect(containers.run).toHaveBeenCalledTimes(runCount);
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(configBefore);
+  });
+
+  it("purges a contained cell only after forced container removal", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection());
+
+    await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).resolves.toEqual(
+      { tenant: "acme", action: "rm", dataPurged: true },
+    );
+
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
+    expect(containers.removeNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+    await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(cellAuthSecretDir(root, "acme"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("passes explicit force through even when inspect observed a stopped container", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+
+    await service.remove({ tenant: "acme", force: true });
+
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
+  });
+
+  it("retains state when network removal fails and completes on retry", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    containers.removeNetwork.mockRejectedValueOnce(new Error("network still in use"));
+
+    await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).rejects.toThrow(
+      /still in use/iu,
+    );
+    expect(await getFleetCell(env, "acme")).toBeDefined();
+    await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).resolves.toBeDefined();
+
+    await expect(
+      service.remove({ tenant: "acme", purgeData: true, force: true }),
+    ).resolves.toMatchObject({ tenant: "acme", dataPurged: true });
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+  });
+
+  it("finishes purge when one exact tenant directory is already missing", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    await fs.rm(path.join(root, "fleet", "cells", "acme"), { recursive: true });
+
+    await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).resolves.toEqual(
+      { tenant: "acme", action: "rm", dataPurged: true },
+    );
+
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
+    await expect(fs.stat(cellAuthSecretDir(root, "acme"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("refuses to remove a container when its cell network belongs to another profile", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    containers.inspectNetwork.mockResolvedValue({
+      kind: "ok",
+      labels: {
+        ...fleetLabels(),
+        "openclaw.fleet.owner": "11111111111111111111111111111111",
+      },
+      attachedContainers: [],
+      internal: false,
+    });
+    containers.remove.mockClear();
+
+    await expect(service.remove({ tenant: "acme" })).rejects.toThrow(
+      /acme-net.*ownership labels/iu,
+    );
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
+  });
+
+  it("removes the ownership-validated generation, not whatever holds the cell name", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+
+    // Docker and Podman resolve a reference as an id first and a name second, so
+    // an id stays pinned to one container while a name follows whatever holds it
+    // now. Here the managed cell is gone and a foreign container has taken its
+    // name after `assertManagedInspection` proved the managed generation.
+    // Unforced `rm` of a missing container exits non-zero on both runtimes.
+    const live = new Set(["foreign-id"]);
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    containers.remove.mockImplementation(async (_runtime, reference, force) => {
+      const resolved = reference === "openclaw-cell-acme" ? "foreign-id" : reference;
+      if (!live.delete(resolved) && !force) {
+        throw new Error(`Error response from daemon: No such container: ${reference}`);
+      }
+    });
+
+    await expect(service.remove({ tenant: "acme" })).rejects.toThrow(/no such container/iu);
+
+    expect(live).toEqual(new Set(["foreign-id"]));
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
+  });
+
+  it("refuses removal before mutation when an unexpected network peer is attached", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    containers.inspectNetwork.mockResolvedValue({
+      kind: "ok",
+      labels: fleetLabels(),
+      attachedContainers: [{ id: "peer-id", name: "unexpected-peer" }],
+      internal: false,
+    });
+    containers.remove.mockClear();
+
+    await expect(service.remove({ tenant: "acme" })).rejects.toThrow(/unexpected containers/iu);
+    expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
+  });
+});

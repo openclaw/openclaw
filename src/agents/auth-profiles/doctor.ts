@@ -1,47 +1,62 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Provider-specific auth doctor hints.
+ * Adds local migration guidance for known legacy profiles before falling back
+ * to provider plugin doctor copy.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { AuthProfileStore } from "./types.js";
-import { formatCliCommand } from "../../cli/command-format.js";
-import { normalizeProviderId } from "../model-selection.js";
-import { listProfilesForProvider } from "./profiles.js";
-import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 
-export function formatAuthDoctorHint(params: {
+const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
+  "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current Qwen API key: openclaw onboard --auth-choice qwen-api-key.";
+
+// Qwen Portal OAuth changed credential behavior; old profiles need an explicit
+// local hint before falling back to provider plugin doctor hints.
+function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: string): boolean {
+  const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
+  return profiles.some(
+    (profile) =>
+      profile?.type === "oauth" && normalizeProviderId(profile.provider) === "qwen-portal",
+  );
+}
+
+type FormatAuthDoctorHintParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
   profileId?: string;
-}): string {
-  const providerKey = normalizeProviderId(params.provider);
-  if (providerKey !== "anthropic") {
-    return "";
-  }
+};
 
-  const legacyProfileId = params.profileId ?? "anthropic:default";
-  const suggested = suggestOAuthProfileIdForLegacyDefault({
-    cfg: params.cfg,
-    store: params.store,
-    provider: providerKey,
-    legacyProfileId,
+// Keep local short-circuits and the plugin fallback in one seam so focused tests
+// can prove their ordering without loading the full provider runtime.
+async function formatAuthDoctorHintWithPluginBuilder(
+  params: FormatAuthDoctorHintParams,
+  buildPluginHint: typeof buildProviderAuthDoctorHintWithPlugin,
+): Promise<string> {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (
+    normalizedProvider === "qwen-portal" &&
+    hasLegacyQwenPortalOAuthProfile(params.store, params.profileId)
+  ) {
+    return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
+  }
+  const pluginHint = await buildPluginHint({
+    provider: normalizedProvider,
+    context: {
+      config: params.cfg,
+      store: params.store,
+      provider: normalizedProvider,
+      profileId: params.profileId,
+    },
   });
-  if (!suggested || suggested === legacyProfileId) {
-    return "";
+  if (typeof pluginHint === "string" && pluginHint.trim()) {
+    return pluginHint;
   }
+  return "";
+}
 
-  const storeOauthProfiles = listProfilesForProvider(params.store, providerKey)
-    .filter((id) => params.store.profiles[id]?.type === "oauth")
-    .join(", ");
-
-  const cfgMode = params.cfg?.auth?.profiles?.[legacyProfileId]?.mode;
-  const cfgProvider = params.cfg?.auth?.profiles?.[legacyProfileId]?.provider;
-
-  return [
-    "Doctor hint (for GitHub issue):",
-    `- provider: ${providerKey}`,
-    `- config: ${legacyProfileId}${
-      cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""
-    }`,
-    `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
-    `- suggested profile: ${suggested}`,
-    `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
-  ].join("\n");
+/** Formats provider-specific auth doctor guidance for a profile/store. */
+export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
+  return await formatAuthDoctorHintWithPluginBuilder(params, buildProviderAuthDoctorHintWithPlugin);
 }

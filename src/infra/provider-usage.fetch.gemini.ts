@@ -1,14 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+// Fetches Gemini provider usage windows.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
+import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-
-type GeminiUsageResponse = {
-  buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
-};
 
 export async function fetchGeminiUsage(
   token: string,
@@ -16,9 +16,10 @@ export async function fetchGeminiUsage(
   fetchFn: typeof fetch,
   provider: UsageProviderId,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-    {
+  const parsed = await fetchUsageJson({
+    provider,
+    url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+    init: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -28,62 +29,47 @@ export async function fetchGeminiUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    return {
-      provider,
-      displayName: PROVIDER_LABELS[provider],
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+  });
+  if (!parsed.ok) {
+    return parsed.snapshot;
   }
-
-  const data = (await res.json()) as GeminiUsageResponse;
-  const quotas: Record<string, number> = {};
-
-  for (const bucket of data.buckets || []) {
-    const model = bucket.modelId || "unknown";
-    const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) {
-      quotas[model] = frac;
-    }
-  }
-
+  const buckets =
+    isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
   const windows: UsageWindow[] = [];
-  let proMin = 1;
-  let flashMin = 1;
-  let hasPro = false;
-  let hasFlash = false;
+  const families = [
+    { label: "Pro", match: "pro", remaining: 1, found: false },
+    { label: "Flash", match: "flash", remaining: 1, found: false },
+  ];
 
-  for (const [model, frac] of Object.entries(quotas)) {
-    const lower = model.toLowerCase();
-    if (lower.includes("pro")) {
-      hasPro = true;
-      if (frac < proMin) {
-        proMin = frac;
+  for (const bucket of buckets) {
+    if (!isRecord(bucket)) {
+      continue;
+    }
+    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
+    const lower = normalizeLowercaseStringOrEmpty(model);
+    for (const family of families) {
+      if (lower.includes(family.match)) {
+        family.found = true;
+        if (frac < family.remaining) {
+          family.remaining = frac;
+        }
       }
     }
-    if (lower.includes("flash")) {
-      hasFlash = true;
-      if (frac < flashMin) {
-        flashMin = frac;
-      }
+  }
+
+  for (const family of families) {
+    if (family.found) {
+      windows.push({
+        label: family.label,
+        usedPercent: clampPercent((1 - family.remaining) * 100),
+      });
     }
   }
 
-  if (hasPro) {
-    windows.push({
-      label: "Pro",
-      usedPercent: clampPercent((1 - proMin) * 100),
-    });
-  }
-  if (hasFlash) {
-    windows.push({
-      label: "Flash",
-      usedPercent: clampPercent((1 - flashMin) * 100),
-    });
-  }
-
-  return { provider, displayName: PROVIDER_LABELS[provider], windows };
+  return {
+    provider,
+    displayName: expectDefined(providerUsageLabel(provider), "gemini provider usage label"),
+    windows,
+  };
 }

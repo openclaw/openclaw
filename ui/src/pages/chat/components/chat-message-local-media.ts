@@ -1,0 +1,88 @@
+import { normalizeBasePath } from "../../../app-route-paths.ts";
+import {
+  buildAssistantMediaUrl,
+  type AssistantMediaContext,
+} from "../../../app/assistant-media.ts";
+
+export function isLocalAssistantAttachmentSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
+    return false;
+  }
+  return (
+    isCanonicalInboundMediaSource(trimmed) ||
+    /^file:/iu.test(trimmed) ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("/") ||
+    /^[a-zA-Z]:[\\/]/.test(trimmed) ||
+    (Boolean(trimmed) && !/^[a-z][a-z0-9+.-]*:/iu.test(trimmed))
+  );
+}
+
+export function isCanonicalInboundMediaSource(source: string): boolean {
+  // Match the raw one-segment form first; URL parsing would erase dot segments.
+  const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const id = decodeURIComponent(match[1]);
+    return (
+      id !== "." && id !== ".." && !id.includes("/") && !id.includes("\\") && !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function buildAssistantAttachmentUrl(
+  source: string,
+  resourceBasePath?: string,
+  mediaTicket?: string | null,
+  context?: AssistantMediaContext,
+  filename?: string,
+): string {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return source;
+  }
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket, context, filename);
+}
+
+export function appendAttachmentUrlSearchParam(
+  source: string,
+  name: string,
+  value: string,
+): string {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set(name, value);
+  return `${path}?${params.toString()}${hash}`;
+}
+
+export function applyResourceBasePath(
+  source: string,
+  resourceBasePath: string | undefined,
+): string {
+  if (!source.startsWith("/") || source.startsWith("//")) {
+    return source;
+  }
+  try {
+    const parsed = new URL(source, window.location.origin);
+    const basePath = normalizeBasePath(resourceBasePath ?? "");
+    const pathname =
+      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
+        ? `${basePath}${parsed.pathname}`
+        : parsed.pathname;
+    return `${pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return source;
+  }
+}

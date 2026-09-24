@@ -1,22 +1,15 @@
-// zca-cli wrapper types
-export type ZcaRunOptions = {
-  profile?: string;
-  cwd?: string;
-  timeout?: number;
-};
-
-export type ZcaResult = {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
-
-export type ZcaProfile = {
-  name: string;
-  label?: string;
-  isDefault?: boolean;
-};
+// Zalouser type declarations define plugin contracts.
+import type {
+  ChannelMessageSendTextContext,
+  MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { z } from "zod";
+import type {
+  ZalouserAccountSchema,
+  ZalouserConfigSchema,
+  ZalouserGroupConfigSchema,
+} from "./config-schema.js";
+import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
   userId: string;
@@ -24,25 +17,50 @@ export type ZcaFriend = {
   avatar?: string;
 };
 
-export type ZcaGroup = {
+export type ZaloGroup = {
   groupId: string;
   name: string;
   memberCount?: number;
 };
 
-export type ZcaMessage = {
+export type ZaloGroupMember = {
+  userId: string;
+  displayName: string;
+  avatar?: string;
+};
+
+export type ZaloEventMessage = {
+  msgId: string;
+  cliMsgId: string;
+  uidFrom: string;
+  idTo: string;
+  msgType: string;
+  st: number;
+  at: number;
+  cmd: number;
+  ts: string | number;
+};
+
+export type ZaloInboundMessage = {
   threadId: string;
+  isGroup: boolean;
+  senderId: string;
+  senderName?: string;
+  groupName?: string;
+  content: string;
+  commandContent?: string;
+  timestampMs: number;
   msgId?: string;
   cliMsgId?: string;
-  type: number;
-  content: string;
-  timestamp: number;
-  metadata?: {
-    isGroup: boolean;
-    threadName?: string;
-    senderName?: string;
-    fromId?: string;
-  };
+  hasAnyMention?: boolean;
+  wasExplicitlyMentioned?: boolean;
+  canResolveExplicitMention?: boolean;
+  implicitMention?: boolean;
+  quotedGlobalMsgId?: string;
+  quotedOwnerId?: string;
+  quotedBody?: string;
+  eventMessage?: ZaloEventMessage;
+  raw: unknown;
 };
 
 export type ZcaUserInfo = {
@@ -51,56 +69,49 @@ export type ZcaUserInfo = {
   avatar?: string;
 };
 
-export type CommonOptions = {
+export type ZaloSendHandoff = Pick<
+  ChannelMessageSendTextContext,
+  "signal" | "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+>;
+
+export type ZaloSendOptions = ZaloSendHandoff & {
+  mediaMaxBytes?: number;
   profile?: string;
-  json?: boolean;
+  mediaUrl?: string;
+  caption?: string;
+  isGroup?: boolean;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  textMode?: "markdown" | "plain";
+  textChunkMode?: "length" | "newline";
+  textChunkLimit?: number;
+  textStyles?: Style[];
 };
 
-export type SendOptions = CommonOptions & {
-  group?: boolean;
+export type ZaloSendResult = {
+  ok: boolean;
+  messageId?: string;
+  receipt: MessageReceipt;
+  error?: string;
 };
 
-export type ListenOptions = CommonOptions & {
-  raw?: boolean;
-  keepAlive?: boolean;
-  webhook?: string;
-  echo?: boolean;
-  prefix?: string;
-};
-
-export type ZalouserAccountConfig = {
-  enabled?: boolean;
+export type ZaloGroupContext = {
+  groupId: string;
   name?: string;
-  profile?: string;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<
-    string,
-    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
-  >;
-  messagePrefix?: string;
-  responsePrefix?: string;
+  members?: string[];
 };
 
-export type ZalouserConfig = {
-  enabled?: boolean;
-  name?: string;
-  profile?: string;
-  defaultAccount?: string;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<
-    string,
-    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
-  >;
-  messagePrefix?: string;
-  responsePrefix?: string;
-  accounts?: Record<string, ZalouserAccountConfig>;
+export type ZaloAuthStatus = {
+  connected: boolean;
+  message: string;
 };
+
+export type ZalouserGroupConfig = z.input<typeof ZalouserGroupConfigSchema>;
+export type ZalouserAccountConfig = z.input<typeof ZalouserAccountSchema>;
+export type ZalouserConfig = z.input<typeof ZalouserConfigSchema>;
 
 export type ResolvedZalouserAccount = {
+  mediaMaxBytes?: number;
   accountId: string;
   name?: string;
   enabled: boolean;

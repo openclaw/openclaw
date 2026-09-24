@@ -1,25 +1,148 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+/** Tests inbound auto-reply handling across channel message contexts. */
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import {
-  buildInboundDedupeKey,
-  resetInboundDedupe,
-  shouldSkipDuplicateInbound,
-} from "./reply/inbound-dedupe.js";
+import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   normalizeMentionText,
+  stripMentions,
 } from "./reply/mentions.js";
+import { prepareReplyConversation } from "./reply/prompt-session-context.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+
+type TestChannelGroupContext = {
+  cfg: OpenClawConfig;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+};
+
+function commitInboundForTest(ctx: MsgContext): void {
+  const claim = claimInboundDedupe(ctx);
+  expect(claim.status).toBe("claimed");
+  if (claim.status !== "claimed") {
+    throw new Error(`expected inbound dedupe claim, got ${claim.status}`);
+  }
+  claim.commit();
+}
+
+function normalizeTestSlug(raw?: string | null): string {
+  return raw?.trim().replace(/^#/, "").toLowerCase() ?? "";
+}
+
+function resolveDiscordRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const discordCfg = params.cfg.channels?.discord as
+    | {
+        guilds?: Record<
+          string,
+          {
+            requireMention?: boolean;
+            slug?: string;
+            channels?: Record<string, { requireMention?: boolean }>;
+          }
+        >;
+      }
+    | undefined;
+  const guilds = discordCfg?.guilds;
+  if (!guilds) {
+    return true;
+  }
+  const space = params.groupSpace?.trim() ?? "";
+  const spaceSlug = normalizeTestSlug(space);
+  const guild =
+    (space ? guilds[space] : undefined) ??
+    (spaceSlug ? guilds[spaceSlug] : undefined) ??
+    Object.values(guilds).find((entry) => normalizeTestSlug(entry?.slug) === spaceSlug) ??
+    guilds["*"];
+  const channelSlug = normalizeTestSlug(params.groupChannel);
+  const channel =
+    (params.groupId ? guild?.channels?.[params.groupId] : undefined) ??
+    (channelSlug ? guild?.channels?.[channelSlug] : undefined) ??
+    (channelSlug ? guild?.channels?.[`#${channelSlug}`] : undefined);
+  return channel?.requireMention ?? guild?.requireMention ?? true;
+}
+
+function resolveSlackRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const slackCfg = params.cfg.channels?.slack as
+    | {
+        defaultAccount?: string;
+        channels?: Record<string, { requireMention?: boolean }>;
+        accounts?: Record<string, { channels?: Record<string, { requireMention?: boolean }> }>;
+      }
+    | undefined;
+  if (!slackCfg) {
+    return true;
+  }
+  const accountId = params.accountId ?? slackCfg.defaultAccount;
+  const channels =
+    (accountId ? slackCfg.accounts?.[accountId]?.channels : undefined) ?? slackCfg.channels;
+  if (!channels) {
+    return true;
+  }
+  const channelName = params.groupChannel?.trim().replace(/^#/, "");
+  const channelSlug = normalizeTestSlug(channelName);
+  const candidates = [
+    params.groupId?.trim(),
+    channelName ? `#${channelName}` : undefined,
+    channelName,
+    channelSlug,
+    "*",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const entry = channels[candidate];
+    if (typeof entry?.requireMention === "boolean") {
+      return entry.requireMention;
+    }
+  }
+  return true;
+}
+
+function installGroupRequireMentionTestPlugins() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          groups: { resolveRequireMention: resolveDiscordRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack" }),
+          groups: { resolveRequireMention: resolveSlackRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "line",
+        plugin: createChannelTestPluginBase({ id: "line" }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createChannelTestPluginBase({ id: "imessage" }),
+        source: "test",
+      },
+    ]),
+  );
+}
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -49,6 +172,14 @@ describe("applyTemplate", () => {
 
     expect(applyTemplate("missing={{Missing}}", ctx)).toBe("missing=");
   });
+
+  it("never renders channel-owned conversation image references", () => {
+    const ctx = {
+      ConversationAvatar: "/private/media/inbound/avatar.png",
+    } as unknown as TemplateContext;
+
+    expect(applyTemplate("avatar={{ConversationAvatar}}", ctx)).toBe("avatar=");
+  });
 });
 
 describe("normalizeInboundTextNewlines", () => {
@@ -61,16 +192,19 @@ describe("normalizeInboundTextNewlines", () => {
     expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
   });
 
-  it("decodes literal \\n to newlines when no real newlines exist", () => {
-    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\nb");
+  it("preserves literal backslash-n sequences (Windows paths)", () => {
+    // Windows paths like C:\Work\nxxx should NOT have \n converted to newlines
+    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\\nb");
+    expect(normalizeInboundTextNewlines("C:\\Work\\nxxx")).toBe("C:\\Work\\nxxx");
   });
 });
 
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
-      Body: "a\\nb\r\nc",
-      RawBody: "raw\\nline",
+      // Use actual CRLF for newline normalization test, not literal \n sequences
+      Body: "a\r\nb\r\nc",
+      RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
       GroupSubject: "Test",
@@ -83,8 +217,102 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("normalizes structured command turn context and legacy command fields together", () => {
+    const out = finalizeInboundContext({
+      Body: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(out.CommandSource).toBe("text");
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(out.CommandSource).toBeUndefined();
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
+  });
+
+  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
+    });
+
+    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
+  });
+
+  it("preserves literal backslash-n in Windows paths", () => {
+    const ctx: MsgContext = {
+      Body: "C:\\Work\\nxxx\\README.md",
+      RawBody: "C:\\Work\\nxxx\\README.md",
+      ChatType: "direct",
+      From: "web:user",
+    };
+
+    const out = finalizeInboundContext(ctx);
+    expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForCommands).toBe("C:\\Work\\nxxx\\README.md");
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
@@ -99,19 +327,24 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
+
+  it("fills a generic content type only when media exists", () => {
+    const withMedia: MsgContext = {
+      Body: "hi",
+      media: [{ path: "/tmp/file.bin" }],
+    };
+    const outWithMedia = finalizeInboundContext(withMedia);
+    expect(outWithMedia.media).toEqual([
+      expect.objectContaining({ path: "/tmp/file.bin", contentType: "application/octet-stream" }),
+    ]);
+
+    const withoutMedia: MsgContext = { Body: "hi" };
+    const outWithoutMedia = finalizeInboundContext(withoutMedia);
+    expect(outWithoutMedia.media).toBeUndefined();
+  });
 });
 
 describe("inbound dedupe", () => {
-  it("builds a stable key when MessageSid is present", () => {
-    const ctx: MsgContext = {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:123",
-      MessageSid: "42",
-    };
-    expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
-  });
-
   it("skips duplicates with the same key", () => {
     resetInboundDedupe();
     const ctx: MsgContext = {
@@ -120,8 +353,8 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
-    expect(shouldSkipDuplicateInbound(ctx, { now: 100 })).toBe(false);
-    expect(shouldSkipDuplicateInbound(ctx, { now: 200 })).toBe(true);
+    commitInboundForTest(ctx);
+    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate" });
   });
 
   it("does not dedupe when the peer changes", () => {
@@ -131,15 +364,11 @@ describe("inbound dedupe", () => {
       OriginatingChannel: "whatsapp",
       MessageSid: "msg-1",
     };
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+1000" }, { now: 100 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+2000" }, { now: 200 }),
-    ).toBe(false);
+    commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
+    expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
   });
 
-  it("does not dedupe across session keys", () => {
+  it("does not dedupe across agent ids", () => {
     resetInboundDedupe();
     const base: MsgContext = {
       Provider: "whatsapp",
@@ -147,71 +376,50 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
+    commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
-    ).toBe(false);
+      claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
+    ).toBe("claimed");
+    expect(claimInboundDedupe({ ...base, SessionKey: "agent:alpha:main" })).toEqual({
+      status: "duplicate",
+    });
+  });
+
+  it("dedupes when the same agent sees the same inbound message under different session keys", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:7463849194",
+      MessageSid: "msg-1",
+    };
+    commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:bravo:main" }, { now: 200 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
-    ).toBe(true);
+      claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
+    ).toEqual({ status: "duplicate" });
   });
 });
 
-describe("createInboundDebouncer", () => {
-  it("debounces and combines items", async () => {
-    vi.useFakeTimers();
-    const calls: Array<string[]> = [];
-
-    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
-      debounceMs: 10,
-      buildKey: (item) => item.key,
-      onFlush: async (items) => {
-        calls.push(items.map((entry) => entry.id));
-      },
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1" });
-    await debouncer.enqueue({ key: "a", id: "2" });
-
-    expect(calls).toEqual([]);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(calls).toEqual([["1", "2"]]);
-
-    vi.useRealTimers();
-  });
-
-  it("flushes buffered items before non-debounced item", async () => {
-    vi.useFakeTimers();
-    const calls: Array<string[]> = [];
-
-    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
-      debounceMs: 50,
-      buildKey: (item) => item.key,
-      shouldDebounce: (item) => item.debounce,
-      onFlush: async (items) => {
-        calls.push(items.map((entry) => entry.id));
-      },
-    });
-
-    await debouncer.enqueue({ key: "a", id: "1", debounce: true });
-    await debouncer.enqueue({ key: "a", id: "2", debounce: false });
-
-    expect(calls).toEqual([["1"], ["2"]]);
-
-    vi.useRealTimers();
-  });
+const senderMetaTempDirs = createSuiteTempRootTracker({
+  prefix: "openclaw-sender-meta-",
 });
 
 describe("initSessionState BodyStripped", () => {
+  beforeAll(async () => {
+    await senderMetaTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await senderMetaTempDirs.cleanup();
+  });
+
   it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-"));
+    const root = await senderMetaTempDirs.make("group");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp 123@g.us] ping",
         BodyForAgent: "ping",
         ChatType: "group",
@@ -219,7 +427,7 @@ describe("initSessionState BodyStripped", () => {
         SenderE164: "+222",
         SenderId: "222@s.whatsapp.net",
         SessionKey: "agent:main:whatsapp:group:123@g.us",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });
@@ -228,19 +436,19 @@ describe("initSessionState BodyStripped", () => {
   });
 
   it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-direct-"));
+    const root = await senderMetaTempDirs.make("direct");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp +1] ping",
         BodyForAgent: "ping",
         ChatType: "direct",
         SenderName: "Bob",
         SenderE164: "+222",
         SessionKey: "agent:main:whatsapp:dm:+222",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });
@@ -250,10 +458,10 @@ describe("initSessionState BodyStripped", () => {
 });
 
 describe("mention helpers", () => {
-  it("builds regexes and skips invalid patterns", () => {
+  it("builds regexes and skips invalid or unsafe patterns", () => {
     const regexes = buildMentionRegexes({
       messages: {
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid"] },
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid", "(a+)+$"] },
       },
     });
     expect(regexes).toHaveLength(1);
@@ -269,6 +477,18 @@ describe("mention helpers", () => {
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+  });
+
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
   });
 
   it("uses per-agent mention patterns when configured", () => {
@@ -291,18 +511,111 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("workbot: hi", regexes)).toBe(true);
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
   });
+
+  it("scopes configured mention patterns by provider conversation policy", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        slack: {
+          mentionPatterns: {
+            mode: "deny",
+            allowIn: ["C123"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const allowed = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C123",
+    });
+    const denied = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C999",
+    });
+
+    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+  });
+
+  it("preserves mention patterns for callers without scoped policy facts", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    });
+
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(true);
+  });
+
+  it("lets provider deny lists override globally allowed mention patterns", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        telegram: {
+          mentionPatterns: {
+            denyIn: ["-100:topic:7"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      buildMentionRegexes(cfg, undefined, {
+        provider: "telegram",
+        conversationId: "-100:topic:7",
+      }),
+    ).toEqual([]);
+    expect(
+      matchesMentionPatterns(
+        "openclaw",
+        buildMentionRegexes(cfg, undefined, {
+          provider: "telegram",
+          conversationId: "-100:topic:8",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("strips safe mention patterns and ignores unsafe ones", () => {
+    const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
+      messages: {
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(a+)+$"] },
+      },
+    });
+    expect(stripped).toBe(`${"a".repeat(28)}!`);
+  });
+
+  it("strips provider mention regexes without config compilation", () => {
+    const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
+    expect(stripped).toBe("< > hello");
+  });
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    installGroupRequireMentionTestPlugins();
+  });
+
+  it("respects Discord guild/channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
           guilds: {
             "145": {
-              requireMention: false,
               channels: {
-                general: { allow: true },
+                "123": { requireMention: false },
               },
             },
           },
@@ -316,15 +629,17 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
   });
 
-  it("respects Slack channel requireMention settings", () => {
+  it("respects Slack channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -340,11 +655,156 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
+  });
+
+  it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
+  });
+
+  it("uses Discord fallback resolver semantics for guild slug matches", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "145": {
+              slug: "dev",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:123",
+      GroupChannel: "#general",
+      GroupSpace: "dev",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
+      channel: "discord",
+      id: "123",
+      chatType: "group",
+    };
+
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
+  });
+
+  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "*": {
+              requireMention: false,
+              channels: {
+                help: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:999",
+      GroupChannel: "#help",
+      GroupSpace: "guild-slug",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:999",
+      channel: "discord",
+      id: "999",
+      chatType: "group",
+    };
+
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(true);
+  });
+
+  it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        line: {
+          groups: {
+            r123: { requireMention: false },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "line",
+      From: "line:room:r123",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "line:group:r123",
+      channel: "line",
+      id: "r123",
+      chatType: "group",
+    };
+
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
+  });
+
+  it("preserves plugin-backed channel requireMention resolution", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        imessage: {
+          groups: {
+            "chat:primary": { requireMention: false },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "imessage",
+      From: "imessage:group:chat:primary",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "imessage:group:chat:primary",
+      channel: "imessage",
+      id: "chat:primary",
+      chatType: "group",
+    };
+
+    const { group } = prepareReplyConversation({ ctx, groupResolution });
+    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
   });
 });

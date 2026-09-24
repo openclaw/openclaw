@@ -1,28 +1,31 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+/**
+ * nodes built-in tool.
+ *
+ * Manages node pairing, notifications, device state, media capture, and approved command invocation.
+ */
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
-import {
-  type CameraFacing,
-  cameraTempPath,
-  parseCameraClipPayload,
-  parseCameraSnapPayload,
-  writeBase64ToFile,
-} from "../../cli/nodes-camera.js";
-import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
-import {
-  parseScreenRecordPayload,
-  screenRecordTempPath,
-  writeScreenRecordToFile,
-} from "../../cli/nodes-screen.js";
-import { parseDurationMs } from "../../cli/parse-duration.js";
-import { imageMimeFromFormat } from "../../media/mime.js";
+import { Type } from "typebox";
+import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
-import { sanitizeToolResultImages } from "../tool-images.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../schema/typebox.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
+import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { executeNodeCommandAction } from "./nodes-tool-commands.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -34,24 +37,68 @@ const NODES_TOOL_ACTIONS = [
   "camera_snap",
   "camera_list",
   "camera_clip",
+  "camera_ptz",
+  "photos_latest",
   "screen_record",
+  "screen_snapshot",
   "location_get",
-  "run",
+  "notifications_list",
+  "notifications_action",
+  "device_status",
+  "device_info",
+  "device_permissions",
+  "device_health",
+  "which",
   "invoke",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
+const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
+const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
+
+function resolveApproveScopes(commands: unknown): OperatorScope[] {
+  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
+}
+
+async function resolveNodePairApproveScopes(
+  gatewayOpts: GatewayCallOptions,
+  requestId: string,
+): Promise<OperatorScope[]> {
+  const pairing: {
+    pending?: Array<{
+      requestId?: string;
+      commands?: unknown;
+      requiredApproveScopes?: unknown;
+    }>;
+  } = await callGatewayTool("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
+  const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
+  const match = pending.find((entry) => entry?.requestId === requestId);
+  if (Array.isArray(match?.requiredApproveScopes)) {
+    const scopes = match.requiredApproveScopes.filter(
+      (scope): scope is OperatorScope =>
+        scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin",
+    );
+    if (scopes.length > 0) {
+      return scopes;
+    }
+  }
+  return resolveApproveScopes(match?.commands);
+}
 
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  node: Type.Optional(Type.String()),
+  ...gatewayCallOptionSchemaProperties(),
+  node: Type.Optional(
+    Type.String({
+      description:
+        "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    }),
+  ),
   requestId: Type.Optional(Type.String()),
   // notify
   title: Type.Optional(Type.String()),
@@ -59,84 +106,128 @@ const NodesToolSchema = Type.Object({
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip
+  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
-  deviceId: Type.Optional(Type.String()),
+  maxWidth: optionalPositiveIntegerSchema(),
+  quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+  delayMs: optionalNonNegativeIntegerSchema(),
+  deviceId: Type.Optional(
+    Type.String({
+      description:
+        "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+    }),
+  ),
+  // camera_ptz
+  ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
+    description:
+      "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+  }),
+  panDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  tiltDegrees: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+  }),
+  zoomPercent: optionalFiniteNumberSchema({
+    description:
+      "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+  }),
+  limit: optionalPositiveIntegerSchema({ maximum: 20 }),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number()),
+  durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
-  fps: Type.Optional(Type.Number()),
-  screenIndex: Type.Optional(Type.Number()),
+  fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
   // location_get
-  maxAgeMs: Type.Optional(Type.Number()),
-  locationTimeoutMs: Type.Optional(Type.Number()),
+  maxAgeMs: optionalNonNegativeIntegerSchema(),
+  locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // run
-  command: Type.Optional(Type.Array(Type.String())),
-  cwd: Type.Optional(Type.String()),
-  env: Type.Optional(Type.Array(Type.String())),
-  commandTimeoutMs: Type.Optional(Type.Number()),
-  invokeTimeoutMs: Type.Optional(Type.Number()),
-  needsScreenRecording: Type.Optional(Type.Boolean()),
+  // notifications_action
+  notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
+  notificationKey: Type.Optional(Type.String()),
+  notificationReplyText: Type.Optional(Type.String()),
+  // which
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
+  invokeTimeoutMs: optionalPositiveIntegerSchema(),
 });
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
+  agentId?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
   config?: OpenClawConfig;
+  modelHasVision?: boolean;
+  allowMediaInvokeCommands?: boolean;
 }): AnyAgentTool {
-  const sessionKey = options?.agentSessionKey?.trim() || undefined;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
+    agentId: options?.agentId,
   });
+  const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts: GatewayCallOptions = {
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-      };
+      const action = readToolStringParam(params, "action", { required: true });
+      const gatewayOpts = readGatewayCallOptions(params);
 
       try {
         switch (action) {
           case "status":
             return jsonResult(await callGatewayTool("node.list", gatewayOpts, {}));
           case "describe": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const node = readToolStringParam(params, "node");
+            if (!node) {
+              throw new Error(
+                'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+              );
+            }
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
             return jsonResult(await callGatewayTool("node.describe", gatewayOpts, { nodeId }));
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
           case "approve": {
-            const requestId = readStringParam(params, "requestId", {
+            const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
             return jsonResult(
-              await callGatewayTool("node.pair.approve", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                "node.pair.approve",
+                gatewayOpts,
+                {
+                  requestId,
+                },
+                { scopes },
+              ),
             );
           }
           case "reject": {
-            const requestId = readStringParam(params, "requestId", {
+            const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
             return jsonResult(
@@ -146,19 +237,19 @@ export function createNodesTool(options?: {
             );
           }
           case "notify": {
-            const node = readStringParam(params, "node", { required: true });
+            const node = readToolStringParam(params, "node", { required: true });
             const title = typeof params.title === "string" ? params.title : "";
             const body = typeof params.body === "string" ? params.body : "";
             if (!title.trim() && !body.trim()) {
               throw new Error("title or body required");
             }
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            await callGatewayTool("node.invoke", gatewayOpts, {
+            const nodeId = await resolveAgentNodeId(gatewayOpts, node);
+            await callNodesToolNodeInvoke(gatewayOpts, {
               nodeId,
               command: "system.notify",
               params: {
-                title: title.trim() || undefined,
-                body: body.trim() || undefined,
+                title: title.trim(),
+                body: body.trim(),
                 sound: typeof params.sound === "string" ? params.sound : undefined,
                 priority: typeof params.priority === "string" ? params.priority : undefined,
                 delivery: typeof params.delivery === "string" ? params.delivery : undefined,
@@ -167,307 +258,38 @@ export function createNodesTool(options?: {
             });
             return jsonResult({ ok: true });
           }
-          case "camera_snap": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const facingRaw =
-              typeof params.facing === "string" ? params.facing.toLowerCase() : "both";
-            const facings: CameraFacing[] =
-              facingRaw === "both"
-                ? ["front", "back"]
-                : facingRaw === "front" || facingRaw === "back"
-                  ? [facingRaw]
-                  : (() => {
-                      throw new Error("invalid facing (front|back|both)");
-                    })();
-            const maxWidth =
-              typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
-                ? params.maxWidth
-                : undefined;
-            const quality =
-              typeof params.quality === "number" && Number.isFinite(params.quality)
-                ? params.quality
-                : undefined;
-            const delayMs =
-              typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
-                ? params.delayMs
-                : undefined;
-            const deviceId =
-              typeof params.deviceId === "string" && params.deviceId.trim()
-                ? params.deviceId.trim()
-                : undefined;
-
-            const content: AgentToolResult<unknown>["content"] = [];
-            const details: Array<Record<string, unknown>> = [];
-
-            for (const facing of facings) {
-              const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-                nodeId,
-                command: "camera.snap",
-                params: {
-                  facing,
-                  maxWidth,
-                  quality,
-                  format: "jpg",
-                  delayMs,
-                  deviceId,
-                },
-                idempotencyKey: crypto.randomUUID(),
-              });
-              const payload = parseCameraSnapPayload(raw?.payload);
-              const normalizedFormat = payload.format.toLowerCase();
-              if (
-                normalizedFormat !== "jpg" &&
-                normalizedFormat !== "jpeg" &&
-                normalizedFormat !== "png"
-              ) {
-                throw new Error(`unsupported camera.snap format: ${payload.format}`);
-              }
-
-              const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-              const filePath = cameraTempPath({
-                kind: "snap",
-                facing,
-                ext: isJpeg ? "jpg" : "png",
-              });
-              await writeBase64ToFile(filePath, payload.base64);
-              content.push({ type: "text", text: `MEDIA:${filePath}` });
-              content.push({
-                type: "image",
-                data: payload.base64,
-                mimeType:
-                  imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-              });
-              details.push({
-                facing,
-                path: filePath,
-                width: payload.width,
-                height: payload.height,
-              });
-            }
-
-            const result: AgentToolResult<unknown> = { content, details };
-            return await sanitizeToolResultImages(result, "nodes:camera_snap");
-          }
-          case "camera_list": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "camera.list",
-              params: {},
-              idempotencyKey: crypto.randomUUID(),
+          case "camera_snap":
+          case "photos_latest":
+          case "camera_clip":
+          case "screen_record":
+          case "screen_snapshot": {
+            return await executeNodeMediaAction({
+              action,
+              params,
+              gatewayOpts,
+              modelHasVision: options?.modelHasVision,
+              imageSanitization,
             });
-            const payload =
-              raw && typeof raw.payload === "object" && raw.payload !== null ? raw.payload : {};
-            return jsonResult(payload);
           }
-          case "camera_clip": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const facing =
-              typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
-            if (facing !== "front" && facing !== "back") {
-              throw new Error("invalid facing (front|back)");
-            }
-            const durationMs =
-              typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
-                ? params.durationMs
-                : typeof params.duration === "string"
-                  ? parseDurationMs(params.duration)
-                  : 3000;
-            const includeAudio =
-              typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-            const deviceId =
-              typeof params.deviceId === "string" && params.deviceId.trim()
-                ? params.deviceId.trim()
-                : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "camera.clip",
-              params: {
-                facing,
-                durationMs,
-                includeAudio,
-                format: "mp4",
-                deviceId,
-              },
-              idempotencyKey: crypto.randomUUID(),
-            });
-            const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
-              facing,
-              ext: payload.format,
-            });
-            await writeBase64ToFile(filePath, payload.base64);
-            return {
-              content: [{ type: "text", text: `FILE:${filePath}` }],
-              details: {
-                facing,
-                path: filePath,
-                durationMs: payload.durationMs,
-                hasAudio: payload.hasAudio,
-              },
-            };
-          }
-          case "screen_record": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
-              typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
-                ? params.durationMs
-                : typeof params.duration === "string"
-                  ? parseDurationMs(params.duration)
-                  : 10_000;
-            const fps =
-              typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
-            const screenIndex =
-              typeof params.screenIndex === "number" && Number.isFinite(params.screenIndex)
-                ? params.screenIndex
-                : 0;
-            const includeAudio =
-              typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "screen.record",
-              params: {
-                durationMs,
-                screenIndex,
-                fps,
-                format: "mp4",
-                includeAudio,
-              },
-              idempotencyKey: crypto.randomUUID(),
-            });
-            const payload = parseScreenRecordPayload(raw?.payload);
-            const filePath =
-              typeof params.outPath === "string" && params.outPath.trim()
-                ? params.outPath.trim()
-                : screenRecordTempPath({ ext: payload.format || "mp4" });
-            const written = await writeScreenRecordToFile(filePath, payload.base64);
-            return {
-              content: [{ type: "text", text: `FILE:${written.path}` }],
-              details: {
-                path: written.path,
-                durationMs: payload.durationMs,
-                fps: payload.fps,
-                screenIndex: payload.screenIndex,
-                hasAudio: payload.hasAudio,
-              },
-            };
-          }
-          case "location_get": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const maxAgeMs =
-              typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
-                ? params.maxAgeMs
-                : undefined;
-            const desiredAccuracy =
-              params.desiredAccuracy === "coarse" ||
-              params.desiredAccuracy === "balanced" ||
-              params.desiredAccuracy === "precise"
-                ? params.desiredAccuracy
-                : undefined;
-            const locationTimeoutMs =
-              typeof params.locationTimeoutMs === "number" &&
-              Number.isFinite(params.locationTimeoutMs)
-                ? params.locationTimeoutMs
-                : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "location.get",
-              params: {
-                maxAgeMs,
-                desiredAccuracy,
-                timeoutMs: locationTimeoutMs,
-              },
-              idempotencyKey: crypto.randomUUID(),
-            });
-            return jsonResult(raw?.payload ?? {});
-          }
-          case "run": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodes = await listNodes(gatewayOpts);
-            if (nodes.length === 0) {
-              throw new Error(
-                "system.run requires a paired companion app or node host (no nodes available).",
-              );
-            }
-            const nodeId = resolveNodeIdFromList(nodes, node);
-            const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-            const supportsSystemRun = Array.isArray(nodeInfo?.commands)
-              ? nodeInfo?.commands?.includes("system.run")
-              : false;
-            if (!supportsSystemRun) {
-              throw new Error(
-                "system.run requires a companion app or node host; the selected node does not support system.run.",
-              );
-            }
-            const commandRaw = params.command;
-            if (!commandRaw) {
-              throw new Error("command required (argv array, e.g. ['echo', 'Hello'])");
-            }
-            if (!Array.isArray(commandRaw)) {
-              throw new Error("command must be an array of strings (argv), e.g. ['echo', 'Hello']");
-            }
-            const command = commandRaw.map((c) => String(c));
-            if (command.length === 0) {
-              throw new Error("command must not be empty");
-            }
-            const cwd =
-              typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined;
-            const env = parseEnvPairs(params.env);
-            const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
-            const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
-            const needsScreenRecording =
-              typeof params.needsScreenRecording === "boolean"
-                ? params.needsScreenRecording
-                : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "system.run",
-              params: {
-                command,
-                cwd,
-                env,
-                timeoutMs: commandTimeoutMs,
-                needsScreenRecording,
-                agentId,
-                sessionKey,
-              },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
-            });
-            return jsonResult(raw?.payload ?? {});
-          }
+          case "camera_list":
+          case "camera_ptz":
+          case "notifications_list":
+          case "device_status":
+          case "device_info":
+          case "device_permissions":
+          case "device_health":
+          case "notifications_action":
+          case "location_get":
+          case "which":
           case "invoke": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
-            const invokeParamsJson =
-              typeof params.invokeParamsJson === "string" ? params.invokeParamsJson.trim() : "";
-            let invokeParams: unknown = {};
-            if (invokeParamsJson) {
-              try {
-                invokeParams = JSON.parse(invokeParamsJson);
-              } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
-                  cause: err,
-                });
-              }
-            }
-            const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
-              nodeId,
-              command: invokeCommand,
-              params: invokeParams,
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
+            return await executeNodeCommandAction({
+              action,
+              input: params,
+              gatewayOpts,
+              agentSessionKey: options?.agentSessionKey,
+              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
-            return jsonResult(raw ?? {});
           }
           default:
             throw new Error(`Unknown action: ${action}`);
@@ -480,7 +302,18 @@ export function createNodesTool(options?: {
             ? gatewayOpts.gatewayUrl.trim()
             : "default";
         const agentLabel = agentId ?? "unknown";
-        const message = err instanceof Error ? err.message : String(err);
+        let message = formatErrorMessage(err);
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
+        if (pairing) {
+          const requestId = pairing.requestId ?? null;
+          const approveHint = requestId
+            ? `Approve pairing request ${requestId} and retry.`
+            : "Approve the pending pairing request and retry.";
+          message = `pairing required before node invoke. ${approveHint}`;
+        }
         throw new Error(
           `agent=${agentLabel} node=${nodeLabel} gateway=${gatewayLabel} action=${action}: ${message}`,
           { cause: err },

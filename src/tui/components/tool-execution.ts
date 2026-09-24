@@ -1,13 +1,26 @@
-import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+// Tool execution component renders tool call status and output in the TUI.
+import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
-import { markdownTheme, theme } from "../theme/theme.js";
+import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
+import * as tuiFormatters from "../tui-formatters.js";
+import { extractTuiImageSources } from "../tui-images.js";
+import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
+import { MessageImages, type TuiImageRenderer } from "./message-images.js";
 
+// Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
   type?: string;
   text?: string;
   mimeType?: string;
   bytes?: number;
   omitted?: boolean;
+  data?: string;
+  url?: string;
+  artifactId?: string;
+  source?: unknown;
 };
 
 type ToolResult = {
@@ -16,23 +29,85 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
+const MAX_PREVIEW_CHARS = PREVIEW_LINES * 256;
 
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
-  const detail = formatToolDetail(display);
+// Bound the actual wrapped Markdown, not just source newlines: a single long
+// tool-output line can otherwise produce thousands of rows and stall the TUI.
+class ToolOutputComponent extends HyperlinkMarkdown {
+  private sourceText: string | undefined;
+  private active = true;
+  private renderedSource: string | undefined;
+  private expanded = false;
+  private literal = false;
+  private literalOutput = new Text("", 0, 0);
+
+  override setText(text: string, literal = false): void {
+    const sourceText = text.trim()
+      ? tuiFormatters.sanitizeTerminalControlsAndBinary(text)
+      : undefined;
+    if (this.sourceText === sourceText && this.literal === literal) {
+      return;
+    }
+    this.sourceText = sourceText;
+    this.literal = literal;
+    this.renderedSource = undefined;
+    super.invalidate();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+  }
+
+  setExpanded(expanded: boolean): void {
+    if (this.expanded === expanded) {
+      return;
+    }
+    this.expanded = expanded;
+    this.renderedSource = undefined;
+    super.invalidate();
+  }
+
+  override render(width: number): string[] {
+    const safeWidth = Math.max(0, Math.floor(width));
+    const previewBudget = Math.min(MAX_PREVIEW_CHARS, PREVIEW_LINES * Math.max(1, safeWidth));
+    const sourceText = this.sourceText ?? (this.active ? "…" : "");
+    const text = this.expanded ? sourceText : truncateUtf16Safe(sourceText, previewBudget);
+
+    if (this.renderedSource !== text) {
+      if (this.literal) {
+        this.literalOutput.setText(theme.toolOutput(text));
+      } else {
+        super.setText(text);
+      }
+      this.renderedSource = text;
+    }
+
+    const lines = this.literal
+      ? this.literalOutput.render(safeWidth).map(tuiFormatters.isolateRtlRenderedLine)
+      : super.render(safeWidth);
+    if (this.expanded || (text.length === sourceText.length && lines.length <= PREVIEW_LINES)) {
+      return lines;
+    }
+    return [...lines.slice(0, PREVIEW_LINES - 1), truncateToWidth("…", safeWidth, "")];
+  }
+}
+
+// Prefer curated display summaries, then fall back to sanitized JSON args.
+function formatArgs(detail: string | undefined, args: unknown): string {
   if (detail) {
-    return detail;
+    return tuiFormatters.sanitizeRenderableText(detail);
   }
   if (!args || typeof args !== "object") {
     return "";
   }
   try {
-    return JSON.stringify(args);
+    return tuiFormatters.sanitizeRenderableText(JSON.stringify(args));
   } catch {
     return "";
   }
 }
 
+// Extracts visible text and compact media placeholders from tool result payloads.
 function extractText(result?: ToolResult): string {
   if (!result?.content) {
     return "";
@@ -48,29 +123,43 @@ function extractText(result?: ToolResult): string {
       lines.push(`[${mime}${size}${omitted}]`);
     }
   }
-  return lines.join("\n").trim();
+  return lines.join("\n");
 }
 
+function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
+  if (toolName !== "exec" && toolName !== "wait") {
+    return false;
+  }
+  const visibleTools = asOptionalObjectRecord(result?.details?.telemetry)?.visibleTools;
+  return (
+    Array.isArray(visibleTools) &&
+    visibleTools.length === 2 &&
+    visibleTools[0] === "exec" &&
+    visibleTools[1] === "wait"
+  );
+}
+
+/** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
   private box: Box;
   private header: Text;
   private argsLine: Text;
-  private output: Markdown;
+  private output: ToolOutputComponent;
   private toolName: string;
-  private args: unknown;
-  private result?: ToolResult;
-  private expanded = false;
-  private isError = false;
+  private title = "";
   private isPartial = true;
+  private isError = false;
+  private images: MessageImages;
+  private activity?: AgentItemEventData | null;
+  private expanded = false;
 
-  constructor(toolName: string, args: unknown) {
+  constructor(toolName: string, args: unknown, imageRenderer?: TuiImageRenderer) {
     super();
     this.toolName = toolName;
-    this.args = args;
-    this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
+    this.box = new Box(1, 1, theme.toolPendingBg);
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
-    this.output = new Markdown("", 0, 0, markdownTheme, {
+    this.output = new ToolOutputComponent("", 0, 0, markdownTheme, {
       color: (line) => theme.toolOutput(line),
     });
     this.addChild(new Spacer(1));
@@ -78,59 +167,96 @@ export class ToolExecutionComponent extends Container {
     this.box.addChild(this.header);
     this.box.addChild(this.argsLine);
     this.box.addChild(this.output);
-    this.refresh();
+    this.images = new MessageImages(imageRenderer);
+    this.box.addChild(this.images);
+    this.setArgs(args);
+    this.setPartialResult(undefined);
   }
 
+  /** Re-renders tool arguments when streaming tool call input changes. */
   setArgs(args: unknown) {
-    this.args = args;
-    this.refresh();
+    const display = resolveToolDisplay({ name: this.toolName, args });
+    this.title = `${display.emoji} ${display.label}`;
+    this.refreshTitle();
+    const argLine = formatArgs(formatToolDetail(display), args);
+    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
   }
 
+  /** Toggles preview/full output rendering for long tool results. */
   setExpanded(expanded: boolean) {
     this.expanded = expanded;
-    this.refresh();
+    this.output.setExpanded(expanded);
   }
 
-  setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
-    this.result = result;
-    this.isPartial = false;
-    this.isError = Boolean(opts?.isError);
-    this.refresh();
+  get isActive() {
+    return this.activity ? this.activity.phase !== "end" : this.isPartial;
   }
 
-  setPartialResult(result: ToolResult | undefined) {
-    this.result = result;
-    this.isPartial = true;
-    this.refresh();
+  setActivity(activity: AgentItemEventData | null) {
+    this.activity = activity;
+    this.refreshResult();
   }
 
-  private refresh() {
-    const bg = this.isPartial
-      ? theme.toolPendingBg
-      : this.isError
-        ? theme.toolErrorBg
-        : theme.toolSuccessBg;
-    this.box.setBgFn((line) => bg(line));
-
-    const display = resolveToolDisplay({
-      name: this.toolName,
-      args: this.args,
-    });
-    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
-    this.header.setText(theme.toolTitle(theme.bold(title)));
-
-    const argLine = formatArgs(this.toolName, this.args);
-    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
-
-    const raw = extractText(this.result);
-    const text = raw || (this.isPartial ? "…" : "");
-    if (!this.expanded && text) {
-      const lines = text.split("\n");
-      const preview =
-        lines.length > PREVIEW_LINES ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…` : text;
-      this.output.setText(preview);
-    } else {
-      this.output.setText(text);
+  override render(width: number): string[] {
+    if (
+      !this.expanded &&
+      (this.activity === null ||
+        this.activity?.hideFromChannelProgress ||
+        this.activity?.suppressChannelProgress)
+    ) {
+      return [];
     }
+    return super.render(width);
+  }
+
+  /** Marks the tool call complete and renders final output. */
+  setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
+    this.updateResult(result, false, Boolean(opts?.isError));
+  }
+
+  /** Renders partial output while the tool call is still running. */
+  setPartialResult(result: ToolResult | undefined) {
+    this.updateResult(result, true);
+  }
+
+  dispose() {
+    this.images.dispose();
+  }
+
+  private refreshTitle() {
+    const title = tuiFormatters.sanitizeRenderableLine(
+      this.activity
+        ? `${this.activity.title}${this.activity.status ? ` (${this.activity.status})` : ""}`
+        : `${this.title}${this.isPartial ? " (running)" : ""}`,
+    );
+    this.header.setText(theme.toolTitle(theme.bold(title)));
+  }
+
+  private updateResult(result: ToolResult | undefined, isPartial: boolean, isError = false) {
+    this.isPartial = isPartial;
+    this.isError = isError;
+    this.refreshResult();
+    // Code Mode JSON is literal data; prose normalization can change values and escapes.
+    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
+    this.images.setImages(extractTuiImageSources(result));
+  }
+
+  private refreshResult() {
+    this.refreshTitle();
+    const status = this.activity?.status;
+    this.box.setBgFn(
+      this.isActive
+        ? theme.toolPendingBg
+        : this.activity
+          ? status === "failed"
+            ? theme.toolErrorBg
+            : status === "completed"
+              ? theme.toolSuccessBg
+              : undefined
+          : this.isError
+            ? theme.toolErrorBg
+            : theme.toolSuccessBg,
+    );
+    this.output.setActive(this.isActive);
   }
 }

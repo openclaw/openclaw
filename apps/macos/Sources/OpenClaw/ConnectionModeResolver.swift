@@ -1,13 +1,13 @@
 import Foundation
 
-enum EffectiveConnectionModeSource: Sendable, Equatable {
+enum EffectiveConnectionModeSource: Equatable {
     case configMode
     case configRemoteURL
     case userDefaults
     case onboarding
 }
 
-struct EffectiveConnectionMode: Sendable, Equatable {
+struct EffectiveConnectionMode: Equatable {
     let mode: AppState.ConnectionMode
     let source: EffectiveConnectionModeSource
 }
@@ -15,7 +15,7 @@ struct EffectiveConnectionMode: Sendable, Equatable {
 enum ConnectionModeResolver {
     static func resolve(
         root: [String: Any],
-        defaults: UserDefaults = .standard) -> EffectiveConnectionMode
+        defaults: UserDefaults = AppDefaults.standard) -> EffectiveConnectionMode
     {
         let gateway = root["gateway"] as? [String: Any]
         let configModeRaw = (gateway?["mode"] as? String) ?? ""

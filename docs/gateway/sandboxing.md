@@ -1,174 +1,80 @@
 ---
 summary: "How OpenClaw sandboxing works: modes, scopes, workspace access, and images"
-title: Sandboxing
+title: "Sandboxing"
+sidebarTitle: "Sandboxing"
 read_when: "You want a dedicated explanation of sandboxing or need to tune agents.defaults.sandbox."
 status: active
 ---
 
-# Sandboxing
+OpenClaw can run tool execution inside a sandbox backend to reduce blast radius. Sandboxing is off by default and controlled by `agents.defaults.sandbox` (global), `agents.entries.*.sandbox` (per-agent), or a required creator-role sandbox policy. The Gateway process always stays on the host; only tool execution moves into the sandbox when enabled.
 
-OpenClaw can run **tools inside Docker containers** to reduce blast radius.
-This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
-`agents.list[].sandbox`). If sandboxing is off, tools run on the host.
-The Gateway stays on the host; tool execution runs in an isolated sandbox
-when enabled.
+<Note>
+This is not a perfect security boundary, but it materially limits filesystem and process access when the model does something dumb.
+</Note>
 
-This is not a perfect security boundary, but it materially limits filesystem
-and process access when the model does something dumb.
+## Sandboxing pages
 
-## What gets sandboxed
+This page is an index. The sandbox reference is documented on twelve
+pages. Open the page that matches what you are configuring.
 
-- Tool execution (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, etc.).
-- Optional sandboxed browser (`agents.defaults.sandbox.browser`).
-  - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
-    Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
-  - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
-  - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
+| Page                                                                                 | Read it when                                                                       |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| [What gets sandboxed](/gateway/sandboxing/what-gets-sandboxed)                       | You want to know exactly which execution moves into the sandbox.                   |
+| [Modes, scope, and backend](/gateway/sandboxing/modes-scope-and-backend)             | You are deciding which sessions run sandboxed and how they share environments.     |
+| [Supported capability matrix](/gateway/sandboxing/supported-capability-matrix)       | You are comparing Docker, SSH, and OpenShell before choosing a backend.            |
+| [Docker backend](/gateway/sandboxing/docker-backend)                                 | You are running the default local backend or enabling the sandboxed browser.       |
+| [Podman backend](/gateway/sandboxing/podman-backend)                                 | You are using Podman instead of Docker for sandboxed tool execution.               |
+| [SSH backend](/gateway/sandboxing/ssh-backend)                                       | You are offloading sandboxed tool execution to a remote machine over SSH.          |
+| [OpenShell backend](/gateway/sandboxing/openshell-backend)                           | You are sandboxing tools in an OpenShell-managed remote environment.               |
+| [Crabbox backend](/gateway/sandboxing/crabbox-backend)                               | You want tool execution on a Crabbox-leased cloud box while the agent stays local. |
+| [Workspace access](/gateway/sandboxing/workspace-access)                             | You are deciding what the sandbox can see of the agent workspace.                  |
+| [Multiple folders for one agent](/gateway/sandboxing/multiple-folders-for-one-agent) | One sandboxed agent needs more than its primary workspace.                         |
+| [Images and setup](/gateway/sandboxing/images-and-setup)                             | You need to build or customize a sandbox image.                                    |
+| [setupCommand (one-time container setup)](/gateway/sandboxing/setup-command)         | You need to run one-time setup inside a newly created sandbox container.           |
 
-Not sandboxed:
+## Where each section moved
 
-- The Gateway process itself.
-- Any tool explicitly allowed to run on the host (e.g. `tools.elevated`).
-  - **Elevated exec runs on the host and bypasses sandboxing.**
-  - If sandboxing is off, `tools.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
+Every anchor this page used to publish is kept here, so an existing link
+such as `/gateway/sandboxing#images-and-setup` still resolves. Each entry
+points at the page that now holds the content.
 
-## Modes
+- <a id="what-gets-sandboxed" />[What gets sandboxed](/gateway/sandboxing/what-gets-sandboxed#what-gets-sandboxed)
+- <a id="modes%2C-scope%2C-and-backend" /><a id="modes-scope-and-backend" />[Modes, scope, and backend](/gateway/sandboxing/modes-scope-and-backend#modes-scope-and-backend)
+- <a id="supported-capability-matrix" />[Supported capability matrix](/gateway/sandboxing/supported-capability-matrix#supported-capability-matrix)
+- <a id="docker-backend" />[Docker backend](/gateway/sandboxing/docker-backend#docker-backend)
+- <a id="sandboxed-browser" />[Sandboxed browser](/gateway/sandboxing/docker-backend#sandboxed-browser)
+- <a id="podman-backend" />[Podman backend](/gateway/sandboxing/podman-backend#podman-backend)
+- <a id="ssh-backend" />[SSH backend](/gateway/sandboxing/ssh-backend#ssh-backend)
+- <a id="openshell-backend" />[OpenShell backend](/gateway/sandboxing/openshell-backend#openshell-backend)
+- <a id="crabbox-backend" />[Crabbox backend](/gateway/sandboxing/crabbox-backend#crabbox-backend)
+- <a id="workspace-access" />[Workspace access](/gateway/sandboxing/workspace-access#workspace-access)
+- <a id="multiple-folders-for-one-agent" />[Multiple folders for one agent](/gateway/sandboxing/multiple-folders-for-one-agent#multiple-folders-for-one-agent)
+- <a id="other-bind-behavior" />[Other bind behavior](/gateway/sandboxing/multiple-folders-for-one-agent#other-bind-behavior)
+- <a id="images-and-setup" />[Images and setup](/gateway/sandboxing/images-and-setup#images-and-setup)
+- <a id="build-the-default-image" />[Build the default image](/gateway/sandboxing/images-and-setup#build-the-default-image)
+- <a id="optional%3A-build-the-common-image" />[Optional: build the common image](/gateway/sandboxing/images-and-setup#optional%3A-build-the-common-image)
+- <a id="optional%3A-build-the-sandbox-browser-image" />[Optional: build the sandbox browser image](/gateway/sandboxing/images-and-setup#optional%3A-build-the-sandbox-browser-image)
+- <a id="sandbox-browser-chromium-defaults" />[Sandbox browser Chromium defaults](/gateway/sandboxing/images-and-setup#sandbox-browser-chromium-defaults)
+- <a id="network-security-defaults" />[Network security defaults](/gateway/sandboxing/images-and-setup#network-security-defaults)
+- <a id="setupcommand-(one-time-container-setup)" /><a id="setupcommand-one-time-container-setup" />[setupCommand (one-time container setup)](/gateway/sandboxing/setup-command#setupcommand-one-time-container-setup)
+- <a id="common-pitfalls" />[Common pitfalls](/gateway/sandboxing/setup-command#common-pitfalls)
 
-`agents.defaults.sandbox.mode` controls **when** sandboxing is used:
+## Tool policy and escape hatches
 
-- `"off"`: no sandboxing.
-- `"non-main"`: sandbox only **non-main** sessions (default if you want normal chats on host).
-- `"all"`: every session runs in a sandbox.
-  Note: `"non-main"` is based on `session.mainKey` (default `"main"`), not agent id.
-  Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
+Tool allow/deny policies still apply before sandbox rules. If a tool is denied globally or per-agent, sandboxing doesn't bring it back.
 
-## Scope
-
-`agents.defaults.sandbox.scope` controls **how many containers** are created:
-
-- `"session"` (default): one container per session.
-- `"agent"`: one container per agent.
-- `"shared"`: one container shared by all sandboxed sessions.
-
-## Workspace access
-
-`agents.defaults.sandbox.workspaceAccess` controls **what the sandbox can see**:
-
-- `"none"` (default): tools see a sandbox workspace under `~/.openclaw/sandboxes`.
-- `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
-- `"rw"`: mounts the agent workspace read/write at `/workspace`.
-
-Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
-Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
-OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so
-they can be read. With `"rw"`, workspace skills are readable from
-`/workspace/skills`.
-
-## Custom bind mounts
-
-`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container.
-Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
-
-Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
-
-Example (read-only source + docker socket):
-
-```json5
-{
-  agents: {
-    defaults: {
-      sandbox: {
-        docker: {
-          binds: ["/home/user/source:/source:ro", "/var/run/docker.sock:/var/run/docker.sock"],
-        },
-      },
-    },
-    list: [
-      {
-        id: "build",
-        sandbox: {
-          docker: {
-            binds: ["/mnt/cache:/cache:rw"],
-          },
-        },
-      },
-    ],
-  },
-}
-```
-
-Security notes:
-
-- Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
-- Sensitive mounts (e.g., `docker.sock`, secrets, SSH keys) should be `:ro` unless absolutely required.
-- Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
-- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
-
-## Images + setup
-
-Default image: `openclaw-sandbox:bookworm-slim`
-
-Build it once:
-
-```bash
-scripts/sandbox-setup.sh
-```
-
-Note: the default image does **not** include Node. If a skill needs Node (or
-other runtimes), either bake a custom image or install via
-`sandbox.docker.setupCommand` (requires network egress + writable root +
-root user).
-
-Sandboxed browser image:
-
-```bash
-scripts/sandbox-browser-setup.sh
-```
-
-By default, sandbox containers run with **no network**.
-Override with `agents.defaults.sandbox.docker.network`.
-
-Docker installs and the containerized gateway live here:
-[Docker](/install/docker)
-
-## setupCommand (one-time container setup)
-
-`setupCommand` runs **once** after the sandbox container is created (not on every run).
-It executes inside the container via `sh -lc`.
-
-Paths:
-
-- Global: `agents.defaults.sandbox.docker.setupCommand`
-- Per-agent: `agents.list[].sandbox.docker.setupCommand`
-
-Common pitfalls:
-
-- Default `docker.network` is `"none"` (no egress), so package installs will fail.
-- `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
-- `user` must be root for package installs (omit `user` or set `user: "0:0"`).
-- Sandbox exec does **not** inherit host `process.env`. Use
-  `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
-
-## Tool policy + escape hatches
-
-Tool allow/deny policies still apply before sandbox rules. If a tool is denied
-globally or per-agent, sandboxing doesn’t bring it back.
-
-`tools.elevated` is an explicit escape hatch that runs `exec` on the host.
-`/exec` directives only apply for authorized senders and persist per session; to hard-disable
-`exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
+`tools.elevated` is an explicit escape hatch that runs `exec` outside the sandbox (`gateway` by default, or `node` when the exec target is `node`). `/exec` directives only apply for authorized senders and persist per session; to hard-disable `exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Debugging:
 
-- Use `openclaw sandbox explain` to inspect effective sandbox mode, tool policy, and fix-it config keys.
-- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the “why is this blocked?” mental model.
-  Keep it locked down.
+- `openclaw sandbox list` shows sandbox containers, status, image match, age, idle time, and associated session/agent.
+- `openclaw sandbox explain [--session <key>] [--agent <id>]` inspects effective sandbox mode, host workspace, runtime workdir, Docker mounts, tool policy, and fix-it config keys. Its `workspaceRoot` field remains the configured sandbox root; `effectiveHostWorkspaceRoot` shows where the active workspace actually lives.
+- `openclaw sandbox recreate [--all | --session <key> | --agent <id>] [--browser] [--force]` removes containers/environments so they get recreated with current config on next use.
+- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the "why is this blocked?" mental model.
 
 ## Multi-agent overrides
 
-Each agent can override sandbox + tools:
-`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
-See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
+Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 
@@ -186,8 +92,12 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 }
 ```
 
-## Related docs
+## Related
 
-- [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
-- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
+- [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
+- [Sandbox configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Security](/gateway/security)
+- [`openclaw sandbox`](/cli/sandbox) — manage sandbox runtimes and inspect the effective sandbox policy
+- [Cloud Workers](/gateway/cloud-workers) — dispatching session work to throwaway cloud machines; its managed workspace is not an OS sandbox

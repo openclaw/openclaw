@@ -1,0 +1,99 @@
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveConcreteSessionStorePath } from "./paths.js";
+import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
+import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import { resolveSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
+import type {
+  SessionTranscriptReadScope,
+  SessionTranscriptReadTarget,
+  SessionTranscriptRuntimeScope,
+  SessionTranscriptRuntimeTarget,
+} from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
+
+/** Binds runtime storage without changing keys that raw ownership checks and read fences validate. */
+export function bindSessionTranscriptStoreScope<
+  T extends Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionKey" | "storePath">,
+>(scope: T, config?: OpenClawConfig): T & { storePath: string } {
+  return {
+    ...scope,
+    storePath: resolveSessionStorePathForScope(
+      { ...scope, storePath: resolveConcreteSessionStorePath(scope.storePath) },
+      config,
+    ),
+  };
+}
+
+/** Resolves the canonical SQLite identity for runtime transcript access. */
+export async function resolveSessionTranscriptRuntimeTarget(
+  scope: SessionTranscriptRuntimeScope,
+  config?: OpenClawConfig,
+  options: { keyFormat?: "agent-qualified" } = {},
+): Promise<
+  SessionTranscriptRuntimeTarget & {
+    selectedSessionId?: string | null;
+    selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+  }
+> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const { storePath } = bindSessionTranscriptStoreScope({ ...scope, agentId }, config);
+  const persistedSessionKey = resolveSessionKeyBySessionId({
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    sessionId: scope.sessionId,
+    storePath,
+  });
+  const selected =
+    persistedSessionKey && !options.keyFormat
+      ? undefined
+      : resolveSessionEntrySelection(
+          {
+            agentId,
+            ...(scope.env ? { env: scope.env } : {}),
+            sessionKey: persistedSessionKey ?? scope.sessionKey,
+            storePath,
+          },
+          {
+            readOnly: true,
+            keyFormat: options.keyFormat,
+            allowCanonicalMove: !persistedSessionKey,
+          },
+        );
+  const sessionKey = persistedSessionKey ?? selected?.normalizedKey ?? scope.sessionKey;
+  return {
+    agentId,
+    sessionId: scope.sessionId,
+    sessionKey,
+    storePath,
+    ...(options.keyFormat
+      ? {
+          selectedSessionId: selected?.existing?.sessionId ?? null,
+          selectedLifecycleRevision: selected?.existing?.lifecycleRevision ?? null,
+        }
+      : {}),
+  };
+}
+
+/** Resolves the physical agent database that owns one runtime transcript. */
+export function resolveSessionTranscriptDatabasePath(
+  target: SessionTranscriptRuntimeTarget,
+): string {
+  const resolved = resolveSqliteTranscriptScope(target);
+  return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+}
+
+export function resolveSessionTranscriptReadTarget(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptReadTarget {
+  return resolveSessionTranscriptReadTargetCore(scope, resolveSessionStorePathForScope);
+}

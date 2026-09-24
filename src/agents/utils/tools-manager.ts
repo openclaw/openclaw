@@ -1,0 +1,425 @@
+/**
+ * Tool binary manager for agent-side helper commands.
+ *
+ * Locates or downloads pinned helper binaries such as fd and ripgrep.
+ */
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { arch, platform } from "node:os";
+import { join } from "node:path";
+import chalk from "chalk";
+import { extractArchive } from "../../infra/archive.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
+import { root as fsRoot, type Root, walkDirectorySync } from "../../infra/fs-safe.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { getBinDir } from "../config.js";
+import { APP_NAME } from "../package-metadata.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
+
+const NETWORK_TIMEOUT_MS = 10_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 1_000;
+const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
+const CONTENT_LENGTH_RE = /^\d+$/;
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
+const TOOL_INSTALL_STALE_MS =
+  DOWNLOAD_TIMEOUT_MS + ARCHIVE_EXTRACT_TIMEOUT_MS + NETWORK_TIMEOUT_MS + 30_000;
+const toolInstallations = new Map<string, Promise<string>>();
+const TOOL_INSTALL_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    // The minimum backoff total is about 234s, beyond the full 220s install bound.
+    retries: 480,
+    factor: 1.2,
+    minTimeout: 25,
+    maxTimeout: 500,
+    randomize: true,
+  },
+  stale: TOOL_INSTALL_STALE_MS,
+  staleRecovery: "remove-if-unchanged",
+};
+
+function isOfflineModeEnabled(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_OFFLINE);
+}
+
+interface ToolConfig {
+  name: string;
+  repo: string; // GitHub repo (e.g., "sharkdp/fd")
+  binaryName: string; // Name of the binary inside the archive
+  systemBinaryNames?: string[]; // Alternative system command names to try before downloading
+  tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
+  getAssetName: (version: string, plat: string, architecture: string) => string | null;
+}
+
+const TOOLS: Record<"fd" | "rg", ToolConfig> = {
+  fd: {
+    name: "fd",
+    repo: "sharkdp/fd",
+    binaryName: "fd",
+    systemBinaryNames: ["fd", "fdfind"],
+    tagPrefix: "v",
+    getAssetName: (version, plat, architecture) => {
+      if (plat === "darwin") {
+        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+        return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
+      } else if (plat === "linux") {
+        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+        return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
+      } else if (plat === "win32") {
+        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+        return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
+      }
+      return null;
+    },
+  },
+  rg: {
+    name: "ripgrep",
+    repo: "BurntSushi/ripgrep",
+    binaryName: "rg",
+    tagPrefix: "",
+    getAssetName: (version, plat, architecture) => {
+      if (plat === "darwin") {
+        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+        return `ripgrep-${version}-${archStr}-apple-darwin.tar.gz`;
+      } else if (plat === "linux") {
+        if (architecture === "arm64") {
+          return `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`;
+        }
+        return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
+      } else if (plat === "win32") {
+        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+        return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
+      }
+      return null;
+    },
+  },
+};
+
+// Check if a command exists in PATH by trying to run it
+function commandExists(cmd: string): boolean {
+  try {
+    const result = spawnSync(cmd, ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
+    // Require a clean exit, not just a successful spawn. An installed-but-broken
+    // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
+    // spawns fine but exits non-zero; without the status check it would be
+    // misreported as available and block ensureTool's auto-install fallback.
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Get the path to a tool (system-wide or in our tools dir)
+function getToolPath(tool: "fd" | "rg", toolsDir: string | undefined): string | null {
+  const config = TOOLS[tool];
+
+  // Check our tools directory first
+  if (toolsDir) {
+    const localPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+    if (existsSync(localPath)) {
+      return localPath;
+    }
+  }
+
+  // Check system PATH - if found, just return the command name (it's in PATH)
+  const systemBinaryNames = config.systemBinaryNames ?? [config.binaryName];
+  for (const systemBinaryName of systemBinaryNames) {
+    if (commandExists(systemBinaryName)) {
+      return systemBinaryName;
+    }
+  }
+
+  return null;
+}
+
+// Fetch latest release version from GitHub
+async function getLatestVersion(repo: string): Promise<string> {
+  const guarded = await fetchWithSsrFGuard({
+    url: `https://api.github.com/repos/${repo}/releases/latest`,
+    timeoutMs: NETWORK_TIMEOUT_MS,
+    auditContext: "tools-manager-release-check",
+    init: {
+      headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+    },
+  });
+  const { response } = guarded;
+
+  try {
+    if (!response.ok) {
+      await cancelUnreadResponseBody(response);
+      throw new Error(`GitHub API error: ${response.status}`);
+    }
+
+    const data = await readProviderJsonResponse<{ tag_name: string }>(response, "GitHub release", {
+      maxBytes: GITHUB_RELEASE_JSON_MAX_BYTES,
+    });
+    return data.tag_name.replace(/^v/, "");
+  } finally {
+    await guarded.release();
+  }
+}
+
+async function downloadFile(url: string, destination: Root, assetName: string): Promise<void> {
+  const guarded = await fetchWithSsrFGuard({
+    url,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    auditContext: "tools-manager-download",
+  });
+  const { response } = guarded;
+
+  try {
+    if (!response.ok) {
+      await cancelUnreadResponseBody(response);
+      throw new Error(`Failed to download: ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("No response body");
+    }
+
+    const rawContentLength = response.headers.get("content-length");
+    const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+    if (rawContentLength !== null && (!contentEncoding || contentEncoding === "identity")) {
+      const contentLength = rawContentLength.trim();
+      if (CONTENT_LENGTH_RE.test(contentLength)) {
+        const declaredBytes = Number(contentLength);
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_ARCHIVE_BYTES) {
+          await cancelUnreadResponseBody(response);
+          throw new Error(`Download exceeds the ${MAX_ARCHIVE_BYTES}-byte archive limit`);
+        }
+      }
+    }
+
+    const body = response.body;
+    async function* chunks() {
+      // Admit the destination before acquiring a reader; the fetch guard owns cancellation.
+      yield* body.values({ preventCancel: true });
+    }
+    await destination.create(join(destination.rootReal, assetName), chunks(), {
+      maxBytes: MAX_ARCHIVE_BYTES,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
+    });
+  } finally {
+    await guarded.release();
+  }
+}
+
+async function extractArchiveSafe(
+  archivePath: string,
+  extractDir: string,
+  assetName: string,
+): Promise<void> {
+  try {
+    await extractArchive({
+      archivePath,
+      destDir: extractDir,
+      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+      limits: {
+        maxArchiveBytes: MAX_ARCHIVE_BYTES,
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+        maxEntries: MAX_ARCHIVE_ENTRIES,
+      },
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
+// Download and install a tool
+async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
+  const config = TOOLS[tool];
+
+  const plat = platform();
+  const architecture = arch();
+
+  // Get latest version
+  let version = await getLatestVersion(config.repo);
+  if (tool === "fd" && plat === "darwin" && architecture === "x64") {
+    version = "10.3.0";
+  }
+
+  // Get asset name for this platform
+  const assetName = config.getAssetName(version, plat, architecture);
+  if (!assetName) {
+    throw new Error(`Unsupported platform: ${plat}/${architecture}`);
+  }
+
+  // Create tools directory
+  mkdirSync(toolsDir, { recursive: true });
+
+  const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
+  const binaryExt = plat === "win32" ? ".exe" : "";
+  const binaryPath = join(toolsDir, config.binaryName + binaryExt);
+  // Keep every installation's archive and extracted files together so parallel
+  // processes cannot remove or overwrite another installation's staging files.
+  const stagingDir = join(
+    toolsDir,
+    `install_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
+  );
+  const archivePath = join(stagingDir, assetName);
+  const extractDir = join(stagingDir, "extract");
+  mkdirSync(extractDir, { recursive: true });
+
+  try {
+    const stagingRoot = await fsRoot(stagingDir);
+    await downloadFile(downloadUrl, stagingRoot, assetName);
+
+    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
+      await extractArchiveSafe(archivePath, extractDir, assetName);
+    } else {
+      throw new Error(`Unsupported archive format: ${assetName}`);
+    }
+
+    // Find the binary in extracted files. Some archives contain files directly
+    // at root, others nest under a versioned subdirectory.
+    const binaryFileName = config.binaryName + binaryExt;
+    const extractedDir = join(extractDir, assetName.replace(/\.(tar\.gz|zip)$/, ""));
+    const extractedBinaryCandidates = [
+      join(extractedDir, binaryFileName),
+      join(extractDir, binaryFileName),
+    ];
+    let extractedBinary = extractedBinaryCandidates.find((candidate) => existsSync(candidate));
+
+    if (!extractedBinary) {
+      const { entries, failedDirs } = walkDirectorySync(extractDir, {
+        symlinks: "skip",
+        include: (entry) => entry.kind === "file" && entry.name === binaryFileName,
+      });
+      extractedBinary = entries[0]?.path;
+      const failure = failedDirs[0];
+      if (!extractedBinary && failure) {
+        throw failure.error;
+      }
+    }
+
+    if (extractedBinary) {
+      renameSync(extractedBinary, binaryPath);
+    } else {
+      throw new Error(
+        `Binary not found in archive: expected ${binaryFileName} under ${extractDir}`,
+      );
+    }
+
+    // Make executable (Unix only)
+    if (plat !== "win32") {
+      chmodSync(binaryPath, 0o755);
+    }
+  } finally {
+    rmSync(stagingDir, { recursive: true, force: true });
+  }
+
+  return binaryPath;
+}
+
+function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
+  const config = TOOLS[tool];
+  const binaryPath = join(toolsDir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+  const currentInstallation = toolInstallations.get(binaryPath);
+  if (currentInstallation) {
+    return currentInstallation;
+  }
+
+  mkdirSync(toolsDir, { recursive: true });
+  const installation = withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
+    const existingPath = getToolPath(tool, toolsDir);
+    return existingPath ?? downloadTool(tool, toolsDir);
+  });
+  toolInstallations.set(binaryPath, installation);
+  void installation.then(
+    () => {
+      if (toolInstallations.get(binaryPath) === installation) {
+        toolInstallations.delete(binaryPath);
+      }
+    },
+    () => {
+      if (toolInstallations.get(binaryPath) === installation) {
+        toolInstallations.delete(binaryPath);
+      }
+    },
+  );
+  return installation;
+}
+
+// Termux package names for tools
+const TERMUX_PACKAGES: Record<string, string> = {
+  fd: "fd",
+  rg: "ripgrep",
+};
+
+// Ensure a tool is available, downloading if necessary
+// Returns the path to the tool, or null if unavailable
+export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
+  const toolsDir = getBinDir();
+  const existingPath = getToolPath(tool, toolsDir);
+  if (existingPath) {
+    return existingPath;
+  }
+
+  const config = TOOLS[tool];
+
+  if (!toolsDir) {
+    if (!silent) {
+      console.log(
+        chalk.yellow(
+          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
+        ),
+      );
+    }
+    return undefined;
+  }
+
+  if (isOfflineModeEnabled()) {
+    if (!silent) {
+      console.log(
+        chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
+      );
+    }
+    return undefined;
+  }
+
+  // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
+  // Users must install via pkg.
+  if (platform() === "android") {
+    const pkgName = TERMUX_PACKAGES[tool] ?? tool;
+    if (!silent) {
+      console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
+    }
+    return undefined;
+  }
+
+  // Tool not found - download it
+  if (!silent) {
+    console.log(chalk.dim(`${config.name} not found. Downloading...`));
+  }
+
+  try {
+    const path = await installTool(tool, toolsDir);
+    if (!silent) {
+      console.log(chalk.dim(`${config.name} installed to ${path}`));
+    }
+    return path;
+  } catch (e) {
+    if (!silent) {
+      console.log(
+        chalk.yellow(
+          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
+    }
+    return undefined;
+  }
+}

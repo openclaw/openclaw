@@ -1,39 +1,64 @@
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
+// Node-host daemon lifecycle commands for install, status, start, stop, and restart.
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
-  DEFAULT_NODE_DAEMON_RUNTIME,
-  isNodeDaemonRuntime,
-} from "../../commands/node-daemon-runtime.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+  resolveGatewayDaemonRuntime,
+  isGatewayDaemonRuntime,
+} from "../../commands/daemon-runtime.js";
+import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
-import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
-import { isWSL } from "../../infra/wsl.js";
+import {
+  buildPlatformRuntimeLogHints,
+  buildPlatformServiceStartHints,
+} from "../../daemon/runtime-hints.js";
+import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+  resolveSystemdUserServiceAccount,
+} from "../../daemon/systemd.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
-  buildDaemonServiceSnapshot,
-  createNullWriter,
-  emitDaemonActionJson,
-} from "../daemon-cli/response.js";
-import { formatRuntimeStatus, parsePort } from "../daemon-cli/shared.js";
+  runServiceRestart,
+  runServiceStart,
+  runServiceStop,
+  runServiceUninstall,
+} from "../daemon-cli/lifecycle-core.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daemon-cli/response.js";
+import {
+  createCliStatusTextStyles,
+  createDaemonInstallActionContext,
+  resolveDaemonInstallBlockMessage,
+  formatRuntimeStatus,
+  projectDaemonServiceForJson,
+  resolveRuntimeStatusColor,
+} from "../daemon-cli/shared.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { resolveNodeGatewayOptions } from "./gateway-options.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  shareInstalledApps?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   runtime?: string;
+  runtimePath?: string;
   force?: boolean;
   json?: boolean;
 };
@@ -47,124 +72,138 @@ type NodeDaemonStatusOptions = {
 };
 
 function renderNodeServiceStartHints(): string[] {
-  const base = [formatCliCommand("openclaw node install"), formatCliCommand("openclaw node start")];
-  switch (process.platform) {
-    case "darwin":
-      return [
-        ...base,
-        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
-      ];
-    case "linux":
-      return [...base, `systemctl --user start ${resolveNodeSystemdServiceName()}.service`];
-    case "win32":
-      return [...base, `schtasks /Run /TN "${resolveNodeWindowsTaskName()}"`];
-    default:
-      return base;
-  }
+  return buildPlatformServiceStartHints({
+    installHint: formatCliCommand("openclaw node install"),
+    startCommand: formatCliCommand("openclaw node start"),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
 function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (process.platform === "darwin") {
-    const logs = resolveGatewayLogPaths(env);
-    return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
-    ];
-  }
-  if (process.platform === "linux") {
-    const unit = resolveNodeSystemdServiceName();
-    return [`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`];
-  }
-  if (process.platform === "win32") {
-    const task = resolveNodeWindowsTaskName();
-    return [`Logs: schtasks /Query /TN "${task}" /V /FO LIST`];
-  }
-  return [];
+  return buildPlatformRuntimeLogHints({
+    env,
+    systemdServiceName: resolveNodeSystemdServiceName(),
+    windowsTaskName: resolveNodeWindowsTaskName(),
+  });
 }
 
-function resolveNodeDefaults(
-  opts: NodeDaemonInstallOptions,
-  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
-) {
-  const host = opts.host?.trim() || config?.gateway?.host || "127.0.0.1";
-  const portOverride = parsePort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null };
+/**
+ * Warns (does NOT auto-enable) when systemd user lingering is disabled.
+ * The installed user-level node service stops when the last SSH session ends
+ * unless `loginctl enable-linger <user>` has been run. Read-only: this never
+ * changes host state, matching the operator-consent policy used elsewhere.
+ */
+async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
   }
-  const port = portOverride ?? config?.gateway?.port ?? 18789;
-  return { host, port };
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return;
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
+  if (!status || status.linger === "yes") {
+    return;
+  }
+  warn(
+    `Systemd lingering is disabled for ${status.user}. The node service will stop when you log out. Run: sudo loginctl enable-linger ${status.user}`,
+  );
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "install", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({
-        ok: false,
-        error: message,
-        hints,
-        warnings: warnings.length ? warnings : undefined,
-      });
-    } else {
-      defaultRuntime.error(message);
-      if (hints?.length) {
-        for (const hint of hints) {
-          defaultRuntime.log(`Tip: ${hint}`);
-        }
-      }
-    }
-    defaultRuntime.exit(1);
-  };
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+  const { json, stdout, warnings, warn, emit, emitMessage, fail } =
+    createDaemonInstallActionContext(opts.json);
+  const installBlock = resolveDaemonInstallBlockMessage("node");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
-    fail("Invalid port");
+  let gatewayOptions;
+  try {
+    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
     return;
   }
-
-  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_NODE_DAEMON_RUNTIME;
-  if (!isNodeDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
+    fail(
+      opts.port !== undefined
+        ? formatInvalidPortOption("--port")
+        : formatInvalidConfigPort("node.gateway.port"),
+    );
+    return;
+  }
+  if (opts.tls === false && opts.tlsFingerprint !== undefined) {
+    fail("--no-tls cannot be combined with --tls-fingerprint");
+    return;
+  }
+  if (cloudflareAccess && tls !== true) {
+    fail("Cloudflare Access credentials require --tls for the node Gateway connection");
     return;
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let existingServiceCommand;
+  try {
+    existingServiceCommand = await service.readCommand(process.env);
+  } catch (error) {
+    fail(`Node service inspection failed: ${formatErrorMessage(error)}`);
+    return;
+  }
+  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
+  const installEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_WRAPPER:
+      process.env.OPENCLAW_WRAPPER ?? existingManagedCommand?.environment?.OPENCLAW_WRAPPER,
+  };
+  let pinSnapshot;
+  try {
+    pinSnapshot = readDaemonRuntimePinForInstall(
+      { kind: "node", env: installEnv },
+      existingServiceCommand,
+      opts.runtime !== undefined || opts.runtimePath !== undefined,
+    );
+  } catch (error) {
+    fail(`Runtime pin inspection failed: ${formatErrorMessage(error)}`);
+    return;
+  }
+  let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
+  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  if (!isGatewayDaemonRuntime(runtimeRaw)) {
+    fail('Invalid --runtime (use "node" or "bun")');
+    return;
+  }
+
+  try {
+    if (!installEnv.OPENCLAW_WRAPPER?.trim() || opts.runtimePath !== undefined) {
+      pinnedRuntimePath = await resolvePinnedDaemonRuntimePath(
+        pinnedRuntimePath,
+        runtimeRaw,
+        installEnv,
+      );
+    }
+  } catch (error) {
+    fail(`Invalid runtime pin: ${formatErrorMessage(error)}`);
+    return;
+  }
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
+    fail(`Node service check failed: ${formatErrorMessage(err)}`);
     return;
   }
   if (loaded && !opts.force) {
-    emit({
+    await warnIfSystemdUserLingerDisabled(warn);
+    emitMessage({
       ok: true,
       result: "already-installed",
       message: `Node service already ${service.loadedText}.`,
@@ -172,358 +211,119 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       warnings: warnings.length ? warnings : undefined,
     });
     if (!json) {
-      defaultRuntime.log(`Node service already ${service.loadedText}.`);
       defaultRuntime.log(`Reinstall with: ${formatCliCommand("openclaw node install --force")}`);
     }
     return;
   }
 
-  const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
-      env: process.env,
+      env: installEnv,
       host,
       port: port ?? 18789,
-      tls,
-      tlsFingerprint: tlsFingerprint || undefined,
+      contextPath,
+      tls: Boolean(tls),
+      tlsFingerprint,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
+      installedAppsSharing: opts.shareInstalledApps,
+      commands: opts.commands,
+      allCommands: opts.allCommands,
       runtime: runtimeRaw,
-      warn: (message) => {
-        if (json) {
-          warnings.push(message);
-        } else {
-          defaultRuntime.log(message);
-        }
-      },
+      pinnedRuntimePath,
+      warn,
     });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-      description,
-    });
-  } catch (err) {
-    fail(`Node install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Node",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        runtimePinUpdate: {
+          expected: pinSnapshot,
+          pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
+        },
+        env: installEnv,
+        stdout,
+        warn,
+        programArguments,
+        workingDirectory,
+        environment,
+        environmentValueSources,
+        description,
+      });
+    },
+    // Run the linger diagnostic only on the verified-success path: placing it
+    // in `install` (before service-load verification) would let a linger
+    // warning accompany a failed install or verification, misdirecting the
+    // operator (see #107033 review). The already-installed short-circuit
+    // above warns separately.
+    onVerified: async () => {
+      await warnIfSystemdUserLingerDisabled(warn);
+    },
   });
 }
 
 export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "uninstall", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service uninstall is disabled.");
-    return;
-  }
-
-  const service = resolveNodeService();
-  try {
-    await service.uninstall({ env: process.env, stdout });
-  } catch (err) {
-    fail(`Node uninstall failed: ${String(err)}`);
-    return;
-  }
-
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  emit({
-    ok: true,
-    result: "uninstalled",
-    service: buildDaemonServiceSnapshot(service, loaded),
+  return await runServiceUninstall({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
+    stopBeforeUninstall: false,
+    assertNotLoadedAfterUninstall: false,
   });
 }
 
 export async function runNodeDaemonStart(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "start", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({ ok: false, error: message, hints });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    let hints = renderNodeServiceStartHints();
-    if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-      if (!systemdAvailable) {
-        hints = [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
-      }
-    }
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
-    return;
-  }
-  try {
-    await service.restart({ env: process.env, stdout });
-  } catch (err) {
-    const hints = renderNodeServiceStartHints();
-    fail(`Node start failed: ${String(err)}`, hints);
-    return;
-  }
-
-  let started = true;
-  try {
-    started = await service.isLoaded({ env: process.env });
-  } catch {
-    started = true;
-  }
-  emit({
-    ok: true,
-    result: "started",
-    service: buildDaemonServiceSnapshot(service, started),
+  return await runServiceStart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
   });
 }
 
 export async function runNodeDaemonRestart(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    hints?: string[];
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "restart", ...payload });
-  };
-  const fail = (message: string, hints?: string[]) => {
-    if (json) {
-      emit({ ok: false, error: message, hints });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    let hints = renderNodeServiceStartHints();
-    if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-      if (!systemdAvailable) {
-        hints = [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
-      }
-    }
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
-    return;
-  }
-  try {
-    await service.restart({ env: process.env, stdout });
-  } catch (err) {
-    const hints = renderNodeServiceStartHints();
-    fail(`Node restart failed: ${String(err)}`, hints);
-    return;
-  }
-
-  let restarted = true;
-  try {
-    restarted = await service.isLoaded({ env: process.env });
-  } catch {
-    restarted = true;
-  }
-  emit({
-    ok: true,
-    result: "restarted",
-    service: buildDaemonServiceSnapshot(service, restarted),
+  await runServiceRestart({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderStartHints: renderNodeServiceStartHints,
+    opts,
   });
 }
 
 export async function runNodeDaemonStop(opts: NodeDaemonLifecycleOptions = {}) {
-  const json = Boolean(opts.json);
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "stop", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
-
-  const service = resolveNodeService();
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    fail(`Node service check failed: ${String(err)}`);
-    return;
-  }
-  if (!loaded) {
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `Node service ${service.notLoadedText}.`,
-      service: buildDaemonServiceSnapshot(service, loaded),
-    });
-    if (!json) {
-      defaultRuntime.log(`Node service ${service.notLoadedText}.`);
-    }
-    return;
-  }
-  try {
-    await service.stop({ env: process.env, stdout });
-  } catch (err) {
-    fail(`Node stop failed: ${String(err)}`);
-    return;
-  }
-
-  let stopped = false;
-  try {
-    stopped = await service.isLoaded({ env: process.env });
-  } catch {
-    stopped = false;
-  }
-  emit({
-    ok: true,
-    result: "stopped",
-    service: buildDaemonServiceSnapshot(service, stopped),
+  return await runServiceStop({
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    opts,
   });
 }
 
 export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const json = Boolean(opts.json);
   const service = resolveNodeService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+  let loaded: boolean;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch (error) {
+    const message = `Node service check failed: ${formatErrorMessage(error)}`;
+    if (json) {
+      throw new Error(message, { cause: error });
+    }
+    defaultRuntime.error(message);
+    defaultRuntime.exit(1);
+    return;
+  }
+  const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service
-      .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {
@@ -535,17 +335,14 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    defaultRuntime.writeJson({
+      service: projectDaemonServiceForJson(payload.service, { includeDefinitionPaths: true }),
+    });
     return;
   }
 
-  const rich = isRich();
-  const label = (value: string) => colorize(rich, theme.muted, value);
-  const accent = (value: string) => colorize(rich, theme.accent, value);
-  const infoText = (value: string) => colorize(rich, theme.info, value);
-  const okText = (value: string) => colorize(rich, theme.success, value);
-  const warnText = (value: string) => colorize(rich, theme.warn, value);
-  const errorText = (value: string) => colorize(rich, theme.error, value);
+  const { rich, label, accent, infoText, okText, warnText, errorText } =
+    createCliStatusTextStyles();
 
   const serviceStatus = loaded ? okText(service.loadedText) : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
@@ -562,15 +359,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   const runtimeLine = formatRuntimeStatus(runtime);
   if (runtimeLine) {
-    const runtimeStatus = runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
@@ -594,7 +383,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -602,7 +391,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

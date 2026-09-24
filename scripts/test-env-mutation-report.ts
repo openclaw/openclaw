@@ -1,0 +1,339 @@
+#!/usr/bin/env node
+// Test Env Mutation Report script supports OpenClaw repository automation.
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import * as ts from "typescript/unstable/ast";
+import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
+
+type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
+
+type TestEnvMutationFinding = {
+  allowed: boolean;
+  allowReason?: string;
+  excerpt: string;
+  file: string;
+  key: string;
+  line: number;
+  operation: EnvMutationOperation;
+};
+
+export type TestEnvMutationReport = {
+  activeFindings: TestEnvMutationFinding[];
+  allowedFindings: TestEnvMutationFinding[];
+  findings: TestEnvMutationFinding[];
+  scannedFileCount: number;
+  schemaVersion: 1;
+  summary: {
+    activeFindingCount: number;
+    activeFileCount: number;
+    allowedFindingCount: number;
+    allowedFileCount: number;
+    findingCount: number;
+    scannedFileCount: number;
+  };
+};
+
+const DYNAMIC_ENV_KEY = "<dynamic>";
+const TRACKED_ENV_KEYS = new Set([
+  "HOME",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "OPENCLAW_AGENT_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_WORKSPACE_DIR",
+  "USERPROFILE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+]);
+const DEFAULT_ALLOWED_FILES = new Map([
+  ["src/test-utils/openclaw-test-state.ts", "canonical OpenClaw test state helper"],
+  ["test/non-isolated-runner.ts", "shared Vitest runner restores global env between files"],
+  ["test/setup.extensions.ts", "global extension-test setup owns process env isolation"],
+  ["test/setup.shared.ts", "global shared-test setup owns process env isolation"],
+  ["test/setup.ts", "global test setup owns process env isolation"],
+  ["test/setup-openclaw-runtime.ts", "global runtime-test setup owns process env isolation"],
+  [
+    "test/helpers/auto-reply/trigger-handling-test-harness.ts",
+    "auto-reply harness owns a suite-scoped temporary home",
+  ],
+]);
+
+function listCandidateFiles(repoRoot: string): string[] {
+  return listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
+}
+
+function isIdentifier(node: ts.Node, text: string): boolean {
+  return ts.isIdentifier(node) && node.text === text;
+}
+
+function isProcessEnvExpression(node: ts.Node): boolean {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    node.name.text === "env" &&
+    isIdentifier(node.expression, "process")
+  );
+}
+
+function stringLiteralText(node: ts.Node | undefined): string | null {
+  if (!node) {
+    return null;
+  }
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
+}
+
+function envKeyFromExpression(node: ts.Node): string | null {
+  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+    return node.name.text;
+  }
+  if (ts.isElementAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+    return stringLiteralText(node.argumentExpression) ?? DYNAMIC_ENV_KEY;
+  }
+  return null;
+}
+
+function propertyNameText(name: ts.PropertyName | undefined): string | null {
+  if (!name) {
+    return null;
+  }
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return null;
+}
+
+function envKeysFromObjectLiteral(node: ts.Expression): string[] {
+  if (!ts.isObjectLiteralExpression(node)) {
+    return [];
+  }
+  return node.properties
+    .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : null))
+    .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
+}
+
+function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
+  const expression = node.expression;
+  if (
+    !ts.isPropertyAccessExpression(expression) ||
+    expression.name.text !== "stubEnv" ||
+    !isIdentifier(expression.expression, "vi")
+  ) {
+    return null;
+  }
+  return stringLiteralText(node.arguments[0]);
+}
+
+function createFinding(params: {
+  allowedFiles: ReadonlyMap<string, string>;
+  file: string;
+  key: string;
+  lines: string[];
+  node: ts.Node;
+  operation: EnvMutationOperation;
+  sourceFile: ts.SourceFile;
+}): TestEnvMutationFinding {
+  const { line } = params.sourceFile.getLineAndCharacterOfPosition(
+    params.node.getStart(params.sourceFile),
+  );
+  const allowReason = params.allowedFiles.get(params.file);
+  return {
+    allowed: allowReason !== undefined,
+    ...(allowReason ? { allowReason } : {}),
+    excerpt: params.lines[line]?.trim() ?? "",
+    file: params.file,
+    key: params.key,
+    line: line + 1,
+    operation: params.operation,
+  };
+}
+
+function scanFile(params: {
+  allowedFiles: ReadonlyMap<string, string>;
+  file: string;
+  sourceFile: ts.SourceFile;
+}): TestEnvMutationFinding[] {
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
+  const findings: TestEnvMutationFinding[] = [];
+
+  function addFinding(node: ts.Node, key: string, operation: EnvMutationOperation): void {
+    if (key !== DYNAMIC_ENV_KEY && !TRACKED_ENV_KEYS.has(key)) {
+      return;
+    }
+    findings.push(
+      createFinding({
+        allowedFiles: params.allowedFiles,
+        file: params.file,
+        key,
+        lines,
+        node,
+        operation,
+        sourceFile,
+      }),
+    );
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind)) {
+      if (
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        isProcessEnvExpression(node.left)
+      ) {
+        for (const key of envKeysFromObjectLiteral(node.right)) {
+          addFinding(node, key, "replace");
+        }
+      } else {
+        const key = envKeyFromExpression(node.left);
+        if (key) {
+          addFinding(node, key, "assign");
+        }
+      }
+    } else if (ts.isDeleteExpression(node)) {
+      const key = envKeyFromExpression(node.expression);
+      if (key) {
+        addFinding(node, key, "delete");
+      }
+    } else if (ts.isCallExpression(node)) {
+      const key = stubEnvKeyFromCall(node);
+      if (key) {
+        addFinding(node, key, "stubEnv");
+      }
+    }
+    node.forEachChild(visit);
+  }
+
+  visit(sourceFile);
+  return findings;
+}
+
+export function collectTestEnvMutationReport(
+  params: {
+    allowedFiles?: ReadonlyMap<string, string>;
+    repoRoot?: string;
+  } = {},
+): TestEnvMutationReport {
+  const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
+  const allowedFiles = params.allowedFiles ?? DEFAULT_ALLOWED_FILES;
+  const files = listCandidateFiles(repoRoot);
+  const findings: TestEnvMutationFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ allowedFiles, file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
+  const activeFindings = findings.filter((finding) => !finding.allowed);
+  const allowedFindings = findings.filter((finding) => finding.allowed);
+  const activeFileCount = new Set(activeFindings.map((finding) => finding.file)).size;
+  const allowedFileCount = new Set(allowedFindings.map((finding) => finding.file)).size;
+  return {
+    activeFindings,
+    allowedFindings,
+    findings,
+    scannedFileCount: files.length,
+    schemaVersion: 1,
+    summary: {
+      activeFindingCount: activeFindings.length,
+      activeFileCount,
+      allowedFindingCount: allowedFindings.length,
+      allowedFileCount,
+      findingCount: findings.length,
+      scannedFileCount: files.length,
+    },
+  };
+}
+
+function renderEnvMutationFinding(finding: TestEnvMutationFinding): string {
+  const action =
+    finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
+  return `  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`;
+}
+
+export function renderTestEnvMutationReport(
+  report: TestEnvMutationReport,
+  options: { includeAllowed?: boolean; limit?: number } = {},
+): string {
+  const limit = options.limit === 0 ? Number.POSITIVE_INFINITY : (options.limit ?? 120);
+  const lines = [
+    "OpenClaw test env mutation report",
+    `Scanned files: ${report.summary.scannedFileCount}`,
+    `Findings: ${report.summary.activeFindingCount} active in ${report.summary.activeFileCount} file(s), ${report.summary.allowedFindingCount} allowed in ${report.summary.allowedFileCount} file(s)`,
+    "",
+  ];
+
+  if (report.activeFindings.length === 0) {
+    lines.push("Active findings: none");
+  } else {
+    lines.push("Active findings:");
+    lines.push(...renderFindingGroups(report.activeFindings, limit, renderEnvMutationFinding));
+  }
+
+  if (options.includeAllowed && report.allowedFindings.length > 0) {
+    lines.push("", "Allowed harness findings:");
+    lines.push(...renderFindingGroups(report.allowedFindings, limit, renderEnvMutationFinding));
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function printHelp(): void {
+  process.stdout.write(`OpenClaw test env mutation report
+
+Usage:
+  pnpm test:env-mutations:report [options]
+
+Options:
+  --include-allowed    Include allowed harness findings in text output
+  --json               Print the full JSON report
+  --limit <n>          Maximum text findings to print; use 0 for all (default: 120)
+  --repo-root <path>   Repository root to scan (default: current working directory)
+  --help, -h           Show this help message
+`);
+}
+
+export function main(argv = process.argv.slice(2)): number {
+  const args = parseInventoryReportCliArgs(argv, { allowIncludeAllowed: true });
+  if (args.help) {
+    printHelp();
+    return 0;
+  }
+
+  const report = collectTestEnvMutationReport({ repoRoot: args.repoRoot });
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(
+      renderTestEnvMutationReport(report, {
+        includeAllowed: args.includeAllowed,
+        limit: args.limit,
+      }),
+    );
+  }
+  return 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  }
+}

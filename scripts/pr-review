@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec "$(cd "$(dirname "$0")" && pwd)/pr" review-init "$@"
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+base="$script_dir/pr"
+
+exec "$base" review-init "$@"

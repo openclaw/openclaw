@@ -1,13 +1,13 @@
 ---
 name: sag
-description: ElevenLabs text-to-speech with mac-style say UX.
+description: "ElevenLabs text-to-speech with mac-style say UX."
 homepage: https://sag.sh
 metadata:
   {
     "openclaw":
       {
-        "emoji": "🗣️",
-        "requires": { "bins": ["sag"], "env": ["ELEVENLABS_API_KEY"] },
+        "emoji": "🔊",
+        "requires": { "bins": ["sag"] },
         "primaryEnv": "ELEVENLABS_API_KEY",
         "install":
           [
@@ -31,6 +31,7 @@ API key (required)
 
 - `ELEVENLABS_API_KEY` (preferred)
 - `SAG_API_KEY` also supported by the CLI
+- Key file via `--api-key-file`, `ELEVENLABS_API_KEY_FILE`, or `SAG_API_KEY_FILE`
 
 Quick start
 
@@ -68,7 +69,7 @@ Confirm voice + speaker before long output.
 
 ## Chat voice responses
 
-When Peter asks for a "voice" reply (e.g., "crazy scientist voice", "explain in voice"), generate audio and send it:
+When the user asks for a "voice" reply (e.g., "crazy scientist voice", "explain in voice"), generate audio and send it:
 
 ```bash
 # Generate audio file

@@ -15,15 +15,14 @@ extension CanvasWindowController {
             return
         }
         let scheme = url.scheme?.lowercased()
-
         // Deep links: allow local Canvas content to invoke the agent without bouncing through NSWorkspace.
         if scheme == "openclaw" {
             if let currentScheme = self.webView.url?.scheme,
-               CanvasScheme.allSchemes.contains(currentScheme) {
+               CanvasScheme.allSchemes.contains(currentScheme)
+            {
                 Task { await DeepLinkHandler.shared.handle(url: url) }
             } else {
-                canvasWindowLogger
-                    .debug("ignoring deep link from non-canvas page \(url.absoluteString, privacy: .public)")
+                canvasWindowLogger.debug("ignoring deep link from non-canvas page")
             }
             decisionHandler(.cancel)
             return
@@ -52,9 +51,15 @@ extension CanvasWindowController {
                 configuration: NSWorkspace.OpenConfiguration(),
                 completionHandler: nil)
         } else {
-            canvasWindowLogger.debug("no application to open url \(url.absoluteString, privacy: .public)")
+            canvasWindowLogger.debug("no application to open scheme=\(scheme ?? "-", privacy: .public)")
         }
         decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, didCommit _: WKNavigation?) {
+        if let url = webView.url {
+            self.updateFilePollingForCommittedNavigation(to: url)
+        }
     }
 
     func webView(_: WKWebView, didFinish _: WKNavigation?) {

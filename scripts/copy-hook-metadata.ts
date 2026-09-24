@@ -5,51 +5,56 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
+import { logVerboseCopy, resolveBuildCopyContext } from "./lib/copy-assets.ts";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, "..");
+const context = resolveBuildCopyContext(import.meta.url);
 
-const srcBundled = path.join(projectRoot, "src", "hooks", "bundled");
-const distBundled = path.join(projectRoot, "dist", "bundled");
+type CopyHookMetadataParams = {
+  rootDir?: string;
+  fs?: typeof fs;
+  verbose?: boolean;
+};
 
-function copyHookMetadata() {
-  if (!fs.existsSync(srcBundled)) {
-    console.warn("[copy-hook-metadata] Source directory not found:", srcBundled);
-    return;
+function listHookMetadataFiles(rootDir: string, fsImpl: typeof fs) {
+  const sourceRoot = path.join(rootDir, "src", "hooks", "bundled");
+  if (!fsImpl.existsSync(sourceRoot)) {
+    return [];
   }
-
-  if (!fs.existsSync(distBundled)) {
-    fs.mkdirSync(distBundled, { recursive: true });
-  }
-
-  const entries = fs.readdirSync(srcBundled, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const hookName = entry.name;
-    const srcHookDir = path.join(srcBundled, hookName);
-    const distHookDir = path.join(distBundled, hookName);
-    const srcHookMd = path.join(srcHookDir, "HOOK.md");
-    const distHookMd = path.join(distHookDir, "HOOK.md");
-
-    if (!fs.existsSync(srcHookMd)) {
-      console.warn(`[copy-hook-metadata] No HOOK.md found for ${hookName}`);
-      continue;
-    }
-
-    if (!fs.existsSync(distHookDir)) {
-      fs.mkdirSync(distHookDir, { recursive: true });
-    }
-
-    fs.copyFileSync(srcHookMd, distHookMd);
-    console.log(`[copy-hook-metadata] Copied ${hookName}/HOOK.md`);
-  }
-
-  console.log("[copy-hook-metadata] Done");
+  return fsImpl
+    .readdirSync(sourceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      source: path.join(sourceRoot, entry.name, "HOOK.md"),
+      target: path.join(rootDir, "dist", "bundled", entry.name, "HOOK.md"),
+    }))
+    .filter(({ source }) => fsImpl.existsSync(source));
 }
 
-copyHookMetadata();
+export function listHookMetadataOutputs(params: CopyHookMetadataParams = {}): string[] {
+  const rootDir = params.rootDir ?? context.projectRoot;
+  const fsImpl = params.fs ?? fs;
+  return listHookMetadataFiles(rootDir, fsImpl).map(({ target }) =>
+    path.relative(rootDir, target).replaceAll(path.sep, "/"),
+  );
+}
+
+export function copyHookMetadata(params: CopyHookMetadataParams = {}): number {
+  const rootDir = params.rootDir ?? context.projectRoot;
+  const fsImpl = params.fs ?? fs;
+  let copiedCount = 0;
+  for (const { source, target } of listHookMetadataFiles(rootDir, fsImpl)) {
+    fsImpl.mkdirSync(path.dirname(target), { recursive: true });
+    fsImpl.copyFileSync(source, target);
+    copiedCount += 1;
+    if (params.verbose) {
+      logVerboseCopy(context, `Copied ${path.basename(path.dirname(target))}/HOOK.md`);
+    }
+  }
+  return copiedCount;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const copiedCount = copyHookMetadata({ verbose: true });
+  console.log(`${context.prefix} Copied ${copiedCount} hook metadata files.`);
+}

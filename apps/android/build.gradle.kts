@@ -1,6 +1,24 @@
 plugins {
-  id("com.android.application") version "8.13.2" apply false
-  id("org.jetbrains.kotlin.android") version "2.2.21" apply false
-  id("org.jetbrains.kotlin.plugin.compose") version "2.2.21" apply false
-  id("org.jetbrains.kotlin.plugin.serialization") version "2.2.21" apply false
+  alias(libs.plugins.android.application) apply false
+  alias(libs.plugins.android.library) apply false
+  alias(libs.plugins.android.test) apply false
+  alias(libs.plugins.ktlint) apply false
+  alias(libs.plugins.kotlin.compose) apply false
+  alias(libs.plugins.kotlin.serialization) apply false
+}
+
+subprojects {
+  plugins.withId("com.android.application") {
+    tasks.withType<Test>().configureEach {
+      // Robolectric retains SDK/resource sandboxes across the full suite; the Gradle daemon
+      // heap does not apply to these forked workers. Keep their budget explicit and bounded.
+      maxHeapSize = "1g"
+      if (project.path == ":app" && System.getenv("CI_RUNNER_BACKEND") == "blacksmith") {
+        // Separate JVMs keep Robolectric sandboxes isolated while other classes await sockets.
+        maxParallelForks = minOf(2, Runtime.getRuntime().availableProcessors())
+      }
+      // Robolectric 4.17 uses SharedSecrets to initialize SDK 37 file descriptors.
+      jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+    }
+  }
 }

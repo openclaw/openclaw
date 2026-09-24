@@ -4,218 +4,97 @@ read_when:
   - Implementing or updating gateway WS clients
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
-title: "Gateway Protocol"
+title: "Gateway protocol"
+doc-schema-version: 1
 ---
 
-# Gateway protocol (WebSocket)
-
-The Gateway WS protocol is the **single control plane + node transport** for
-OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) connect over WebSocket and declare their **role** + **scope** at
+The Gateway WS protocol is the single control plane and node transport for
+OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
+headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
-## Transport
-
-- WebSocket, text frames with JSON payloads.
-- First frame **must** be a `connect` request.
-
-## Handshake (connect)
-
-Gateway → Client (pre-connect challenge):
-
-```json
-{
-  "type": "event",
-  "event": "connect.challenge",
-  "payload": { "nonce": "…", "ts": 1737264000000 }
-}
-```
-
-Client → Gateway:
-
-```json
-{
-  "type": "req",
-  "id": "…",
-  "method": "connect",
-  "params": {
-    "minProtocol": 3,
-    "maxProtocol": 3,
-    "client": {
-      "id": "cli",
-      "version": "1.2.3",
-      "platform": "macos",
-      "mode": "operator"
-    },
-    "role": "operator",
-    "scopes": ["operator.read", "operator.write"],
-    "caps": [],
-    "commands": [],
-    "permissions": {},
-    "auth": { "token": "…" },
-    "locale": "en-US",
-    "userAgent": "openclaw-cli/1.2.3",
-    "device": {
-      "id": "device_fingerprint",
-      "publicKey": "…",
-      "signature": "…",
-      "signedAt": 1737264000000,
-      "nonce": "…"
-    }
-  }
-}
-```
-
-Gateway → Client:
-
-```json
-{
-  "type": "res",
-  "id": "…",
-  "ok": true,
-  "payload": { "type": "hello-ok", "protocol": 3, "policy": { "tickIntervalMs": 15000 } }
-}
-```
-
-When a device token is issued, `hello-ok` also includes:
-
-```json
-{
-  "auth": {
-    "deviceToken": "…",
-    "role": "operator",
-    "scopes": ["operator.read", "operator.write"]
-  }
-}
-```
-
-### Node example
-
-```json
-{
-  "type": "req",
-  "id": "…",
-  "method": "connect",
-  "params": {
-    "minProtocol": 3,
-    "maxProtocol": 3,
-    "client": {
-      "id": "ios-node",
-      "version": "1.2.3",
-      "platform": "ios",
-      "mode": "node"
-    },
-    "role": "node",
-    "scopes": [],
-    "caps": ["camera", "canvas", "screen", "location", "voice"],
-    "commands": ["camera.snap", "canvas.navigate", "screen.record", "location.get"],
-    "permissions": { "camera.capture": true, "screen.record": false },
-    "auth": { "token": "…" },
-    "locale": "en-US",
-    "userAgent": "openclaw-ios/1.2.3",
-    "device": {
-      "id": "device_fingerprint",
-      "publicKey": "…",
-      "signature": "…",
-      "signedAt": 1737264000000,
-      "nonce": "…"
-    }
-  }
-}
-```
-
-## Framing
-
-- **Request**: `{type:"req", id, method, params}`
-- **Response**: `{type:"res", id, ok, payload|error}`
-- **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
-
-Side-effecting methods require **idempotency keys** (see schema).
-
-## Roles + scopes
-
-### Roles
-
-- `operator` = control plane client (CLI/UI/automation).
-- `node` = capability host (camera/screen/canvas/system.run).
-
-### Scopes (operator)
-
-Common scopes:
-
-- `operator.read`
-- `operator.write`
-- `operator.admin`
-- `operator.approvals`
-- `operator.pairing`
-
-### Caps/commands/permissions (node)
-
-Nodes declare capability claims at connect time:
-
-- `caps`: high-level capability categories.
-- `commands`: command allowlist for invoke.
-- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
-
-The Gateway treats these as **claims** and enforces server-side allowlists.
-
-## Presence
-
-- `system-presence` returns entries keyed by device identity.
-- Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
-  even when it connects as both **operator** and **node**.
-
-### Node helper methods
-
-- Nodes may call `skills.bins` to fetch the current list of skill executables
-  for auto-allow checks.
-
-## Exec approvals
-
-- When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
-- Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
-
-## Versioning
-
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
-- Schemas + models are generated from TypeBox definitions:
-  - `pnpm protocol:gen`
-  - `pnpm protocol:gen:swift`
-  - `pnpm protocol:check`
-
-## Auth
-
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket is closed.
-- After pairing, the Gateway issues a **device token** scoped to the connection
-  role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
-  persisted by the client for future connects.
-- Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
-
-## Device identity + pairing
-
-- Nodes should include a stable device identity (`device.id`) derived from a
-  keypair fingerprint.
-- Gateways issue tokens per device + role.
-- Pairing approvals are required for new device IDs unless local auto-approval
-  is enabled.
-- **Local** connects include loopback and the gateway host’s own tailnet address
-  (so same‑host tailnet binds can still auto‑approve).
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it **only** when `gateway.controlUi.allowInsecureAuth` is enabled
-  (or `gateway.controlUi.dangerouslyDisableDeviceAuth` for break-glass use).
-- Non-local connections must sign the server-provided `connect.challenge` nonce.
-
-## TLS + pinning
-
-- TLS is supported for WS connections.
-- Clients may optionally pin the gateway cert fingerprint (see `gateway.tls`
-  config plus `gateway.remote.tlsFingerprint` or CLI `--tls-fingerprint`).
+Agent tools running inside a Gateway dispatch requests directly through that
+Gateway's router. They retain method scopes, agent and approval authority,
+request deadlines, and cancellation without opening another WebSocket. Explicit
+Gateway URL or token overrides, standalone agents, and separate client processes
+continue to use the WebSocket transport.
 
 ## Scope
 
-This protocol exposes the **full gateway API** (status, channels, models, chat,
-agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
-TypeBox schemas in `src/gateway/protocol/schema.ts`.
+This protocol exposes the full gateway API: status, channels, models, chat,
+agent, sessions, nodes, approvals, and more. The exact surface is defined by
+the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
+
+## What each page covers
+
+- [Transport and framing](/gateway/protocol/transport) — gateway WS transport: packages, frame shapes, limits, and WebRTC Talk control.
+- [Handshake and roles](/gateway/protocol/handshake) — connect frame, hello-ok payload, client capabilities, roles, and scopes.
+- [Presence and events](/gateway/protocol/presence) — presence snapshots, node host stats, and broadcast event scoping.
+- [RPC methods](/gateway/protocol/rpc-methods) — RPC method families, discovery, session list bootstrap, and event families.
+- [Ledger RPCs](/gateway/protocol/ledgers) — audit ledger and task ledger RPCs, their scopes, cursors, and payloads.
+- [Operator methods](/gateway/protocol/operator-methods) — operator helper methods, exec approvals, and agent delivery fallback.
+- [Versioning](/gateway/protocol/versioning) — protocol version constants, the N-1 node window, and client defaults.
+- [Auth and device identity](/gateway/protocol/auth) — handshake auth paths, device identity, pairing signatures, and TLS pinning.
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor here, so an existing link to this page with a fragment still resolves. Each entry points at the page that now holds the content.
+
+- <a id="npm-packages" />[npm packages](/gateway/protocol/transport#npm-packages)
+- <a id="transport-and-framing" />[Transport and framing](/gateway/protocol/transport#transport-and-framing)
+- <a id="gateway-controlled-webrtc-talk" />[Gateway-controlled WebRTC Talk](/gateway/protocol/transport#gateway-controlled-webrtc-talk)
+- <a id="handshake" />[Handshake](/gateway/protocol/handshake#handshake)
+- <a id="worker-role-and-closed-protocol" />[Worker role and closed protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol)
+- <a id="client-capabilities" />[Client capabilities](/gateway/protocol/handshake#client-capabilities)
+- <a id="node-connect-example" />[Node connect example](/gateway/protocol/handshake#node-connect-example)
+- <a id="roles-and-scopes" />[Roles and scopes](/gateway/protocol/handshake#roles-and-scopes)
+- <a id="caps%2Fcommands%2Fpermissions-(node)" />[Caps/commands/permissions (node)](</gateway/protocol/handshake#caps%2Fcommands%2Fpermissions-(node)>)
+- <a id="caps/commands/permissions-node" />[Caps/commands/permissions (node)](/gateway/protocol/handshake#caps/commands/permissions-node)
+- <a id="presence" />[Presence](/gateway/protocol/presence#presence)
+- <a id="node-host-stats" />[Node host stats](/gateway/protocol/presence#node-host-stats)
+- <a id="node-background-alive-event" />[Node background alive event](/gateway/protocol/presence#node-background-alive-event)
+- <a id="broadcast-event-scoping" />[Broadcast event scoping](/gateway/protocol/presence#broadcast-event-scoping)
+- <a id="rpc-method-families" />[RPC method families](/gateway/protocol/rpc-methods#rpc-method-families)
+- <a id="system-and-identity" />[System and identity](/gateway/protocol/rpc-methods#system-and-identity)
+- <a id="models-and-usage" />[Models and usage](/gateway/protocol/rpc-methods#models-and-usage)
+- <a id="channels-and-login-helpers" />[Channels and login helpers](/gateway/protocol/rpc-methods#channels-and-login-helpers)
+- <a id="plugin-management" />[Plugin management](/gateway/protocol/rpc-methods#plugin-management)
+- <a id="messaging-and-logs" />[Messaging and logs](/gateway/protocol/rpc-methods#messaging-and-logs)
+- <a id="operator-terminal" />[Operator terminal](/gateway/protocol/rpc-methods#operator-terminal)
+- <a id="talk-and-tts" />[Talk and TTS](/gateway/protocol/rpc-methods#talk-and-tts)
+- <a id="secrets-config-update-and-wizard" />[Secrets, config, update, and wizard](/gateway/protocol/rpc-methods#secrets-config-update-and-wizard)
+- <a id="agent-and-workspace-helpers" />[Agent and workspace helpers](/gateway/protocol/rpc-methods#agent-and-workspace-helpers)
+- <a id="session-control" />[Session control](/gateway/protocol/rpc-methods#session-control)
+- <a id="device-pairing-and-device-tokens" />[Device pairing and device tokens](/gateway/protocol/rpc-methods#device-pairing-and-device-tokens)
+- <a id="node-pairing-invoke-and-pending-work" />[Node pairing, invoke, and pending work](/gateway/protocol/rpc-methods#node-pairing-invoke-and-pending-work)
+- <a id="approval-families" />[Approval families](/gateway/protocol/rpc-methods#approval-families)
+- <a id="control-ui-commands" />[Control UI commands](/gateway/protocol/rpc-methods#control-ui-commands)
+- <a id="automation-skills-and-tools" />[Automation, skills, and tools](/gateway/protocol/rpc-methods#automation-skills-and-tools)
+- <a id="session-list-bootstrap" />[Session list bootstrap](/gateway/protocol/rpc-methods#session-list-bootstrap)
+- <a id="common-event-families" />[Common event families](/gateway/protocol/rpc-methods#common-event-families)
+- <a id="node-helper-methods" />[Node helper methods](/gateway/protocol/rpc-methods#node-helper-methods)
+- <a id="node-exec-lifecycle-events" />[Node exec lifecycle events](/gateway/protocol/rpc-methods#node-exec-lifecycle-events)
+- <a id="audit-ledger-rpc" />[Audit ledger RPC](/gateway/protocol/ledgers#audit-ledger-rpc)
+- <a id="task-ledger-rpcs" />[Task ledger RPCs](/gateway/protocol/ledgers#task-ledger-rpcs)
+- <a id="operator-helper-methods" />[Operator helper methods](/gateway/protocol/operator-methods#operator-helper-methods)
+- <a id="models.list-views" />[`models.list` views](/gateway/protocol/operator-methods#models.list-views)
+- <a id="models-list-views" />[`models.list` views](/gateway/protocol/operator-methods#models-list-views)
+- <a id="exec-approvals" />[Exec approvals](/gateway/protocol/operator-methods#exec-approvals)
+- <a id="agent-delivery-fallback" />[Agent delivery fallback](/gateway/protocol/operator-methods#agent-delivery-fallback)
+- <a id="versioning" />[Versioning](/gateway/protocol/versioning#versioning)
+- <a id="client-constants" />[Client constants](/gateway/protocol/versioning#client-constants)
+- <a id="auth" />[Auth](/gateway/protocol/auth#auth)
+- <a id="device-identity-and-pairing" />[Device identity and pairing](/gateway/protocol/auth#device-identity-and-pairing)
+- <a id="device-auth-migration-diagnostics" />[Device auth migration diagnostics](/gateway/protocol/auth#device-auth-migration-diagnostics)
+- <a id="tls-and-pinning" />[TLS and pinning](/gateway/protocol/auth#tls-and-pinning)
+
+## Related
+
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
+- [Gateway runbook](/gateway)
+- [Operator scopes](/gateway/operator-scopes) — the scopes protocol methods are authorized against
+- [Audit history](/gateway/audit) — metadata-only activity history and decision receipts
+- [Pairing](/channels/pairing) — approve who can DM you and which nodes can join
+- [Cloud Workers](/gateway/cloud-workers) — worker sessions driven over this protocol
+- [Tools invoke API](/gateway/tools-invoke-http-api) — invoke a single tool directly via the Gateway HTTP endpoint

@@ -1,92 +1,22 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { normalizeFeishuTarget } from "./targets.js";
+import {
+  listFeishuDirectoryGroups,
+  listFeishuDirectoryPeers,
+  type FeishuDirectoryGroup,
+  type FeishuDirectoryPeer,
+} from "./directory.static.js";
 
-export type FeishuDirectoryPeer = {
-  kind: "user";
-  id: string;
-  name?: string;
-};
-
-export type FeishuDirectoryGroup = {
-  kind: "group";
-  id: string;
-  name?: string;
-};
-
-export async function listFeishuDirectoryPeers(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryPeer[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const entry of feishuCfg?.allowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const userId of Object.keys(feishuCfg?.dms ?? {})) {
-    const trimmed = userId.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => normalizeFeishuTarget(raw) ?? raw)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "user" as const, id }));
-}
-
-export async function listFeishuDirectoryGroups(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-}): Promise<FeishuDirectoryGroup[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const q = params.query?.trim().toLowerCase() || "";
-  const ids = new Set<string>();
-
-  for (const groupId of Object.keys(feishuCfg?.groups ?? {})) {
-    const trimmed = groupId.trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  for (const entry of feishuCfg?.groupAllowFrom ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") {
-      ids.add(trimmed);
-    }
-  }
-
-  return Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-    .slice(0, params.limit && params.limit > 0 ? params.limit : undefined)
-    .map((id) => ({ kind: "group" as const, id }));
-}
+const MAX_FEISHU_DIRECTORY_PAGES = 100;
 
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;
   query?: string;
   limit?: number;
   accountId?: string;
+  fallbackToStatic?: boolean;
 }): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
@@ -97,19 +27,29 @@ export async function listFeishuDirectoryPeersLive(params: {
     const client = createFeishuClient(account);
     const peers: FeishuDirectoryPeer[] = [];
     const limit = params.limit ?? 50;
+    const q = normalizeLowercaseStringOrEmpty(params.query);
+    const pageSize = q ? 50 : Math.min(limit, 50);
+    let pageToken: string | undefined;
+    const seenPageTokens = new Set<string>();
 
-    const response = await client.contact.user.list({
-      params: {
-        page_size: Math.min(limit, 50),
-      },
-    });
-
-    if (response.code === 0 && response.data?.items) {
-      for (const user of response.data.items) {
+    for (let page = 0; page < MAX_FEISHU_DIRECTORY_PAGES; page += 1) {
+      const response = await client.contact.user.list({
+        params: {
+          page_size: pageSize,
+          page_token: pageToken,
+        },
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      for (const user of response.data?.items ?? []) {
         if (user.open_id) {
-          const q = params.query?.trim().toLowerCase() || "";
           const name = user.name || "";
-          if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+          if (
+            !q ||
+            normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
+            normalizeLowercaseStringOrEmpty(name).includes(q)
+          ) {
             peers.push({
               kind: "user",
               id: user.open_id,
@@ -118,13 +58,28 @@ export async function listFeishuDirectoryPeersLive(params: {
           }
         }
         if (peers.length >= limit) {
-          break;
+          return peers;
         }
       }
-    }
+      if (!response.data?.has_more) {
+        return peers;
+      }
 
-    return peers;
-  } catch {
+      const nextPageToken = response.data.page_token;
+      if (!nextPageToken) {
+        throw new Error("Feishu live peer directory returned an empty page token");
+      }
+      if (seenPageTokens.has(nextPageToken)) {
+        throw new Error("Feishu live peer directory returned a repeated page token");
+      }
+      seenPageTokens.add(nextPageToken);
+      pageToken = nextPageToken;
+    }
+    throw new Error("Feishu live peer directory pagination limit exceeded");
+  } catch (err) {
+    if (params.fallbackToStatic === false) {
+      throw err instanceof Error ? err : new Error("Feishu live peer lookup failed");
+    }
     return listFeishuDirectoryPeers(params);
   }
 }
@@ -134,6 +89,8 @@ export async function listFeishuDirectoryGroupsLive(params: {
   query?: string;
   limit?: number;
   accountId?: string;
+  fallbackToStatic?: boolean;
+  filter?: (group: FeishuDirectoryGroup) => boolean;
 }): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
@@ -144,34 +101,59 @@ export async function listFeishuDirectoryGroupsLive(params: {
     const client = createFeishuClient(account);
     const groups: FeishuDirectoryGroup[] = [];
     const limit = params.limit ?? 50;
-
-    const response = await client.im.chat.list({
-      params: {
-        page_size: Math.min(limit, 100),
-      },
-    });
-
-    if (response.code === 0 && response.data?.items) {
-      for (const chat of response.data.items) {
+    const q = normalizeLowercaseStringOrEmpty(params.query);
+    let pageToken: string | undefined;
+    let pages = 0;
+    const seenPageTokens = new Set<string>();
+    do {
+      const response = await client.im.chat.list({
+        params: {
+          page_size: Math.min(limit, 100),
+          page_token: pageToken,
+        },
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      for (const chat of response.data?.items ?? []) {
         if (chat.chat_id) {
-          const q = params.query?.trim().toLowerCase() || "";
           const name = chat.name || "";
-          if (!q || chat.chat_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
-            groups.push({
-              kind: "group",
-              id: chat.chat_id,
-              name: name || undefined,
-            });
+          const group = {
+            kind: "group",
+            id: chat.chat_id,
+            name: name || undefined,
+          } satisfies FeishuDirectoryGroup;
+          const matchesQuery =
+            !q ||
+            normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
+            normalizeLowercaseStringOrEmpty(name).includes(q);
+          if (matchesQuery && (!params.filter || params.filter(group))) {
+            groups.push(group);
           }
         }
         if (groups.length >= limit) {
           break;
         }
       }
+      pages += 1;
+      const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
+      if (nextPageToken && seenPageTokens.has(nextPageToken)) {
+        throw new Error("Feishu live group directory returned a repeated page token");
+      }
+      if (nextPageToken) {
+        seenPageTokens.add(nextPageToken);
+      }
+      pageToken = nextPageToken;
+    } while (pageToken && groups.length < limit && pages < MAX_FEISHU_DIRECTORY_PAGES);
+    if (pageToken && pages >= MAX_FEISHU_DIRECTORY_PAGES) {
+      throw new Error("Feishu live group directory pagination limit exceeded");
     }
 
     return groups;
-  } catch {
+  } catch (err) {
+    if (params.fallbackToStatic === false) {
+      throw err instanceof Error ? err : new Error("Feishu live group lookup failed");
+    }
     return listFeishuDirectoryGroups(params);
   }
 }

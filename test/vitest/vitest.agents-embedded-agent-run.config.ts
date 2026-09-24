@@ -1,0 +1,15 @@
+// Vitest embedded agent run config owns the attempt-runner subtree.
+import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
+import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+
+export function createAgentsEmbeddedRunVitestConfig(env?: Record<string, string | undefined>) {
+  const owner = agentVitestProjectOwners.embeddedRun;
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.dir,
+    env,
+    exclude: owner.exclude,
+    name: owner.name,
+  });
+}
+
+export default createAgentsEmbeddedRunVitestConfig();

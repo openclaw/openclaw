@@ -1,34 +1,34 @@
-import type { RuntimeEnv } from "../../runtime.js";
+/** Command for setting the default text model. */
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolveModelTarget, updateConfig } from "./shared.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
+import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { updateDefaultModelPrimaryConfig } from "./shared.js";
 
+/** Sets agents.defaults.model.primary and repairs provider runtime plugin installs when needed. */
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const updated = await updateConfig((cfg) => {
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const key = `${resolved.provider}/${resolved.model}`;
-    const nextModels = { ...cfg.agents?.defaults?.models };
-    if (!nextModels[key]) {
-      nextModels[key] = {};
-    }
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          model: {
-            ...(existingModel?.fallbacks ? { fallbacks: existingModel.fallbacks } : undefined),
-            primary: key,
-          },
-          models: nextModels,
-        },
-      },
-    };
+  const { updated, warning: catalogWarning } = await updateDefaultModelPrimaryConfig({
+    modelRaw,
+    field: "model",
   });
+  if (catalogWarning) {
+    runtime.error?.(catalogWarning);
+  }
+  const selectedModel = resolveAgentModelPrimaryValue(updated.agents?.defaults?.model) ?? modelRaw;
+  const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+    cfg: updated,
+    model: selectedModel,
+  });
+  const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+    cfg: updated,
+    model: selectedModel,
+  });
+  const warnings = [...repaired.warnings, ...copilotRepaired.warnings];
+  for (const warning of warnings) {
+    runtime.error?.(warning);
+  }
 
   logConfigUpdated(runtime);
-  runtime.log(`Default model: ${updated.agents?.defaults?.model?.primary ?? modelRaw}`);
+  runtime.log(`Default model: ${selectedModel}`);
 }

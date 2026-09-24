@@ -1,48 +1,35 @@
+// Renders `openclaw status --all` report data into terminal lines.
+// Styling is applied here so data builders remain color/theme agnostic.
+
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
-import { renderTable } from "../../terminal/table.js";
-import { isRich, theme } from "../../terminal/theme.js";
+import type { BestEffortConfigSnapshot } from "../../config/io.js";
+import { formatStatusConfigDiagnosticEntries } from "../status.format.js";
+import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
-import { formatTimeAgo } from "./format.js";
+import {
+  buildStatusAgentTableRows,
+  buildStatusChannelDetailSections,
+  statusAgentsTableColumns,
+  statusOverviewTableColumns,
+} from "./report-tables.js";
+import { appendStatusReportHeading, appendStatusReportTable } from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
 
-type ChannelsTable = {
-  rows: Array<{
-    id: string;
-    label: string;
-    enabled: boolean;
-    state: "ok" | "warn" | "off" | "setup";
-    detail: string;
-  }>;
-  details: Array<{
-    title: string;
-    columns: string[];
-    rows: Array<Record<string, string>>;
-  }>;
-};
-
-type ChannelIssueLike = {
-  channel: string;
-  message: string;
-};
-
-type AgentStatusLike = {
-  agents: Array<{
-    id: string;
-    name?: string | null;
-    bootstrapPending?: boolean | null;
-    sessionsCount: number;
-    lastActiveAgeMs?: number | null;
-    sessionsPath: string;
-  }>;
-};
-
+/** Builds the complete status-all text report, including overview tables and diagnosis lines. */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   overviewRows: OverviewRow[];
-  channels: ChannelsTable;
-  channelIssues: ChannelIssueLike[];
-  agentStatus: AgentStatusLike;
+  channels: {
+    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
+    details: Parameters<typeof buildStatusChannelDetailSections>[0]["details"];
+  };
+  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
+  agentStatus: Parameters<typeof buildStatusAgentTableRows>[0]["agentStatus"];
   connectionDetailsForReport: string;
   diagnosis: Omit<
     Parameters<typeof appendStatusAllDiagnosis>[0],
@@ -56,130 +43,44 @@ export async function buildStatusAllReportLines(params: {
   const fail = (text: string) => (rich ? theme.error(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
 
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-
-  const overview = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Item", header: "Item", minWidth: 10 },
-      { key: "Value", header: "Value", flex: true, minWidth: 24 },
-    ],
-    rows: params.overviewRows,
-  });
-
-  const channelRows = params.channels.rows.map((row) => ({
-    channelId: row.id,
-    Channel: row.label,
-    Enabled: row.enabled ? ok("ON") : muted("OFF"),
-    State:
-      row.state === "ok"
-        ? ok("OK")
-        : row.state === "warn"
-          ? warn("WARN")
-          : row.state === "off"
-            ? muted("OFF")
-            : theme.accentDim("SETUP"),
-    Detail: row.detail,
-  }));
-  const channelIssuesByChannel = (() => {
-    const map = new Map<string, ChannelIssueLike[]>();
-    for (const issue of params.channelIssues) {
-      const key = issue.channel;
-      const list = map.get(key);
-      if (list) {
-        list.push(issue);
-      } else {
-        map.set(key, [issue]);
-      }
-    }
-    return map;
-  })();
-  const channelRowsWithIssues = channelRows.map((row) => {
-    const issues = channelIssuesByChannel.get(row.channelId) ?? [];
-    if (issues.length === 0) {
-      return row;
-    }
-    const issue = issues[0];
-    const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;
-    return {
-      ...row,
-      State: warn("WARN"),
-      Detail: `${row.Detail}${suffix}`,
-    };
-  });
-
-  const channelsTable = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Channel", header: "Channel", minWidth: 10 },
-      { key: "Enabled", header: "Enabled", minWidth: 7 },
-      { key: "State", header: "State", minWidth: 8 },
-      { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
-    ],
-    rows: channelRowsWithIssues,
-  });
-
-  const agentRows = params.agentStatus.agents.map((a) => ({
-    Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
-    Bootstrap:
-      a.bootstrapPending === true
-        ? warn("PENDING")
-        : a.bootstrapPending === false
-          ? ok("OK")
-          : "unknown",
-    Sessions: String(a.sessionsCount),
-    Active: a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
-    Store: a.sessionsPath,
-  }));
-
-  const agentsTable = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "Bootstrap", header: "Bootstrap", minWidth: 10 },
-      { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
-      { key: "Active", header: "Active", minWidth: 10 },
-      { key: "Store", header: "Store", flex: true, minWidth: 34 },
-    ],
-    rows: agentRows,
-  });
+  const tableWidth = getTerminalTableWidth();
 
   const lines: string[] = [];
-  lines.push(heading("OpenClaw status --all"));
-  lines.push("");
-  lines.push(heading("Overview"));
-  lines.push(overview.trimEnd());
-  lines.push("");
-  lines.push(heading("Channels"));
-  lines.push(channelsTable.trimEnd());
-  for (const detail of params.channels.details) {
-    lines.push("");
-    lines.push(heading(detail.title));
+  if (params.configDiagnostics) {
     lines.push(
-      renderTable({
-        width: tableWidth,
-        columns: detail.columns.map((c) => ({
-          key: c,
-          header: c,
-          flex: c === "Notes",
-          minWidth: c === "Notes" ? 28 : 10,
-        })),
-        rows: detail.rows.map((r) => ({
-          ...r,
-          ...(r.Status === "OK"
-            ? { Status: ok("OK") }
-            : r.Status === "WARN"
-              ? { Status: warn("WARN") }
-              : {}),
-        })),
-      }).trimEnd(),
+      warn("Config diagnostics:"),
+      ...formatStatusConfigDiagnosticEntries(params.configDiagnostics),
+      "",
     );
   }
-  lines.push("");
-  lines.push(heading("Agents"));
-  lines.push(agentsTable.trimEnd());
-  lines.push("");
-  lines.push(heading("Diagnosis (read-only)"));
+  lines.push(heading("OpenClaw status --all"));
+  const report = { lines, heading, width: tableWidth, renderTable };
+  const overviewColumns = [...statusOverviewTableColumns];
+  const overviewRows = params.overviewRows;
+  // Prepare every styled row before table rendering so callbacks retain their existing order.
+  const channelColumns = statusChannelsTableColumns.map((column) =>
+    column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
+  );
+  const channelRows = buildStatusChannelsTableRows({
+    rows: params.channels.rows,
+    channelIssues: params.channelIssues,
+    ok,
+    warn,
+    muted,
+    accentDim: theme.accentDim,
+    formatIssueMessage: (message) => truncateUtf16Safe(message, 90),
+  });
+  const details = buildStatusChannelDetailSections({ details: params.channels.details, ok, warn });
+  const agentColumns = [...statusAgentsTableColumns];
+  const agentRows = buildStatusAgentTableRows({ agentStatus: params.agentStatus, ok, warn });
+
+  appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
+  appendStatusReportTable(report, "Channels", channelColumns, channelRows);
+  for (const detail of details) {
+    appendStatusReportTable(report, detail.title, detail.columns, detail.rows);
+  }
+  appendStatusReportTable(report, "Agents", agentColumns, agentRows);
+  appendStatusReportHeading(report, "Diagnosis (read-only)");
 
   await appendStatusAllDiagnosis({
     lines,

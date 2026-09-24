@@ -1,0 +1,56 @@
+{
+  "id": "exa",
+  "categories": ["web"],
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "exa",
+        "envVars": ["EXA_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Exa API Key",
+      "help": "Exa Search API key (fallback: EXA_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "exa-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Exa Search Base URL",
+      "help": "Optional Exa Search API base URL override. OpenClaw appends /search when the URL does not already end there."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["exa"]
+  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

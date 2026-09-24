@@ -1,245 +1,216 @@
+/** Cron job scheduling, validation, creation, and patch helpers. */
 import crypto from "node:crypto";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
+import type { CronConfig } from "../../config/types.cron.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { assertCronJobStateTimestamps } from "../persisted-shape.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import { normalizeCronScriptPayload } from "../script-payload.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
+import { createCronStreamSourceIdentity } from "../stream-schedule.js";
+import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
-  CronJob,
+  CronFailureAlert,
+  CronFailureAlertPatch,
   CronJobCreate,
   CronJobPatch,
-  CronPayload,
-  CronPayloadPatch,
+  CronJobState,
+  CronSchedule,
+  CronStoredJob,
+  CronToolsAllowExecTarget,
+  CronToolsAllowProvenance,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
+import { resolveInitialCronDelivery } from "./initial-delivery.js";
+import { normalizeDeclarativeLabel } from "./jobs-declarative.js";
 import {
-  normalizeOptionalAgentId,
-  normalizeOptionalText,
-  normalizePayloadToSystemText,
-  normalizeRequiredName,
-} from "./normalize.js";
+  computeJobNextRunAtMs,
+  normalizeStreamScheduleBounds,
+  resolveEveryAnchorMs,
+} from "./jobs-scheduling.js";
+import { reconcileToolsAllowAuthority } from "./jobs-tool-policy.js";
+import {
+  assertAnnounceDeliveryChannelSupport,
+  assertTimeScheduleSatisfiable,
+  assertDeliverySupport,
+  assertFailureDestinationSupport,
+  assertMainSessionAgentId,
+  assertPacingSupport,
+  assertScriptPayloadSupport,
+  assertStreamScheduleSupport,
+  assertSupportedJobSpec,
+  assertTriggerSupport,
+} from "./jobs-validation.js";
+import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
+import { mergeCronPayload } from "./payload-merge.js";
+import type { CronServiceState } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
-function resolveEveryAnchorMs(params: {
-  schedule: { everyMs: number; anchorMs?: number };
-  fallbackAnchorMs: number;
-}) {
-  const raw = params.schedule.anchorMs;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.max(0, Math.floor(raw));
+function resetJobFailureState(job: CronStoredJob): void {
+  delete job.state.autoDisabled;
+  job.state.consecutiveErrors = 0;
+  job.state.scheduleErrorCount = 0;
+  if (job.schedule.kind === "stream") {
+    job.state.streamRestartExhausted = undefined;
+    job.state.streamConsecutiveFailures = 0;
+    job.state.streamError = undefined;
   }
-  return Math.max(0, Math.floor(params.fallbackAnchorMs));
 }
 
-export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
+type ScheduleNormalizationContext =
+  | { kind: "create"; nowMs: number }
+  | { kind: "patch"; previous: CronSchedule }
+  | { kind: "declarative"; previous: CronSchedule; nowMs: number; fallbackAnchorMs: number };
+
+function normalizeJobSchedule(
+  schedule: CronSchedule,
+  context: ScheduleNormalizationContext,
+): CronSchedule {
+  if (schedule.kind === "every") {
+    if (context.kind === "patch") {
+      return schedule;
+    }
+    if (context.kind === "create") {
+      return {
+        ...schedule,
+        anchorMs: resolveEveryAnchorMs({ schedule, fallbackAnchorMs: context.nowMs }),
+      };
+    }
+    if (schedule.anchorMs !== undefined) {
+      return schedule;
+    }
+    const anchorMs =
+      context.previous.kind === "every" && context.previous.everyMs === schedule.everyMs
+        ? resolveEveryAnchorMs({
+            schedule: context.previous,
+            fallbackAnchorMs: context.fallbackAnchorMs,
+          })
+        : context.nowMs;
+    return {
+      ...schedule,
+      anchorMs,
+    };
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (schedule.kind === "cron") {
+    const explicitStaggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+    if (explicitStaggerMs !== undefined) {
+      return { ...schedule, staggerMs: explicitStaggerMs };
+    }
+    if (
+      context.kind !== "create" &&
+      context.previous.kind === "cron" &&
+      context.previous.expr === schedule.expr
+    ) {
+      return { ...schedule, staggerMs: context.previous.staggerMs };
+    }
+    const defaultStaggerMs = resolveDefaultCronStaggerMs(schedule.expr);
+    if (defaultStaggerMs !== undefined) {
+      return { ...schedule, staggerMs: defaultStaggerMs };
+    }
+    return context.kind === "declarative" ? { ...schedule } : schedule;
   }
+  const input = context.kind === "declarative" ? structuredClone(schedule) : schedule;
+  return normalizeStreamScheduleBounds(input);
 }
 
-function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (job.delivery && job.sessionTarget !== "isolated") {
-    throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
-  }
-}
+type JobValidationContext =
+  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
+  | {
+      kind: "patch";
+      patch: CronJobPatch;
+      defaultAgentId?: string;
+      nowMs?: number;
+      cronConfig?: CronConfig;
+    }
+  | {
+      kind: "declarative";
+      input: CronJobCreate;
+      defaultAgentId?: string;
+      nowMs: number;
+      cronConfig?: CronConfig;
+    };
 
-export function findJobOrThrow(state: CronServiceState, id: string) {
-  const job = state.store?.jobs.find((j) => j.id === id);
-  if (!job) {
-    throw new Error(`unknown cron job id: ${id}`);
-  }
-  return job;
-}
-
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled) {
-    return undefined;
-  }
-  if (job.schedule.kind === "every") {
-    const anchorMs = resolveEveryAnchorMs({
-      schedule: job.schedule,
-      fallbackAnchorMs: job.createdAtMs,
+function validateFullJob(
+  job: CronStoredJob,
+  context: JobValidationContext,
+  configuredChannels?: readonly string[],
+) {
+  const cronConfig = context.cronConfig;
+  const triggerTouched =
+    context.kind === "create"
+      ? job.trigger !== undefined
+      : context.kind === "patch"
+        ? context.patch.trigger != null
+        : context.input.trigger !== undefined;
+  const scriptTouched =
+    context.kind === "create"
+      ? job.payload.kind === "script"
+      : context.kind === "patch"
+        ? context.patch.payload?.kind === "script"
+        : context.input.payload.kind === "script";
+  const streamTouched =
+    context.kind !== "patch" ||
+    context.patch.enabled === true ||
+    context.patch.schedule?.kind === "stream";
+  const validateCapabilities = () => {
+    assertTriggerSupport(job, {
+      cronConfig,
+      validateAuthoredTrigger: triggerTouched,
     });
-    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
+    assertScriptPayloadSupport(job, {
+      cronConfig,
+      requireEnabled: scriptTouched,
+      ...(context.kind === "patch" ? { validateSyntax: context.patch.payload !== undefined } : {}),
+    });
+    assertStreamScheduleSupport(job, { cronConfig, requireEnabled: streamTouched });
+  };
+  if (context.kind === "declarative") {
+    validateCapabilities();
   }
-  if (job.schedule.kind === "at") {
-    // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
-      return undefined;
-    }
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const schedule = job.schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
-        ? schedule.atMs
-        : typeof schedule.atMs === "string"
-          ? parseAbsoluteTimeMs(schedule.atMs)
-          : typeof schedule.at === "string"
-            ? parseAbsoluteTimeMs(schedule.at)
-            : null;
-    return atMs !== null ? atMs : undefined;
+  assertSupportedJobSpec(job);
+  assertPacingSupport(job);
+  if (context.kind !== "declarative") {
+    validateCapabilities();
   }
-  return computeNextRunAtMs(job.schedule, nowMs);
-}
-
-/** Maximum consecutive schedule errors before auto-disabling a job. */
-const MAX_SCHEDULE_ERRORS = 3;
-
-export function recomputeNextRuns(state: CronServiceState): boolean {
-  if (!state.store) {
-    return false;
-  }
-  let changed = false;
-  const now = state.deps.nowMs();
-  for (const job of state.store.jobs) {
-    if (!job.state) {
-      job.state = {};
-      changed = true;
-    }
-    if (!job.enabled) {
-      if (job.state.nextRunAtMs !== undefined) {
-        job.state.nextRunAtMs = undefined;
-        changed = true;
-      }
-      if (job.state.runningAtMs !== undefined) {
-        job.state.runningAtMs = undefined;
-        changed = true;
-      }
-      continue;
-    }
-    const runningAt = job.state.runningAtMs;
-    if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
-      state.deps.log.warn(
-        { jobId: job.id, runningAtMs: runningAt },
-        "cron: clearing stuck running marker",
-      );
-      job.state.runningAtMs = undefined;
-      changed = true;
-    }
-    // Only recompute if nextRunAtMs is missing or already past-due.
-    // Preserving a still-future nextRunAtMs avoids accidentally advancing
-    // a job that hasn't fired yet (e.g. during restart recovery).
-    const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
-    if (isDueOrMissing) {
-      try {
-        const newNext = computeJobNextRunAtMs(job, now);
-        if (job.state.nextRunAtMs !== newNext) {
-          job.state.nextRunAtMs = newNext;
-          changed = true;
-        }
-        // Clear schedule error count on successful computation.
-        if (job.state.scheduleErrorCount) {
-          job.state.scheduleErrorCount = undefined;
-          changed = true;
-        }
-      } catch (err) {
-        const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
-        job.state.scheduleErrorCount = errorCount;
-        job.state.nextRunAtMs = undefined;
-        job.state.lastError = `schedule error: ${String(err)}`;
-        changed = true;
-
-        if (errorCount >= MAX_SCHEDULE_ERRORS) {
-          job.enabled = false;
-          state.deps.log.error(
-            { jobId: job.id, name: job.name, errorCount, err: String(err) },
-            "cron: auto-disabled job after repeated schedule errors",
-          );
-        } else {
-          state.deps.log.warn(
-            { jobId: job.id, name: job.name, errorCount, err: String(err) },
-            "cron: failed to compute next run for job (skipping)",
-          );
-        }
-      }
-    }
-  }
-  return changed;
-}
-
-/**
- * Maintenance-only version of recomputeNextRuns that handles disabled jobs
- * and stuck markers, but does NOT recompute nextRunAtMs for enabled jobs
- * with existing values. Used during timer ticks when no due jobs were found
- * to prevent silently advancing past-due nextRunAtMs values without execution
- * (see #13992).
- */
-export function recomputeNextRunsForMaintenance(state: CronServiceState): boolean {
-  if (!state.store) {
-    return false;
-  }
-  let changed = false;
-  const now = state.deps.nowMs();
-  for (const job of state.store.jobs) {
-    if (!job.state) {
-      job.state = {};
-      changed = true;
-    }
-    if (!job.enabled) {
-      if (job.state.nextRunAtMs !== undefined) {
-        job.state.nextRunAtMs = undefined;
-        changed = true;
-      }
-      if (job.state.runningAtMs !== undefined) {
-        job.state.runningAtMs = undefined;
-        changed = true;
-      }
-      continue;
-    }
-    const runningAt = job.state.runningAtMs;
-    if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
-      state.deps.log.warn(
-        { jobId: job.id, runningAtMs: runningAt },
-        "cron: clearing stuck running marker",
-      );
-      job.state.runningAtMs = undefined;
-      changed = true;
-    }
-    // Only compute missing nextRunAtMs, do NOT recompute existing ones.
-    // If a job was past-due but not found by findDueJobs, recomputing would
-    // cause it to be silently skipped.
-    if (job.state.nextRunAtMs === undefined) {
-      const newNext = computeJobNextRunAtMs(job, now);
-      if (newNext !== undefined) {
-        job.state.nextRunAtMs = newNext;
-        changed = true;
-      }
-    }
-  }
-  return changed;
-}
-
-export function nextWakeAtMs(state: CronServiceState) {
-  const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
-  if (enabled.length === 0) {
-    return undefined;
-  }
-  return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs as number),
-    enabled[0].state.nextRunAtMs as number,
+  assertMainSessionAgentId(
+    job,
+    context.defaultAgentId,
+    context.kind === "patch" ? context.patch : undefined,
   );
+  assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(
+    job,
+    configuredChannels,
+    context.kind === "patch" ? context.patch : undefined,
+  );
+  assertFailureDestinationSupport(job);
+  const scheduleTouched =
+    context.kind !== "patch" ||
+    context.patch.schedule !== undefined ||
+    context.patch.enabled === true;
+  if (context.nowMs !== undefined && scheduleTouched) {
+    assertTimeScheduleSatisfiable(job, context.nowMs, computeJobNextRunAtMs);
+  }
 }
-
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+/** Creates a normalized cron job row from public add input and computes its initial schedule. */
+export function createJob(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: DeliveryValidationOptions & {
+    scheduledToolPolicy?: CronScheduledToolPolicy;
+    toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  },
+): CronStoredJob {
   const now = state.deps.nowMs();
-  const id = crypto.randomUUID();
-  const schedule =
-    input.schedule.kind === "every"
-      ? {
-          ...input.schedule,
-          anchorMs: resolveEveryAnchorMs({
-            schedule: input.schedule,
-            fallbackAnchorMs: now,
-          }),
-        }
-      : input.schedule;
+  const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
+  const schedule = normalizeJobSchedule(input.schedule, { kind: "create", nowMs: now });
   const deleteAfterRun =
     typeof input.deleteAfterRun === "boolean"
       ? input.deleteAfterRun
@@ -247,45 +218,147 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         ? true
         : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
-  const job: CronJob = {
+  const declarationKey = normalizeDeclarativeLabel(input.declarationKey, "declarationKey");
+  const displayName = normalizeDeclarativeLabel(input.displayName, "displayName");
+  const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
+  const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
+  const ownerAccountId = normalizeOptionalAccountId(input.owner?.accountId);
+  const initialState = { ...input.state } as Partial<CronJobState>;
+  // Schedule activation is stamped only by committed scheduling mutations.
+  // Accepting caller state here would let imports spoof restart catch-up ownership.
+  delete initialState.scheduleActivatedAtMs;
+  delete initialState.runningScheduleChangeId;
+  delete initialState.autoDisabled;
+  assertCronJobStateTimestamps(initialState);
+  const job: CronStoredJob = {
     id,
+    ...(declarationKey ? { declarationKey } : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(ownerAgentId || ownerSessionKey || ownerAccountId
+      ? {
+          owner: {
+            ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+            ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
+          },
+        }
+      : {}),
     agentId: normalizeOptionalAgentId(input.agentId),
+    sessionKey: normalizeOptionalString((input as { sessionKey?: unknown }).sessionKey),
     name: normalizeRequiredName(input.name),
-    description: normalizeOptionalText(input.description),
+    description: normalizeOptionalString(input.description),
     enabled,
     deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
+    ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
-    payload: input.payload,
-    delivery: input.delivery,
+    payload:
+      input.payload.kind === "script"
+        ? normalizeCronScriptPayload(structuredClone(input.payload))
+        : structuredClone(input.payload),
+    delivery: resolveInitialCronDelivery(input),
+    failureAlert: input.failureAlert,
+    ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
-      ...input.state,
+      ...initialState,
+      ...(schedule.kind === "stream"
+        ? { streamSourceIdentity: createCronStreamSourceIdentity() }
+        : {}),
     },
   };
-  assertSupportedJobSpec(job);
-  assertDeliverySupport(job);
+  // New trusted jobs are explicit by construction. Agent-runtime callers are
+  // required to arrive with a creator cap before the service can apply this default.
+  applyDefaultCronToolsAllow(job);
+  reconcileToolsAllowAuthority({
+    job,
+    previouslyUsedToolRuntime: false,
+    explicitlyMutatesToolsAllow: true,
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
+    toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
+  });
+  validateFullJob(
+    job,
+    {
+      kind: "create",
+      cronConfig: state.deps.cronConfig,
+      defaultAgentId: state.deps.defaultAgentId,
+      nowMs: now,
+    },
+    opts?.configuredChannels,
+  );
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
 
-export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
+/** Applies a public cron patch in-place, preserving omitted nested fields and validating the result. */
+export function applyJobPatch(
+  job: CronStoredJob,
+  patch: CronJobPatch,
+  opts?: {
+    defaultAgentId?: string;
+    scheduleValidationNowMs?: number;
+    cronConfig?: CronConfig;
+    scheduledToolPolicy?: CronScheduledToolPolicy | null;
+    toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  } & DeliveryValidationOptions,
+) {
+  const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
+  const previousScheduleKind = job.schedule.kind;
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
   if ("description" in patch) {
-    job.description = normalizeOptionalText(patch.description);
+    job.description = normalizeOptionalString(patch.description);
+  }
+  if ("displayName" in patch) {
+    const displayName = normalizeDeclarativeLabel(patch.displayName, "displayName", true);
+    if (displayName) {
+      job.displayName = displayName;
+    } else {
+      delete job.displayName;
+    }
   }
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
   }
-  if (typeof patch.deleteAfterRun === "boolean") {
+  const hasDeleteAfterRunPatch = typeof patch.deleteAfterRun === "boolean";
+  if (hasDeleteAfterRunPatch) {
     job.deleteAfterRun = patch.deleteAfterRun;
+  } else if (
+    patch.schedule?.kind === "at" &&
+    (previousScheduleKind === "every" || previousScheduleKind === "cron")
+  ) {
+    // A schedule-kind transition starts a new retention contract. Do not let a
+    // recurring job's ignored/stale flag defeat the one-shot cleanup default.
+    job.deleteAfterRun = true;
+  } else if (
+    previousScheduleKind === "at" &&
+    (patch.schedule?.kind === "every" || patch.schedule?.kind === "cron")
+  ) {
+    delete job.deleteAfterRun;
   }
   if (patch.schedule) {
-    job.schedule = patch.schedule;
+    job.schedule = normalizeJobSchedule(patch.schedule, { kind: "patch", previous: job.schedule });
+  }
+  if ("trigger" in patch) {
+    if (patch.trigger === null || patch.trigger === undefined) {
+      delete job.trigger;
+    } else {
+      job.trigger = structuredClone(patch.trigger);
+    }
+  }
+  if ("pacing" in patch) {
+    if (patch.pacing === null || patch.pacing === undefined) {
+      delete job.pacing;
+    } else {
+      job.pacing = structuredClone(patch.pacing);
+    }
   }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
@@ -295,195 +368,370 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
-  }
-  if (!patch.delivery && patch.payload?.kind === "agentTurn") {
-    // Back-compat: legacy clients still update delivery via payload fields.
-    const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
-    if (
-      legacyDeliveryPatch &&
-      job.sessionTarget === "isolated" &&
-      job.payload.kind === "agentTurn"
-    ) {
-      job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
+    if (job.payload.kind === "script") {
+      job.payload = normalizeCronScriptPayload(job.payload);
     }
   }
-  if (patch.delivery) {
-    job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
+  if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
+    // `null` means unrestricted, not a return to ambiguous legacy semantics.
+    // Ordinary edits to an existing capless job intentionally remain legacy.
+    applyDefaultCronToolsAllow(job);
   }
-  if (job.sessionTarget === "main" && job.delivery) {
-    job.delivery = undefined;
+  reconcileToolsAllowAuthority({
+    job,
+    previouslyUsedToolRuntime,
+    explicitlyMutatesToolsAllow:
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
+    toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
+  });
+  if (patch.delivery) {
+    const implicitMode = resolveCronDeliveryPlan(job).mode;
+    job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
+  }
+  if ("failureAlert" in patch) {
+    job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
+  }
+  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+    assertFailureDestinationSupport(job);
+    // Retargeting may discard inherited announce routes, but must not silently
+    // accept a newly authored delivery request before cleanup.
+    const authoredDelivery =
+      patch.delivery && mergeCronDelivery(undefined, patch.delivery, "announce");
+    if (
+      authoredDelivery &&
+      (patch.delivery?.mode !== undefined ||
+        authoredDelivery.channel !== undefined ||
+        authoredDelivery.to !== undefined ||
+        authoredDelivery.threadId !== undefined ||
+        authoredDelivery.accountId !== undefined ||
+        authoredDelivery.completionDestination !== undefined)
+    ) {
+      assertDeliverySupport({ sessionTarget: job.sessionTarget, delivery: authoredDelivery });
+    }
+    // Clear-only failure destinations retain their global-default opt-outs.
+    const failureDestination = job.delivery?.failureDestination;
+    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
   }
   if (patch.state) {
-    job.state = { ...job.state, ...patch.state };
+    const statePatch = { ...patch.state } as Partial<CronJobState>;
+    // Runtime state patches may report execution progress, but the scheduler
+    // alone owns the boundary that decides whether restart catch-up can run.
+    delete statePatch.scheduleActivatedAtMs;
+    delete statePatch.runningScheduleChangeId;
+    delete statePatch.autoDisabled;
+    assertCronJobStateTimestamps(statePatch);
+    job.state = { ...job.state, ...statePatch };
+  }
+  if (patch.enabled === true) {
+    resetJobFailureState(job);
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
-  assertSupportedJobSpec(job);
-  assertDeliverySupport(job);
+  if ("sessionKey" in patch) {
+    job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
+  }
+  if (previousScheduleKind === "stream" && job.schedule.kind !== "stream") {
+    job.state.streamStatus = undefined;
+    job.state.streamError = undefined;
+    job.state.streamConsecutiveFailures = undefined;
+    job.state.streamRestartExhausted = undefined;
+    job.state.streamSourceIdentity = undefined;
+    job.state.streamDroppedBatches = undefined;
+    job.state.streamCoalescedBatches = undefined;
+    job.state.streamLastStartedAtMs = undefined;
+    job.state.streamLastExitAtMs = undefined;
+  }
+  validateFullJob(
+    job,
+    {
+      kind: "patch",
+      patch,
+      defaultAgentId: opts?.defaultAgentId,
+      nowMs: opts?.scheduleValidationNowMs,
+      cronConfig: opts?.cronConfig,
+    },
+    opts?.configuredChannels,
+  );
 }
 
-function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
-  if (patch.kind !== existing.kind) {
-    return buildPayloadFromPatch(patch);
+/** Converges the declared schedule, payload, delivery, and display label only. */
+export function applyDeclarativeJobSpec(
+  job: CronStoredJob,
+  input: CronJobCreate,
+  opts: {
+    defaultAgentId?: string;
+    enabledExplicit: boolean;
+    nowMs: number;
+    cronConfig?: CronConfig;
+    scheduledToolPolicy?: CronScheduledToolPolicy;
+    toolsAllowProvenance?: CronToolsAllowProvenance;
+    toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  } & DeliveryValidationOptions,
+) {
+  const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
+  const previousToolsAllow = job.payload.toolsAllow;
+  const previousToolsAllowIsDefault = job.payload.toolsAllowIsDefault;
+  // Name, target, routing, owner, and run policy remain outside declaration
+  // convergence; changing those uses cron.update and cannot retarget an identity.
+  const displayName = normalizeDeclarativeLabel(input.displayName, "displayName");
+  if (displayName) {
+    job.displayName = displayName;
+  } else {
+    delete job.displayName;
   }
 
-  if (patch.kind === "systemEvent") {
-    if (existing.kind !== "systemEvent") {
-      return buildPayloadFromPatch(patch);
+  job.schedule = normalizeJobSchedule(input.schedule, {
+    kind: "declarative",
+    previous: job.schedule,
+    nowMs: opts.nowMs,
+    fallbackAnchorMs: job.createdAtMs,
+  });
+  if (input.pacing !== undefined) {
+    job.pacing = structuredClone(input.pacing);
+  } else {
+    delete job.pacing;
+  }
+  job.payload =
+    input.payload.kind === "script"
+      ? normalizeCronScriptPayload(structuredClone(input.payload))
+      : structuredClone(input.payload);
+  if (input.trigger) {
+    job.trigger = structuredClone(input.trigger);
+  } else {
+    delete job.trigger;
+  }
+  if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
+    if (previousToolsAllow !== undefined) {
+      // Omitted declaration fields preserve explicit authority already stored
+      // on the job, including the server-managed creator-default marker.
+      job.payload.toolsAllow = [...previousToolsAllow];
+      if (previousToolsAllowIsDefault === true) {
+        job.payload.toolsAllowIsDefault = true;
+      }
+    } else if (!previouslyUsedToolRuntime) {
+      // A declaration that newly becomes tool-bearing adopts current explicit semantics.
+      applyDefaultCronToolsAllow(job);
     }
-    const text = typeof patch.text === "string" ? patch.text : existing.text;
-    return { kind: "systemEvent", text };
   }
-
-  if (existing.kind !== "agentTurn") {
-    return buildPayloadFromPatch(patch);
+  reconcileToolsAllowAuthority({
+    job,
+    previouslyUsedToolRuntime,
+    explicitlyMutatesToolsAllow: explicitlyDeclaresToolsAllow,
+    scheduledToolPolicy: opts.scheduledToolPolicy,
+    toolsAllowProvenance: opts.toolsAllowProvenance,
+    toolsAllowExecTarget: opts.toolsAllowExecTarget,
+  });
+  const delivery = resolveInitialCronDelivery(input);
+  if (delivery) {
+    job.delivery = structuredClone(delivery);
+  } else {
+    delete job.delivery;
   }
-
-  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
-  if (typeof patch.message === "string") {
-    next.message = patch.message;
-  }
-  if (typeof patch.model === "string") {
-    next.model = patch.model;
-  }
-  if (typeof patch.thinking === "string") {
-    next.thinking = patch.thinking;
-  }
-  if (typeof patch.timeoutSeconds === "number") {
-    next.timeoutSeconds = patch.timeoutSeconds;
-  }
-  if (typeof patch.allowUnsafeExternalContent === "boolean") {
-    next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
-  }
-  if (typeof patch.deliver === "boolean") {
-    next.deliver = patch.deliver;
-  }
-  if (typeof patch.channel === "string") {
-    next.channel = patch.channel;
-  }
-  if (typeof patch.to === "string") {
-    next.to = patch.to;
-  }
-  if (typeof patch.bestEffortDeliver === "boolean") {
-    next.bestEffortDeliver = patch.bestEffortDeliver;
-  }
-  return next;
-}
-
-function buildLegacyDeliveryPatch(
-  payload: Extract<CronPayloadPatch, { kind: "agentTurn" }>,
-): CronDeliveryPatch | null {
-  const deliver = payload.deliver;
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const hasLegacyHints =
-    typeof deliver === "boolean" ||
-    typeof payload.bestEffortDeliver === "boolean" ||
-    Boolean(toRaw);
-  if (!hasLegacyHints) {
-    return null;
-  }
-
-  const patch: CronDeliveryPatch = {};
-  let hasPatch = false;
-
-  if (deliver === false) {
-    patch.mode = "none";
-    hasPatch = true;
-  } else if (deliver === true || toRaw) {
-    patch.mode = "announce";
-    hasPatch = true;
-  }
-
-  if (typeof payload.channel === "string") {
-    const channel = payload.channel.trim().toLowerCase();
-    patch.channel = channel ? channel : undefined;
-    hasPatch = true;
-  }
-  if (typeof payload.to === "string") {
-    patch.to = payload.to.trim();
-    hasPatch = true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    patch.bestEffort = payload.bestEffortDeliver;
-    hasPatch = true;
-  }
-
-  return hasPatch ? patch : null;
-}
-
-function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
-  if (patch.kind === "systemEvent") {
-    if (typeof patch.text !== "string" || patch.text.length === 0) {
-      throw new Error('cron.update payload.kind="systemEvent" requires text');
+  if (opts.enabledExplicit) {
+    // Reconciliation preserves an enabled job's failure streak; explicit recovery
+    // of a stopped job uses the same reset as the enable command.
+    if (
+      input.enabled &&
+      (!job.enabled || job.state.autoDisabled || job.state.streamRestartExhausted)
+    ) {
+      resetJobFailureState(job);
     }
-    return { kind: "systemEvent", text: patch.text };
+    job.enabled = input.enabled;
   }
-
-  if (typeof patch.message !== "string" || patch.message.length === 0) {
-    throw new Error('cron.update payload.kind="agentTurn" requires message');
-  }
-
-  return {
-    kind: "agentTurn",
-    message: patch.message,
-    model: patch.model,
-    thinking: patch.thinking,
-    timeoutSeconds: patch.timeoutSeconds,
-    allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
-    deliver: patch.deliver,
-    channel: patch.channel,
-    to: patch.to,
-    bestEffortDeliver: patch.bestEffortDeliver,
-  };
+  assertCronJobStateTimestamps(input.state ?? {});
+  validateFullJob(
+    job,
+    {
+      kind: "declarative",
+      input,
+      defaultAgentId: opts.defaultAgentId,
+      nowMs: opts.nowMs,
+      cronConfig: opts.cronConfig,
+    },
+    opts.configuredChannels,
+  );
 }
 
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
-): CronDelivery {
+  implicitMode: CronDelivery["mode"],
+): CronDelivery | undefined {
+  const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
-    mode: existing?.mode ?? "none",
+    mode: existing?.mode ?? implicitMode,
     channel: existing?.channel,
     to: existing?.to,
+    threadId: existing?.threadId,
+    accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    completionDestination: existing?.completionDestination,
+    failureDestination: existing?.failureDestination,
   };
 
   if (typeof patch.mode === "string") {
+    const previousMode = next.mode;
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
+      // `to` has different meaning for channel targets and webhook URLs; clear
+      // it when crossing that boundary so stale destinations do not leak.
+      next.to = undefined;
+    }
+    if (next.mode === "webhook") {
+      next.channel = undefined;
+      next.threadId = undefined;
+      next.accountId = undefined;
+    }
+    if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
+      next.completionDestination = undefined;
+    }
   }
   if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
+    next.channel = normalizeOptionalString(patch.channel);
   }
   if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
+    next.to = normalizeOptionalString(patch.to);
+  }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
+  }
+  if ("accountId" in patch) {
+    next.accountId = normalizeOptionalString(patch.accountId);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (hasCompletionDestinationPatch) {
+    if (patch.completionDestination == null) {
+      next.completionDestination = undefined;
+    } else {
+      const to = normalizeOptionalString(patch.completionDestination.to);
+      next.completionDestination = {
+        mode: "webhook",
+        ...(to ? { to } : {}),
+      };
+    }
+  }
+  if ("failureDestination" in patch) {
+    if (patch.failureDestination == null) {
+      next.failureDestination = undefined;
+    } else {
+      const existingFd = next.failureDestination;
+      const patchFd = patch.failureDestination;
+      const nextFd: typeof next.failureDestination = {};
+      if (existingFd) {
+        if (Object.hasOwn(existingFd, "channel")) {
+          nextFd.channel = existingFd.channel;
+        }
+        if (Object.hasOwn(existingFd, "to")) {
+          nextFd.to = existingFd.to;
+        }
+        if (Object.hasOwn(existingFd, "accountId")) {
+          nextFd.accountId = existingFd.accountId;
+        }
+        if (Object.hasOwn(existingFd, "mode")) {
+          nextFd.mode = existingFd.mode;
+        }
+      }
+      if (patchFd) {
+        if ("channel" in patchFd) {
+          const channel = normalizeOptionalString(patchFd.channel) ?? "";
+          nextFd.channel = channel ? channel : undefined;
+        }
+        if ("to" in patchFd) {
+          const to = normalizeOptionalString(patchFd.to) ?? "";
+          nextFd.to = to ? to : undefined;
+        }
+        if ("accountId" in patchFd) {
+          const accountId = normalizeOptionalString(patchFd.accountId) ?? "";
+          nextFd.accountId = accountId ? accountId : undefined;
+        }
+        if ("mode" in patchFd) {
+          const mode = normalizeOptionalString(patchFd.mode) ?? "";
+          nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+        }
+      }
+      const hasFailureDestination =
+        Object.hasOwn(nextFd, "channel") ||
+        Object.hasOwn(nextFd, "to") ||
+        Object.hasOwn(nextFd, "accountId") ||
+        Object.hasOwn(nextFd, "mode");
+      next.failureDestination = hasFailureDestination ? nextFd : undefined;
+    }
+  }
+
+  if (
+    existing === undefined &&
+    !("mode" in patch) &&
+    next.channel === undefined &&
+    next.to === undefined &&
+    next.threadId === undefined &&
+    next.accountId === undefined &&
+    next.bestEffort === undefined &&
+    next.completionDestination === undefined &&
+    next.failureDestination === undefined
+  ) {
+    // Clearing an absent override must preserve implicit detached-job delivery.
+    return undefined;
   }
 
   return next;
 }
 
-export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
-  if (!job.state) {
-    job.state = {};
-  }
-  if (typeof job.state.runningAtMs === "number") {
+function mergeCronFailureAlert(
+  existing: CronFailureAlert | false | undefined,
+  patch: CronFailureAlertPatch | false | null | undefined,
+): CronFailureAlert | false | undefined {
+  if (patch === false) {
     return false;
   }
-  if (opts.forced) {
-    return true;
-  }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
-}
-
-export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
+  if (patch === null) {
     return undefined;
   }
-  const text = normalizePayloadToSystemText(job.payload);
-  return text.trim() ? text : undefined;
+  if (patch === undefined) {
+    return existing;
+  }
+  const base = existing === false || existing === undefined ? {} : existing;
+  const next: CronFailureAlert = { ...base };
+
+  if ("after" in patch) {
+    const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
+    next.after = after > 0 ? Math.floor(after) : undefined;
+  }
+  if ("channel" in patch) {
+    next.channel = normalizeOptionalString(patch.channel);
+  }
+  if ("to" in patch) {
+    next.to = normalizeOptionalString(patch.to);
+  }
+  if ("cooldownMs" in patch) {
+    const cooldownMs =
+      typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)
+        ? patch.cooldownMs
+        : -1;
+    next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
+  }
+  if ("includeSkipped" in patch) {
+    next.includeSkipped =
+      typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
+  }
+  if ("mode" in patch) {
+    const mode = normalizeOptionalString(patch.mode) ?? "";
+    next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+  }
+  if ("accountId" in patch) {
+    const accountId = normalizeOptionalString(patch.accountId) ?? "";
+    next.accountId = accountId ? accountId : undefined;
+  }
+
+  return next;
 }
+
+/**
+ * Covers both durable reservations and the process marker that survives mutable job state.
+ * Every timer/manual admission path must use this or disable/re-enable can duplicate a run.
+ */

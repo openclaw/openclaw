@@ -1,5 +1,4 @@
 import Cocoa
-import Darwin
 import Foundation
 import OSLog
 
@@ -11,14 +10,15 @@ final class PresenceReporter {
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 180 // a few minutes
     private let instanceId: String = InstanceIdentity.instanceId
+    private static let clearLastInputTag = "system-presence-clear-last-input"
+    private static let legacyClearedLastInputSeconds = 30 * 24 * 60 * 60
 
     func start() {
         guard self.task == nil else { return }
         self.task = Task.detached { [weak self] in
             guard let self else { return }
             await self.push(reason: "launch")
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+            while await SimpleTaskSupport.waitForNextOperation(interval: self.interval) {
                 await self.push(reason: "periodic")
             }
         }
@@ -33,10 +33,9 @@ final class PresenceReporter {
     private func push(reason: String) async {
         let mode = await MainActor.run { AppStateStore.shared.connectionMode.rawValue }
         let host = InstanceIdentity.displayName
-        let ip = Self.primaryIPv4Address() ?? "ip-unknown"
+        let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
         let platform = Self.platformString()
-        let lastInput = Self.lastInputSeconds()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
         var params: [String: AnyHashable] = [
             "instanceId": AnyHashable(self.instanceId),
@@ -46,10 +45,13 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
+            // Older Gateways ignore the tag but overwrite exact recency with this
+            // fixed sentinel. Current Gateways let the tag win and delete the field.
+            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([Self.clearLastInputTag]),
             "reason": AnyHashable(reason),
         ]
         if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
-        if let lastInput { params["lastInputSeconds"] = AnyHashable(lastInput) }
         do {
             try await ControlChannel.shared.sendSystemEvent(text, params: params)
         } catch {
@@ -64,11 +66,9 @@ final class PresenceReporter {
 
     private static func composePresenceSummary(mode: String, reason: String) -> String {
         let host = InstanceIdentity.displayName
-        let ip = Self.primaryIPv4Address() ?? "ip-unknown"
+        let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
-        let lastInput = Self.lastInputSeconds()
-        let lastLabel = lastInput.map { "last input \($0)s ago" } ?? "last input unknown"
-        return "Node: \(host) (\(ip)) · app \(version) · \(lastLabel) · mode \(mode) · reason \(reason)"
+        return "Node: \(host) (\(ip)) · app \(version) · mode \(mode) · reason \(reason)"
     }
 
     private static func appVersionString() -> String {
@@ -87,50 +87,7 @@ final class PresenceReporter {
         return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    private static func lastInputSeconds() -> Int? {
-        let anyEvent = CGEventType(rawValue: UInt32.max) ?? .null
-        let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEvent)
-        if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
-        return Int(seconds.rounded())
-    }
-
-    private static func primaryIPv4Address() -> String? {
-        var addrList: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
-        defer { freeifaddrs(addrList) }
-
-        var fallback: String?
-        var en0: String?
-
-        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let flags = Int32(ptr.pointee.ifa_flags)
-            let isUp = (flags & IFF_UP) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            let name = String(cString: ptr.pointee.ifa_name)
-            let family = ptr.pointee.ifa_addr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
-
-            var addr = ptr.pointee.ifa_addr.pointee
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(
-                &addr,
-                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
-                &buffer,
-                socklen_t(buffer.count),
-                nil,
-                0,
-                NI_NUMERICHOST)
-            guard result == 0 else { continue }
-            let len = buffer.prefix { $0 != 0 }
-            let bytes = len.map { UInt8(bitPattern: $0) }
-            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-
-            if name == "en0" { en0 = ip; break }
-            if fallback == nil { fallback = ip }
-        }
-
-        return en0 ?? fallback
-    }
+    // SystemPresenceInfo supplies the best-effort primary IPv4 address.
 }
 
 #if DEBUG
@@ -139,20 +96,11 @@ extension PresenceReporter {
         self.composePresenceSummary(mode: mode, reason: reason)
     }
 
-    static func _testAppVersionString() -> String {
-        self.appVersionString()
-    }
-
-    static func _testPlatformString() -> String {
-        self.platformString()
-    }
-
-    static func _testLastInputSeconds() -> Int? {
-        self.lastInputSeconds()
-    }
-
-    static func _testPrimaryIPv4Address() -> String? {
-        self.primaryIPv4Address()
+    static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
+        [
+            "lastInputSeconds": AnyHashable(self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([self.clearLastInputTag]),
+        ]
     }
 }
 #endif

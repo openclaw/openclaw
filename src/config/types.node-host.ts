@@ -1,11 +1,14 @@
-export type NodeHostBrowserProxyConfig = {
-  /** Enable the browser proxy on the node host (default: true). */
-  enabled?: boolean;
-  /** Optional allowlist of profile names exposed via the proxy. */
-  allowProfiles?: string[];
+// Defines node-host-local capability configuration types from the canonical schema.
+import type { z } from "zod";
+import type { McpServerConfig } from "./types.mcp.js";
+import type { NodeHostSchema } from "./zod-schema.root-support.js";
+
+type NodeHostSchemaInput = NonNullable<z.input<typeof NodeHostSchema>>;
+
+export type NodeHostConfig = Omit<NodeHostSchemaInput, "mcp"> & {
+  mcp?: {
+    servers?: Record<string, McpServerConfig>;
+  };
 };
 
-export type NodeHostConfig = {
-  /** Browser proxy settings for node hosts. */
-  browserProxy?: NodeHostBrowserProxyConfig;
-};
+export type NodeHostBrowserProxyConfig = NonNullable<NodeHostConfig["browserProxy"]>;

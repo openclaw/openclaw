@@ -1,0 +1,238 @@
+import type { APIEmbed } from "discord-api-types/v10";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+  resolveTextChunksWithFallback,
+} from "openclaw/plugin-sdk/reply-payload";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { chunkDiscordTextWithMode } from "../chunk.js";
+import { registerDiscordComponentEntries } from "../components-registry.js";
+import { buildDiscordComponentMessage } from "../components.js";
+import {
+  hasDiscordV2Components,
+  type ButtonInteraction,
+  type CommandInteraction,
+  type MessagePayloadFile,
+  type StringSelectMenuInteraction,
+  type TopLevelComponents,
+} from "../internal/discord.js";
+import {
+  buildDiscordPresentationPayload,
+  DISCORD_PRESENTATION_CAPABILITIES,
+  resolveDiscordComponentSpec,
+} from "../outbound-components.js";
+
+export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
+
+function isDiscordUnknownInteraction(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as {
+    discordCode?: number;
+    status?: number;
+    message?: string;
+    rawBody?: { code?: number; message?: string };
+  };
+  if (err.discordCode === 10062 || err.rawBody?.code === 10062) {
+    return true;
+  }
+  if (err.status === 404 && /Unknown interaction/i.test(err.message ?? "")) {
+    return true;
+  }
+  if (/Unknown interaction/i.test(err.rawBody?.message ?? "")) {
+    return true;
+  }
+  return false;
+}
+
+function resolveDiscordInteractionMessageParts(payload: ReplyPayload) {
+  const discordData = payload.channelData?.discord as
+    | { components?: TopLevelComponents[]; embeds?: APIEmbed[] }
+    | undefined;
+  const { components, embeds } = discordData ?? {};
+  return {
+    components: Array.isArray(components) && components.length > 0 ? components : undefined,
+    embeds: Array.isArray(embeds) && embeds.length > 0 ? embeds : undefined,
+  };
+}
+
+export function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
+  const { components, embeds } = resolveDiscordInteractionMessageParts(payload);
+  return hasOutboundReplyContent(payload) || Boolean(components || embeds);
+}
+
+export async function safeDiscordInteractionCall<T>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (isDiscordUnknownInteraction(error)) {
+      logVerbose(`discord: ${label} skipped (interaction expired)`);
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function settleDiscordInteractionWithoutVisibleReply(
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
+): Promise<void> {
+  // Only slash-command defers create Discord's visible loading response. Component
+  // defers own an existing message, so deleting their original response would erase UI.
+  if (interaction.responseState !== "deferred") {
+    return;
+  }
+  await safeDiscordInteractionCall("interaction delete deferred reply", () =>
+    interaction.deleteReply(),
+  );
+}
+
+export async function deliverDiscordInteractionReply(params: {
+  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+  payload: ReplyPayload;
+  mediaLocalRoots?: readonly string[];
+  componentRoute?: { accountId: string; agentId: string; sessionKey: string };
+  textLimit: number;
+  maxLinesPerMessage?: number;
+  preferFollowUp: boolean;
+  responseEphemeral?: boolean;
+  chunkMode: "length" | "newline";
+}): Promise<boolean> {
+  const { interaction, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
+  const nativeParts = resolveDiscordInteractionMessageParts(params.payload);
+  // Keep attachments and authored native parts on their existing delivery path.
+  const preserveNativeParts =
+    resolveSendableOutboundReplyParts(params.payload).hasMedia ||
+    Boolean(nativeParts.components || nativeParts.embeds);
+  const payload = await renderPresentationForDelivery(
+    {
+      presentationCapabilities: DISCORD_PRESENTATION_CAPABILITIES,
+      renderPresentation: (adapted) =>
+        preserveNativeParts
+          ? null
+          : buildDiscordPresentationPayload({
+              payload: adapted,
+              presentation: adapted.presentation,
+            }),
+    },
+    params.payload,
+  );
+  const componentSpec = preserveNativeParts
+    ? undefined
+    : await resolveDiscordComponentSpec(payload);
+  let componentBuild = componentSpec
+    ? buildDiscordComponentMessage({ spec: componentSpec, ...params.componentRoute })
+    : undefined;
+  const reply = resolveSendableOutboundReplyParts(payload);
+  let { components: firstMessageComponents, embeds: firstMessageEmbeds } =
+    resolveDiscordInteractionMessageParts(payload);
+  if (componentBuild) {
+    firstMessageComponents = componentBuild.components;
+  }
+
+  // Interaction acknowledgement/defer state is not delivery for this payload. Only a
+  // successful native send in this invocation can make a later expiry partial.
+  let payloadDelivered = false;
+  const sendMessage = async (
+    content: string,
+    files?: MessagePayloadFile[],
+    components?: TopLevelComponents[],
+    embeds?: APIEmbed[],
+  ) => {
+    const hasV2 = hasDiscordV2Components(components);
+    const payloadLocal = {
+      ...(content && !hasV2 ? { content } : {}),
+      ...(components ? { components } : {}),
+      ...(embeds && !hasV2 ? { embeds } : {}),
+      ...(params.responseEphemeral !== undefined ? { ephemeral: params.responseEphemeral } : {}),
+      ...(files?.length ? { files } : {}),
+    };
+    let result: void | null;
+    try {
+      result = await safeDiscordInteractionCall("interaction send", async () => {
+        const sent =
+          !preferFollowUp && !payloadDelivered
+            ? await interaction.reply(payloadLocal)
+            : await interaction.followUp(payloadLocal);
+        payloadDelivered = true;
+        firstMessageComponents = undefined;
+        firstMessageEmbeds = undefined;
+        if (componentBuild) {
+          // Initial callbacks need not return a message; callback input supplies its ID later.
+          const messageId =
+            sent && typeof sent === "object" && "id" in sent && typeof sent.id === "string"
+              ? sent.id
+              : undefined;
+          await registerDiscordComponentEntries({
+            entries: componentBuild.entries,
+            modals: componentBuild.modals,
+            messageId,
+          });
+          componentBuild = undefined;
+        }
+      });
+    } catch (error) {
+      if (!payloadDelivered) {
+        throw error;
+      }
+      throw createChannelPartialDeliveryError(error, { visibleReplySent: true });
+    }
+    if (result !== null) {
+      return;
+    }
+    const expiry = new PlatformMessageNotDispatchedError(
+      "Discord interaction expired before message dispatch",
+      { cause: new Error("Unknown interaction") },
+    );
+    if (!payloadDelivered) {
+      throw expiry;
+    }
+    throw createChannelPartialDeliveryError(expiry, { visibleReplySent: true });
+  };
+
+  const files = reply.hasMedia
+    ? await Promise.all(
+        reply.mediaUrls.map(async (url) => {
+          const loaded = await loadWebMedia(url, {
+            localRoots: params.mediaLocalRoots,
+          });
+          return {
+            name: loaded.fileName ?? "upload",
+            data: loaded.buffer,
+            contentType: loaded.contentType,
+          };
+        }),
+      )
+    : undefined;
+
+  if (!files && !reply.hasText && !firstMessageComponents && !firstMessageEmbeds) {
+    return false;
+  }
+  const chunks = resolveTextChunksWithFallback(
+    reply.text,
+    chunkDiscordTextWithMode(reply.text, {
+      maxChars: textLimit,
+      maxLines: maxLinesPerMessage,
+      chunkMode,
+    }),
+  );
+  if (chunks.length === 0) {
+    chunks.push("");
+  }
+  for (const [index, chunk] of chunks.entries()) {
+    const chunkFiles = index === 0 ? files : undefined;
+    if (!chunk.trim() && !chunkFiles && !firstMessageComponents && !firstMessageEmbeds) {
+      continue;
+    }
+    await sendMessage(chunk, chunkFiles, firstMessageComponents, firstMessageEmbeds);
+  }
+  return payloadDelivered;
+}

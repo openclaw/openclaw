@@ -1,152 +1,215 @@
+// Tests reply history loading, trimming, and rendering for prompt context.
 import { describe, expect, it } from "vitest";
-import {
-  appendHistoryEntry,
-  buildHistoryContext,
-  buildHistoryContextFromEntries,
-  buildHistoryContextFromMap,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  HISTORY_CONTEXT_MARKER,
-  recordPendingHistoryEntryIfEnabled,
-} from "./history.js";
-import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
+import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from "./history.js";
+import type { HistoryEntry } from "./history.types.js";
 
-describe("history helpers", () => {
-  it("returns current message when history is empty", () => {
-    const result = buildHistoryContext({
-      historyText: "  ",
-      currentMessage: "hello",
-    });
-    expect(result).toBe("hello");
+describe("history media recording", () => {
+  it("keeps only bounded local image media", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        limit: 2,
+        messageId: "msg-1",
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png" },
+          { path: "https://example.com/b.png", contentType: "image/png" },
+          { path: "/tmp/c.pdf", contentType: "application/pdf", kind: "document" },
+          { path: "C:\\tmp\\d.jpg", kind: "image" },
+          { path: "/tmp/e.jpg", kind: "image" },
+        ],
+      }),
+    ).toEqual([
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+      { path: "C:\\tmp\\d.jpg", kind: "image", messageId: "msg-1" },
+    ]);
   });
 
-  it("wraps history entries and excludes current by default", () => {
-    const result = buildHistoryContextFromEntries({
-      entries: [
-        { sender: "A", body: "one" },
-        { sender: "B", body: "two" },
+  it("preserves native sticker classification for local sticker images", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        messageId: "msg-sticker",
+        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
+      }),
+    ).toEqual([
+      {
+        path: "/tmp/sticker.png",
+        contentType: "image/png",
+        kind: "sticker",
+        messageId: "msg-sticker",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "an image with generic MIME and a .bin path",
+      path: "/tmp/telegram-upload.bin",
+      contentType: "application/octet-stream",
+      kind: "image" as const,
+    },
+    {
+      name: "a sticker with generic MIME and a .bin path",
+      path: "/tmp/telegram-sticker.bin",
+      contentType: "application/octet-stream",
+      kind: "sticker" as const,
+    },
+    {
+      name: "an extensionless sticker without transport MIME",
+      path: "/tmp/telegram-sticker",
+      contentType: undefined,
+      kind: "sticker" as const,
+    },
+  ])("records $name at the actual channel history boundary", async (testCase) => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+
+    await recordPendingHistoryEntryWithMedia({
+      historyMap,
+      historyKey: "telegram-chat",
+      limit: 5,
+      entry: {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "telegram-message",
+      },
+      media: async () => [
+        {
+          path: testCase.path,
+          contentType: testCase.contentType,
+          kind: testCase.kind,
+        },
       ],
-      currentMessage: "current",
-      formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).not.toContain("B: two");
-    expect(result).toContain(CURRENT_MESSAGE_MARKER);
-    expect(result).toContain("current");
+    expect(historyMap.get("telegram-chat")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "telegram-message",
+        media: [
+          {
+            path: testCase.path,
+            contentType: testCase.contentType,
+            kind: testCase.kind,
+            messageId: "telegram-message",
+          },
+        ],
+      },
+    ]);
   });
 
-  it("trims history to configured limit", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-
-    appendHistoryEntry({
-      historyMap,
-      historyKey: "group",
-      limit: 2,
-      entry: { sender: "A", body: "one" },
-    });
-    appendHistoryEntry({
-      historyMap,
-      historyKey: "group",
-      limit: 2,
-      entry: { sender: "B", body: "two" },
-    });
-    appendHistoryEntry({
-      historyMap,
-      historyKey: "group",
-      limit: 2,
-      entry: { sender: "C", body: "three" },
-    });
-
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two", "three"]);
+  it.each([
+    { path: "/tmp/telegram-document.bin", contentType: "application/octet-stream" },
+    { path: "/tmp/telegram-document.png", contentType: undefined },
+    { path: "/tmp/telegram-document.png", contentType: "application/pdf" },
+    { path: "/tmp/telegram-document.png", contentType: "image/png" },
+  ])("never records authoritative documents with MIME $contentType as history images", (media) => {
+    expect(
+      normalizeHistoryMediaEntries({
+        media: [
+          {
+            ...media,
+            kind: "document",
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 
-  it("builds context from map and appends entry", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
+  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
+    "never records unknown-kind image-looking documents with MIME %s",
+    (contentType) => {
+      expect(
+        normalizeHistoryMediaEntries({
+          media: [{ path: "/tmp/report.png", contentType, kind: "unknown" }],
+        }),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    { path: "/tmp/diagram.svg", kind: undefined },
+    { path: "/tmp/diagram.svg", kind: "unknown" as const },
+    { path: "/tmp/photo.png", kind: undefined },
+    { path: "/tmp/photo.png", kind: "unknown" as const },
+  ])("never manufactures image history from filename-only $path", (media) => {
+    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([]);
+  });
+
+  it.each([
+    { path: "/tmp/diagram.svg", kind: "image" as const, contentType: undefined },
+    { path: "/tmp/diagram.svg", kind: undefined, contentType: "image/svg+xml" },
+  ])("preserves explicitly identified SVG history media", (media) => {
+    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([
+      {
+        ...media,
+        kind: "image",
+        messageId: undefined,
+      },
+    ]);
+  });
+
+  it("records filename-only SVG turns without manufacturing reusable image history", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+
+    await recordPendingHistoryEntryWithMedia({
+      historyMap,
+      historyKey: "telegram-chat",
+      limit: 5,
+      entry: { sender: "Alice", body: "<media:document>", messageId: "diagram-message" },
+      media: async () => [{ path: "/tmp/diagram.svg" }],
+    });
+
+    expect(historyMap.get("telegram-chat")).toEqual([
+      { sender: "Alice", body: "<media:document>", messageId: "diagram-message" },
+    ]);
+  });
+
+  it("records text history unchanged when media resolver has no usable media", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+
+    await recordPendingHistoryEntryWithMedia({
+      historyMap,
+      historyKey: "channel-1",
+      limit: 5,
+      entry: { sender: "Alice", body: "hello", messageId: "msg-1" },
+      media: async () => [{ path: "https://example.com/a.png", contentType: "image/png" }],
+    });
+
+    expect(historyMap.get("channel-1")).toEqual([
+      { sender: "Alice", body: "hello", messageId: "msg-1" },
+    ]);
+  });
+
+  it("records text history before async media resolution finishes", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+    let resolveMedia!: (media: HistoryEntry["media"]) => void;
+    const mediaPromise = new Promise<HistoryEntry["media"]>((resolve) => {
+      resolveMedia = resolve;
+    });
+
+    const pending = recordPendingHistoryEntryWithMedia({
+      historyMap,
+      historyKey: "channel-1",
+      limit: 5,
+      entry: { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
+      media: async () => await mediaPromise,
+    });
+
+    expect(historyMap.get("channel-1")).toEqual([
+      { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
     ]);
 
-    const result = buildHistoryContextFromMap({
-      historyMap,
-      historyKey: "group",
-      limit: 3,
-      entry: { sender: "C", body: "three" },
-      currentMessage: "current",
-      formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
-    });
+    resolveMedia([{ path: "/tmp/a.png", contentType: "image/png" }]);
+    await pending;
 
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).toContain("B: two");
-    expect(result).not.toContain("C: three");
-  });
-
-  it("builds context from pending map without appending", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
+    expect(historyMap.get("channel-1")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        messageId: "msg-1",
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+        ],
+      },
     ]);
-
-    const result = buildPendingHistoryContextFromMap({
-      historyMap,
-      historyKey: "group",
-      limit: 3,
-      currentMessage: "current",
-      formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
-    });
-
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).toContain("B: two");
-    expect(result).toContain(CURRENT_MESSAGE_MARKER);
-    expect(result).toContain("current");
-  });
-
-  it("records pending entries only when enabled", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-
-    recordPendingHistoryEntryIfEnabled({
-      historyMap,
-      historyKey: "group",
-      limit: 0,
-      entry: { sender: "A", body: "one" },
-    });
-    expect(historyMap.get("group")).toEqual(undefined);
-
-    recordPendingHistoryEntryIfEnabled({
-      historyMap,
-      historyKey: "group",
-      limit: 2,
-      entry: null,
-    });
-    expect(historyMap.get("group")).toEqual(undefined);
-
-    recordPendingHistoryEntryIfEnabled({
-      historyMap,
-      historyKey: "group",
-      limit: 2,
-      entry: { sender: "B", body: "two" },
-    });
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two"]);
-  });
-
-  it("clears history entries only when enabled", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
-    ]);
-
-    clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 0 });
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
-
-    clearHistoryEntriesIfEnabled({ historyMap, historyKey: "group", limit: 2 });
-    expect(historyMap.get("group")).toEqual([]);
   });
 });

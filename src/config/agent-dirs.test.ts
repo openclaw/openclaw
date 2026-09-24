@@ -1,47 +1,49 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./types.js";
+// Covers agent directory resolution across config and environment overrides.
+import path from "node:path";
+import { describe, expect, it } from "vitest";
 import { findDuplicateAgentDirs } from "./agent-dirs.js";
+import type { OpenClawConfig } from "./types.js";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
-describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
-  it("uses OPENCLAW_HOME for default agent dir resolution", () => {
-    // findDuplicateAgentDirs calls resolveEffectiveAgentDir internally.
-    // With a single agent there are no duplicates, but we can inspect the
-    // resolved dir indirectly by triggering a duplicate with two agents
-    // that both fall through to the same default dir — which can't happen
-    // since they have different IDs.  Instead we just verify no crash and
-    // that the env flows through by checking a two-agent config produces
-    // distinct dirs (no duplicates).
+describe("findDuplicateAgentDirs", () => {
+  it("finds duplicate explicit dirs in keyed agent entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: {
+          alpha: { default: true, agentDir: "/srv/shared-agent" },
+          beta: { agentDir: "/srv/shared-agent" },
+        },
       },
     };
 
-    const env = {
-      OPENCLAW_HOME: "/srv/openclaw-home",
-      HOME: "/home/other",
-    } as NodeJS.ProcessEnv;
-
-    const dupes = findDuplicateAgentDirs(cfg, { env });
-    expect(dupes).toHaveLength(0);
+    expect(findDuplicateAgentDirs(cfg)).toEqual([
+      { agentDir: "/srv/shared-agent", agentIds: ["alpha", "beta"] },
+    ]);
   });
 
-  it("resolves agent dir under OPENCLAW_HOME state dir", () => {
-    // Force two agents to the same explicit agentDir to verify the path
-    // that doesn't use the default — then test the default path by
-    // checking that a single-agent config resolves without duplicates.
-    const cfg: OpenClawConfig = {};
+  it.each([
+    {
+      name: "OPENCLAW_HOME",
+      env: { OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" },
+      stateDir: "/srv/openclaw-home/.openclaw",
+    },
+    {
+      name: "OPENCLAW_STATE_DIR",
+      env: { OPENCLAW_STATE_DIR: "/srv/openclaw-state", OPENCLAW_HOME: "/home/other" },
+      stateDir: "/srv/openclaw-state",
+    },
+    {
+      name: "the supplied home resolver",
+      env: {},
+      stateDir: "/srv/fallback-home/.openclaw",
+    },
+  ])("detects a configured directory colliding with $name", ({ env, stateDir }) => {
+    const agentDir = path.resolve(stateDir, "agents", "alpha", "agent");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { alpha: {}, beta: { agentDir } } },
+    };
 
-    const env = {
-      OPENCLAW_HOME: "/srv/openclaw-home",
-    } as NodeJS.ProcessEnv;
-
-    // No duplicates for a single default agent
-    const dupes = findDuplicateAgentDirs(cfg, { env });
-    expect(dupes).toHaveLength(0);
+    expect(findDuplicateAgentDirs(cfg, { env, homedir: () => "/srv/fallback-home" })).toEqual([
+      { agentDir, agentIds: ["alpha", "beta"] },
+    ]);
   });
 });

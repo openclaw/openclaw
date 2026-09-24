@@ -2,8 +2,17 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct WebChatMainSessionKeyTests {
-    @Test func configGetSnapshotMainKeyFallsBackToMainWhenMissing() throws {
+struct WebChatMainSessionKeyTests {
+    @Test func `unavailable endpoint falls back to the main session key`() async {
+        let connection = GatewayConnection(configProvider: {
+            throw URLError(.cannotConnectToHost)
+        })
+
+        #expect(await connection.mainSessionKey() == "main")
+        await connection.shutdown()
+    }
+
+    @Test func `config get snapshot main key falls back to main when missing`() throws {
         let json = """
         {
           "path": "/Users/pete/.openclaw/openclaw.json",
@@ -19,7 +28,7 @@ import Testing
         #expect(key == "main")
     }
 
-    @Test func configGetSnapshotMainKeyTrimsAndUsesValue() throws {
+    @Test func `config get snapshot keeps the canonical main key`() throws {
         let json = """
         {
           "path": "/Users/pete/.openclaw/openclaw.json",
@@ -35,7 +44,7 @@ import Testing
         #expect(key == "main")
     }
 
-    @Test func configGetSnapshotMainKeyFallsBackWhenEmptyOrWhitespace() throws {
+    @Test func `config get snapshot main key falls back when empty or whitespace`() throws {
         let json = """
         {
           "config": { "session": { "mainKey": "   " } }
@@ -45,7 +54,7 @@ import Testing
         #expect(key == "main")
     }
 
-    @Test func configGetSnapshotMainKeyFallsBackWhenConfigNull() throws {
+    @Test func `config get snapshot main key falls back when config null`() throws {
         let json = """
         {
           "config": null
@@ -55,7 +64,7 @@ import Testing
         #expect(key == "main")
     }
 
-    @Test func configGetSnapshotUsesGlobalScope() throws {
+    @Test func `config get snapshot uses global scope`() throws {
         let json = """
         {
           "config": { "session": { "scope": "global" } }

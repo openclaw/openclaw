@@ -1,242 +1,533 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Covers message-action reply/thread inheritance, single-reply modes, and
+// outbound mirror route preparation.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  prepareOutboundMirrorRoute,
+  resolveAndApplyOutboundReplyToId,
+  resolveAndApplyOutboundThreadId,
+} from "./message-action-threading.js";
 
-const mocks = vi.hoisted(() => ({
-  executeSendAction: vi.fn(),
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-}));
+const resolveOutboundSessionRoute = vi.fn();
 
-vi.mock("./outbound-send-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-    "./outbound-send-service.js",
-  );
-  return {
-    ...actual,
-    executeSendAction: mocks.executeSendAction,
-  };
-});
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call arg to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
-  return {
-    ...actual,
-    recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
-  };
-});
-
-import { runMessageAction } from "./message-action-runner.js";
-
-const slackConfig = {
+const workspaceConfig = {
   channels: {
-    slack: {
+    workspace: {
       botToken: "xoxb-test",
-      appToken: "xapp-test",
     },
   },
 } as OpenClawConfig;
 
-const telegramConfig = {
+const forumConfig = {
   channels: {
-    telegram: {
-      botToken: "telegram-test",
+    forum: {
+      botToken: "forum-test",
     },
   },
 } as OpenClawConfig;
 
-describe("runMessageAction threading auto-injection", () => {
-  beforeEach(async () => {
-    const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
-    const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
-    const { setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js");
-    const runtime = createPluginRuntime();
-    setSlackRuntime(runtime);
-    setTelegramRuntime(runtime);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: slackPlugin,
-        },
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: telegramPlugin,
-        },
-      ]),
-    );
+const defaultForumToolContext = {
+  currentChannelId: "forum:123",
+  currentThreadTs: "42",
+} as const;
+
+describe("message action threading helpers", () => {
+  beforeEach(() => {
+    resolveOutboundSessionRoute.mockReset();
   });
 
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-    mocks.executeSendAction.mockReset();
-    mocks.recordSessionMetaFromInbound.mockReset();
-  });
-
-  it("uses toolContext thread when auto-threading is active", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
+  it.each([
+    {
+      name: "exact channel id",
+      target: "channel:C123",
+      threadTs: "111.222",
+      expectedSessionKey: "agent:main:workspace:channel:c123:thread:111.222",
+    },
+    {
+      name: "case-insensitive channel id",
+      target: "channel:c123",
+      threadTs: "333.444",
+      expectedSessionKey: "agent:main:workspace:channel:c123:thread:333.444",
+    },
+  ] as const)("prepares outbound routes for workspace using $name", async (testCase) => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: testCase.target,
+      message: "hi",
+    };
+    resolveOutboundSessionRoute.mockResolvedValue({
+      sessionKey: testCase.expectedSessionKey,
+      baseSessionKey: "base",
+      peer: { id: "peer", kind: "channel" },
+      chatType: "channel",
+      from: "from",
+      to: testCase.target,
+      threadId: testCase.threadTs,
     });
 
-    await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
+    const result = await prepareOutboundMirrorRoute({
+      cfg: workspaceConfig,
+      channel: "workspace",
+      to: testCase.target,
+      actionParams,
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: testCase.threadTs,
+        replyToMode: "all",
+      },
+      agentId: "main",
+      resolveAutoThreadId: ({ toolContext }) => toolContext?.currentThreadTs,
+      resolveOutboundSessionRoute,
+    });
+
+    expect(result.outboundRoute?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(actionParams["__sessionKey"]).toBe(testCase.expectedSessionKey);
+    expect(actionParams["__agentId"]).toBe("main");
+  });
+
+  it("prepares the outbound route with a canonicalized reply root", async () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "child-777",
+    };
+    resolveOutboundSessionRoute.mockResolvedValue(null);
+
+    await prepareOutboundMirrorRoute({
+      cfg: forumConfig,
+      channel: "forum",
+      to: "forum:123",
+      actionParams,
+      toolContext: defaultForumToolContext,
+      agentId: "main",
+      resolveAutoThreadId: () => "root-42",
+      resolveReplyTransport: ({ threadId }) => ({
+        replyToId: threadId == null ? threadId : String(threadId),
+        threadId: threadId ?? null,
+      }),
+      resolveOutboundSessionRoute,
+    });
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledOnce();
+    expect(firstMockArg(resolveOutboundSessionRoute)).toMatchObject({
+      replyToId: "root-42",
+      threadId: "root-42",
+    });
+  });
+
+  it.each([
+    {
+      name: "injects threadId for matching target",
+      target: "forum:123",
+      expectedThreadId: "42",
+    },
+    {
+      name: "injects threadId for prefixed group target",
+      target: "forum:group:123",
+      expectedThreadId: "42",
+    },
+    {
+      name: "skips threadId when target chat differs",
+      target: "forum:999",
+      expectedThreadId: undefined,
+    },
+  ] as const)("forum auto-threading: $name", (testCase) => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: testCase.target,
+      message: "hi",
+    };
+
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: testCase.target,
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        to.includes("123") ? toolContext?.currentThreadTs : undefined,
+    });
+
+    expect(actionParams.threadId).toBe(testCase.expectedThreadId);
+    expect(resolved).toBe(testCase.expectedThreadId);
+  });
+
+  it("uses explicit forum threadId without rewriting replyTo", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      threadId: "999",
+      replyTo: "777",
+    };
+
+    const resolveAutoThreadId = vi.fn(() => "42");
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+    });
+
+    expect(actionParams.threadId).toBe("999");
+    expect(actionParams.replyTo).toBe("777");
+    expect(resolved).toBe("999");
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit reply target through Slack-style reply transport", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      threadId: "root-42",
+      replyTo: "child-777",
+    };
+
+    const resolveAutoThreadId = vi.fn(() => "unexpected");
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+      replyToIsExplicit: true,
+      resolveReplyTransport: ({ replyToId }) => ({
+        replyToId,
+        threadId: null,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("child-777");
+    expect(resolved).toBe("root-42");
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes an inherited reply target through a one-root transport", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "child-777",
+    };
+
+    resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      replyToIsExplicit: false,
+      resolveAutoThreadId: ({ replyToId }) => (replyToId ? undefined : "root-42"),
+      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => ({
+        replyToId: replyToIsExplicit || threadId == null ? replyToId : String(threadId),
+        threadId: threadId ?? null,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("root-42");
+  });
+
+  it.each([
+    { name: "threadId null", params: { threadId: null } },
+    { name: "topLevel true", params: { topLevel: true } },
+  ] as const)("skips auto-threading for $name", (testCase) => {
+    const resolveAutoThreadId = vi.fn(() => "42");
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      ...testCase.params,
+    };
+
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit replyTo when the provider keeps reply and thread distinct", () => {
+    const resolveAutoThreadId = vi.fn((_params: { replyToId?: string | null }) => "thread-777");
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "777",
+    };
+
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+    });
+
+    expect(resolveAutoThreadId).toHaveBeenCalledOnce();
+    expect(firstMockArg(resolveAutoThreadId).replyToId).toBe("777");
+    expect(resolved).toBe("thread-777");
+    expect(actionParams.threadId).toBe("thread-777");
+    expect(actionParams.replyTo).toBe("777");
+  });
+
+  it("canonicalizes replyTo when the provider maps reply and thread to one root", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      replyTo: "child-777",
+    };
+
+    resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId: () => "root-42",
+      resolveReplyTransport: ({ threadId }) => ({
+        replyToId: threadId == null ? threadId : String(threadId),
+        threadId: threadId ?? null,
+      }),
+    });
+
+    expect(actionParams.threadId).toBe("root-42");
+    expect(actionParams.replyTo).toBe("root-42");
+  });
+
+  it("inherits currentMessageId for same-target sends when replyToMode=all", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi",
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "workspace",
+      toolContext: {
+        currentChannelId: "channel:C123",
+        currentMessageId: "msg-42",
+        replyToMode: "all",
+      },
+    });
+
+    expect(resolved).toEqual({ replyToId: "msg-42", source: "implicit", mode: "all" });
+    expect(actionParams.replyTo).toBe("msg-42");
+  });
+
+  it("inherits currentMessageId for a routable alias of the native channel", () => {
+    const actionParams: Record<string, unknown> = {
+      to: "user:U123",
+    };
+
+    resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "slack",
+      toolContext: {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentMessageId: "msg-42",
+        replyToMode: "all",
+      },
+    });
+
+    expect(actionParams.replyTo).toBe("msg-42");
+  });
+
+  it("skips inherited reply ids for explicit top-level sends", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi",
+      topLevel: true,
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "workspace",
+      toolContext: {
+        currentChannelId: "channel:C123",
+        currentMessageId: "msg-42",
+        replyToMode: "all",
+      },
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(actionParams.replyTo).toBeUndefined();
+  });
+
+  it("canonicalizes batched reply threading to first mode", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi",
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "workspace",
+      toolContext: {
+        currentChannelId: "channel:C123",
+        currentMessageId: "msg-42",
+        replyToMode: "batched",
+      },
+    });
+
+    expect(resolved).toEqual({ replyToId: "msg-42", source: "implicit", mode: "first" });
+    expect(actionParams.replyTo).toBe("msg-42");
+  });
+
+  it("consumes first-mode inherited reply threading only once", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi",
+    };
+    const hasRepliedRef = { value: false };
+
+    const firstResolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "workspace",
+      toolContext: {
+        currentChannelId: "channel:C123",
+        currentMessageId: "msg-42",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+    });
+
+    const secondResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "workspace",
         target: "channel:C123",
-        message: "hi",
+        message: "followup",
       },
-      toolContext: {
-        currentChannelId: "C123",
-        currentThreadTs: "111.222",
-        replyToMode: "all",
+      {
+        channel: "workspace",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
       },
-      agentId: "main",
-    });
+    );
 
-    const call = mocks.executeSendAction.mock.calls[0]?.[0];
-    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:111.222");
+    expect(firstResolved).toEqual({ replyToId: "msg-42", source: "implicit", mode: "first" });
+    expect(secondResolved).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
   });
 
-  it("matches auto-threading when channel ids differ in case", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
-    });
+  it("consumes first-mode threading once for a channel-normalized target alias", () => {
+    const hasRepliedRef = { value: false };
+    const toolContext = {
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentMessageId: "msg-42",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+    const matchesToolContextTarget = vi.fn(({ target }: { target: string }) => target === "U123");
 
-    await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
+    const firstResolved = resolveAndApplyOutboundReplyToId(
+      {
         channel: "slack",
-        target: "channel:c123",
-        message: "hi",
+        target: "U123",
+        message: "first",
       },
+      {
+        channel: "slack",
+        toolContext,
+        matchesToolContextTarget,
+      },
+    );
+    const secondResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "slack",
+        target: "U123",
+        message: "followup",
+      },
+      {
+        channel: "slack",
+        toolContext,
+        matchesToolContextTarget,
+      },
+    );
+
+    expect(firstResolved).toEqual({ replyToId: "msg-42", source: "implicit", mode: "first" });
+    expect(secondResolved).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+    expect(matchesToolContextTarget).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes first-mode when the first send uses an explicit replyTo", () => {
+    const hasRepliedRef = { value: false };
+    const explicitResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "workspace",
+        target: "channel:C123",
+        message: "first",
+        replyTo: "explicit-1",
+      },
+      {
+        channel: "workspace",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      },
+    );
+
+    const inheritedResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "workspace",
+        target: "channel:C123",
+        message: "followup",
+      },
+      {
+        channel: "workspace",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      },
+    );
+
+    expect(explicitResolved).toEqual({ replyToId: "explicit-1", source: "explicit" });
+    expect(inheritedResolved).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("does not inherit reply threading across providers even when target ids match", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "discord",
+      target: "channel:C123",
+      message: "hi",
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "discord",
       toolContext: {
-        currentChannelId: "C123",
-        currentThreadTs: "333.444",
+        currentChannelId: "channel:C123",
+        currentChannelProvider: "slack",
+        currentMessageId: "msg-42",
         replyToMode: "all",
       },
-      agentId: "main",
     });
 
-    const call = mocks.executeSendAction.mock.calls[0]?.[0];
-    expect(call?.ctx?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123:thread:333.444");
-  });
-
-  it("auto-injects telegram threadId from toolContext when omitted", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
-    });
-
-    await runMessageAction({
-      cfg: telegramConfig,
-      action: "send",
-      params: {
-        channel: "telegram",
-        target: "telegram:123",
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: "telegram:123",
-        currentThreadTs: "42",
-      },
-      agentId: "main",
-    });
-
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
-      ctx?: { params?: Record<string, unknown> };
-    };
-    expect(call?.ctx?.params?.threadId).toBe("42");
-  });
-
-  it("skips telegram auto-threading when target chat differs", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
-    });
-
-    await runMessageAction({
-      cfg: telegramConfig,
-      action: "send",
-      params: {
-        channel: "telegram",
-        target: "telegram:999",
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: "telegram:123",
-        currentThreadTs: "42",
-      },
-      agentId: "main",
-    });
-
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
-      ctx?: { params?: Record<string, unknown> };
-    };
-    expect(call?.ctx?.params?.threadId).toBeUndefined();
-  });
-
-  it("matches telegram target with internal prefix variations", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
-    });
-
-    await runMessageAction({
-      cfg: telegramConfig,
-      action: "send",
-      params: {
-        channel: "telegram",
-        target: "telegram:group:123",
-        message: "hi",
-      },
-      toolContext: {
-        currentChannelId: "telegram:123",
-        currentThreadTs: "42",
-      },
-      agentId: "main",
-    });
-
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
-      ctx?: { params?: Record<string, unknown> };
-    };
-    expect(call?.ctx?.params?.threadId).toBe("42");
-  });
-
-  it("uses explicit telegram threadId when provided", async () => {
-    mocks.executeSendAction.mockResolvedValue({
-      handledBy: "plugin",
-      payload: {},
-    });
-
-    await runMessageAction({
-      cfg: telegramConfig,
-      action: "send",
-      params: {
-        channel: "telegram",
-        target: "telegram:123",
-        message: "hi",
-        threadId: "999",
-      },
-      toolContext: {
-        currentChannelId: "telegram:123",
-        currentThreadTs: "42",
-      },
-      agentId: "main",
-    });
-
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
-      ctx?: { params?: Record<string, unknown> };
-    };
-    expect(call?.ctx?.params?.threadId).toBe("999");
+    expect(resolved).toBeUndefined();
+    expect(actionParams.replyTo).toBeUndefined();
   });
 });

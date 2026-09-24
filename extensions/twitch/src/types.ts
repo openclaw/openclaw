@@ -5,27 +5,8 @@
  * from OpenClaw core.
  */
 
-import type {
-  ChannelGatewayContext,
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  ChannelStatusAdapter,
-} from "../../../src/channels/plugins/types.adapters.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelCapabilities,
-  ChannelLogSink,
-  ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
-  ChannelMeta,
-} from "../../../src/channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { OutboundDeliveryResult } from "../../../src/infra/outbound/deliver.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-
+import type { z } from "zod";
+import type { TwitchAccountSchema, TwitchRoleSchema } from "./config-schema.js";
 // ============================================================================
 // Twitch-Specific Types
 // ============================================================================
@@ -33,49 +14,12 @@ import type { RuntimeEnv } from "../../../src/runtime.js";
 /**
  * Twitch user roles that can be allowed to interact with the bot
  */
-export type TwitchRole = "moderator" | "owner" | "vip" | "subscriber" | "all";
+export type TwitchRole = z.input<typeof TwitchRoleSchema>;
 
 /**
  * Account configuration for a Twitch channel
  */
-export interface TwitchAccountConfig {
-  /** Twitch username */
-  username: string;
-  /** Twitch OAuth access token (requires chat:read and chat:write scopes) */
-  accessToken: string;
-  /** Twitch client ID (from Twitch Developer Portal or twitchtokengenerator.com) */
-  clientId: string;
-  /** Channel name to join (required) */
-  channel: string;
-  /** Enable this account */
-  enabled?: boolean;
-  /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
-  allowFrom?: Array<string>;
-  /** Roles allowed to interact with the bot (e.g., ["mod", "vip", "sub"]) */
-  allowedRoles?: TwitchRole[];
-  /** Require @mention to trigger bot responses */
-  requireMention?: boolean;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
-  clientSecret?: string;
-  /** Refresh token (required for automatic token refresh) */
-  refreshToken?: string;
-  /** Token expiry time in seconds (optional, for token refresh tracking) */
-  expiresIn?: number | null;
-  /** Timestamp when token was obtained (optional, for token refresh tracking) */
-  obtainmentTimestamp?: number;
-}
-
-/**
- * Message target for Twitch
- */
-export interface TwitchTarget {
-  /** Account ID */
-  accountId: string;
-  /** Channel name (defaults to account's channel) */
-  channel?: string;
-}
+export type TwitchAccountConfig = z.input<typeof TwitchAccountSchema>;
 
 /**
  * Twitch message from chat
@@ -92,9 +36,9 @@ export interface TwitchChatMessage {
   /** Display name (may include special characters) */
   displayName?: string;
   /** Message ID */
-  id?: string;
-  /** Timestamp */
-  timestamp?: Date;
+  id: string;
+  /** Receive timestamp in milliseconds */
+  timestamp?: number;
   /** Whether the sender is a moderator */
   isMod?: boolean;
   /** Whether the sender is the channel owner/broadcaster */
@@ -107,37 +51,15 @@ export interface TwitchChatMessage {
   chatType?: "group";
 }
 
-/**
- * Send result from Twitch client
- */
-export interface SendResult {
-  ok: boolean;
-  error?: string;
-  messageId?: string;
-}
-
 // Re-export core types for convenience
 export type {
   ChannelAccountSnapshot,
-  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
-  ChannelMeta,
   ChannelOutboundAdapter,
-  ChannelStatusAdapter,
-  ChannelCapabilities,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelPlugin,
   ChannelOutboundContext,
   OutboundDeliveryResult,
-};
-
-import type { z } from "zod";
-// Import and re-export the schema type
-import type { TwitchConfigSchema } from "./config-schema.js";
-export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
-
-export type { OpenClawConfig };
-export type { RuntimeEnv };
+} from "../runtime-api.js";

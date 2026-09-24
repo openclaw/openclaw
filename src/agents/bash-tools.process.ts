@@ -1,76 +1,330 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+/**
+ * Process-control tool factory.
+ * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
+ * and removes background exec sessions.
+ */
+import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
+import type { ManagedRunStdin } from "../process/supervisor/types.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { cancelBackgroundExecSession } from "./bash-process-control.js";
 import {
+  acknowledgeNotifyOnExit,
+  type ProcessSession,
+  compareProcessSessionStartOrder,
   deleteSession,
-  drainSession,
   getFinishedSession,
   getSession,
+  hasPendingPollDelivery,
   listFinishedSessions,
   listRunningSessions,
-  markExited,
-  setJobTtlMs,
+  prepareSessionPoll,
 } from "./bash-process-registry.js";
+import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
+  EXEC_RETENTION_CAP_NOTE,
+  appendExecTimeoutRetryGuidance,
+  renderExecExitLabel,
+} from "./bash-tools.exec-output.js";
+import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
+import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
+import { processSchema } from "./bash-tools.schemas.js";
+import {
+  clampWithDefault,
   deriveSessionName,
-  killSession,
-  pad,
+  padProcessStatus,
+  readEnvInt,
   sliceLogLines,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
+import { encodePaste } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
+import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
+import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
+/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
-  cleanupMs?: number;
+  hasCronTool?: boolean;
+  inputWaitIdleMs?: number;
   scopeKey?: string;
 };
 
-const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
-  data: Type.Optional(Type.String({ description: "Data to write for write" })),
-  keys: Type.Optional(
-    Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
-  ),
-  hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
-  literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
-  text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
-  bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
-  eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
-  offset: Type.Optional(Type.Number({ description: "Log offset" })),
-  limit: Type.Optional(Type.Number({ description: "Log length" })),
-});
+const DEFAULT_LOG_TAIL_LINES = 200;
+const DEFAULT_INPUT_WAIT_IDLE_MS = 15_000;
+const MIN_INPUT_WAIT_IDLE_MS = 1_000;
+const MAX_INPUT_WAIT_IDLE_MS = 10 * 60 * 1000;
+const PROCESS_TOOL_ACTIONS = (
+  processSchema.properties.action as typeof processSchema.properties.action & {
+    enum: readonly string[];
+  }
+).enum;
+type ProcessToolAction = (typeof PROCESS_TOOL_ACTIONS)[number];
+const pollScopeByAssistantMessage = new WeakMap<object, object>();
 
+function currentPollScope(): object | undefined {
+  const assistantMessage = getAgentToolExecutionContext()?.assistantMessage;
+  if (!assistantMessage) {
+    return undefined;
+  }
+  const existing = pollScopeByAssistantMessage.get(assistantMessage);
+  if (existing) {
+    return existing;
+  }
+  // Retained sessions must not keep a full assistant message alive after a dropped result.
+  const scope = {};
+  pollScopeByAssistantMessage.set(assistantMessage, scope);
+  return scope;
+}
+
+function resolveLogSliceWindow(offset?: number, limit?: number) {
+  const usingDefaultTail = offset === undefined && limit === undefined;
+  const effectiveLimit =
+    typeof limit === "number" && Number.isFinite(limit)
+      ? limit
+      : usingDefaultTail
+        ? DEFAULT_LOG_TAIL_LINES
+        : undefined;
+  return { effectiveOffset: offset, effectiveLimit, usingDefaultTail };
+}
+
+function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
+  if (!usingDefaultTail || totalLines <= DEFAULT_LOG_TAIL_LINES) {
+    return "";
+  }
+  return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
+}
+
+function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
+  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
+}
+
+const MAX_POLL_WAIT_MS = 30_000;
+
+type RunningSessionRuntime = {
+  stdinWritable: boolean;
+  waitingForInput: boolean;
+  idleMs: number;
+  lastOutputAt: number;
+};
+
+function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRunStdin {
+  if (!stdin || stdin.destroyed) {
+    return false;
+  }
+  if (stdin.writable === false || stdin.writableEnded === true || stdin.writableFinished === true) {
+    return false;
+  }
+  return true;
+}
+
+function runningSessionInputDetails(runtime: RunningSessionRuntime) {
+  return {
+    stdinWritable: runtime.stdinWritable,
+    waitingForInput: runtime.waitingForInput,
+    idleMs: runtime.idleMs,
+    lastOutputAt: runtime.lastOutputAt,
+  };
+}
+
+function resolvePollWaitMs(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
+  }
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
+      return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
+    }
+  }
+  return 0;
+}
+
+function failText(text: string): AgentToolResult<unknown> {
+  return textResult(text, { status: "failed", error: text });
+}
+
+function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {
+  try {
+    const sessionState = getDiagnosticSessionState({ sessionId });
+    return recordCommandPoll(sessionState, sessionId, hasNewOutput);
+  } catch {
+    return undefined;
+  }
+}
+
+function resetPollRetrySuggestion(sessionId: string): void {
+  try {
+    const sessionState = getDiagnosticSessionState({ sessionId });
+    resetCommandPollCount(sessionState, sessionId);
+  } catch {
+    // Ignore diagnostics state failures for process tool behavior.
+  }
+}
+
+function isConfirmedRequestedStop(session: ProcessSession): boolean {
+  return (
+    session.cancellationRequested === true &&
+    session.exitReason === "manual-cancel" &&
+    session.finalizationFailed !== true
+  );
+}
+
+function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
+  return {
+    status:
+      finished.terminalStatus === "completed" || isConfirmedRequestedStop(finished)
+        ? "completed"
+        : "failed",
+    sessionId,
+    exitCode: finished.exitCode ?? undefined,
+    ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
+    ...(finished.exitReason
+      ? {
+          exitReason: finished.exitReason,
+          timedOut:
+            finished.exitReason === "overall-timeout" ||
+            finished.exitReason === "no-output-timeout",
+        }
+      : {}),
+    ...(finished.noOutputTimedOut !== undefined
+      ? { noOutputTimedOut: finished.noOutputTimedOut }
+      : {}),
+    name: deriveSessionName(finished.command),
+  };
+}
+
+function finishedPollResult(
+  sessionId: string,
+  finished: ProcessSession,
+  pollScope: object | undefined,
+): AgentToolResult<unknown> {
+  resetPollRetrySuggestion(sessionId);
+  const delivery = prepareSessionPoll(finished, pollScope);
+  const { output: unreadOutput, outputDropped } = delivery;
+  const output = unreadOutput.trim();
+  // Omitted retained output is pageable only while this public id still owns
+  // the exact process; a reused slug must never point the model at successor logs.
+  const retainedOutputNote = outputDropped
+    ? getFinishedSession(sessionId) === finished
+      ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
+      : "[earlier output is omitted from this poll; omitted output is no longer available through action=log]\n\n"
+    : "";
+  const text = appendExecTimeoutRetryGuidance(
+    retentionCapNote(finished) +
+      retainedOutputNote +
+      (output || "(no new output)") +
+      (isConfirmedRequestedStop(finished)
+        ? `\n\nProcess stopped by request (${renderExecExitLabel(finished)}).`
+        : `\n\nProcess exited with ${renderExecExitLabel(finished)}.`),
+    finished.exitReason,
+  );
+  return attachInternalToolResultAcknowledgement(
+    textResult(text, {
+      ...finishedSessionDetails(sessionId, finished),
+      aggregated: finished.aggregated,
+    }),
+    () => {
+      delivery.acknowledge();
+      acknowledgeNotifyOnExit(finished);
+    },
+  );
+}
+
+function createAbortError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
+}
+
+async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw createAbortError(signal.reason);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    };
+    const onResolve = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort: (() => void) | undefined = () => {
+      cleanup();
+      reject(createAbortError(signal?.reason));
+    };
+    // An active poll must outlive the child's last handle so one-shot callers receive its result.
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any> {
-  if (defaults?.cleanupMs !== undefined) {
-    setJobTtlMs(defaults.cleanupMs);
-  }
+): AgentToolWithMeta<typeof processSchema, unknown> {
+  const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
   const scopeKey = defaults?.scopeKey;
+  const inputWaitIdleMs = clampWithDefault(
+    defaults?.inputWaitIdleMs ?? readEnvInt("OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS"),
+    DEFAULT_INPUT_WAIT_IDLE_MS,
+    MIN_INPUT_WAIT_IDLE_MS,
+    MAX_INPUT_WAIT_IDLE_MS,
+  );
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
+
+  const describeRunningSession = (session: ProcessSession): RunningSessionRuntime => {
+    const lastOutputAt = session.processActivity?.lastOutputAtMs ?? session.startedAt;
+    const idleMs = Math.max(0, Date.now() - lastOutputAt);
+    const stdinWritable = isWritableStdin(session.stdin);
+    return {
+      stdinWritable,
+      waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
+      idleMs,
+      lastOutputAt,
+    };
+  };
+
+  const buildInputWaitHint = (runtime: RunningSessionRuntime | undefined) => {
+    if (!runtime?.waitingForInput) {
+      return "";
+    }
+    const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
+    return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
+  };
 
   return {
     name: "process",
     label: "process",
-    description:
-      "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args) => {
+    outputSchema: ProcessToolOutputSchema,
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        assertSourceCurrent();
+      };
+      assertCurrent();
+      const action = (args as { action?: unknown }).action;
+      if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
+        return failText(
+          `Invalid process action. Expected one of: ${PROCESS_TOOL_ACTIONS.join(", ")}`,
+        );
+      }
       const params = args as {
-        action:
-          | "list"
-          | "poll"
-          | "log"
-          | "write"
-          | "send-keys"
-          | "submit"
-          | "paste"
-          | "kill"
-          | "clear"
-          | "remove";
+        action: ProcessToolAction;
         sessionId?: string;
         data?: string;
         keys?: string[];
@@ -81,61 +335,59 @@ export function createProcessTool(
         eof?: boolean;
         offset?: number;
         limit?: number;
+        timeout?: unknown;
       };
 
       if (params.action === "list") {
-        const running = listRunningSessions()
+        const sessions = [...listRunningSessions(), ...listFinishedSessions()]
           .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: "running",
-            pid: s.pid ?? undefined,
-            startedAt: s.startedAt,
-            runtimeMs: Date.now() - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-          }));
-        const finished = listFinishedSessions()
-          .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: s.status,
-            startedAt: s.startedAt,
-            endedAt: s.endedAt,
-            runtimeMs: s.endedAt - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-            exitCode: s.exitCode ?? undefined,
-            exitSignal: s.exitSignal ?? undefined,
-          }));
-        const lines = [...running, ...finished]
-          .toSorted((a, b) => b.startedAt - a.startedAt)
-          .map((s) => {
-            const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            return `${s.sessionId} ${pad(s.status, 9)} ${formatDurationCompact(s.runtimeMs) ?? "n/a"} :: ${label}`;
-          });
-        return {
-          content: [
-            {
-              type: "text",
-              text: lines.join("\n") || "No running or recent sessions.",
-            },
-          ],
-          details: { status: "completed", sessions: [...running, ...finished] },
-        };
+          .toSorted(compareProcessSessionStartOrder)
+          .map((s) =>
+            Object.assign(
+              {
+                sessionId: s.id,
+                status: s.terminalStatus ?? "running",
+                startedAt: s.startedAt,
+                runtimeMs: (s.endedAt ?? Date.now()) - s.startedAt,
+                cwd: s.cwd,
+                command: s.command,
+                name: deriveSessionName(s.command),
+                tail: s.tail,
+                truncated: s.truncated,
+              },
+              s.endedAt !== undefined
+                ? {
+                    ...finishedSessionDetails(s.id, s),
+                    status: s.terminalStatus ?? "running",
+                    endedAt: s.endedAt,
+                  }
+                : Object.assign(
+                    { pid: s.pid ?? undefined },
+                    runningSessionInputDetails(describeRunningSession(s)),
+                  ),
+            ),
+          );
+        const lines = sessions.map((s) => {
+          const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
+          const timeoutReason =
+            "exitReason" in s &&
+            (s.exitReason === "overall-timeout" || s.exitReason === "no-output-timeout")
+              ? s.exitReason
+              : undefined;
+          const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
+          const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
+          return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
+            formatDurationCompact(s.runtimeMs) ?? "n/a"
+          }${timeoutMarker}${marker} :: ${label}`;
+        });
+        return textResult(lines.join("\n") || "No running or recent sessions.", {
+          status: "completed",
+          sessions,
+        });
       }
 
       if (!params.sessionId) {
-        return {
-          content: [{ type: "text", text: "sessionId is required for this action." }],
-          details: { status: "failed" },
-        };
+        return failText("sessionId is required for this action.");
       }
 
       const session = getSession(params.sessionId);
@@ -143,523 +395,286 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
+      const resolveBackgroundedWritableStdin = () => {
+        if (!scopedSession) {
+          return {
+            ok: false as const,
+            result: failText(`No active session found for ${params.sessionId}`),
+          };
+        }
+        if (!scopedSession.backgrounded) {
+          return {
+            ok: false as const,
+            result: failText(`Session ${params.sessionId} is not backgrounded.`),
+          };
+        }
+        if (scopedSession.finalizing) {
+          return {
+            ok: false as const,
+            result: failText(`Session ${params.sessionId} is finalizing.`),
+          };
+        }
+        const stdin = scopedSession.stdin;
+        if (!isWritableStdin(stdin)) {
+          return {
+            ok: false as const,
+            result: failText(`Session ${params.sessionId} stdin is not writable.`),
+          };
+        }
+        return { ok: true as const, session: scopedSession, stdin };
+      };
+
+      const runningSessionResult = (
+        sessionLocal: ProcessSession,
+        text: string,
+      ): AgentToolResult<unknown> =>
+        textResult(text, {
+          status: "running",
+          sessionId: params.sessionId,
+          name: deriveSessionName(sessionLocal.command),
+        });
+
       switch (params.action) {
         case "poll": {
+          const pollScope = currentPollScope();
           if (!scopedSession) {
             if (scopedFinished) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
-                  },
-                ],
-                details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
-                  sessionId: params.sessionId,
-                  exitCode: scopedFinished.exitCode ?? undefined,
-                  aggregated: scopedFinished.aggregated,
-                  name: deriveSessionName(scopedFinished.command),
-                },
-              };
+              return finishedPollResult(params.sessionId, scopedFinished, pollScope);
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            resetPollRetrySuggestion(params.sessionId);
+            return failText(`No session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          const { stdout, stderr } = drainSession(scopedSession);
-          const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
-          if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
-            markExited(
-              scopedSession,
-              scopedSession.exitCode ?? null,
-              scopedSession.exitSignal ?? null,
-              status,
-            );
+          const pollWaitMs = resolvePollWaitMs(params.timeout);
+          if (pollWaitMs > 0 && !scopedSession.exited) {
+            if (signal?.aborted) {
+              throw createAbortError(signal.reason);
+            }
+            const deadline = Date.now() + pollWaitMs;
+            // Interactive children cannot progress until their pending prompt reaches the model.
+            while (
+              !scopedSession.exited &&
+              !hasPendingPollDelivery(scopedSession) &&
+              scopedSession.pendingOutput.length === 0 &&
+              !scopedSession.pendingOutputDropped &&
+              Date.now() < deadline
+            ) {
+              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
+            }
           }
-          const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
-            : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  (output || "(no new output)") +
-                  (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : "\n\nProcess still running."),
-              },
-            ],
-            details: {
-              status,
+          if (scopedSession.exited) {
+            // Retention admission survives clear/eviction on this exact object.
+            // A process removed before exit was never retained; never read a successor.
+            if (scopedSession.endedAt !== undefined && isInScope(scopedSession)) {
+              return finishedPollResult(params.sessionId, scopedSession, pollScope);
+            }
+            resetPollRetrySuggestion(params.sessionId);
+            return failText(`No session found for ${params.sessionId}`);
+          }
+          const delivery = prepareSessionPoll(scopedSession, pollScope);
+          const { output: unreadOutput, outputDropped } = delivery;
+          const output = unreadOutput.trim();
+          const aggregateOutputNote = retentionCapNote(scopedSession);
+          const retainedOutputNote = outputDropped
+            ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
+            : "";
+          const hasNewOutput = output.length > 0;
+          const retryInMs = recordPollRetrySuggestion(params.sessionId, hasNewOutput);
+          const runtime = describeRunningSession(scopedSession);
+          const text =
+            aggregateOutputNote +
+            retainedOutputNote +
+            (output || "(no new output)") +
+            (buildInputWaitHint(runtime) || "\n\nProcess still running.");
+          return attachInternalToolResultAcknowledgement(
+            textResult(text, {
+              status: "running",
               sessionId: params.sessionId,
-              exitCode: exited ? exitCode : undefined,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
-            },
-          };
+              ...runningSessionInputDetails(runtime),
+              ...(typeof retryInMs === "number" ? { retryInMs } : {}),
+            }),
+            () => delivery.acknowledge(),
+          );
         }
 
         case "log": {
-          if (scopedSession) {
-            if (!scopedSession.backgrounded) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Session ${params.sessionId} is not backgrounded.`,
-                  },
-                ],
-                details: { status: "failed" },
-              };
-            }
-            const { slice, totalLines, totalChars } = sliceLogLines(
-              scopedSession.aggregated,
-              params.offset,
-              params.limit,
-            );
-            return {
-              content: [{ type: "text", text: slice || "(no output yet)" }],
-              details: {
-                status: scopedSession.exited ? "completed" : "running",
-                sessionId: params.sessionId,
-                total: totalLines,
-                totalLines,
-                totalChars,
-                truncated: scopedSession.truncated,
-                name: deriveSessionName(scopedSession.command),
-              },
-            };
+          const record = scopedSession ?? scopedFinished;
+          if (!record) {
+            return failText(`No session found for ${params.sessionId}`);
           }
-          if (scopedFinished) {
-            const { slice, totalLines, totalChars } = sliceLogLines(
-              scopedFinished.aggregated,
-              params.offset,
-              params.limit,
-            );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
-            return {
-              content: [{ type: "text", text: slice || "(no output recorded)" }],
-              details: {
-                status,
-                sessionId: params.sessionId,
-                total: totalLines,
-                totalLines,
-                totalChars,
-                truncated: scopedFinished.truncated,
-                exitCode: scopedFinished.exitCode ?? undefined,
-                exitSignal: scopedFinished.exitSignal ?? undefined,
-                name: deriveSessionName(scopedFinished.command),
-              },
-            };
+          if (scopedSession && !scopedSession.backgrounded) {
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          const window = resolveLogSliceWindow(params.offset, params.limit);
+          const { slice, totalLines, totalChars } = sliceLogLines(
+            record.aggregated,
+            window.effectiveOffset,
+            window.effectiveLimit,
+          );
+          const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
+          const text =
+            retentionCapNote(record) +
+            (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
+            defaultTailNote(totalLines, window.usingDefaultTail) +
+            (isConfirmedRequestedStop(record)
+              ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
+              : "");
+          const output = runtime
+            ? text + buildInputWaitHint(runtime)
+            : appendExecTimeoutRetryGuidance(text, record.exitReason);
+          return textResult(output, {
+            ...(runtime
+              ? {
+                  status: record.exited ? "completed" : "running",
+                  sessionId: params.sessionId,
+                  name: deriveSessionName(record.command),
+                  ...runningSessionInputDetails(runtime),
+                }
+              : finishedSessionDetails(params.sessionId, record)),
+            // Code Mode reads details, so preserve the requested page and its recovery hints.
+            output,
+            total: totalLines,
+            totalLines,
+            totalChars,
+            truncated: record.truncated,
+          });
         }
 
         case "write": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(params.data ?? "", (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
+          await writeProcessStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
-            stdin.end();
+            assertCurrent();
+            resolved.stdin.end();
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
-                  params.eof ? " (stdin closed)" : ""
-                }.`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
-          };
+          return runningSessionResult(
+            resolved.session,
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
+              params.eof ? " (stdin closed)" : ""
+            }.`,
+          );
         }
 
         case "send-keys": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const { data, warnings } = encodeKeySequence({
+          return await handleProcessSendKeys({
+            sessionId: params.sessionId,
+            session: resolved.session,
+            stdin: resolved.stdin,
             keys: params.keys,
             hex: params.hex,
             literal: params.literal,
           });
-          if (!data) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No key data provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(data, (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `Sent ${data.length} bytes to session ${params.sessionId}.` +
-                  (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
-          };
         }
 
         case "submit": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write("\r", (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Submitted session ${params.sessionId} (sent CR).`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
-          };
+          await writeProcessStdin(resolved.stdin, "\r");
+          return runningSessionResult(
+            resolved.session,
+            `Submitted session ${params.sessionId} (sent CR).`,
+          );
         }
 
         case "paste": {
-          if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-          if (!stdin || stdin.destroyed) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} stdin is not writable.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+          const resolved = resolveBackgroundedWritableStdin();
+          if (!resolved.ok) {
+            return resolved.result;
           }
           const payload = encodePaste(params.text ?? "", params.bracketed !== false);
           if (!payload) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No paste text provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText("No paste text provided.");
           }
-          await new Promise<void>((resolve, reject) => {
-            stdin.write(payload, (err) => {
-              if (err) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: params.sessionId,
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
-          };
+          await writeProcessStdin(resolved.stdin, payload);
+          return runningSessionResult(
+            resolved.session,
+            `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,
+          );
         }
 
         case "kill": {
           if (!scopedSession) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No active session found for ${params.sessionId}`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`No active session found for ${params.sessionId}`);
           }
           if (!scopedSession.backgrounded) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Session ${params.sessionId} is not backgrounded.`,
-                },
-              ],
-              details: { status: "failed" },
-            };
+            return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          killSession(scopedSession);
-          markExited(scopedSession, null, "SIGKILL", "failed");
-          return {
-            content: [{ type: "text", text: `Killed session ${params.sessionId}.` }],
-            details: {
-              status: "failed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
-          };
+          if (scopedSession.finalizing) {
+            return failText(`Session ${params.sessionId} is finalizing.`);
+          }
+          if (!cancelBackgroundExecSession(scopedSession.id)) {
+            return failText(
+              `Unable to terminate session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+            );
+          }
+          resetPollRetrySuggestion(params.sessionId);
+          // The kill was performed; "failed" here would flag a successful
+          // action as a tool error and invite the model to retry it.
+          return textResult(`Termination requested for session ${params.sessionId}.`, {
+            status: "completed",
+            name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+          });
         }
 
         case "clear": {
           if (scopedFinished) {
+            resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
-            return {
-              content: [{ type: "text", text: `Cleared session ${params.sessionId}.` }],
-              details: { status: "completed" },
-            };
+            return textResult(`Cleared session ${params.sessionId}.`, { status: "completed" });
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No finished session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No finished session found for ${params.sessionId}`);
         }
 
         case "remove": {
           if (scopedSession) {
-            killSession(scopedSession);
-            markExited(scopedSession, null, "SIGKILL", "failed");
-            return {
-              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
-              details: {
-                status: "failed",
-                name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-              },
-            };
+            if (!scopedSession.backgrounded) {
+              return failText(`Session ${params.sessionId} is not backgrounded.`);
+            }
+            if (scopedSession.finalizing) {
+              return failText(`Session ${params.sessionId} is finalizing.`);
+            }
+            if (!cancelBackgroundExecSession(scopedSession.id)) {
+              return failText(
+                `Unable to remove session ${params.sessionId}: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.`,
+              );
+            }
+            // Keep remove semantics deterministic: drop from process registry now.
+            scopedSession.backgrounded = false;
+            deleteSession(params.sessionId);
+            resetPollRetrySuggestion(params.sessionId);
+            // Removal succeeded (termination requested + registry row dropped);
+            // match the finished-session remove branch's success shape.
+            return textResult(`Removed session ${params.sessionId} (termination requested).`, {
+              status: "completed",
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            });
           }
           if (scopedFinished) {
+            resetPollRetrySuggestion(params.sessionId);
             deleteSession(params.sessionId);
-            return {
-              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
-              details: { status: "completed" },
-            };
+            return textResult(`Removed session ${params.sessionId}.`, { status: "completed" });
           }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
+          return failText(`No session found for ${params.sessionId}`);
         }
       }
 
-      return {
-        content: [{ type: "text", text: `Unknown action ${params.action as string}` }],
-        details: { status: "failed" },
-      };
+      return failText(`Unknown action ${params.action as string}`);
     },
   };
 }
 
+/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

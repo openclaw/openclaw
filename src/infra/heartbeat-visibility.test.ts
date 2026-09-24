@@ -1,8 +1,42 @@
+// Covers heartbeat visibility resolution across defaults and accounts.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 
 describe("resolveHeartbeatVisibility", () => {
+  function createChannelDefaultsHeartbeatConfig(heartbeatVisibility: {
+    showOk?: boolean;
+    showAlerts?: boolean;
+    useIndicator?: boolean;
+  }): OpenClawConfig {
+    return {
+      channels: {
+        defaults: {
+          heartbeatVisibility,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function createTelegramAccountHeartbeatConfig(): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          heartbeatVisibility: {
+            showOk: true,
+          },
+          accounts: {
+            primary: {
+              heartbeatVisibility: {
+                showOk: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   it("returns default values when no config is provided", () => {
     const cfg = {} as OpenClawConfig;
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
@@ -15,17 +49,11 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("uses channel defaults when provided", () => {
-    const cfg = {
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: true,
-            showAlerts: false,
-            useIndicator: false,
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createChannelDefaultsHeartbeatConfig({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -40,14 +68,14 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: true,
             useIndicator: true,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
           },
         },
@@ -67,20 +95,20 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: true,
             useIndicator: true,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: false,
           },
           accounts: {
             primary: {
-              heartbeat: {
+              heartbeatVisibility: {
                 showOk: true,
                 showAlerts: true,
               },
@@ -107,12 +135,12 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showAlerts: false,
           },
           accounts: {
@@ -136,46 +164,14 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("handles missing accountId gracefully", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          heartbeat: {
-            showOk: true,
-          },
-          accounts: {
-            primary: {
-              heartbeat: {
-                showOk: false,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
+    const cfg = createTelegramAccountHeartbeatConfig();
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
     expect(result.showOk).toBe(true);
   });
 
   it("handles non-existent account gracefully", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          heartbeat: {
-            showOk: true,
-          },
-          accounts: {
-            primary: {
-              heartbeat: {
-                showOk: false,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
+    const cfg = createTelegramAccountHeartbeatConfig();
     const result = resolveHeartbeatVisibility({
       cfg,
       channel: "telegram",
@@ -189,7 +185,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         whatsapp: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
             showAlerts: false,
           },
@@ -210,7 +206,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         discord: {
-          heartbeat: {
+          heartbeatVisibility: {
             useIndicator: false,
           },
         },
@@ -230,7 +226,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         slack: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
             showAlerts: true,
             useIndicator: true,
@@ -249,17 +245,11 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("webchat uses channel defaults only (no per-channel config)", () => {
-    const cfg = {
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: true,
-            showAlerts: false,
-            useIndicator: false,
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createChannelDefaultsHeartbeatConfig({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
 
@@ -286,7 +276,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
           },
         },

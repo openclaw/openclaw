@@ -1,16 +1,30 @@
-import { runZca } from "./zca.js";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+// Zalouser plugin module implements send behavior.
+import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
+import { createZalouserSendReceipt } from "./send-receipt.js";
+import { parseZalouserTextStyles } from "./text-styles.js";
+import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
+import {
+  sendZaloDeliveredEvent,
+  sendZaloLink,
+  sendZaloReaction,
+  sendZaloSeenEvent,
+  sendZaloTextMessage,
+  sendZaloTypingEvent,
+} from "./zalo-js.js";
+import { TextStyle } from "./zca-constants.js";
 
-export type ZalouserSendOptions = {
-  profile?: string;
-  mediaUrl?: string;
-  caption?: string;
-  isGroup?: boolean;
+type ZalouserSendOptions = ZaloSendOptions & {
+  /** Persist each concrete platform send before the next internal chunk starts. */
+  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void;
 };
+type ZalouserSendResult = ZaloSendResult;
 
-export type ZalouserSendResult = {
-  ok: boolean;
-  messageId?: string;
-  error?: string;
+const ZALO_TEXT_LIMIT = 2000;
+
+type StyledTextChunk = {
+  text: string;
+  styles?: ZaloSendOptions["textStyles"];
 };
 
 export async function sendMessageZalouser(
@@ -18,84 +32,54 @@ export async function sendMessageZalouser(
   text: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
-  const profile = options.profile || process.env.ZCA_PROFILE || "default";
+  const { onDeliveryResult, ...transportOptions } = options;
+  const prepared =
+    transportOptions.textMode === "markdown"
+      ? parseZalouserTextStyles(text)
+      : { text, styles: transportOptions.textStyles };
+  const textChunkLimit = transportOptions.textChunkLimit ?? ZALO_TEXT_LIMIT;
+  const chunks = splitStyledText(
+    prepared.text,
+    (prepared.styles?.length ?? 0) > 0 ? prepared.styles : undefined,
+    textChunkLimit,
+    transportOptions.textChunkMode,
+  );
 
-  if (!threadId?.trim()) {
-    return { ok: false, error: "No threadId provided" };
-  }
-
-  // Handle media sending
-  if (options.mediaUrl) {
-    return sendMediaZalouser(threadId, options.mediaUrl, {
-      ...options,
-      caption: text || options.caption,
-    });
-  }
-
-  // Send text message
-  const args = ["msg", "send", threadId.trim(), text.slice(0, 2000)];
-  if (options.isGroup) {
-    args.push("-g");
-  }
-
-  try {
-    const result = await runZca(args, { profile });
-
-    if (result.ok) {
-      return { ok: true, messageId: extractMessageId(result.stdout) };
+  let lastResult: ZalouserSendResult | null = null;
+  for (const [index, chunk] of chunks.entries()) {
+    const chunkOptions =
+      index === 0
+        ? { ...transportOptions, textStyles: chunk.styles }
+        : {
+            ...transportOptions,
+            caption: undefined,
+            mediaLocalRoots: undefined,
+            mediaUrl: undefined,
+            textStyles: chunk.styles,
+          };
+    const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions, onDeliveryResult);
+    if (!result.ok) {
+      const error = new Error(result.error || "Failed to send Zalouser message");
+      if (result.receipt.platformMessageIds.length > 0) {
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: result.receipt.platformMessageIds,
+          receipt: result.receipt,
+          visibleReplySent: true,
+        });
+      }
+      throw error;
     }
-
-    return { ok: false, error: result.stderr || "Failed to send message" };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-async function sendMediaZalouser(
-  threadId: string,
-  mediaUrl: string,
-  options: ZalouserSendOptions = {},
-): Promise<ZalouserSendResult> {
-  const profile = options.profile || process.env.ZCA_PROFILE || "default";
-
-  if (!threadId?.trim()) {
-    return { ok: false, error: "No threadId provided" };
+    await onDeliveryResult?.(result);
+    lastResult = result;
   }
 
-  if (!mediaUrl?.trim()) {
-    return { ok: false, error: "No media URL provided" };
-  }
-
-  // Determine media type from URL
-  const lowerUrl = mediaUrl.toLowerCase();
-  let command: string;
-  if (lowerUrl.match(/\.(mp4|mov|avi|webm)$/)) {
-    command = "video";
-  } else if (lowerUrl.match(/\.(mp3|wav|ogg|m4a)$/)) {
-    command = "voice";
-  } else {
-    command = "image";
-  }
-
-  const args = ["msg", command, threadId.trim(), "-u", mediaUrl.trim()];
-  if (options.caption) {
-    args.push("-m", options.caption.slice(0, 2000));
-  }
-  if (options.isGroup) {
-    args.push("-g");
-  }
-
-  try {
-    const result = await runZca(args, { profile });
-
-    if (result.ok) {
-      return { ok: true, messageId: extractMessageId(result.stdout) };
+  return (
+    lastResult ?? {
+      ok: false,
+      error: "No message content provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "text" }),
     }
-
-    return { ok: false, error: result.stderr || `Failed to send ${command}` };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  );
 }
 
 export async function sendImageZalouser(
@@ -103,24 +87,11 @@ export async function sendImageZalouser(
   imageUrl: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
-  const profile = options.profile || process.env.ZCA_PROFILE || "default";
-  const args = ["msg", "image", threadId.trim(), "-u", imageUrl.trim()];
-  if (options.caption) {
-    args.push("-m", options.caption.slice(0, 2000));
-  }
-  if (options.isGroup) {
-    args.push("-g");
-  }
-
-  try {
-    const result = await runZca(args, { profile });
-    if (result.ok) {
-      return { ok: true, messageId: extractMessageId(result.stdout) };
-    }
-    return { ok: false, error: result.stderr || "Failed to send image" };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return await sendMessageZalouser(threadId, options.caption ?? "", {
+    ...options,
+    caption: undefined,
+    mediaUrl: imageUrl,
+  });
 }
 
 export async function sendLinkZalouser(
@@ -128,33 +99,115 @@ export async function sendLinkZalouser(
   url: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
-  const profile = options.profile || process.env.ZCA_PROFILE || "default";
-  const args = ["msg", "link", threadId.trim(), url.trim()];
-  if (options.isGroup) {
-    args.push("-g");
-  }
-
-  try {
-    const result = await runZca(args, { profile });
-    if (result.ok) {
-      return { ok: true, messageId: extractMessageId(result.stdout) };
-    }
-    return { ok: false, error: result.stderr || "Failed to send link" };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+  return await sendZaloLink(threadId, url, options);
 }
 
-function extractMessageId(stdout: string): string | undefined {
-  // Try to extract message ID from output
-  const match = stdout.match(/message[_\s]?id[:\s]+(\S+)/i);
-  if (match) {
-    return match[1];
+export async function sendTypingZalouser(
+  threadId: string,
+  options: Pick<ZalouserSendOptions, "profile" | "isGroup"> = {},
+): Promise<void> {
+  await sendZaloTypingEvent(threadId, options);
+}
+
+export async function sendReactionZalouser(params: {
+  threadId: string;
+  msgId: string;
+  cliMsgId: string;
+  emoji: string;
+  remove?: boolean;
+  profile?: string;
+  isGroup?: boolean;
+}): Promise<ZalouserSendResult> {
+  const result = await sendZaloReaction({
+    profile: params.profile,
+    threadId: params.threadId,
+    isGroup: params.isGroup,
+    msgId: params.msgId,
+    cliMsgId: params.cliMsgId,
+    emoji: params.emoji,
+    remove: params.remove,
+  });
+  return {
+    ok: result.ok,
+    error: result.error,
+    receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
+  };
+}
+
+export async function sendDeliveredZalouser(params: {
+  profile?: string;
+  isGroup?: boolean;
+  message: ZaloEventMessage;
+  isSeen?: boolean;
+}): Promise<void> {
+  await sendZaloDeliveredEvent(params);
+}
+
+export async function sendSeenZalouser(params: {
+  profile?: string;
+  isGroup?: boolean;
+  message: ZaloEventMessage;
+}): Promise<void> {
+  await sendZaloSeenEvent(params);
+}
+
+function splitStyledText(
+  text: string,
+  styles: ZaloSendOptions["textStyles"],
+  limit: number,
+  mode: ZaloSendOptions["textChunkMode"],
+): StyledTextChunk[] {
+  if (text.length === 0) {
+    return [{ text, styles: undefined }];
   }
-  // Return first word if it looks like an ID
-  const firstWord = stdout.trim().split(/\s+/)[0];
-  if (firstWord && /^[a-zA-Z0-9_-]+$/.test(firstWord)) {
-    return firstWord;
+
+  const chunks: StyledTextChunk[] = [];
+  for (const range of chunkTextRanges(text, {
+    limit,
+    mode: mode === "newline" ? "preferred" : "hard",
+  })) {
+    const { start, end } = range;
+    chunks.push({
+      text: text.slice(start, end),
+      styles: sliceTextStyles(styles, start, end),
+    });
   }
-  return undefined;
+  return chunks;
+}
+
+function sliceTextStyles(
+  styles: ZaloSendOptions["textStyles"],
+  start: number,
+  end: number,
+): ZaloSendOptions["textStyles"] {
+  if (!styles || styles.length === 0) {
+    return undefined;
+  }
+
+  const chunkStyles = styles
+    .map((style) => {
+      const overlapStart = Math.max(style.start, start);
+      const overlapEnd = Math.min(style.start + style.len, end);
+      if (overlapEnd <= overlapStart) {
+        return null;
+      }
+
+      if (style.st === TextStyle.Indent) {
+        return {
+          start: overlapStart - start,
+          len: overlapEnd - overlapStart,
+          st: style.st,
+          indentSize: style.indentSize,
+        };
+      }
+
+      return {
+        start: overlapStart - start,
+        len: overlapEnd - overlapStart,
+        st: style.st,
+      };
+    })
+    .filter((style): style is NonNullable<typeof style> => style !== null);
+
+  return chunkStyles.length > 0 ? chunkStyles : undefined;
 }

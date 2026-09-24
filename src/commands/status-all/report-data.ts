@@ -1,0 +1,261 @@
+// Collects raw data needed to render `openclaw status --all`.
+// This file performs local read-only probes; formatting stays in report-line builders.
+
+import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
+import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
+import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
+import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
+import {
+  buildPluginCompatibilityNotices,
+  withPluginDiagnosticsReport,
+} from "../../plugins/status.js";
+import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
+import {
+  buildStatusOverviewSurfaceFromOverview,
+  type StatusOverviewSurface,
+} from "../status-overview-surface.ts";
+import {
+  resolveStatusGatewayDiagnosticsSafe,
+  resolveStatusGatewayHealthSafe,
+  type StatusGatewayDiagnosticsResult,
+  type resolveStatusServiceSummaries,
+} from "../status-runtime-shared.ts";
+import { buildStatusUpdateRows } from "../status-update-restart.ts";
+import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
+import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
+import {
+  resolveStatusSummaryFromOverview,
+  type StatusScanOverviewResult,
+} from "../status.scan-overview.ts";
+
+type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSummaries>>;
+type StatusGatewayServiceSummary = StatusServiceSummaries[0];
+type StatusNodeServiceSummary = StatusServiceSummaries[1];
+type StatusGatewayHealthSafe = Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>>;
+type ConfigFileSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+
+type StatusAllProgress = {
+  setLabel(label: string): void;
+  tick(): void;
+};
+
+function resolveStatusAllConfigPath(path: string | null | undefined): string {
+  const trimmed = path?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "(unknown config path)";
+}
+
+/** Collects local diagnosis inputs that are not part of the shared overview scan. */
+async function resolveStatusAllLocalDiagnosis(params: {
+  overview: StatusScanOverviewResult;
+  progress: StatusAllProgress;
+  gatewayReachable: boolean;
+  gatewayProbe: StatusScanOverviewResult["gatewaySnapshot"]["gatewayProbe"];
+  gatewayCallOverrides: StatusScanOverviewResult["gatewaySnapshot"]["gatewayCallOverrides"];
+  nodeOnlyGateway: NodeOnlyGatewayInfo | null;
+  timeoutMs?: number;
+  gatewayProbeDeadlineMs: number;
+}): Promise<{
+  configPath: string;
+  health: StatusGatewayHealthSafe | undefined;
+  diagnosis: {
+    snap: ConfigFileSnapshot | null;
+    remoteUrlMissing: boolean;
+    secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
+    sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>> | null;
+    lastErr: string | null;
+    port: number;
+    portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
+    tailscaleMode: string;
+    tailscaleDns: string | null;
+    tailscaleHttpsUrl: string | null;
+    skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
+    pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
+    channelsStatus: StatusScanOverviewResult["channelsStatus"];
+    channelIssues: StatusScanOverviewResult["channelIssues"];
+    agentStatus: StatusScanOverviewResult["agentStatus"];
+    gatewayReachable: boolean;
+    gatewayStartupPhase?: string;
+    health: StatusGatewayHealthSafe | undefined;
+    deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
+    exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
+    nodeOnlyGateway: NodeOnlyGatewayInfo | null;
+  };
+}> {
+  const { overview } = params;
+  const snap = await readConfigFileSnapshot({ observe: false }).catch(() => null);
+  const configPath = resolveStatusAllConfigPath(snap?.path);
+  const diagnosticsParams = {
+    config: overview.cfg,
+    gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+    timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
+    gatewayReachable: params.gatewayReachable,
+    ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+  };
+
+  const [health, deliveryDiagnostics, exporterDiagnostics] =
+    params.nodeOnlyGateway || params.gatewayProbe?.startupPhase
+      ? [undefined, null, null]
+      : await Promise.all([
+          resolveStatusGatewayHealthSafe({
+            config: overview.cfg,
+            gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+            timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
+            gatewayReachable: params.gatewayReachable,
+            gatewayProbeError: params.gatewayProbe?.error ?? null,
+            ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+          }),
+          resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
+          resolveStatusGatewayDiagnosticsSafe({
+            ...diagnosticsParams,
+            type: "telemetry.exporter",
+          }),
+        ]);
+
+  params.progress.setLabel("Checking local state…");
+  // These probes are intentionally best-effort so status-all can still print a partial report.
+  const sentinel = await readRestartSentinelReadOnly().catch(() => null);
+  const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
+  const port = resolveGatewayPort(overview.cfg);
+  const bindHost = await resolveGatewayBindHost(
+    overview.cfg.gateway?.bind ?? "loopback",
+    overview.cfg.gateway?.customBindHost,
+  );
+  const portUsage = await inspectPortUsage(port, {
+    probeHosts: resolveGatewayRequiredListenHosts(bindHost),
+  }).catch(() => null);
+  params.progress.tick();
+
+  const controlPlaneWorkspace = resolvePluginControlPlaneWorkspace({
+    config: overview.cfg,
+    env: process.env,
+  });
+  const defaultWorkspace = controlPlaneWorkspace.workspaceDir ?? null;
+  const skillReadiness =
+    defaultWorkspace != null
+      ? (() => {
+          try {
+            // Skill eligibility depends on whether the default agent may request node exec.
+            const nodeSkills = resolveNodeExecEligibility({
+              cfg: overview.cfg,
+              execApprovals: loadExecApprovalsReadOnly(),
+              agentId: controlPlaneWorkspace.agentId,
+            });
+            return buildWorkspaceSkillReadiness(defaultWorkspace, {
+              config: overview.cfg,
+              agentId: controlPlaneWorkspace.agentId,
+              eligibility: {
+                nodeSkills,
+                remote: getRemoteSkillEligibility({
+                  advertiseExecNode: nodeSkills.canExec,
+                }),
+              },
+            });
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  const pluginCompatibility = await withPluginDiagnosticsReport(
+    { config: overview.cfg },
+    (report) => buildPluginCompatibilityNotices({ report }),
+  );
+
+  return {
+    configPath,
+    health,
+    diagnosis: {
+      snap,
+      remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
+      secretDiagnostics: overview.secretDiagnostics,
+      sentinel,
+      lastErr,
+      port,
+      portUsage,
+      tailscaleMode: overview.tailscaleMode,
+      tailscaleDns: overview.tailscaleDns,
+      tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
+      skillReadiness,
+      pluginCompatibility,
+      channelsStatus: overview.channelsStatus,
+      channelIssues: overview.channelIssues,
+      agentStatus: overview.agentStatus,
+      gatewayReachable: params.gatewayReachable,
+      gatewayStartupPhase: params.gatewayProbe?.startupPhase,
+      health,
+      deliveryDiagnostics,
+      exporterDiagnostics,
+      nodeOnlyGateway: params.nodeOnlyGateway,
+    },
+  };
+}
+
+/** Builds the full status-all report data model from a completed overview scan. */
+export async function buildStatusAllReportData(params: {
+  overview: StatusScanOverviewResult;
+  daemon: StatusGatewayServiceSummary;
+  nodeService: StatusNodeServiceSummary;
+  nodeOnlyGateway: NodeOnlyGatewayInfo | null;
+  progress: StatusAllProgress;
+  timeoutMs?: number;
+  gatewayProbeDeadlineMs: number;
+}) {
+  const gatewaySnapshot = params.overview.gatewaySnapshot;
+  const [{ configPath, health, diagnosis }, summary] = await Promise.all([
+    resolveStatusAllLocalDiagnosis({
+      overview: params.overview,
+      progress: params.progress,
+      gatewayReachable: gatewaySnapshot.gatewayReachable,
+      gatewayProbe: gatewaySnapshot.gatewayProbe,
+      gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
+      nodeOnlyGateway: params.nodeOnlyGateway,
+      timeoutMs: params.timeoutMs,
+      gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+    }),
+    params.overview.runtimeDegradation ??
+      resolveStatusSummaryFromOverview({ overview: params.overview }),
+  ]);
+
+  const overviewSurface: StatusOverviewSurface = buildStatusOverviewSurfaceFromOverview({
+    overview: params.overview,
+    gatewayService: params.daemon,
+    nodeService: params.nodeService,
+    nodeOnlyGateway: params.nodeOnlyGateway,
+  });
+  const overviewRows = buildStatusAllOverviewRows({
+    surface: overviewSurface,
+    osLabel: params.overview.osSummary.label,
+    configPath,
+    summary,
+    secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    updateRows: buildStatusUpdateRows(diagnosis.sentinel?.payload),
+    agentStatus: params.overview.agentStatus,
+  });
+
+  return {
+    configDiagnostics: params.overview.configDiagnostics,
+    overviewRows,
+    channels: params.overview.channels,
+    channelIssues: params.overview.channelIssues.map((issue) => ({
+      channel: issue.channel,
+      message: issue.message,
+    })),
+    agentStatus: params.overview.agentStatus,
+    connectionDetailsForReport: resolveStatusAllConnectionDetails({
+      nodeOnlyGateway: params.nodeOnlyGateway,
+      remoteUrlMissing: gatewaySnapshot.remoteUrlMissing,
+      gatewayConnection: gatewaySnapshot.gatewayConnection,
+      bindMode: params.overview.cfg.gateway?.bind ?? "loopback",
+      configPath,
+    }),
+    diagnosis: {
+      ...diagnosis,
+      health,
+    },
+  };
+}

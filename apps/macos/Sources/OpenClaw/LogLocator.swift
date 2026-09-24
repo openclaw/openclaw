@@ -7,8 +7,7 @@ enum LogLocator {
         {
             return URL(fileURLWithPath: override)
         }
-        let preferred = URL(fileURLWithPath: "/tmp/openclaw")
-        return preferred
+        return URL(fileURLWithPath: "/tmp/openclaw")
     }
 
     private static var stdoutLog: URL {
@@ -16,7 +15,8 @@ enum LogLocator {
     }
 
     private static var gatewayLog: URL {
-        logDir.appendingPathComponent("openclaw-gateway.log")
+        let suffix = AppProfile.current.name.map { "-\($0)" } ?? ""
+        return logDir.appendingPathComponent("openclaw-gateway\(suffix).log")
     }
 
     private static func ensureLogDirExists() {

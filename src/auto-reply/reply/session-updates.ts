@@ -1,134 +1,143 @@
+/** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveUserTimezone } from "../../agents/date-time.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import { buildChannelSummary } from "../../infra/channel-summary.js";
+import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
-  resolveTimezone,
-  formatUtcTimestamp,
-  formatZonedTimestamp,
-} from "../../infra/format-time/format-datetime.ts";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+  type ExecPolicyOverrides,
+  resolveNodeExecEligibility,
+} from "../../agents/exec-defaults.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
-export async function prependSystemEvents(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  isMainSession: boolean;
-  isNewSession: boolean;
-  prefixedBodyBase: string;
-}): Promise<string> {
-  const compactSystemEvent = (line: string): string | null => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return null;
+function publishSessionEntry(
+  params: {
+    sessionEntryHandle?: ReplySessionEntryHandle;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+  },
+  entry: SessionEntry | undefined,
+): void {
+  if (entry) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(entry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = entry;
     }
-    const lower = trimmed.toLowerCase();
-    if (lower.includes("reason periodic")) {
-      return null;
-    }
-    // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat"
-    // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this
-    if (lower.startsWith("read heartbeat.md")) {
-      return null;
-    }
-    // Also filter heartbeat poll/wake noise
-    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
-      return null;
-    }
-    if (trimmed.startsWith("Node:")) {
-      return trimmed.replace(/ · last input [^·]+/i, "").trim();
-    }
-    return trimmed;
-  };
-
-  const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
-    const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
-    if (!raw) {
-      return { mode: "local" as const };
-    }
-    const lowered = raw.toLowerCase();
-    if (lowered === "utc" || lowered === "gmt") {
-      return { mode: "utc" as const };
-    }
-    if (lowered === "local" || lowered === "host") {
-      return { mode: "local" as const };
-    }
-    if (lowered === "user") {
-      return {
-        mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-      };
-    }
-    const explicit = resolveTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
-  };
-
-  const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) {
-      return "unknown-time";
-    }
-    const zone = resolveSystemEventTimezone(cfg);
-    if (zone.mode === "utc") {
-      return formatUtcTimestamp(date, { displaySeconds: true });
-    }
-    if (zone.mode === "local") {
-      return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-    }
-    return (
-      formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
-      "unknown-time"
-    );
-  };
-
-  const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
-  systemLines.push(
-    ...queued
-      .map((event) => {
-        const compacted = compactSystemEvent(event.text);
-        if (!compacted) {
-          return null;
-        }
-        return `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${compacted}`;
-      })
-      .filter((v): v is string => Boolean(v)),
-  );
-  if (params.isMainSession && params.isNewSession) {
-    const summary = await buildChannelSummary(params.cfg);
-    if (summary.length > 0) {
-      systemLines.unshift(...summary);
+  } else {
+    params.sessionEntryHandle?.clearCurrent();
+    if (params.sessionStore && params.sessionKey) {
+      delete params.sessionStore[params.sessionKey];
     }
   }
-  if (systemLines.length === 0) {
-    return params.prefixedBodyBase;
-  }
-
-  const block = systemLines.map((l) => `System: ${l}`).join("\n");
-  return `${block}\n\n${params.prefixedBodyBase}`;
 }
 
+async function persistSkillSnapshot(params: {
+  expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  sessionEntryHandle?: ReplySessionEntryHandle;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  sessionId?: string;
+  storePath?: string;
+  currentEntry: SessionEntry;
+  skillsSnapshot: SessionEntry["skillsSnapshot"];
+  isFirstTurnInSession: boolean;
+}): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
+  const updates = {
+    sessionId: params.sessionId ?? params.currentEntry.sessionId ?? crypto.randomUUID(),
+    updatedAt: Date.now(),
+    ...(params.isFirstTurnInSession ? { systemSent: true } : {}),
+    skillsSnapshot: params.skillsSnapshot,
+  };
+  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
+    return { entry: undefined, updated: false };
+  }
+  if (!params.storePath || !params.sessionKey) {
+    const current = params.sessionEntryHandle
+      ? params.sessionKey
+        ? params.sessionEntryHandle.get(params.sessionKey)
+        : params.sessionEntryHandle.getCurrent()
+      : params.sessionKey
+        ? params.sessionStore?.[params.sessionKey]
+        : undefined;
+    if (
+      current?.sessionId !== params.expectedSession?.sessionId ||
+      current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
+    ) {
+      return { entry: current, updated: false };
+    }
+    // Preparation can yield to session management. Apply only the owned fields
+    // to its current row, including field removals such as unpinning.
+    const nextEntry = { ...(current ?? params.currentEntry), ...updates };
+    publishSessionEntry(params, nextEntry);
+    return { entry: nextEntry, updated: true };
+  }
+  let updated = false;
+  const persistedEntry = await updateSessionEntry(
+    {
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    },
+    (entry) => {
+      updated =
+        entry.sessionId === params.expectedSession?.sessionId &&
+        entry.lifecycleRevision === params.expectedSession?.lifecycleRevision;
+      return updated ? updates : null;
+    },
+  );
+  publishSessionEntry(params, persistedEntry ?? undefined);
+  if (persistedEntry) {
+    return { entry: persistedEntry, updated };
+  }
+  return { entry: undefined, updated: false };
+}
+
+/** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
+  agentId: string;
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
+  executionWorkspaceDir?: string;
   cfg: OpenClawConfig;
+  execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
   systemSent: boolean;
 }> {
+  if (isFastTestRuntimeEnv()) {
+    // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
+    // Dedicated skills tests cover snapshot generation behavior.
+    return {
+      sessionEntry: params.sessionEntry,
+      skillsSnapshot: params.sessionEntry?.skillsSnapshot,
+      systemSent: params.sessionEntry?.systemSent ?? false,
+    };
+  }
+
   const {
+    agentId,
     sessionEntry,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     storePath,
@@ -137,66 +146,84 @@ export async function ensureSkillSnapshot(params: {
     workspaceDir,
     cfg,
     skillFilter,
+    skillOverrides,
   } = params;
 
-  let nextEntry = sessionEntry;
+  let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
+  const expectedSession = nextEntry && {
+    sessionId: nextEntry.sessionId,
+    lifecycleRevision: nextEntry.lifecycleRevision,
+  };
   let systemSent = sessionEntry?.systemSent ?? false;
-  const remoteEligibility = getRemoteSkillEligibility();
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-  ensureSkillsWatcher({ workspaceDir, config: cfg });
-  const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+  const nodeSkillsEligibility = resolveNodeExecEligibility({
+    cfg,
+    sessionEntry,
+    sessionKey,
+    agentId,
+    execOverrides: params.execOverrides,
+  });
+  const existingSnapshot = nextEntry?.skillsSnapshot;
+  const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
+    resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir,
+      ...(params.executionWorkspaceDir
+        ? { executionWorkspaceDir: params.executionWorkspaceDir }
+        : {}),
+      config: cfg,
+      agentId,
+      skillFilter,
+      skillOverrides,
+      resolveEligibility: () => ({
+        nodeSkills: nodeSkillsEligibility,
+        remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkillsEligibility.canExec }),
+      }),
+      existingSnapshot: snapshot,
+      librarySelections: nextEntry?.skillLibrarySelections,
+    });
+  const initialSnapshotState = await resolveSnapshot(existingSnapshot);
+  const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
-  if (isFirstTurnInSession && sessionStore && sessionKey) {
+  if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
     const current = nextEntry ??
-      sessionStore[sessionKey] ?? {
+      sessionEntryHandle?.get(sessionKey) ??
+      sessionStore?.[sessionKey] ?? {
         sessionId: sessionId ?? crypto.randomUUID(),
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
-      systemSent: true,
+      !current.skillsSnapshot || shouldRefreshSnapshot
+        ? initialSnapshotState.snapshot
+        : (await resolveSnapshot(current.skillsSnapshot)).snapshot;
+    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
+      expectedSession,
+      sessionEntryHandle,
+      sessionStore,
+      sessionKey,
+      sessionId,
+      storePath,
+      currentEntry: current,
       skillsSnapshot: skillSnapshot,
-    };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
+      isFirstTurnInSession,
+    });
+    if (!updated) {
+      return {
+        sessionEntry: persistedEntry,
+        skillsSnapshot: persistedEntry?.skillsSnapshot,
+        systemSent: persistedEntry?.systemSent ?? false,
+      };
     }
-    systemSent = true;
+    nextEntry = persistedEntry;
+    systemSent = persistedEntry?.systemSent ?? systemSent;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  const skillsSnapshot =
+    nextEntry?.skillsSnapshot &&
+    (nextEntry.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot)
+      ? (await resolveSnapshot(nextEntry.skillsSnapshot)).snapshot
+      : initialSnapshotState.snapshot;
   if (
     skillsSnapshot &&
-    sessionStore &&
+    (sessionEntryHandle || sessionStore) &&
     sessionKey &&
     !isFirstTurnInSession &&
     (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
@@ -205,71 +232,144 @@ export async function ensureSkillSnapshot(params: {
       sessionId: sessionId ?? crypto.randomUUID(),
       updatedAt: Date.now(),
     };
-    nextEntry = {
-      ...current,
-      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
+    const { entry: persistedEntry, updated } = await persistSkillSnapshot({
+      expectedSession,
+      sessionEntryHandle,
+      sessionStore,
+      sessionKey,
+      sessionId,
+      storePath,
+      currentEntry: current,
       skillsSnapshot,
-    };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
+      isFirstTurnInSession,
+    });
+    if (!updated) {
+      return {
+        sessionEntry: persistedEntry,
+        skillsSnapshot: persistedEntry?.skillsSnapshot,
+        systemSent: persistedEntry?.systemSent ?? false,
+      };
     }
+    nextEntry = persistedEntry;
+  }
+
+  if (sessionKey && (sessionEntryHandle || sessionStore)) {
+    // Even a reusable snapshot crosses an await. Return the current row so the
+    // reply caller cannot restore stale metadata or a retired session generation.
+    const current = storePath
+      ? loadSessionEntry({ storePath, sessionKey })
+      : sessionEntryHandle
+        ? sessionEntryHandle.get(sessionKey)
+        : sessionStore?.[sessionKey];
+    if (storePath) {
+      publishSessionEntry(params, current);
+    }
+    if (
+      current?.sessionId !== expectedSession?.sessionId ||
+      current?.lifecycleRevision !== expectedSession?.lifecycleRevision
+    ) {
+      return {
+        sessionEntry: current,
+        skillsSnapshot: current?.skillsSnapshot,
+        systemSent: current?.systemSent ?? false,
+      };
+    }
+    nextEntry = current;
+    systemSent = current?.systemSent ?? false;
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
 
+/** Accounts completed compaction without creating or changing session ownership. */
 export async function incrementCompactionCount(params: {
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   now?: number;
-  /** Token count after compaction - if provided, updates session token counts */
+  amount?: number;
   tokensAfter?: number;
+  compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
+  expectedSession?: Pick<
+    InternalSessionEntry,
+    "sessionId" | "lifecycleRevision" | "activeWriterRunId"
+  >;
+  transcriptByteCompactionLatch?: NonNullable<
+    InternalSessionEntry["transcriptByteCompactionLatch"]
+  >;
+  authorize?: () => boolean;
 }): Promise<number | undefined> {
-  const {
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    now = Date.now(),
-    tokensAfter,
-  } = params;
-  if (!sessionStore || !sessionKey) {
+  const { sessionStore, sessionKey, storePath, authorize } = params;
+  if (!sessionKey || (!storePath && !sessionStore)) {
     return undefined;
   }
-  const entry = sessionStore[sessionKey] ?? sessionEntry;
-  if (!entry) {
+  const cachedEntry = sessionStore?.[sessionKey] ?? params.sessionEntry;
+  const initial: typeof params.expectedSession = params.expectedSession ?? cachedEntry;
+  if (!initial) {
     return undefined;
   }
-  const nextCount = (entry.compactionCount ?? 0) + 1;
-  // Build update payload with compaction count and optionally updated token counts
-  const updates: Partial<SessionEntry> = {
-    compactionCount: nextCount,
-    updatedAt: now,
+  const expected = {
+    sessionId: initial.sessionId,
+    lifecycleRevision: initial.lifecycleRevision,
+    activeWriterRunId: initial.activeWriterRunId,
   };
-  // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  if (tokensAfter != null && tokensAfter > 0) {
-    updates.totalTokens = tokensAfter;
-    // Clear input/output breakdown since we only have the total estimate after compaction
-    updates.inputTokens = undefined;
-    updates.outputTokens = undefined;
-  }
-  sessionStore[sessionKey] = {
-    ...entry,
-    ...updates,
+  const update = (current: InternalSessionEntry): Partial<InternalSessionEntry> | null => {
+    if (
+      !(authorize?.() ?? true) ||
+      current.sessionId !== expected.sessionId ||
+      current.lifecycleRevision !== expected.lifecycleRevision ||
+      current.activeWriterRunId !== expected.activeWriterRunId
+    ) {
+      return null;
+    }
+    // The writer-serialized row owns the count, not the caller's pre-await cache.
+    return projectCompactionAccountingPatch(current, params);
   };
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...updates,
-      };
-    });
+    let committed = false;
+    const authorityRevoked = new Error("compaction accounting authority revoked");
+    let persisted: InternalSessionEntry | null;
+    try {
+      persisted = await patchSessionEntryCore(
+        { agentId: params.agentId, storePath, sessionKey },
+        update,
+        {
+          onCommitted: (entry) => {
+            committed = true;
+            // Publish while this commit owns the row, before maintenance yields to a new writer.
+            if (sessionStore) {
+              sessionStore[sessionKey] = entry;
+            }
+          },
+          ...(authorize
+            ? {
+                assertCommitAllowed: () => {
+                  if (!authorize()) {
+                    throw authorityRevoked;
+                  }
+                },
+              }
+            : {}),
+        },
+      );
+    } catch (error) {
+      if (error === authorityRevoked) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (!committed || !persisted) {
+      return undefined;
+    }
+    return persisted.compactionCount;
   }
-  return nextCount;
+  const patch = cachedEntry && update(cachedEntry);
+  if (!sessionStore || !cachedEntry || !patch) {
+    return undefined;
+  }
+  const nextEntry = projectCanonicalSessionEntryShape({ ...cachedEntry, ...patch });
+  sessionStore[sessionKey] = nextEntry;
+  return nextEntry.compactionCount;
 }

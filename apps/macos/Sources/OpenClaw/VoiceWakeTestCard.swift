@@ -20,20 +20,20 @@ struct VoiceWakeTestCard: View {
                 .tint(self.isTesting ? .red : .accentColor)
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 self.statusIcon
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(self.statusText)
+                    Text(verbatim: self.statusText)
                         .font(.subheadline)
-                        .frame(maxHeight: 22, alignment: .center)
+                        .fixedSize(horizontal: false, vertical: true)
                     if case let .detected(text) = testState {
-                        Text("Heard: \(text)")
+                        Text(String(format: String(localized: "Heard: %@"), text))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
             .background(.quaternary.opacity(0.2))
@@ -71,22 +71,22 @@ struct VoiceWakeTestCard: View {
     private var statusText: String {
         switch self.testState {
         case .idle:
-            "Press start, say a trigger word, and wait for detection."
+            String(localized: "Press start, say a trigger word, and wait for detection.")
 
         case .requesting:
-            "Requesting mic & speech permission…"
+            String(localized: "Requesting mic & speech permission…")
 
         case .listening:
-            "Listening… say your trigger word."
+            String(localized: "Listening… say your trigger word.")
 
         case let .hearing(text):
-            "Heard: \(text)"
+            String(format: String(localized: "Heard: %@"), text)
 
         case .finalizing:
-            "Finalizing…"
+            String(localized: "Finalizing…")
 
         case .detected:
-            "Voice wake detected!"
+            String(localized: "Voice wake detected!")
 
         case let .failed(reason):
             reason

@@ -1,30 +1,51 @@
+// Node camera commands: list devices, capture photos, and capture short clips through node.invoke.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
 import {
+  type CameraArtifactFacing,
   type CameraFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
-  writeBase64ToFile,
+  resolveCameraClipTarget,
+  resolveCameraSnapTargets,
+  writeCameraPayloadToFile,
+  writeCameraClipPayloadToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callNodesGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeInteger,
+  resolveCliNode,
+  resolveCliNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
-  const v = String(value ?? "")
-    .trim()
-    .toLowerCase();
+  const v = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "");
   if (v === "front" || v === "back") {
     return v;
   }
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
+function getGatewayInvokePayload(raw: unknown): unknown {
+  return typeof raw === "object" && raw !== null
+    ? (raw as { payload?: unknown }).payload
+    : undefined;
+}
+
+/** Register node camera list/snap/clip commands. */
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 
@@ -35,23 +56,31 @@ export function registerNodesCameraCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const raw = await callGatewayCli("node.invoke", opts, {
-            nodeId,
-            command: "camera.list",
-            params: {},
-            idempotencyKey: randomIdempotencyKey(),
-          });
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
+          const raw = await callNodesGatewayCli(
+            "node.invoke",
+            opts,
+            buildNodeInvokeParams({
+              nodeId,
+              command: "camera.list",
+              params: {},
+            }),
+          );
 
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload =
             typeof res.payload === "object" && res.payload !== null
               ? (res.payload as { devices?: unknown })
               : {};
-          const devices = Array.isArray(payload.devices) ? payload.devices : [];
+          const devices = Array.isArray(payload.devices)
+            ? payload.devices.filter(
+                (device): device is Record<string, unknown> =>
+                  typeof device === "object" && device !== null && !Array.isArray(device),
+              )
+            : [];
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(devices, null, 2));
+            defaultRuntime.writeJson(devices);
             return;
           }
 
@@ -62,7 +91,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           const { heading, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = devices.map((device) => ({
             Name: typeof device.name === "string" ? device.name : "Unknown Camera",
             Position: typeof device.position === "string" ? device.position : muted("unspecified"),
@@ -88,76 +117,93 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("snap")
-      .description("Capture a photo from a node camera (prints MEDIA:<path>)")
+      .description("Capture a photo from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--facing <front|back|both>", "Camera facing", "both")
+      .option("--facing <front|back|both>", "Camera facing")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
       .option("--max-width <px>", "Max width in px (optional)")
-      .option("--quality <0-1>", "JPEG quality (default 0.9)")
-      .option("--delay-ms <ms>", "Delay before capture in ms (macOS default 2000)")
+      .option("--quality <0-1>", "JPEG quality (optional; platform-specific default)")
+      .option("--delay-ms <ms>", "Delay before capture in ms (optional; platform-specific default)")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const facingOpt = String(opts.facing ?? "both")
-            .trim()
-            .toLowerCase();
-          const facings: CameraFacing[] =
-            facingOpt === "both"
-              ? ["front", "back"]
-              : facingOpt === "front" || facingOpt === "back"
-                ? [facingOpt]
+          const facingOpt = normalizeLowercaseStringOrEmpty(
+            normalizeOptionalString(opts.facing) ?? "",
+          );
+          const facing =
+            facingOpt === ""
+              ? undefined
+              : facingOpt === "both" || facingOpt === "front" || facingOpt === "back"
+                ? facingOpt
                 : (() => {
                     throw new Error(
                       `invalid facing: ${String(opts.facing)} (expected front|back|both)`,
                     );
                   })();
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
-          const delayMs = opts.delayMs ? Number.parseInt(String(opts.delayMs), 10) : undefined;
-          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
-
-          const results: Array<{
-            facing: CameraFacing;
-            path: string;
-            width: number;
-            height: number;
+          const maxWidth = parseOptionalNodeInteger(opts.maxWidth, "--max-width");
+          const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
+            minInclusive: 0,
+            maxInclusive: 1,
+          });
+          const delayMs = parseOptionalNodeInteger(opts.delayMs, "--delay-ms", "non-negative");
+          const deviceId = normalizeOptionalString(opts.deviceId);
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = node.nodeId;
+          if (deviceId && facing === "both" && node.platform?.toLowerCase() !== "linux") {
+            throw new Error("facing=both is not allowed when --device-id is set");
+          }
+          const targets = resolveCameraSnapTargets({
+            facing,
+            platform: node.platform,
+            deviceId,
+          });
+          const captures: Array<{
+            facing: CameraArtifactFacing;
+            payload: ReturnType<typeof parseCameraSnapPayload>;
+            filePath: string;
           }> = [];
-
-          for (const facing of facings) {
-            const invokeParams: Record<string, unknown> = {
+          for (const target of targets) {
+            const invokeParams = buildNodeInvokeParams({
               nodeId,
               command: "camera.snap",
               params: {
-                facing,
-                maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
-                quality: Number.isFinite(quality) ? quality : undefined,
+                ...(target.requestFacing ? { facing: target.requestFacing } : {}),
+                maxWidth,
+                quality,
                 format: "jpg",
-                delayMs: Number.isFinite(delayMs) ? delayMs : undefined,
+                delayMs,
                 deviceId: deviceId || undefined,
               },
-              idempotencyKey: randomIdempotencyKey(),
-            };
-            if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-              invokeParams.timeoutMs = timeoutMs;
-            }
-
-            const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-            const res =
-              typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-            const payload = parseCameraSnapPayload(res.payload);
-            const filePath = cameraTempPath({
-              kind: "snap",
-              facing,
-              ext: payload.format === "jpeg" ? "jpg" : payload.format,
+              timeoutMs,
             });
-            await writeBase64ToFile(filePath, payload.base64);
+
+            const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
+            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw), {
+              expectedHost: node.remoteIp,
+            });
+            captures.push({
+              facing: target.artifactFacing,
+              payload,
+              filePath: cameraTempPath({
+                kind: "snap",
+                facing: target.artifactFacing,
+                ext: payload.format === "jpeg" ? "jpg" : payload.format,
+              }),
+            });
+          }
+
+          const results = [];
+          for (const { facing: artifactFacing, payload, filePath } of captures) {
+            await writeCameraPayloadToFile({
+              filePath,
+              payload,
+              expectedHost: node.remoteIp,
+              invalidPayloadMessage: "invalid camera.snap payload",
+            });
             results.push({
-              facing,
+              facing: artifactFacing,
               path: filePath,
               width: payload.width,
               height: payload.height,
@@ -165,10 +211,10 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify({ files: results }, null, 2));
+            defaultRuntime.writeJson({ files: results });
             return;
           }
-          defaultRuntime.log(results.map((r) => `MEDIA:${shortenHomePath(r.path)}`).join("\n"));
+          defaultRuntime.log(results.map((r) => shortenHomePath(r.path)).join("\n"));
         });
       }),
     { timeoutMs: 60_000 },
@@ -177,7 +223,7 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("clip")
-      .description("Capture a short video clip from a node camera (prints MEDIA:<path>)")
+      .description("Capture a short video clip from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back>", "Camera facing", "front")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
@@ -190,59 +236,48 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 90000)", "90000")
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const facing = parseFacing(String(opts.facing ?? "front"));
-          const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
+          const facing = parseFacing(opts.facing ?? "front");
+          const durationMs = parseDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
-          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
+          const deviceId = normalizeOptionalString(opts.deviceId);
+          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const nodeId = node.nodeId;
+          const target = resolveCameraClipTarget({ facing, platform: node.platform });
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "camera.clip",
             params: {
-              facing,
-              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+              facing: target.requestFacing,
+              durationMs,
               includeAudio,
               format: "mp4",
               deviceId: deviceId || undefined,
             },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
-
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload = parseCameraClipPayload(res.payload);
-          const filePath = cameraTempPath({
-            kind: "clip",
-            facing,
-            ext: payload.format,
+            timeoutMs,
           });
-          await writeBase64ToFile(filePath, payload.base64);
+
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
+          const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
+          const filePath = await writeCameraClipPayloadToFile({
+            payload,
+            facing: target.artifactFacing,
+            expectedHost: node.remoteIp,
+          });
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify(
-                {
-                  file: {
-                    facing,
-                    path: filePath,
-                    durationMs: payload.durationMs,
-                    hasAudio: payload.hasAudio,
-                  },
-                },
-                null,
-                2,
-              ),
-            );
+            defaultRuntime.writeJson({
+              file: {
+                facing: target.artifactFacing,
+                path: filePath,
+                durationMs: payload.durationMs,
+                hasAudio: payload.hasAudio,
+              },
+            });
             return;
           }
-          defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
+          defaultRuntime.log(shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 90_000 },

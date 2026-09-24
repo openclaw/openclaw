@@ -1,0 +1,155 @@
+name: CodeQL macOS Critical Security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
+
+concurrency:
+  group: codeql-macos-critical-security-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || format('ref-{0}', github.ref) }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  prepare-mermaid:
+    name: Prepare Mermaid assets
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install Mermaid renderer dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Upload Mermaid assets
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-macos-mermaid-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: Critical Security (macOS)
+    needs: prepare-mermaid
+    runs-on: macos-26-intel
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          submodules: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
+            exit 1
+          fi
+          swift --version
+
+      - name: Download Mermaid assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare-mermaid.outputs.artifact-id }}
+          path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          languages: swift
+          build-mode: manual
+          config-file: ./.github/codeql/codeql-macos-critical-security.yml
+
+      - name: Build macOS for CodeQL
+        # Preserve ARM-only application paths in CodeQL coverage on the Intel host.
+        run: swift build --package-path apps/macos --product OpenClaw --arch arm64 --disable-index-store -debug-info-format none
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          output: sarif-results
+          upload: failure-only
+          category: "/codeql-critical-security/macos"
+
+      - name: Remove dependency build results
+        env:
+          SARIF_OUTPUT: sarif-results
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [ ! -d "$SARIF_OUTPUT" ]; then
+            echo "SARIF output directory not found: $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          mkdir -p sarif-results-filtered
+
+          files=("$SARIF_OUTPUT"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No SARIF files found in $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            jq '
+              def in_dependency_build:
+                ((.locations // []) | length > 0)
+                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+
+              .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
+            ' "$file" > "sarif-results-filtered/$(basename "$file")"
+          done
+
+      - name: Upload filtered SARIF
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        with:
+          sarif_file: sarif-results-filtered
+          category: "/codeql-critical-security/macos"

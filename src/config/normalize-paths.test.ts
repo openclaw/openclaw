@@ -1,14 +1,14 @@
+// Verifies config path normalization and platform-specific behavior.
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
+import { normalizeConfigPaths } from "./normalize-paths.js";
 
 describe("normalizeConfigPaths", () => {
   it("expands tilde for path-ish keys only", async () => {
     await withTempHome(async (home) => {
-      vi.resetModules();
-      const { normalizeConfigPaths } = await import("./normalize-paths.js");
-
       const cfg = normalizeConfigPaths({
+        worktreeRoot: "~/worktrees",
         tools: { exec: { pathPrepend: ["~/bin"] } },
         plugins: { load: { paths: ["~/plugins/a"] } },
         logging: { file: "~/.openclaw/logs/openclaw.log" },
@@ -21,6 +21,13 @@ describe("normalizeConfigPaths", () => {
             accounts: {
               personal: {
                 tokenFile: "~/.openclaw/telegram.token",
+              },
+            },
+          },
+          whatsapp: {
+            accounts: {
+              personal: {
+                authDir: "~/.openclaw/credentials/wa-personal",
               },
             },
           },
@@ -44,6 +51,7 @@ describe("normalizeConfigPaths", () => {
         },
       });
 
+      expect(cfg.worktreeRoot).toBe(path.join(home, "worktrees"));
       expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "a"));
       expect(cfg.logging?.file).toBe(path.join(home, ".openclaw", "logs", "openclaw.log"));
       expect(cfg.hooks?.path).toBe(path.join(home, ".openclaw", "hooks.json5"));
@@ -51,6 +59,9 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.tools?.exec?.pathPrepend?.[0]).toBe(path.join(home, "bin"));
       expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".openclaw", "telegram.token"),
+      );
+      expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
+        path.join(home, ".openclaw", "credentials", "wa-personal"),
       );
       expect(cfg.channels?.imessage?.accounts?.personal?.dbPath).toBe(
         path.join(home, "Library", "Messages", "chat.db"),

@@ -1,628 +1,691 @@
+/** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
-import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type {
+  AdmittedRunContext,
+  PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import {
-  isCompactionFailureError,
-  isContextOverflowError,
-  isLikelyContextOverflowError,
-  isTransientHttpError,
-  sanitizeUserFacingText,
-} from "../../agents/pi-embedded-helpers.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveGroupSessionKey,
-  resolveSessionTranscriptPath,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
+  createDeferredEmbeddedRunLifecycleManager,
+  type DeferredEmbeddedRunLifecycleManager,
+} from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
+import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
-import { defaultRuntime } from "../../runtime.js";
 import {
-  isMarkdownCapableMessageChannel,
-  resolveMessageChannel,
-} from "../../utils/message-channel.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
-import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { parseReplyDirectives } from "./reply-directives.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
+  captureAgentRunLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { logSessionTurnCreated } from "../../logging/diagnostic.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+import type { ReplyPayload } from "../types.js";
+import {
+  clearRecoveredAutoFallbackPrimaryProbeSelection,
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
+} from "./agent-runner-auto-fallback.js";
+import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
+import { recordAgentTurnExecutionOutcome } from "./agent-runner-execution-outcome.js";
+import type {
+  AgentTurnCompaction,
+  AgentTurnExecutionResult,
+  AgentTurnInternalResult,
+  AgentTurnParams,
+  InternalFollowupRun,
+  RuntimeFallbackAttempt,
+} from "./agent-runner-execution.types.js";
+import {
+  buildTerminalAgentRunFailureReplyPayload,
+  markAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
+import {
+  executeAgentFallbackCycle,
+  type AgentFallbackCycleState,
+} from "./agent-runner-fallback-cycle.js";
+import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import {
+  createAgentTurnTimingTracker,
+  resolveRunStartupPhase,
+} from "./agent-runner-turn-timing.js";
+import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
+import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
+import type { FollowupRun } from "./queue.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
+import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import {
+  markReplyOperationExecutionStarted,
+  retainReplyOperationUntilComplete,
+} from "./reply-run-registry.js";
+import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
-export type AgentRunLoopResult =
-  | {
-      kind: "success";
-      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
-      fallbackProvider?: string;
-      fallbackModel?: string;
-      didLogHeartbeatStrip: boolean;
-      autoCompactionCompleted: boolean;
-      /** Payload keys sent directly (not via pipeline) during tool flush. */
-      directlySentBlockKeys?: Set<string>;
-    }
-  | { kind: "final"; payload: ReplyPayload };
-
-export async function runAgentTurnWithFallback(params: {
-  commandBody: string;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  opts?: GetReplyOptions;
-  typingSignals: TypingSignaler;
-  blockReplyPipeline: BlockReplyPipeline | null;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
+async function executeAgentTurnInternalLoop(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+  commitMcpAppModelContext: () => void,
+  preparedRunAdmission: PreparedAgentRunAdmission,
+  admittedRunContext: { current?: AdmittedRunContext },
+  deferredLifecycle: DeferredEmbeddedRunLifecycleManager,
+  compaction: AgentTurnCompaction,
+): Promise<AgentTurnInternalResult> {
+  const heartbeatState = { didLogStrip: false };
+  // Direct delivery receipts retain settlement facts across fallback candidates.
+  const directBlockDeliveries: DirectBlockDelivery[] = [];
+  const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+    run: params.followupRun.run,
+    entry: params.activeSessionStore?.[params.sessionKey ?? ""] ?? params.getActiveSessionEntry(),
+    sessionKey: params.sessionKey,
+  });
+  if (runnableRun !== params.followupRun.run) {
+    params.followupRun.run = runnableRun;
+  }
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
+  const effectiveRun =
+    runtimeConfig === runnableRun.config
+      ? runnableRun
+      : {
+          ...runnableRun,
+          config: runtimeConfig,
+        };
+  let liveModelSwitchRuntimeEntry:
+    | Pick<
+        SessionEntry,
+        "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
+      >
+    | undefined;
+  const applyLiveModelSwitchToRun = (
+    run: FollowupRun["run"],
+    err: LiveSessionModelSwitchError,
+  ): void => {
+    run.provider = err.provider;
+    run.model = err.model;
+    run.authProfileId = err.authProfileId;
+    run.authProfileIdSource = err.authProfileId ? err.authProfileIdSource : undefined;
+    run.autoFallbackPrimaryProbe = undefined;
+    // Keep runtime paired with the error's model/auth winner even if the
+    // active in-memory session snapshot lags the persisted directive write.
+    liveModelSwitchRuntimeEntry = { agentRuntimeOverride: err.agentRuntimeOverride };
   };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
-  isHeartbeat: boolean;
-  sessionKey?: string;
-  getActiveSessionEntry: () => SessionEntry | undefined;
-  activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  resolvedVerboseLevel: VerboseLevel;
-}): Promise<AgentRunLoopResult> {
-  const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
-  let didLogHeartbeatStrip = false;
-  let autoCompactionCompleted = false;
-  // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
-  const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  params.opts?.onAgentRunStart?.(runId);
+  const agentTurnTiming = createAgentTurnTimingTracker({
+    profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
+  });
+  const shouldSurfaceToControlUi = isInternalMessageChannel(
+    params.followupRun.run.messageProvider ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider,
+  );
+  let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
+      ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      agentId: params.followupRun.run.agentId,
+      lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      isControlUiVisible: shouldSurfaceToControlUi,
+      ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
+      completionSource: params.completionSource,
     });
   }
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  if (isDiagnosticsEnabled(runtimeConfig)) {
+    logSessionTurnCreated({
+      runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.followupRun.run.sessionId,
+      agentId: params.followupRun.run.agentId,
+      channel:
+        params.followupRun.run.messageProvider ??
+        params.sessionCtx.Surface ??
+        params.sessionCtx.Provider,
+      trigger: params.isHeartbeat ? "heartbeat" : "user",
+    });
+  }
+  let replyMediaContext: ReplyMediaContext;
+  let currentTurnImages: CurrentTurnImages;
+  try {
+    replyMediaContext =
+      params.replyMediaContext ??
+      agentTurnTiming.measureSync("reply_media_context", () =>
+        createReplyMediaContext({
+          cfg: runtimeConfig,
+          agentId: params.followupRun.run.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          mediaNormalizationOwner: params.followupRun.run.mediaNormalizationOwner,
+          messageProvider: params.followupRun.run.messageProvider,
+          accountId:
+            params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+          groupId: params.followupRun.run.groupId,
+          groupChannel: params.followupRun.run.groupChannel,
+          groupSpace: params.followupRun.run.groupSpace,
+          requesterSenderId: params.followupRun.run.senderId,
+          requesterSenderName: params.followupRun.run.senderName,
+          requesterSenderUsername: params.followupRun.run.senderUsername,
+          requesterSenderE164: params.followupRun.run.senderE164,
+        }),
+      );
+    const internalFollowupRun = params.followupRun as InternalFollowupRun;
+    const hasQueuedCurrentTurnImages =
+      internalFollowupRun.currentTurnImagesPrepared === true ||
+      Object.hasOwn(params.followupRun, "images") ||
+      Object.hasOwn(params.followupRun, "imageOrder");
+    // Queue admission owns current-turn materialization, including empty results.
+    // Re-scanning here can resurrect suppressed media or duplicate loaded images.
+    currentTurnImages = hasQueuedCurrentTurnImages
+      ? {
+          images: params.followupRun.images,
+          imageOrder: params.followupRun.imageOrder,
+          mediaImageLayout: internalFollowupRun.mediaImageLayout,
+        }
+      : await agentTurnTiming.measure("current_turn_images", () =>
+          resolveCurrentTurnImages({
+            ctx: params.sessionCtx,
+            cfg: runtimeConfig,
+            images: params.opts?.images,
+            imageOrder: params.opts?.imageOrder,
+          }),
+        );
+  } catch (error) {
+    clearAgentRunContext(runId, lifecycleGeneration);
+    throw error;
+  }
+  let didNotifyAgentRunStart = false;
+  let lastRunStartupPhase: ReturnType<typeof resolveRunStartupPhase>;
+  const notifyAgentRunStart = () => {
+    if (didNotifyAgentRunStart) {
+      return;
+    }
+    didNotifyAgentRunStart = true;
+    if (params.replyOperation) {
+      markReplyOperationExecutionStarted(params.replyOperation);
+    }
+    params.opts?.onAgentRunStart?.(runId, admittedRunContext.current?.executionIdentityToken);
+  };
+  const signalExecutionPhaseForTyping = (
+    info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
+  ) => {
+    agentTurnTiming.logExecutionPhaseIfSlow({
+      runId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey,
+      phase: info.phase,
+    });
+    const startupPhase = resolveRunStartupPhase(info.phase);
+    if (startupPhase && startupPhase !== lastRunStartupPhase) {
+      lastRunStartupPhase = startupPhase;
+      emitAgentRunStatusEvent({ runId, phase: startupPhase });
+    }
+    if (info.phase === "model_call_started" || info.phase === "process_spawned") {
+      commitMcpAppModelContext();
+    }
+    const isUserVisibleExecutionActivity =
+      info.phase === "turn_accepted" ||
+      info.phase === "process_spawned" ||
+      info.phase === "model_call_started" ||
+      info.phase === "tool_execution_started" ||
+      info.phase === "assistant_output_started";
+    if (!isUserVisibleExecutionActivity) {
+      return;
+    }
+    notifyAgentRunStart();
+    void (
+      params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
+    ).catch((err: unknown) => {
+      logVerbose(`execution phase typing signal failed: ${String(err)}`);
+    });
+  };
+  const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
+  let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
-  let didResetAfterCompactionFailure = false;
-  let didRetryTransientHttpError = false;
+  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
+  let fallbackExhausted = false;
+  let terminalRunFailed = false;
+  const modelPatch = createAgentPatchedSessionModelRunGuard({
+    cfg: runtimeConfig,
+    agentId: params.followupRun.run.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    onError: (error) =>
+      logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
+  });
+  let liveModelSwitchRetries = 0;
+  const fallbackCycleState: AgentFallbackCycleState = {
+    deferredLifecycle,
+    lifecycleGeneration,
+    turnStartedAtMs: Date.now(),
+    compaction,
+    postCompactionModelAttempted: false,
+    attemptedRuntimeProvider: fallbackProvider,
+    attemptedRuntimeModel: fallbackModel,
+    bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
+      params.getActiveSessionEntry()?.systemPromptReport,
+    ),
+  };
+  const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
+    provider: string;
+    model: string;
+  }): Promise<void> =>
+    clearRecoveredAutoFallbackPrimaryProbeSelection({
+      run: effectiveRun,
+      ...paramsForClear,
+      sessionKey: params.sessionKey,
+      activeSessionStore: params.activeSessionStore,
+      getActiveSessionEntry: params.getActiveSessionEntry,
+      storePath: params.storePath,
+    });
 
   while (true) {
     try {
-      const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
-      );
-      const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (!allowPartialStream) {
-          return { skip: true };
-        }
-        let text = payload.text;
-        if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-          const stripped = stripHeartbeatToken(text, {
-            mode: "message",
-          });
-          if (stripped.didStrip && !didLogHeartbeatStrip) {
-            didLogHeartbeatStrip = true;
-            logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-          }
-          if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
-            return { skip: true };
-          }
-          text = stripped.text;
-        }
-        if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-          return { skip: true };
-        }
-        if (!text) {
-          return { skip: true };
-        }
-        const sanitized = sanitizeUserFacingText(text, {
-          errorContext: Boolean(payload.isError),
-        });
-        if (!sanitized.trim()) {
-          return { skip: true };
-        }
-        return { text: sanitized, skip: false };
-      };
-      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-        const { text, skip } = normalizeStreamingText(payload);
-        if (skip || !text) {
-          return undefined;
-        }
-        await params.typingSignals.signalTextDelta(text);
-        return text;
-      };
-      const blockReplyPipeline = params.blockReplyPipeline;
-      const onToolResult = params.opts?.onToolResult;
-      const fallbackResult = await runWithModelFallback({
-        cfg: params.followupRun.run.config,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
-        run: (provider, model) => {
-          // Notify that model selection is complete (including after fallback).
-          // This allows responsePrefix template interpolation with the actual model.
-          params.opts?.onModelSelected?.({
-            provider,
-            model,
-            thinkLevel: params.followupRun.run.thinkLevel,
-          });
-
-          if (isCliProvider(provider, params.followupRun.run.config)) {
-            const startedAt = Date.now();
-            emitAgentEvent({
-              runId,
-              stream: "lifecycle",
-              data: {
-                phase: "start",
-                startedAt,
-              },
-            });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
-            return (async () => {
-              let lifecycleTerminalEmitted = false;
-              try {
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
-                  prompt: params.commandBody,
-                  provider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId,
-                  images: params.opts?.images,
-                });
-
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = result.payloads?.[0]?.text?.trim();
-                if (cliText) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "assistant",
-                    data: { text: cliText },
-                  });
-                }
-
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-
-                return result;
-              } catch (err) {
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-                throw err;
-              } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
-              }
-            })();
-          }
-          const authProfileId =
-            provider === params.followupRun.run.provider
-              ? params.followupRun.run.authProfileId
-              : undefined;
-          return runEmbeddedPiAgent({
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.followupRun.run.agentId,
-            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-            agentAccountId: params.sessionCtx.AccountId,
-            messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-            messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-            groupChannel:
-              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-            senderId: params.sessionCtx.SenderId?.trim() || undefined,
-            senderName: params.sessionCtx.SenderName?.trim() || undefined,
-            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-            // Provider threading context for tool auto-injection
-            ...buildThreadingToolContext({
-              sessionCtx: params.sessionCtx,
-              config: params.followupRun.run.config,
-              hasRepliedRef: params.opts?.hasRepliedRef,
-            }),
-            sessionFile: params.followupRun.run.sessionFile,
-            workspaceDir: params.followupRun.run.workspaceDir,
-            agentDir: params.followupRun.run.agentDir,
-            config: params.followupRun.run.config,
-            skillsSnapshot: params.followupRun.run.skillsSnapshot,
-            prompt: params.commandBody,
-            extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-            ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-            provider,
-            model,
-            authProfileId,
-            authProfileIdSource: authProfileId
-              ? params.followupRun.run.authProfileIdSource
-              : undefined,
-            thinkLevel: params.followupRun.run.thinkLevel,
-            verboseLevel: params.followupRun.run.verboseLevel,
-            reasoningLevel: params.followupRun.run.reasoningLevel,
-            execOverrides: params.followupRun.run.execOverrides,
-            toolResultFormat: (() => {
-              const channel = resolveMessageChannel(
-                params.sessionCtx.Surface,
-                params.sessionCtx.Provider,
-              );
-              if (!channel) {
-                return "markdown";
-              }
-              return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
-            })(),
-            bashElevated: params.followupRun.run.bashElevated,
-            timeoutMs: params.followupRun.run.timeoutMs,
-            runId,
-            images: params.opts?.images,
-            abortSignal: params.opts?.abortSignal,
-            blockReplyBreak: params.resolvedBlockStreamingBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
-                  }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
-            onAssistantMessageStart: async () => {
-              await params.typingSignals.signalMessageStart();
-            },
-            onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
-                ? async (payload) => {
-                    await params.typingSignals.signalReasoningDelta();
-                    await params.opts?.onReasoningStream?.({
-                      text: payload.text,
-                      mediaUrls: payload.mediaUrls,
-                    });
-                  }
-                : undefined,
-            onAgentEvent: async (evt) => {
-              // Trigger typing when tools start executing.
-              // Must await to ensure typing indicator starts before tool summaries are emitted.
-              if (evt.stream === "tool") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                if (phase === "start" || phase === "update") {
-                  await params.typingSignals.signalToolStart();
-                }
-              }
-              // Track auto-compaction completion
-              if (evt.stream === "compaction") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
-                  autoCompactionCompleted = true;
-                }
-              }
-            },
-            // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
-            // even when regular block streaming is disabled. The handler sends directly
-            // via opts.onBlockReply when the pipeline isn't available.
-            onBlockReply: params.opts?.onBlockReply
-              ? async (payload) => {
-                  const { text, skip } = normalizeStreamingText(payload);
-                  const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                  if (skip && !hasPayloadMedia) {
-                    return;
-                  }
-                  const currentMessageId =
-                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                  const taggedPayload = applyReplyTagsToPayload(
-                    {
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                      mediaUrl: payload.mediaUrls?.[0],
-                      replyToId: payload.replyToId,
-                      replyToTag: payload.replyToTag,
-                      replyToCurrent: payload.replyToCurrent,
-                    },
-                    currentMessageId,
-                  );
-                  // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                  if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
-                    return;
-                  }
-                  const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
-                    currentMessageId,
-                    silentToken: SILENT_REPLY_TOKEN,
-                  });
-                  const cleaned = parsed.text || undefined;
-                  const hasRenderableMedia =
-                    Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                  // Skip empty payloads unless they have audioAsVoice flag (need to track it)
-                  if (
-                    !cleaned &&
-                    !hasRenderableMedia &&
-                    !payload.audioAsVoice &&
-                    !parsed.audioAsVoice
-                  ) {
-                    return;
-                  }
-                  if (parsed.isSilent && !hasRenderableMedia) {
-                    return;
-                  }
-
-                  const blockPayload: ReplyPayload = params.applyReplyToMode({
-                    ...taggedPayload,
-                    text: cleaned,
-                    audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
-                    replyToId: taggedPayload.replyToId ?? parsed.replyToId,
-                    replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
-                    replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
-                  });
-
-                  void params.typingSignals
-                    .signalTextDelta(cleaned ?? taggedPayload.text)
-                    .catch((err) => {
-                      logVerbose(`block reply typing signal failed: ${String(err)}`);
-                    });
-
-                  // Use pipeline if available (block streaming enabled), otherwise send directly
-                  if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-                    params.blockReplyPipeline.enqueue(blockPayload);
-                  } else if (params.blockStreamingEnabled) {
-                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-                    // Track sent key to avoid duplicate in final payloads.
-                    directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
-                    await params.opts?.onBlockReply?.(blockPayload);
-                  }
-                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
-                }
-              : undefined,
-            onBlockReplyFlush:
-              params.blockStreamingEnabled && blockReplyPipeline
-                ? async () => {
-                    await blockReplyPipeline.flush({ force: true });
-                  }
-                : undefined,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onToolResult: onToolResult
-              ? (payload) => {
-                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
-                  // If a tool callback starts typing after the run finalized, we can end up with
-                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
-                  const task = (async () => {
-                    const { text, skip } = normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    await params.typingSignals.signalTextDelta(text);
-                    await onToolResult({
-                      text,
-                      mediaUrls: payload.mediaUrls,
-                    });
-                  })()
-                    .catch((err) => {
-                      logVerbose(`tool result delivery failed: ${String(err)}`);
-                    })
-                    .finally(() => {
-                      params.pendingToolTasks.delete(task);
-                    });
-                  params.pendingToolTasks.add(task);
-                }
-              : undefined,
-          });
-        },
+      const presentation = createAgentTurnPresentation({
+        turn: params,
+        replyMediaContext,
+        directBlockDeliveries,
+        heartbeatState,
       });
-      runResult = fallbackResult.result;
-      fallbackProvider = fallbackResult.provider;
-      fallbackModel = fallbackResult.model;
-
-      // Some embedded runs surface context overflow as an error payload instead of throwing.
-      // Treat those as a session-level failure and auto-recover by starting a fresh session.
-      const embeddedError = runResult.meta?.error;
-      if (
-        embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      const cycle = await executeAgentFallbackCycle({
+        preparedRunAdmission,
+        turn: params,
+        effectiveRun,
+        runtimeConfig,
+        liveModelSwitchRuntimeEntry,
+        runId,
+        runAbortSignal: fallbackCycleState.deferredLifecycle.signal,
+        currentTurnImages,
+        state: fallbackCycleState,
+        presentation,
+        directBlockDeliveries,
+        notifyAgentRunStart,
+        signalExecutionPhaseForTyping,
+        notifyUserAboutCompaction,
+        timing: agentTurnTiming,
+        modelPatch,
+        shouldSurfaceToControlUi,
+        commitTerminalOutcome,
+        clearRecoveredAutoFallbackPrimaryProbe,
+      });
+      lifecycleGeneration = fallbackCycleState.lifecycleGeneration;
+      if (cycle.kind === "aborted") {
+        return cycle;
+      }
+      if (cycle.kind === "final") {
         return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+          ...cycle,
+          resolved: {
+            provider: fallbackCycleState.attemptedRuntimeProvider,
+            model: fallbackCycleState.attemptedRuntimeModel,
           },
         };
       }
-      if (embeddedError?.kind === "role_ordering") {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
-        if (didReset) {
-          return {
-            kind: "final",
-            payload: {
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            },
-          };
-        }
-      }
-
+      runResult = cycle.runResult;
+      fallbackProvider = cycle.fallbackProvider;
+      fallbackModel = cycle.fallbackModel;
+      fallbackExhausted = cycle.fallbackExhausted;
+      fallbackAttempts = cycle.fallbackAttempts;
+      terminalRunFailed = cycle.terminalRunFailed;
       break;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const isContextOverflow = isLikelyContextOverflowError(message);
-      const isCompactionFailure = isCompactionFailureError(message);
-      const isSessionCorruption = /function call turn comes immediately after/i.test(message);
-      const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
-      const isTransientHttp = isTransientHttpError(message);
-
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (err instanceof LiveSessionModelSwitchError) {
+        liveModelSwitchRetries += 1;
+      }
+      const action = await handleAgentExecutionError({
+        turn: params,
+        error: err,
+        runtimeConfig,
+        runId,
+        state: fallbackCycleState,
+        liveModelSwitchRetries,
+        shouldSurfaceToControlUi,
+        timing: agentTurnTiming,
+        modelPatch,
+        resolveVisibleReplyDelivery: () =>
+          resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
+      });
+      if (action.kind === "aborted") {
+        return action;
+      }
+      if (action.kind === "final") {
         return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+          ...action,
+          resolved: {
+            provider: fallbackCycleState.attemptedRuntimeProvider,
+            model: fallbackCycleState.attemptedRuntimeModel,
           },
         };
       }
-      if (isRoleOrderingError) {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
-        if (didReset) {
-          return {
-            kind: "final",
-            payload: {
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            },
-          };
+      if (action.liveModelSwitchError) {
+        const switchError = action.liveModelSwitchError;
+        applyLiveModelSwitchToRun(params.followupRun.run, switchError);
+        if (runnableRun !== params.followupRun.run) {
+          applyLiveModelSwitchToRun(runnableRun, switchError);
+        }
+        if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
+          applyLiveModelSwitchToRun(effectiveRun, switchError);
         }
       }
-
-      // Auto-recover from Gemini session corruption by resetting the session
-      if (
-        isSessionCorruption &&
-        params.sessionKey &&
-        params.activeSessionStore &&
-        params.storePath
-      ) {
-        const sessionKey = params.sessionKey;
-        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
-        defaultRuntime.error(
-          `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
-        );
-
-        try {
-          // Delete transcript file if it exists
-          if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
-            }
-          }
-
-          // Keep the in-memory snapshot consistent with the on-disk store reset.
-          delete params.activeSessionStore[sessionKey];
-
-          // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
-          });
-        } catch (cleanupErr) {
-          defaultRuntime.error(
-            `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,
-          );
-        }
-
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
-          },
-        };
-      }
-
-      if (isTransientHttp && !didRetryTransientHttpError) {
-        didRetryTransientHttpError = true;
-        // Retry the full runWithModelFallback() cycle — transient errors
-        // (502/521/etc.) typically affect the whole provider, so falling
-        // back to an alternate model first would not help. Instead we wait
-        // and retry the complete primary→fallback chain.
-        defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
-        );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
-        });
-        continue;
-      }
-
-      defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
-      const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-        : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
-
-      return {
-        kind: "final",
-        payload: {
-          text: fallbackText,
-        },
-      };
+      continue;
     }
   }
 
+  // Surface rate limit and overload errors that occur mid-turn (after tool
+  // calls) instead of silently returning an empty response. See #36142.
+  // Only applies when the assistant produced no valid (non-error) reply text,
+  // so tool-level rate-limit messages don't override a successful turn.
+  // Prioritize metaErrorMsg (raw upstream error) over errorPayloadText to
+  // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
+  // skip already-formatted payloads so tool-specific 429 errors (e.g.
+  // browser/search tool failures) are preserved rather than overwritten.
+  //
+  // Instead of early-returning kind:"final" (which would bypass
+  // buildReplyPayloads() filtering and session bookkeeping), inject the
+  // error payload into runResult so it flows through the normal
+  // kind:"success" path — preserving streaming dedup, message_send
+  // suppression, and usage/model metadata updates.
+  if (runResult) {
+    const hasNonErrorContent = runResult.payloads?.some(
+      (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
+    );
+    if (!hasNonErrorContent) {
+      const metaErrorMsg = runResult.meta?.error?.message ?? "";
+      const rawErrorPayloadText =
+        runResult.payloads?.find(
+          (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
+        )?.text ?? "";
+      const errorCandidate = metaErrorMsg || rawErrorPayloadText;
+      const candidateReason = errorCandidate ? classifyFailoverReason(errorCandidate) : null;
+      const formattedErrorCandidate =
+        candidateReason === "rate_limit" || candidateReason === "overloaded"
+          ? renderRateLimitOrOverloadedCopy({ reason: candidateReason, raw: errorCandidate })
+          : undefined;
+      if (formattedErrorCandidate) {
+        runResult.payloads = [
+          markAgentRunFailureReplyPayload({
+            text: formattedErrorCandidate,
+            isError: true,
+          }),
+        ];
+      }
+    }
+  }
+  const patchedModelNeedsRevert = terminalRunFailed
+    ? false
+    : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
+  await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
+  let terminalFailurePayload: ReplyPayload | undefined;
+  if (terminalRunFailed) {
+    const replyExpectation = resolveReplyExpectation(params.followupRun.run);
+    terminalFailurePayload = buildTerminalAgentRunFailureReplyPayload({
+      isHeartbeat: params.isHeartbeat,
+      replyExpectation,
+      visibleReplyDelivered:
+        replyExpectation === "optional"
+          ? await resolveReplyFailureVisibility(
+              params.resolveVisibleReplyDelivery,
+              directBlockDeliveries,
+            )
+          : false,
+    });
+  }
+
   return {
-    kind: "success",
-    runResult,
+    kind: "completed",
+    maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
+    compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
+    result: runResult,
     fallbackProvider,
     fallbackModel,
-    didLogHeartbeatStrip,
-    autoCompactionCompleted,
-    directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
+    fallbackAttempts,
+    didLogHeartbeatStrip: heartbeatState.didLogStrip,
+    autoCompactionCount: compaction.count,
+    hasDirectlySentBlockReply:
+      directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
+      undefined,
+    directBlockDeliveries,
+    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
+    ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
+      ? { postCompactionModelFailure: true as const }
+      : {}),
   };
+}
+
+async function executeAgentTurnInternal(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+  commitMcpAppModelContext: () => void,
+  compaction: AgentTurnCompaction,
+): Promise<AgentTurnInternalResult> {
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const admittedRunContext: { current?: AdmittedRunContext } = {};
+  const gatewayContextResolver =
+    readChannelContextGatewayContextResolver(params.sessionCtx) ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const preparedRunAdmission = prepareChannelRunAdmission({
+    cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
+    runId,
+    agentId: params.followupRun.run.agentId,
+    ingressKind: "channel",
+    boundary: "auto-reply.agent-runner",
+    operatorAuthority: params.followupRun.operatorAuthority,
+    evidence: params.followupRun.channelAdmissionEvidence,
+    assertSourceCurrent:
+      params.followupRun.run.senderIsOwner === true
+        ? captureCommandOwnerAssertion(params.followupRun.run)
+        : undefined,
+    onAdmitted: (context) => {
+      bindGatewayContextResolver(context, gatewayContextResolver);
+      admittedRunContext.current = context;
+      params.followupRun.run.skillLibraryAuthoring?.bind(context);
+    },
+  });
+  const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
+    runId,
+    agentId: params.followupRun.run.agentId,
+    sessionId: params.followupRun.run.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.followupRun.run.sessionFile,
+    abortSignal: resolveFollowupAbortSignal({
+      abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      operatorAuthority: params.followupRun.operatorAuthority,
+    }),
+  });
+  try {
+    return await executeAgentTurnInternalLoop(
+      params,
+      commitTerminalOutcome,
+      commitMcpAppModelContext,
+      preparedRunAdmission,
+      admittedRunContext,
+      deferredLifecycle,
+      compaction,
+    );
+  } finally {
+    try {
+      await deferredLifecycle.complete();
+    } finally {
+      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
+        preparedRunAdmission.close,
+      );
+    }
+  }
+}
+
+/** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
+async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const executionParams =
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  // Gateway writes require exact view identity against this bare session runtime;
+  // requester-scoped and combined runtimes cannot cross the App view boundary.
+  const runtime = executionParams.isHeartbeat
+    ? undefined
+    : peekSessionMcpRuntime({
+        sessionId: executionParams.followupRun.run.sessionId,
+        sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
+      });
+  const modelContextLease = runtime
+    ? leaseMcpAppModelContextForTurn({
+        runtime,
+      })
+    : undefined;
+  const turnParams = modelContextLease
+    ? {
+        ...executionParams,
+        followupRun: {
+          ...executionParams.followupRun,
+          currentInboundContext: appendCurrentInboundContext(
+            executionParams.followupRun.currentInboundContext,
+            [modelContextLease.context],
+            modelContextLease.legacyText,
+          ),
+        },
+      }
+    : executionParams;
+  // Keep committed facts outside cleanup so a restart cannot erase them.
+  const compaction: AgentTurnCompaction = { count: 0, durable: [] };
+  const completedCompaction = () =>
+    compaction.count > 0
+      ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
+      : {};
+  let terminalOutcomeCommitted = false;
+  // Settlement freezes cancellation once, including failure exits through finally.
+  const commitTerminalOutcome = () => {
+    if (terminalOutcomeCommitted) {
+      return;
+    }
+    terminalOutcomeCommitted = true;
+    executionParams.replyOperation?.freezeAbort();
+  };
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
+  try {
+    const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+      try {
+        return await executeAgentTurnInternal(
+          turnParams,
+          commitTerminalOutcome,
+          modelContextLease?.commit ?? (() => undefined),
+          compaction,
+        );
+      } finally {
+        modelContextLease?.rollback();
+        commitTerminalOutcome();
+      }
+    });
+    if (internal.kind === "aborted") {
+      return { runId, outcome: { ...internal, ...completedCompaction() } };
+    }
+    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation);
+    if (abortReason) {
+      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+    }
+    if (internal.kind === "final") {
+      return {
+        runId,
+        outcome: {
+          kind: "rejected",
+          payload: internal.payload,
+          resolved: internal.resolved,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
+          ...completedCompaction(),
+        },
+      };
+    }
+    const provider =
+      internal.fallbackProvider ??
+      internal.result.meta?.agentMeta?.provider ??
+      executionParams.followupRun.run.provider;
+    const model =
+      internal.fallbackModel ??
+      internal.result.meta?.agentMeta?.model ??
+      executionParams.followupRun.run.model;
+    const terminalStatus = internal.terminalFailurePayload
+      ? {
+          status: "failed" as const,
+          terminalFailurePayload: internal.terminalFailurePayload,
+          ...(internal.postCompactionModelFailure
+            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+            : {}),
+        }
+      : { status: "ok" as const };
+    return {
+      runId,
+      outcome: {
+        kind: "settled",
+        maintenanceAuthProfile: internal.maintenanceAuthProfile,
+        compactionRequestBudget: internal.compactionRequestBudget,
+        ...terminalStatus,
+        result: internal.result,
+        resolved: { provider, model },
+        fallback: {
+          exhausted: internal.fallbackExhausted === true,
+          attempts: internal.fallbackAttempts,
+        },
+        autoCompactionCount: internal.autoCompactionCount,
+        ...completedCompaction(),
+        didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
+        hasDirectlySentBlockReply: internal.hasDirectlySentBlockReply,
+        directBlockDeliveries: internal.directBlockDeliveries,
+      },
+    };
+  } catch (error) {
+    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
+    if (abortReason) {
+      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+    }
+    throw error;
+  }
+}
+
+/** Runs the agent turn and records its execution and message-tool delivery outcomes. */
+export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  params.opts?.onRunVerbosityResolved?.({
+    verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
+    resolvedVerboseLevel: params.resolvedVerboseLevel,
+  });
+  if (params.replyOperation) {
+    // Cancellation stops execution, but the exact owner must finish committed accounting first.
+    retainReplyOperationUntilComplete(params.replyOperation);
+  }
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const executionParams =
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  try {
+    const result = await executeAgentTurnOutcome(executionParams);
+    recordAgentTurnExecutionOutcome(executionParams, result);
+    return result;
+  } catch (error) {
+    recordAgentTurnExecutionOutcome(executionParams, undefined);
+    throw error;
+  }
 }

@@ -1,21 +1,74 @@
 ---
 summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
 read_when:
-  - You’re using pairing-mode DMs and need to approve senders
-title: "pairing"
+  - You're using pairing-mode DMs and need to approve senders
+title: "Pairing CLI"
 ---
 
 # `openclaw pairing`
 
-Approve or inspect DM pairing requests (for channels that support pairing).
+Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
 
-Related:
+Related: [Pairing flow](/channels/pairing)
 
-- Pairing flow: [Pairing](/channels/pairing)
+The same pending requests can be reviewed in the Control UI under **Settings →
+Channels → DM access requests**. The Control UI supports approve, optional
+requester notification, and dismiss. Dismiss removes the current request but does
+not permanently block the sender.
 
 ## Commands
 
 ```bash
-openclaw pairing list whatsapp
-openclaw pairing approve whatsapp <code> --notify
+openclaw pairing list telegram
+openclaw pairing list --channel telegram --account work
+openclaw pairing list telegram --json
+
+openclaw pairing approve <code>
+openclaw pairing approve telegram <code>
+openclaw pairing approve --channel telegram --account work <code> --notify
 ```
+
+Use `--account <accountId>` to restrict either command to one channel account.
+If you omit `--account`, `list` shows pending requests across the channel's accounts,
+and `approve` uses the account belonging to the matching request. Explicitly empty
+or whitespace-only values, such as `--account ""`, are rejected with
+`--account must not be blank`.
+
+## `pairing list`
+
+List pending pairing requests for one channel.
+
+| Option                  | Description                           |
+| ----------------------- | ------------------------------------- |
+| `[channel]`             | positional channel id                 |
+| `--channel <channel>`   | explicit channel id                   |
+| `--account <accountId>` | account id for multi-account channels |
+| `--json`                | machine-readable output               |
+
+If multiple pairing-capable channels are configured, pass a channel positionally or with `--channel`. Extension channels work as long as the channel id is valid.
+
+## `pairing approve`
+
+Approve a pending pairing code and allow that sender.
+
+Usage:
+
+- `openclaw pairing approve <channel> <code>`
+- `openclaw pairing approve --channel <channel> <code>`
+- `openclaw pairing approve <code>` when exactly one pairing-capable channel is configured
+
+Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a confirmation back to the requester on the same channel).
+
+### Owner bootstrap
+
+If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner. It writes a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically.
+
+The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. Those actions include `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent. It does not by itself grant owner privileges beyond this one-time bootstrap.
+
+If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run [`openclaw doctor`](/cli/doctor). It warns when no command owner is configured. It also shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+
+## Related
+
+- [CLI reference](/cli)
+- [Channel pairing](/channels/pairing)
+- [`openclaw qr`](/cli/qr) — mobile/device bootstrap QR and setup code, not a channel DM pairing code

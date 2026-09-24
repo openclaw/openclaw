@@ -1,11 +1,19 @@
+// Link detection extracts unique safe bare HTTP(S) URLs from inbound text while filtering SSRF targets.
+import { findMarkdownLinkSourceSpans } from "../../packages/markdown-core/src/link-spans.js";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
-// Remove markdown link syntax so only bare URLs are considered.
-const MARKDOWN_LINK_RE = /\[[^\]]*]\((https?:\/\/\S+?)\)/gi;
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function stripMarkdownLinks(message: string): string {
-  return message.replace(MARKDOWN_LINK_RE, " ");
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (const [start, end] of findMarkdownLinkSourceSpans(message)) {
+    chunks.push(message.slice(cursor, start), " ");
+    cursor = end;
+  }
+  chunks.push(message.slice(cursor));
+  return chunks.join("");
 }
 
 function resolveMaxLinks(value?: number): number {
@@ -21,7 +29,7 @@ function isAllowedUrl(raw: string): boolean {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    if (parsed.hostname === "127.0.0.1") {
+    if (isBlockedHostnameOrIp(parsed.hostname)) {
       return false;
     }
     return true;
@@ -30,6 +38,10 @@ function isAllowedUrl(raw: string): boolean {
   }
 }
 
+/**
+ * Extracts unique, SSRF-filtered bare HTTP(S) links from inbound text.
+ * Markdown links are ignored so display-only citations do not trigger fetches.
+ */
 export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
   const source = message?.trim();
   if (!source) {

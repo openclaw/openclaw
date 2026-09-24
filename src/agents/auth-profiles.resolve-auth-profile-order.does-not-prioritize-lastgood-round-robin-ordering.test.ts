@@ -1,30 +1,176 @@
-import { describe, expect, it } from "vitest";
-import { resolveAuthProfileOrder } from "./auth-profiles.js";
+/**
+ * Auth profile ordering regression tests.
+ * Ensures last-good hints do not override explicit config, aws-sdk, or
+ * round-robin ordering semantics.
+ */
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: Object.fromEntries(
+      profileIds.map((profileId) => [
+        profileId,
+        {
+          type: "api_key",
+          provider,
+          key: profileId.endsWith(":work") ? "sk-work" : "sk-default",
+        },
+      ]),
+    ),
+  };
+}
+
+function makeApiKeyProfilesByProviderProvider(
+  providerByProfileId: Record<string, string>,
+): Record<string, { provider: string; mode: "api_key" }> {
+  return Object.fromEntries(
+    Object.entries(providerByProfileId).map(([profileId, provider]) => [
+      profileId,
+      { provider, mode: "api_key" },
+    ]),
+  );
+}
+
+const ANTHROPIC_STORE = createAuthProfileStoreFixture({
+  "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
+  "anthropic:work": createApiKeyCredential("anthropic", "sk-work"),
+}) satisfies AuthProfileStore;
+
+const ANTHROPIC_CFG = {
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },
+    },
+  },
+} satisfies OpenClawConfig;
 
 describe("resolveAuthProfileOrder", () => {
-  const store: AuthProfileStore = {
-    version: 1,
-    profiles: {
-      "anthropic:default": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-default",
+  const store = ANTHROPIC_STORE;
+  const cfg = ANTHROPIC_CFG;
+
+  it("keeps config-only aws-sdk profiles for aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: "bedrock-converse-stream",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          order: {
+            "amazon-bedrock": ["amazon-bedrock:default"],
+          },
+          profiles: {
+            "amazon-bedrock:default": {
+              provider: "amazon-bedrock",
+              mode: "aws-sdk",
+            },
+          },
+        },
       },
-      "anthropic:work": {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-work",
+      store: { version: 1, profiles: {} },
+      provider: "amazon-bedrock",
+    });
+
+    expect(order).toEqual(["amazon-bedrock:default"]);
+  });
+
+  it("rejects config-only aws-sdk profiles for non aws-sdk providers", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              auth: "api-key",
+              baseUrl: "https://api.anthropic.com",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+        auth: {
+          profiles: {
+            "anthropic:aws": {
+              provider: "anthropic",
+              mode: "aws-sdk",
+            },
+          },
+        },
       },
-    },
-  };
-  const cfg = {
-    auth: {
-      profiles: {
-        "anthropic:default": { provider: "anthropic", mode: "api_key" },
-        "anthropic:work": { provider: "anthropic", mode: "api_key" },
+      store: { version: 1, profiles: {} },
+      provider: "anthropic",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
+
+  function resolveWithAnthropicOrderAndUsage(params: {
+    orderSource: "store" | "config";
+    usageStats: NonNullable<AuthProfileStore["usageStats"]>;
+  }) {
+    const configuredOrder = { anthropic: ["anthropic:default", "anthropic:work"] };
+    return resolveAuthProfileOrder({
+      cfg:
+        params.orderSource === "config"
+          ? {
+              auth: {
+                order: configuredOrder,
+                profiles: cfg.auth?.profiles,
+              },
+            }
+          : undefined,
+      store:
+        params.orderSource === "store"
+          ? { ...store, order: configuredOrder, usageStats: params.usageStats }
+          : { ...store, usageStats: params.usageStats },
+      provider: "anthropic",
+    });
+  }
+
+  function resolveMinimaxOrderWithProfile(profile: {
+    type: "token";
+    provider: "minimax";
+    token?: string;
+    tokenRef?: { source: "env" | "file" | "exec"; provider: string; id: string };
+    expires?: number;
+  }) {
+    return resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["minimax:default"],
+          },
+        },
       },
-    },
-  };
+      store: {
+        version: 1,
+        profiles: {
+          "minimax:default": {
+            ...profile,
+          },
+        },
+      },
+      provider: "minimax",
+    });
+  }
 
   it("does not prioritize lastGood over round-robin ordering", () => {
     const order = resolveAuthProfileOrder({
@@ -41,6 +187,70 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order[0]).toBe("anthropic:default");
   });
+  it("does not match auth.order across provider id variants", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { "z.ai": ["zai:work", "zai:default"] },
+          profiles: makeApiKeyProfilesByProviderProvider({
+            "zai:default": "zai",
+            "zai:work": "zai",
+          }),
+        },
+      },
+      store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
+      provider: "zai",
+    });
+    expect(order).toEqual(["zai:default", "zai:work"]);
+  });
+  it("normalizes provider casing in auth.order keys", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { OpenAI: ["openai:work", "openai:default"] },
+          profiles: makeApiKeyProfilesByProviderProvider({
+            "openai:default": "openai",
+            "openai:work": "openai",
+          }),
+        },
+      },
+      store: makeApiKeyStore("openai", ["openai:default", "openai:work"]),
+      provider: "openai",
+    });
+    expect(order).toEqual(["openai:work", "openai:default"]);
+  });
+  it("does not match provider id variants in auth.profiles", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: makeApiKeyProfilesByProviderProvider({
+            "zai:default": "z.ai",
+            "zai:work": "Z.AI",
+          }),
+        },
+      },
+      store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
+      provider: "zai",
+    });
+    expect(order).toEqual([]);
+  });
+  it("prioritizes oauth profiles when order missing", () => {
+    const mixedStore: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
+      "anthropic:oauth": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    });
+    const order = resolveAuthProfileOrder({
+      store: mixedStore,
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:oauth", "anthropic:default"]);
+  });
   it("uses explicit profiles when order is missing", () => {
     const order = resolveAuthProfileOrder({
       cfg,
@@ -49,12 +259,29 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:default", "anthropic:work"]);
   });
+  it("uses stored profiles when no config exists", () => {
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:default", "anthropic:work"]);
+  });
+  it("prioritizes preferred profiles", () => {
+    const order = resolveAuthProfileOrder({
+      cfg,
+      store,
+      provider: "anthropic",
+      preferredProfile: "anthropic:work",
+    });
+    expect(order[0]).toBe("anthropic:work");
+    expect(order).toContain("anthropic:default");
+  });
   it("uses configured order when provided", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:work", "anthropic:default"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store,
@@ -62,12 +289,158 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
+  it("drops explicit order entries that are missing from the store", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["minimax:default", "minimax:prod"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "minimax:prod": createApiKeyCredential("minimax", "sk-prod"),
+      }),
+      provider: "minimax",
+    });
+    expect(order).toEqual(["minimax:prod"]);
+  });
+  it("falls back to stored provider profiles when config profile ids drift", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+          order: {
+            openai: ["openai:default"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      }),
+      provider: "openai",
+    });
+    expect(order).toEqual(["openai:user@example.com"]);
+  });
+  it("does not bypass explicit ids when the configured profile exists but is invalid", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "token",
+            },
+          },
+          order: {
+            openai: ["openai:default"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "openai:default": {
+          type: "token",
+          provider: "openai",
+          token: "expired-token",
+          expires: Date.now() - 1_000,
+        },
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      }),
+      provider: "openai",
+    });
+    expect(order).toStrictEqual([]);
+  });
+  it("drops explicit order entries that belong to another provider", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["openai:default", "minimax:prod"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "openai:default": createApiKeyCredential("openai", "sk-openai"),
+        "minimax:prod": createApiKeyCredential("minimax", "sk-mini"),
+      }),
+      provider: "minimax",
+    });
+    expect(order).toEqual(["minimax:prod"]);
+  });
+  it("orders by lastUsed when no explicit order exists", () => {
+    const order = resolveAuthProfileOrder({
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:a": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+          "anthropic:b": createApiKeyCredential("anthropic", "sk-b"),
+          "anthropic:c": createApiKeyCredential("anthropic", "sk-c"),
+        },
+        usageStats: {
+          "anthropic:a": { lastUsed: 200 },
+          "anthropic:b": { lastUsed: 100 },
+          "anthropic:c": { lastUsed: 300 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:a", "anthropic:b", "anthropic:c"]);
+  });
+  it("pushes cooldown profiles to the end, ordered by cooldown expiry", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:ready": createApiKeyCredential("anthropic", "sk-ready"),
+          "anthropic:cool1": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60_000,
+          },
+          "anthropic:cool2": createApiKeyCredential("anthropic", "sk-cool"),
+        },
+        usageStats: {
+          "anthropic:ready": { lastUsed: 50 },
+          "anthropic:cool1": { cooldownUntil: now + 120_000 },
+          "anthropic:cool2": { cooldownUntil: now + 60_000 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:ready", "anthropic:cool2", "anthropic:cool1"]);
+  });
   it("prefers store order over config order", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store: {
@@ -78,47 +451,64 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
-  it("pushes cooldown profiles to the end even with store order", () => {
-    const now = Date.now();
-    const order = resolveAuthProfileOrder({
-      store: {
-        ...store,
-        order: { anthropic: ["anthropic:default", "anthropic:work"] },
-        usageStats: {
-          "anthropic:default": { cooldownUntil: now + 60_000 },
-          "anthropic:work": { lastUsed: 1 },
-        },
-      },
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-  });
-  it("pushes cooldown profiles to the end even with configured order", () => {
-    const now = Date.now();
+  it("prefers store order over stale configured profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
-          order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
+          profiles: {
+            "openai:old-login": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
         },
       },
       store: {
-        ...store,
+        version: 1,
+        order: { openai: ["openai:new-login", "openai:old-login"] },
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: Date.now() + 60_000,
+          },
+          "openai:old-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai",
+    });
+
+    expect(order).toEqual(["openai:new-login", "openai:old-login"]);
+  });
+  it.each(["store", "config"] as const)(
+    "pushes cooldown profiles to the end even with %s order",
+    (orderSource) => {
+      const now = Date.now();
+      const order = resolveWithAnthropicOrderAndUsage({
+        orderSource,
         usageStats: {
           "anthropic:default": { cooldownUntil: now + 60_000 },
           "anthropic:work": { lastUsed: 1 },
         },
-      },
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-  });
-  it("pushes disabled profiles to the end even with store order", () => {
-    const now = Date.now();
-    const order = resolveAuthProfileOrder({
-      store: {
-        ...store,
-        order: { anthropic: ["anthropic:default", "anthropic:work"] },
+      });
+      expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+    },
+  );
+
+  it.each(["store", "config"] as const)(
+    "pushes disabled profiles to the end even with %s order",
+    (orderSource) => {
+      const now = Date.now();
+      const order = resolveWithAnthropicOrderAndUsage({
+        orderSource,
         usageStats: {
           "anthropic:default": {
             disabledUntil: now + 60_000,
@@ -126,55 +516,64 @@ describe("resolveAuthProfileOrder", () => {
           },
           "anthropic:work": { lastUsed: 1 },
         },
-      },
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-  });
-  it("pushes disabled profiles to the end even with configured order", () => {
-    const now = Date.now();
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
-        },
-      },
-      store: {
-        ...store,
-        usageStats: {
-          "anthropic:default": {
-            disabledUntil: now + 60_000,
-            disabledReason: "billing",
+      });
+      expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+    },
+  );
+
+  it.each(["store", "config"] as const)(
+    "keeps OpenRouter explicit order even when cooldown fields exist (%s)",
+    (orderSource) => {
+      const now = Date.now();
+      const explicitOrder = ["openrouter:default", "openrouter:work"];
+      const order = resolveAuthProfileOrder({
+        cfg:
+          orderSource === "config"
+            ? {
+                auth: {
+                  order: { openrouter: explicitOrder },
+                },
+              }
+            : undefined,
+        store: {
+          version: 1,
+          ...(orderSource === "store" ? { order: { openrouter: explicitOrder } } : {}),
+          profiles: {
+            "openrouter:default": createApiKeyCredential("openrouter", "sk-or-default"),
+            "openrouter:work": createApiKeyCredential("openrouter", "sk-or-work"),
           },
-          "anthropic:work": { lastUsed: 1 },
+          usageStats: {
+            "openrouter:default": {
+              cooldownUntil: now + 60_000,
+              disabledUntil: now + 120_000,
+              disabledReason: "billing",
+            },
+          },
         },
-      },
-      provider: "anthropic",
-    });
-    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
-  });
+        provider: "openrouter",
+      });
+
+      expect(order).toEqual(explicitOrder);
+    },
+  );
 
   it("mode: oauth config accepts both oauth and token credentials (issue #559)", () => {
     const now = Date.now();
-    const storeWithBothTypes: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:oauth-cred": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: now + 60_000,
-        },
-        "anthropic:token-cred": {
-          type: "token",
-          provider: "anthropic",
-          token: "just-a-token",
-          expires: now + 60_000,
-        },
+    const storeWithBothTypes: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:oauth-cred": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: now + 60_000,
       },
-    };
+      "anthropic:token-cred": {
+        type: "token",
+        provider: "anthropic",
+        token: "just-a-token",
+        expires: now + 60_000,
+      },
+    });
 
     const orderOauthCred = resolveAuthProfileOrder({
       store: storeWithBothTypes,
@@ -205,18 +604,15 @@ describe("resolveAuthProfileOrder", () => {
 
   it("mode: token config rejects oauth credentials (issue #559 root cause)", () => {
     const now = Date.now();
-    const storeWithOauth: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:oauth-cred": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: now + 60_000,
-        },
+    const storeWithOauth: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:oauth-cred": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: now + 60_000,
       },
-    };
+    });
 
     const order = resolveAuthProfileOrder({
       store: storeWithOauth,
@@ -230,5 +626,115 @@ describe("resolveAuthProfileOrder", () => {
       },
     });
     expect(order).not.toContain("anthropic:oauth-cred");
+  });
+  it.each([
+    {
+      caseName: "drops token profiles with empty credentials",
+      profile: {
+        type: "token" as const,
+        provider: "minimax" as const,
+        token: "   ",
+      },
+    },
+    {
+      caseName: "drops token profiles that are already expired",
+      profile: {
+        type: "token" as const,
+        provider: "minimax" as const,
+        token: "sk-minimax",
+        expires: Date.now() - 1000,
+      },
+    },
+    {
+      caseName: "drops token profiles with invalid expires metadata",
+      profile: {
+        type: "token" as const,
+        provider: "minimax" as const,
+        token: "sk-minimax",
+        expires: 0,
+      },
+    },
+  ])("$caseName", ({ profile }) => {
+    const order = resolveMinimaxOrderWithProfile(profile);
+    expect(order).toStrictEqual([]);
+  });
+  it("keeps api_key profiles backed by keyRef when plaintext key is absent", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            anthropic: ["anthropic:default"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          keyRef: {
+            source: "exec",
+            provider: "vault_local",
+            id: "anthropic/default",
+          },
+        },
+      }),
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:default"]);
+  });
+  it("keeps token profiles backed by tokenRef when expires is absent", () => {
+    const order = resolveMinimaxOrderWithProfile({
+      type: "token",
+      provider: "minimax",
+      tokenRef: {
+        source: "exec",
+        provider: "keychain",
+        id: "minimax/default",
+      },
+    });
+    expect(order).toEqual(["minimax:default"]);
+  });
+  it("drops tokenRef profiles when expires is invalid", () => {
+    const order = resolveMinimaxOrderWithProfile({
+      type: "token",
+      provider: "minimax",
+      tokenRef: {
+        source: "exec",
+        provider: "keychain",
+        id: "minimax/default",
+      },
+      expires: 0,
+    });
+    expect(order).toStrictEqual([]);
+  });
+  it("keeps token profiles with inline token when no expires is set", () => {
+    const order = resolveMinimaxOrderWithProfile({
+      type: "token",
+      provider: "minimax",
+      token: "sk-minimax",
+    });
+    expect(order).toEqual(["minimax:default"]);
+  });
+  it("keeps oauth profiles that can refresh", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            anthropic: ["anthropic:oauth"],
+          },
+        },
+      },
+      store: createAuthProfileStoreFixture({
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "",
+          refresh: "refresh-token",
+          expires: Date.now() - 1000,
+        },
+      }),
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:oauth"]);
   });
 });

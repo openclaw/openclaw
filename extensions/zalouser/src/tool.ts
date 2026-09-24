@@ -1,26 +1,25 @@
-import { Type } from "@sinclair/typebox";
-import { runZca, parseJsonOutput } from "./zca.js";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+// Zalouser plugin module implements tool behavior.
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
+import { Type } from "typebox";
+import { resolveZalouserAccountSync } from "./accounts.js";
+import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import { parseZalouserOutboundTarget } from "./session-route.js";
+import { normalizeZalouserCredentialProfile } from "./session-state.js";
+import type { ZalouserConfig } from "./types.js";
+import {
+  checkZaloAuthenticated,
+  getZaloUserInfo,
+  listZaloFriendsMatching,
+  listZaloGroupsMatching,
+} from "./zalo-js.js";
 
 const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
 
-type AgentToolResult = {
-  content: Array<{ type: string; text: string }>;
-  details?: unknown;
-};
-
-function stringEnum<T extends readonly string[]>(
-  values: T,
-  options: { description?: string } = {},
-) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-    ...options,
-  });
-}
-
-// Tool schema - avoiding Type.Union per tool schema guardrails
-export const ZalouserToolSchema = Type.Object(
+const ZalouserToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
     threadId: Type.Optional(Type.String({ description: "Thread ID for messaging" })),
@@ -43,111 +42,153 @@ type ToolParams = {
   url?: string;
 };
 
-function json(payload: unknown): AgentToolResult {
+type ZalouserToolContext = Pick<
+  OpenClawPluginToolContext,
+  "deliveryContext" | "config" | "runtimeConfig" | "getRuntimeConfig"
+>;
+
+function resolveToolMediaMaxBytes(profile: string | undefined, context?: ZalouserToolContext) {
+  const cfg = context?.getRuntimeConfig?.() ?? context?.runtimeConfig ?? context?.config ?? {};
+  const route = context?.deliveryContext;
+  if (route?.channel === "zalouser" && route.accountId) {
+    const account = resolveZalouserAccountSync({ cfg, accountId: route.accountId });
+    // Profiles are credentials, not account IDs; only the actual route can select an account cap.
+    if (
+      normalizeZalouserCredentialProfile(account.profile) ===
+      normalizeZalouserCredentialProfile(profile)
+    ) {
+      return account.mediaMaxBytes;
+    }
+  }
+  return resolveChannelMediaMaxBytes({
+    cfg,
+    // SAFETY: The plugin schema validates this open-world channel config section.
+    resolveChannelLimitMb: () => (cfg.channels?.zalouser as ZalouserConfig | undefined)?.mediaMaxMb,
+  });
+}
+
+function resolveAmbientZalouserTarget(context?: ZalouserToolContext): {
+  threadId?: string;
+  isGroup?: boolean;
+} {
+  const deliveryContext = context?.deliveryContext;
+  const rawTarget = deliveryContext?.to;
+  if (
+    (deliveryContext?.channel === undefined || deliveryContext.channel === "zalouser") &&
+    typeof rawTarget === "string" &&
+    rawTarget.trim()
+  ) {
+    try {
+      return parseZalouserOutboundTarget(rawTarget);
+    } catch {
+      // Ignore unrelated delivery targets; explicit tool params still win.
+    }
+  }
+  if (deliveryContext?.channel && deliveryContext.channel !== "zalouser") {
+    return {};
+  }
+  const ambientThreadId = deliveryContext?.threadId;
+  if (typeof ambientThreadId === "string" && ambientThreadId.trim()) {
+    return { threadId: ambientThreadId.trim() };
+  }
+  if (typeof ambientThreadId === "number" && Number.isFinite(ambientThreadId)) {
+    return { threadId: String(ambientThreadId) };
+  }
+  return {};
+}
+
+function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolContext) {
+  const explicitThreadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+  const ambientTarget = resolveAmbientZalouserTarget(context);
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: payload,
+    threadId: explicitThreadId || ambientTarget.threadId,
+    isGroup: typeof params.isGroup === "boolean" ? params.isGroup : ambientTarget.isGroup,
   };
 }
 
-export async function executeZalouserTool(
+async function executeZalouserTool(
   _toolCallId: string,
   params: ToolParams,
-  _signal?: AbortSignal,
+  signal?: AbortSignal,
   _onUpdate?: unknown,
-): Promise<AgentToolResult> {
+  context?: ZalouserToolContext,
+): Promise<AgentToolResult<unknown>> {
   try {
     switch (params.action) {
       case "send": {
-        if (!params.threadId || !params.message) {
+        const target = resolveZalouserSendTarget(params, context);
+        if (!target.threadId || !params.message) {
           throw new Error("threadId and message required for send action");
         }
-        const args = ["msg", "send", params.threadId, params.message];
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendMessageZalouser(target.threadId, params.message, {
+          signal,
+          profile: params.profile,
+          isGroup: target.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send message");
+          throw new Error(result.error || "Failed to send message");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "image": {
-        if (!params.threadId) {
+        const target = resolveZalouserSendTarget(params, context);
+        if (!target.threadId) {
           throw new Error("threadId required for image action");
         }
         if (!params.url) {
           throw new Error("url required for image action");
         }
-        const args = ["msg", "image", params.threadId, "-u", params.url];
-        if (params.message) {
-          args.push("-m", params.message);
-        }
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendImageZalouser(target.threadId, params.url, {
+          signal,
+          profile: params.profile,
+          mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
+          caption: params.message,
+          isGroup: target.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send image");
+          throw new Error(result.error || "Failed to send image");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "link": {
-        if (!params.threadId || !params.url) {
+        const target = resolveZalouserSendTarget(params, context);
+        if (!target.threadId || !params.url) {
           throw new Error("threadId and url required for link action");
         }
-        const args = ["msg", "link", params.threadId, params.url];
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendLinkZalouser(target.threadId, params.url, {
+          signal,
+          profile: params.profile,
+          caption: params.message,
+          isGroup: target.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send link");
+          throw new Error(result.error || "Failed to send link");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "friends": {
-        const args = params.query ? ["friend", "find", params.query] : ["friend", "list", "-j"];
-        const result = await runZca(args, { profile: params.profile });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get friends");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const rows = await listZaloFriendsMatching(params.profile, params.query);
+        return json(rows);
       }
 
       case "groups": {
-        const result = await runZca(["group", "list", "-j"], {
-          profile: params.profile,
-        });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get groups");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const rows = await listZaloGroupsMatching(params.profile, params.query);
+        return json(rows);
       }
 
       case "me": {
-        const result = await runZca(["me", "info", "-j"], {
-          profile: params.profile,
-        });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get profile");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const info = await getZaloUserInfo(params.profile);
+        return json(info ?? { error: "Not authenticated" });
       }
 
       case "status": {
-        const result = await runZca(["auth", "status"], {
-          profile: params.profile,
-        });
+        const authenticated = await checkZaloAuthenticated(params.profile);
         return json({
-          authenticated: result.ok,
-          output: result.stdout || result.stderr,
+          authenticated,
+          output: authenticated ? "authenticated" : "not authenticated",
         });
       }
 
@@ -160,7 +201,21 @@ export async function executeZalouserTool(
     }
   } catch (err) {
     return json({
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
   }
+}
+
+export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool {
+  return {
+    name: "zalouser",
+    label: "Zalo Personal",
+    description:
+      "Send messages and access data via Zalo personal account. " +
+      "Actions: send (text message), image (send image URL), link (send link), " +
+      "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
+    parameters: ZalouserToolSchema,
+    execute: async (toolCallId, params, signal, onUpdate) =>
+      await executeZalouserTool(toolCallId, params as ToolParams, signal, onUpdate, context),
+  } satisfies AnyAgentTool;
 }

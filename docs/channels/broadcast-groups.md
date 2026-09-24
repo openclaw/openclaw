@@ -1,79 +1,145 @@
 ---
-summary: "Broadcast a WhatsApp message to multiple agents"
+summary: "Run bounded agent group threads across messaging channels"
 read_when:
   - Configuring broadcast groups
-  - Debugging multi-agent replies in WhatsApp
+  - Configuring bounded agent group threads
+  - Debugging multi-agent replies across channels
 status: experimental
-title: "Broadcast Groups"
+title: "Broadcast groups"
+sidebarTitle: "Broadcast groups"
 ---
 
-# Broadcast Groups
-
-**Status:** Experimental  
-**Version:** Added in 2026.1.9
+<Note>
+**Status:** Experimental. Legacy WhatsApp broadcast arrays remain supported.
+</Note>
 
 ## Overview
 
-Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
+Agent group threads run **multiple agents** on the same inbound message, using the top-level `broadcast` config. Each agent runs in its own session. Channel-qualified entries can select participants by mention and allow a bounded number of follow-up rounds so agents can build on sibling replies.
 
-Current scope: **WhatsApp only** (web channel).
+Channel allowlists and group activation rules still apply. For qualified entries on Discord, Slack, and Telegram, an explicit mention of any configured participant can satisfy the room’s mention gate, even when that participant is not the ordinary routed agent. Legacy WhatsApp entries keep their existing admission behavior.
 
-Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
-
-## Use Cases
-
-### 1. Specialized Agent Teams
-
-Deploy multiple agents with atomic, focused responsibilities:
-
-```
-Group: "Development Team"
-Agents:
-  - CodeReviewer (reviews code snippets)
-  - DocumentationBot (generates docs)
-  - SecurityAuditor (checks for vulnerabilities)
-  - TestGenerator (suggests test cases)
-```
-
-Each agent processes the same message and provides its specialized perspective.
-
-### 2. Multi-Language Support
-
-```
-Group: "International Support"
-Agents:
-  - Agent_EN (responds in English)
-  - Agent_DE (responds in German)
-  - Agent_ES (responds in Spanish)
-```
-
-### 3. Quality Assurance Workflows
-
-```
-Group: "Customer Support"
-Agents:
-  - SupportAgent (provides answer)
-  - QAAgent (reviews quality, only responds if issues found)
-```
-
-### 4. Task Automation
-
-```
-Group: "Project Management"
-Agents:
-  - TaskTracker (updates task database)
-  - TimeLogger (logs time spent)
-  - ReportGenerator (creates summaries)
-```
+The live WhatsApp QA lane includes `whatsapp-broadcast-group-fanout`, which verifies that one mentioned group message can produce distinct visible replies from two configured agents.
 
 ## Configuration
 
-### Basic Setup
+### Agent group threads
 
-Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
+Use a key in the form `"<channel>:<peerId>"`, such as
+`"discord:123456789"`, `"slack:C0123"`, `"telegram:-100123"`, or
+`"whatsapp:1203@g.us"`. The value can be an agent ID array or a strict object:
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    entries: {
+      reviewer: {
+        name: "Reviewer",
+        groupChat: { mentionPatterns: ["@reviewer\\b"] },
+      },
+      writer: {
+        name: "Writer",
+        groupChat: { mentionPatterns: ["@writer\\b"] },
+      },
+    },
+  },
+  bindings: [{ agentId: "reviewer", match: { channel: "telegram" } }],
+  broadcast: {
+    "telegram:-100123": {
+      agents: ["reviewer", "writer"],
+      mentionGating: true,
+      maxRounds: 2,
+      maxTurns: 4,
+    },
+  },
+}
+```
+
+The ordinary channel route still needs an agent; the binding above selects
+Reviewer for admission before group dispatch. After the room is allowed by its
+channel config, send `@reviewer @writer Review
+this draft`. Both participants can answer the initial message and, within the
+budget, add something new in one follow-up round. Send `@writer` to select only
+Writer for the initial round.
+
+| Object field    | Default         | Contract                                                                       |
+| --------------- | --------------- | ------------------------------------------------------------------------------ |
+| `agents`        | Required        | Configured agent IDs; at most 16 participants.                                 |
+| `mentionGating` | `true`          | Select explicitly mentioned participants; if none match, select all.           |
+| `maxRounds`     | `1`             | Integer from 1 to 4, including the initial round.                              |
+| `maxTurns`      | `agents.length` | Integer from 1 to 32; total participant turns started for one inbound message. |
+
+Unknown object fields are rejected. Qualified arrays use the same defaults:
+`"slack:C0123": ["reviewer", "writer"]` runs one initial round with mention
+selection. A qualified WhatsApp key takes precedence over an unqualified key
+for the same peer. Unqualified object entries are not supported.
+
+`maxTurns` counts **agent runs started by the coordinator**, including runs
+that pass or fail. Slots are reserved synchronously before parallel launch, so
+parallel participants cannot overspend the budget. If the budget is smaller
+than the eligible participant count, configured order determines which turns
+start. A turn can produce multiple platform messages through chunks, previews,
+or message-tool sends. Those deliveries are governed by the agent run and
+channel transport; `maxTurns` does not count, buffer, or cap physical messages.
+
+Telegram, Discord, and Slack disable their shared preview and progress drafts
+for qualified group threads so concurrent participants do not overwrite each
+other's drafts. Final replies, block replies, and message-tool sends remain
+available.
+
+The default turn budget covers one turn per configured agent. To let every
+agent run twice, set `maxRounds: 2` and `maxTurns` to twice the participant count.
+
+### Mention selection
+
+Selection uses only explicit `@`-style matches in the current inbound text,
+computed once for the participant set. A name in prose or a bare emoji does not
+select a participant. Mention patterns resolve from the agent’s
+`groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`, then its
+identity-derived patterns. Give participants distinct patterns when you want
+to address them separately.
+
+With `mentionGating: true`, a match selects only the matching participants for
+round 1; no matches selects all. With `mentionGating: false`, all participants
+are selected. This option does not turn off the channel’s `requireMention`
+policy, sender allowlists, or command authorization.
+
+### Bounded follow-up rounds
+
+After a completed round, another round can run only within both `maxRounds`
+and `maxTurns`. Eligible participants are those that produced a final reply
+in the previous round or were addressed by name in a sibling’s final reply.
+Each participant's final text is limited to 4,000 characters in the digest;
+the combined sibling text is limited to 16,000 characters.
+Each receives an attributed, size-bounded digest of sibling finals from that
+round, with an instruction to reply only when adding something new and otherwise
+return `NO_REPLY`. Passing does not produce a visible final reply.
+
+All participants passing ends the thread. Reaching either limit or cancellation
+also stops further turns. Each continuation has its own internal identity;
+it is not a replay of the physical inbound message. Sequential strategy changes
+launch order within a round; it does not turn that round into a pipeline where
+each participant sees earlier replies from the same round.
+
+Budget state is in memory, scoped to the channel, account, conversation, thread,
+and root inbound message. It is not restart-resumable: a Gateway restart loses
+the active round and budget state. Ordinary inbound deduplication remains a
+separate protection.
+
+### Participant labels
+
+When a qualified entry configures more than one participant, Discord, Slack,
+and Telegram replies begin with the participant name in bold. The configured
+count controls labeling, even if mention selection, the turn budget, or silence
+leaves only one responder. WhatsApp presentation remains unchanged.
+
+### Basic setup
+
+Legacy single-pass setup uses unqualified WhatsApp peer IDs as keys and arrays of agent IDs as values:
 
 - group chats: group JID (e.g. `120363403215116621@g.us`)
-- DMs: E.164 phone number (e.g. `+15551234567`)
+- DMs: sender E.164 phone number (e.g. `+15551234567`)
 
 ```json
 {
@@ -83,28 +149,20 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 }
 ```
 
-**Result:** When OpenClaw would reply in this chat, it will run all three agents.
+**Result:** when OpenClaw would reply in this chat, it runs all three agents.
 
-### Processing Strategy
+Every listed agent ID must exist in the configured roster: config validation rejects unknown IDs in both arrays and objects. Deleting an agent prunes it from both forms.
 
-Control how agents process messages:
+Runtime membership uses the canonical `agents.entries` roster when present, including an empty roster. Legacy `agents.list` is used only when `agents.entries` is absent.
 
-#### Parallel (Default)
+### Processing strategy
 
-All agents process simultaneously:
+`broadcast.strategy` sets how agents process the message:
 
-```json
-{
-  "broadcast": {
-    "strategy": "parallel",
-    "120363403215116621@g.us": ["alfred", "baerbel"]
-  }
-}
-```
-
-#### Sequential
-
-Agents process in order (one waits for previous to finish):
+| Strategy             | Behavior                                                              |
+| -------------------- | --------------------------------------------------------------------- |
+| `parallel` (default) | All agents process simultaneously; replies arrive in any order.       |
+| `sequential`         | Agents process in array order; each waits for the previous to finish. |
 
 ```json
 {
@@ -115,171 +173,166 @@ Agents process in order (one waits for previous to finish):
 }
 ```
 
-### Complete Example
+### Complete example
 
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "code-reviewer",
+    "entries": {
+      "code-reviewer": {
+        "default": true,
         "name": "Code Reviewer",
         "workspace": "/path/to/code-reviewer",
         "sandbox": { "mode": "all" }
       },
-      {
-        "id": "security-auditor",
+      "security-auditor": {
         "name": "Security Auditor",
         "workspace": "/path/to/security-auditor",
         "sandbox": { "mode": "all" }
       },
-      {
-        "id": "docs-generator",
+      "docs-generator": {
         "name": "Documentation Generator",
         "workspace": "/path/to/docs-generator",
         "sandbox": { "mode": "all" }
       }
-    ]
+    }
   },
   "broadcast": {
     "strategy": "parallel",
-    "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"],
-    "120363424282127706@g.us": ["support-en", "support-de"],
-    "+15555550123": ["assistant", "logger"]
+    "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"]
   }
 }
 ```
 
-## How It Works
+## How it works
 
-### Message Flow
+### Message flow
 
-1. **Incoming message** arrives in a WhatsApp group
-2. **Broadcast check**: System checks if peer ID is in `broadcast`
-3. **If in broadcast list**:
-   - All listed agents process the message
-   - Each agent has its own session key and isolated context
-   - Agents process in parallel (default) or sequentially
-4. **If not in broadcast list**:
-   - Normal routing applies (first matching binding)
+<Steps>
+  <Step title="Incoming message arrives">
+    A channel message arrives.
+  </Step>
+  <Step title="Route and admission">
+    OpenClaw applies channel allowlists, group activation rules, and configured ACP binding ownership.
+  </Step>
+  <Step title="Broadcast check">
+    If no configured ACP binding owns the route, OpenClaw checks the qualified channel/peer key, then the legacy peer key for WhatsApp.
+  </Step>
+  <Step title="If broadcast applies">
+    - Selected participants process the message within the round and turn limits.
+    - Each agent has its own session key and isolated context.
+    - Agents process in parallel (default) or sequentially.
+    - WhatsApp audio attachments are transcribed once before fan-out, so agents share one transcript instead of making separate STT calls.
 
-Note: broadcast groups do not bypass channel allowlists or group activation rules (mentions/commands/etc). They only change _which agents run_ when a message is eligible for processing.
+  </Step>
+  <Step title="If broadcast does not apply">
+    OpenClaw dispatches the ordinary route or the configured ACP session route selected during routing.
+  </Step>
+</Steps>
 
-### Session Isolation
+<Note>
+Group threads do not bypass channel allowlists, command authorization, or exclusive ACP bindings. Participant mention admission extends the room mention gate as described above.
+</Note>
+
+### Session isolation
 
 Each agent in a broadcast group maintains completely separate:
 
 - **Session keys** (`agent:alfred:whatsapp:group:120363...` vs `agent:baerbel:whatsapp:group:120363...`)
-- **Conversation history** (agent doesn't see other agents' messages)
+- **Conversation history** (sibling replies are shared only through bounded follow-up digests)
 - **Workspace** (separate sandboxes if configured)
 - **Tool access** (different allow/deny lists)
-- **Memory/context** (separate IDENTITY.md, SOUL.md, etc.)
-- **Group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered
+- **Memory/context** (separate `IDENTITY.md`, `SOUL.md`, etc.)
 
-This allows each agent to have:
+On Discord, Slack, and Telegram, reply delivery and completion hooks use the
+responding participant's session, and local media resolves with that participant's
+media roots. This also applies to qualified entries with one participant, whose
+replies do not have a participant name label.
 
-- Different personalities
-- Different tool access (e.g., read-only vs. read-write)
-- Different models (e.g., opus vs. sonnet)
-- Different skills installed
+On WhatsApp, one input is shared on purpose: the **group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered. It is cleared once after the fan-out completes.
 
-### Example: Isolated Sessions
+This allows each agent to have different personalities, models, skills, and tool access (for example read-only vs. read-write).
+
+### Example: isolated sessions
 
 In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 
-**Alfred's context:**
+<Tabs>
+  <Tab title="Alfred's context">
+    ```text
+    Session: agent:alfred:whatsapp:group:120363403215116621@g.us
+    History: [user message, alfred's previous responses]
+    Workspace: ~/openclaw-alfred/
+    Tools: read, write, exec
+    ```
+  </Tab>
+  <Tab title="Baerbel's context">
+    ```text
+    Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
+    History: [user message, baerbel's previous responses]
+    Workspace: ~/openclaw-baerbel/
+    Tools: read only
+    ```
+  </Tab>
+</Tabs>
 
-```
-Session: agent:alfred:whatsapp:group:120363403215116621@g.us
-History: [user message, alfred's previous responses]
-Workspace: /Users/pascal/openclaw-alfred/
-Tools: read, write, exec
-```
+## Use cases
 
-**Bärbel's context:**
+- **Specialized agent teams**: a dev group where `code-reviewer`, `security-auditor`, `test-generator`, and `docs-checker` each answer the same message from their own angle.
+- **Multi-language support**: one support chat with `support-en`, `support-de`, `support-es` responding in their languages.
+- **Quality assurance**: `support-agent` answers while `qa-agent` reviews and only responds when it finds issues.
+- **Task automation**: `task-tracker`, `time-logger`, and `report-generator` all consume the same status update.
 
-```
-Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
-History: [user message, baerbel's previous responses]
-Workspace: /Users/pascal/openclaw-baerbel/
-Tools: read only
-```
+## Best practices
 
-## Best Practices
-
-### 1. Keep Agents Focused
-
-Design each agent with a single, clear responsibility:
-
-```json
-{
-  "broadcast": {
-    "DEV_GROUP": ["formatter", "linter", "tester"]
-  }
-}
-```
-
-✅ **Good:** Each agent has one job  
-❌ **Bad:** One generic "dev-helper" agent
-
-### 2. Use Descriptive Names
-
-Make it clear what each agent does:
-
-```json
-{
-  "agents": {
-    "security-scanner": { "name": "Security Scanner" },
-    "code-formatter": { "name": "Code Formatter" },
-    "test-generator": { "name": "Test Generator" }
-  }
-}
-```
-
-### 3. Configure Different Tool Access
-
-Give agents only the tools they need:
-
-```json
-{
-  "agents": {
-    "reviewer": {
-      "tools": { "allow": ["read", "exec"] } // Read-only
-    },
-    "fixer": {
-      "tools": { "allow": ["read", "write", "edit", "exec"] } // Read-write
+<AccordionGroup>
+  <Accordion title="1. Keep agents focused">
+    Give each agent a single, clear responsibility (`formatter`, `linter`, `tester`) instead of one generic "dev-helper" agent.
+  </Accordion>
+  <Accordion title="2. Use descriptive ids and names">
+    ```json
+    {
+      "agents": {
+        "entries": {
+          "security-scanner": { "default": true, "name": "Security Scanner" },
+          "code-formatter": { "name": "Code Formatter" },
+          "test-generator": { "name": "Test Generator" }
+        }
+      }
     }
-  }
-}
-```
+    ```
+  </Accordion>
+  <Accordion title="3. Configure different tool access">
+    ```json
+    {
+      "agents": {
+        "entries": {
+          "reviewer": {
+            "default": true,
+            "tools": { "allow": ["read", "exec"] }
+          },
+          "fixer": { "tools": { "allow": ["read", "write", "edit", "exec"] } }
+        }
+      }
+    }
+    ```
 
-### 4. Monitor Performance
+    `reviewer` is read-only. `fixer` can read and write.
 
-With many agents, consider:
-
-- Using `"strategy": "parallel"` (default) for speed
-- Limiting broadcast groups to 5-10 agents
-- Using faster models for simpler agents
-
-### 5. Handle Failures Gracefully
-
-Agents fail independently. One agent's error doesn't block others:
-
-```
-Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
-Result: Agent A and C respond, Agent B logs error
-```
+  </Accordion>
+  <Accordion title="4. Monitor performance">
+    With many agents, prefer `"strategy": "parallel"` (default), keep broadcast groups to a handful of agents, and use faster models for simpler agents.
+  </Accordion>
+  <Accordion title="5. Failures stay isolated">
+    Agents fail independently. One agent's error is logged (`Broadcast agent <id> failed: ...`) and does not block the others.
+  </Accordion>
+</AccordionGroup>
 
 ## Compatibility
 
 ### Providers
 
-Broadcast groups currently work with:
-
-- ✅ WhatsApp (implemented)
-- 🚧 Telegram (planned)
-- 🚧 Discord (planned)
-- 🚧 Slack (planned)
+Channel-qualified entries use the shared core dispatch path across channel plugins. Discord, Slack, and Telegram additionally support participant mention admission and name labels. Legacy unqualified entries apply only to WhatsApp (web channel).
 
 ### Routing
 
@@ -299,144 +352,143 @@ Broadcast groups work alongside existing routing:
 }
 ```
 
-- `GROUP_A`: Only alfred responds (normal routing)
-- `GROUP_B`: agent1 AND agent2 respond (broadcast)
+- `GROUP_A`: only alfred responds (normal routing).
+- `GROUP_B`: agent1 AND agent2 respond (broadcast).
 
-**Precedence:** `broadcast` takes priority over `bindings`.
+<Note>
+**Precedence:** `broadcast` takes priority over ordinary route bindings. Configured ACP bindings (`bindings[].type="acp"`) are exclusive: when one matches, OpenClaw dispatches to the configured ACP session instead of fan-out broadcast.
+</Note>
 
 ## Troubleshooting
 
-### Agents Not Responding
+<AccordionGroup>
+  <Accordion title="Agents not responding">
+    **Check:**
 
-**Check:**
+    1. Agent IDs exist in `agents.entries` (config validation rejects unknown ids).
+    2. The qualified channel/peer key matches the room. Legacy WhatsApp keys use a group JID like `120363403215116621@g.us`, or E.164 like `+15551234567` for DMs.
+    3. The message passed normal gating (mention/activation rules still apply).
 
-1. Agent IDs exist in `agents.list`
-2. Peer ID format is correct (e.g., `120363403215116621@g.us`)
-3. Agents are not in deny lists
+    **Debug:**
 
-**Debug:**
+    ```bash
+    openclaw logs --follow | grep -i broadcast
+    ```
 
-```bash
-tail -f ~/.openclaw/logs/gateway.log | grep broadcast
-```
+    A successful fan-out logs `Broadcasting message to <n> agents (<strategy>)`.
 
-### Only One Agent Responding
+  </Accordion>
+  <Accordion title="Only one agent responding">
+    **Check:** explicit mentions may select one participant, `maxTurns` may allow only one run, or the others may pass. Also check whether the peer is only in ordinary route bindings or matches an exclusive configured ACP binding.
 
-**Cause:** Peer ID might be in `bindings` but not `broadcast`.
+    **Fix:** add ordinary route-bound peers to the broadcast config, or remove/change the configured ACP binding if fan-out broadcast is desired.
 
-**Fix:** Add to broadcast config or remove from bindings.
-
-### Performance Issues
-
-**If slow with many agents:**
-
-- Reduce number of agents per group
-- Use lighter models (sonnet instead of opus)
-- Check sandbox startup time
+  </Accordion>
+  <Accordion title="Performance issues">
+    If slow with many agents: reduce the number of agents per group, use lighter models, and check sandbox startup time.
+  </Accordion>
+</AccordionGroup>
 
 ## Examples
 
-### Example 1: Code Review Team
-
-```json
-{
-  "broadcast": {
-    "strategy": "parallel",
-    "120363403215116621@g.us": [
-      "code-formatter",
-      "security-scanner",
-      "test-coverage",
-      "docs-checker"
-    ]
-  },
-  "agents": {
-    "list": [
-      {
-        "id": "code-formatter",
-        "workspace": "~/agents/formatter",
-        "tools": { "allow": ["read", "write"] }
+<AccordionGroup>
+  <Accordion title="Example 1: Code review team">
+    ```json
+    {
+      "broadcast": {
+        "strategy": "parallel",
+        "120363403215116621@g.us": [
+          "code-formatter",
+          "security-scanner",
+          "test-coverage",
+          "docs-checker"
+        ]
       },
-      {
-        "id": "security-scanner",
-        "workspace": "~/agents/security",
-        "tools": { "allow": ["read", "exec"] }
+      "agents": {
+        "entries": {
+          "code-formatter": {
+            "default": true,
+            "workspace": "~/agents/formatter",
+            "tools": { "allow": ["read", "write"] }
+          },
+          "security-scanner": {
+            "workspace": "~/agents/security",
+            "tools": { "allow": ["read", "exec"] }
+          },
+          "test-coverage": {
+            "workspace": "~/agents/testing",
+            "tools": { "allow": ["read", "exec"] }
+          },
+          "docs-checker": { "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
+        }
+      }
+    }
+    ```
+
+    One code snippet in the group can produce four perspectives: formatting fixes, a security finding, a coverage gap, and a docs nit.
+
+  </Accordion>
+  <Accordion title="Example 2: Multi-language pipeline">
+    ```json
+    {
+      "broadcast": {
+        "strategy": "sequential",
+        "+15555550123": ["detect-language", "translator-en", "translator-de"]
       },
-      {
-        "id": "test-coverage",
-        "workspace": "~/agents/testing",
-        "tools": { "allow": ["read", "exec"] }
-      },
-      { "id": "docs-checker", "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
-    ]
-  }
-}
-```
+      "agents": {
+        "entries": {
+          "detect-language": { "default": true, "workspace": "~/agents/lang-detect" },
+          "translator-en": { "workspace": "~/agents/translate-en" },
+          "translator-de": { "workspace": "~/agents/translate-de" }
+        }
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
 
-**User sends:** Code snippet  
-**Responses:**
+## API reference
 
-- code-formatter: "Fixed indentation and added type hints"
-- security-scanner: "⚠️ SQL injection vulnerability in line 12"
-- test-coverage: "Coverage is 45%, missing tests for error cases"
-- docs-checker: "Missing docstring for function `process_data`"
-
-### Example 2: Multi-Language Support
-
-```json
-{
-  "broadcast": {
-    "strategy": "sequential",
-    "+15555550123": ["detect-language", "translator-en", "translator-de"]
-  },
-  "agents": {
-    "list": [
-      { "id": "detect-language", "workspace": "~/agents/lang-detect" },
-      { "id": "translator-en", "workspace": "~/agents/translate-en" },
-      { "id": "translator-de", "workspace": "~/agents/translate-de" }
-    ]
-  }
-}
-```
-
-## API Reference
-
-### Config Schema
+### Config schema
 
 ```typescript
-interface OpenClawConfig {
-  broadcast?: {
-    strategy?: "parallel" | "sequential";
-    [peerId: string]: string[];
-  };
-}
+type BroadcastGroupConfig = {
+  agents: string[];
+  mentionGating?: boolean;
+  maxRounds?: number;
+  maxTurns?: number;
+};
+
+type BroadcastConfig = {
+  strategy?: "parallel" | "sequential";
+  [key: string]: string[] | BroadcastGroupConfig | "parallel" | "sequential" | undefined;
+};
 ```
 
 ### Fields
 
-- `strategy` (optional): How to process agents
-  - `"parallel"` (default): All agents process simultaneously
-  - `"sequential"`: Agents process in array order
-- `[peerId]`: WhatsApp group JID, E.164 number, or other peer ID
-  - Value: Array of agent IDs that should process messages
+<ParamField path="strategy" type='"parallel" | "sequential"' default='"parallel"'>
+  How to process eligible agents within each round. `parallel` launches reserved turns together; `sequential` runs them in configured order.
+</ParamField>
+<ParamField path="[channel:peerId]" type="string[] | BroadcastGroupConfig">
+  Channel-qualified peer ID. Arrays use the group-thread defaults; objects configure mention selection, rounds, and participant-turn budgets. At most 16 agents.
+</ParamField>
+<ParamField path="[peerId]" type="string[]">
+  Legacy WhatsApp group JID or E.164 phone number. Every listed agent processes one turn, with no internal follow-up rounds or participant selection.
+</ParamField>
 
 ## Limitations
 
-1. **Max agents:** No hard limit, but 10+ agents may be slow
-2. **Shared context:** Agents don't see each other's responses (by design)
-3. **Message ordering:** Parallel responses may arrive in any order
-4. **Rate limits:** All agents count toward WhatsApp rate limits
+1. **Shared context:** follow-up digests contain bounded sibling finals, not full sibling sessions or tool histories.
+2. **Message ordering:** parallel responses may arrive in any order.
+3. **Rate limits:** participants share the channel account’s transport limits; one turn can produce several platform messages.
+4. **Recovery:** round and turn-budget state is in memory and cannot resume after a Gateway restart.
+5. **Control UI:** a dedicated team-thread session is not yet available. Each participant keeps its own session.
 
-## Future Enhancements
+## Related
 
-Planned features:
-
-- [ ] Shared context mode (agents see each other's responses)
-- [ ] Agent coordination (agents can signal each other)
-- [ ] Dynamic agent selection (choose agents based on message content)
-- [ ] Agent priorities (some agents respond before others)
-
-## See Also
-
-- [Multi-Agent Configuration](/tools/multi-agent-sandbox-tools)
-- [Routing Configuration](/channels/channel-routing)
-- [Session Management](/concepts/sessions)
+- [Channel routing](/channels/channel-routing)
+- [Groups](/channels/groups)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Pairing](/channels/pairing)
+- [Session management](/concepts/session)

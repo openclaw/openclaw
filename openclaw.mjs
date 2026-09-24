@@ -1,18 +1,230 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { access } from "node:fs/promises";
 import module from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
+import {
+  consumeLauncherRootOptionToken,
+  isForegroundGmailRunInvocation,
+  isNativeHookRelayInvocation,
+  recoverNodeRuntime,
+  runRespawnedChild,
+} from "./node-runtime-recovery.mjs";
+import {
+  canRunOpenClawNodeDiagnostics,
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
+} from "./node-version.mjs";
 
-// https://nodejs.org/api/module.html#module-compile-cache
-if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
-  try {
-    module.enableCompileCache();
-  } catch {
-    // Ignore errors
+const isSourceCheckoutLauncher = () =>
+  existsSync(new URL("./.git", import.meta.url)) ||
+  existsSync(new URL("./src/entry.ts", import.meta.url));
+
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
+  await import("./node-sqlite.mjs");
+
+const RECOMMENDED_NODE_MAJOR = 26;
+const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
+
+const ensureSupportedRuntimeVersion = async () => {
+  if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return false;
+    }
+    process.stderr.write(
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
+        `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
+    );
+    return process.exit(1);
   }
-}
+  const probe = await detectCurrentSqliteCapabilities();
+  const failure = nodeRuntimeFailure(process.versions.node, probe);
+  if (!failure) {
+    const note = nodeRuntimeNote(process.versions.node, probe);
+    if (note) {
+      process.stderr.write(`${note}\n`);
+    }
+    return false;
+  }
+  const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
+  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
+  const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
+  await recoverNodeRuntime({
+    allowInstall: !diagnosticExemption,
+  });
+  if (!diagnosticExemption) {
+    process.stderr.write(`openclaw: ${failure}\n`);
+  }
+  if (diagnosticExemption) {
+    return false;
+  }
+  process.stderr.write(
+    "If you use nvm, run:\n" +
+      `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
+      `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
+      `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
+  );
+  if (unsupportedCommand === "update" && canRunDiagnostics) {
+    // A later CLI startup respawn must not repeat this invocation's recovery offer.
+    process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
+    return false;
+  }
+  return process.exit(1);
+};
+
+const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
+const isNodeCompileCacheRequested = () =>
+  Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const sanitizeCompileCachePathSegment = (value) => {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+};
+const readPackageVersion = () => {
+  try {
+    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
+      return parsed.version;
+    }
+  } catch {
+    // Fall through to an install-metadata-only cache key.
+  }
+  return "unknown";
+};
+const resolvePackagedCompileCacheDirectory = () => {
+  const packageJsonUrl = new URL("./package.json", import.meta.url);
+  const version = sanitizeCompileCachePathSegment(readPackageVersion());
+  let installMarker = "no-package-json";
+  try {
+    const stat = statSync(packageJsonUrl);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package archives should always have package.json, but keep startup best-effort.
+  }
+  const baseDirectory = isNodeCompileCacheRequested()
+    ? process.env.NODE_COMPILE_CACHE
+    : path.join(os.tmpdir(), "node-compile-cache");
+  return path.join(
+    baseDirectory,
+    "openclaw",
+    version,
+    sanitizeCompileCachePathSegment(installMarker),
+  );
+};
+
+const resolveCompileCacheRespawnLauncher = () => {
+  const moduleLauncher = fileURLToPath(import.meta.url);
+  const invokedLauncher = process.argv[1];
+  if (invokedLauncher) {
+    try {
+      // npm/pnpm's lexical install path matters only when it identifies this module.
+      if (realpathSync(invokedLauncher) === realpathSync(moduleLauncher)) {
+        return invokedLauncher;
+      }
+    } catch {
+      // An unavailable entry path cannot identify this launcher.
+    }
+  }
+  // Public cli-entry imports can belong to another application or have no argv[1].
+  return moduleLauncher;
+};
+
+const respawnWithoutCompileCacheIfNeeded = () => {
+  if (!isSourceCheckoutLauncher()) {
+    return false;
+  }
+  if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
+    return false;
+  }
+  if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
+  };
+  delete env.NODE_COMPILE_CACHE;
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
+    env,
+  );
+};
+
+const respawnWithPackagedCompileCacheIfNeeded = () => {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  const currentDirectory = module.getCompileCacheDir?.();
+  if (!currentDirectory) {
+    return false;
+  }
+  const desiredDirectory = resolvePackagedCompileCacheDirectory();
+  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_COMPILE_CACHE: desiredDirectory,
+    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
+    env,
+  );
+};
+
+const getErrorMessage = (err) =>
+  err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : "";
 
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
+
+const isDirectModuleNotFoundError = (err, specifier) => {
+  const message = getErrorMessage(err);
+  const bunSpecifierMiss =
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`);
+  const launcherPath = fileURLToPath(import.meta.url);
+  const bunLauncherImporterMiss =
+    message.includes(` from '${launcherPath}'`) ||
+    message.includes(` from "${launcherPath}"`) ||
+    message.includes(` imported from ${launcherPath}`);
+
+  const expectedUrl = new URL(specifier, import.meta.url);
+  const expectedPath = fileURLToPath(expectedUrl);
+  const nodePathMiss =
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`);
+
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss || (bunSpecifierMiss && bunLauncherImporterMiss);
+  }
+
+  return bunSpecifierMiss && bunLauncherImporterMiss;
+};
 
 const installProcessWarningFilter = async () => {
   // Keep bootstrap warnings consistent with the TypeScript runtime.
@@ -24,7 +236,7 @@ const installProcessWarningFilter = async () => {
         return;
       }
     } catch (err) {
-      if (isModuleNotFoundError(err)) {
+      if (isDirectModuleNotFoundError(err, specifier)) {
         continue;
       }
       throw err;
@@ -32,25 +244,523 @@ const installProcessWarningFilter = async () => {
   }
 };
 
-await installProcessWarningFilter();
-
 const tryImport = async (specifier) => {
   try {
     await import(specifier);
     return true;
   } catch (err) {
-    // Only swallow missing-module errors; rethrow real runtime errors.
-    if (isModuleNotFoundError(err)) {
+    // Only swallow direct entry misses; rethrow transitive resolution failures.
+    if (isDirectModuleNotFoundError(err, specifier)) {
       return false;
     }
     throw err;
   }
 };
 
-if (await tryImport("./dist/entry.js")) {
-  // OK
-} else if (await tryImport("./dist/entry.mjs")) {
-  // OK
+const exists = async (specifier) => {
+  try {
+    await access(new URL(specifier, import.meta.url));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const buildMissingEntryErrorMessage = async () => {
+  const lines = ["openclaw: missing dist/entry.(m)js (build output)."];
+  if (!(await exists("./src/entry.ts"))) {
+    return lines.join("\n");
+  }
+
+  lines.push("This install looks like an unbuilt source tree or GitHub source archive.");
+  lines.push(
+    "Build locally with `pnpm install && pnpm build`, or install a built package instead.",
+  );
+  lines.push(
+    "For pinned GitHub installs, use `npm install -g github:openclaw/openclaw#<ref>` instead of a raw `/archive/<ref>.tar.gz` URL.",
+  );
+  lines.push("For releases, use `npm install -g openclaw@latest`.");
+  return lines.join("\n");
+};
+
+const isBareRootHelpInvocation = (argv) =>
+  argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
+
+const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
+const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
+  browser: { command: "browser", metadataKey: "browserHelpText" },
+  secrets: { command: "secrets", metadataKey: "secretsHelpText" },
+  nodes: { command: "nodes", metadataKey: "nodesHelpText" },
+};
+const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "config",
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+]);
+
+const hasLauncherContainerTarget = (argv) => {
+  if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+    return true;
+  }
+  const args = argv.slice(2);
+  for (const arg of args) {
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (arg === "--container" || arg.startsWith("--container=")) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const resolvePrecomputedCommandHelpByName = (commandName) => {
+  if (Object.hasOwn(LAUNCHER_PRECOMPUTED_COMMAND_HELP, commandName)) {
+    return LAUNCHER_PRECOMPUTED_COMMAND_HELP[commandName];
+  }
+  if (LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP.has(commandName)) {
+    return {
+      command: commandName,
+      metadataKey: "subcommandHelpText",
+      subcommandKey: commandName,
+    };
+  }
+  return null;
+};
+
+const resolvePrecomputedCommandHelp = (argv) => {
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return null;
+    }
+    // The runtime entry owns profile validation and config projection before cached help.
+    if (arg === "--dev" || arg === "--profile" || arg.startsWith("--profile=")) {
+      return null;
+    }
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    const commandHelp = resolvePrecomputedCommandHelpByName(arg);
+    const helpFlags = args.slice(index + 1);
+    return commandHelp &&
+      helpFlags.length > 0 &&
+      helpFlags.every((flag) => LAUNCHER_HELP_FLAGS.has(flag))
+      ? commandHelp
+      : null;
+  }
+  return null;
+};
+
+const isHelpFastPathDisabled = () =>
+  process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
+
+const normalizeLauncherHomeValue = (value) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+};
+
+const resolveLauncherOsHomeDir = () =>
+  normalizeLauncherHomeValue(process.env.HOME) ??
+  normalizeLauncherHomeValue(process.env.USERPROFILE) ??
+  os.homedir();
+
+const resolveLauncherHomeDir = () => {
+  const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
+  const rawHome =
+    explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
+      : (explicit ?? resolveLauncherOsHomeDir());
+  return path.resolve(rawHome);
+};
+
+const resolveLauncherUserPath = (input) => {
+  if (input === "~") {
+    return resolveLauncherHomeDir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(resolveLauncherHomeDir(), input.slice(2));
+  }
+  return path.resolve(input);
+};
+
+const resolveLauncherConfigPaths = () => {
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicit) {
+    return [resolveLauncherUserPath(explicit)];
+  }
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    const stateDir = resolveLauncherUserPath(stateOverride);
+    return [path.join(stateDir, "openclaw.json"), path.join(stateDir, "clawdbot.json")];
+  }
+  const homeDir = resolveLauncherHomeDir();
+  return [
+    path.join(homeDir, ".openclaw", "openclaw.json"),
+    path.join(homeDir, ".openclaw", "clawdbot.json"),
+    path.join(homeDir, ".clawdbot", "openclaw.json"),
+    path.join(homeDir, ".clawdbot", "clawdbot.json"),
+  ];
+};
+
+const shouldDeferRootHelpToRuntimeEntry = () => {
+  if (
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
+  ) {
+    return true;
+  }
+  for (const configPath of resolveLauncherConfigPaths()) {
+    try {
+      const raw = readFileSync(configPath, "utf8");
+      return /\bplugins\b|\$include\b/.test(raw);
+    } catch {
+      continue;
+    }
+  }
+  return false;
+};
+
+const loadPrecomputedHelpText = (key, subkey) => {
+  try {
+    const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+    const value = subkey ? parsed?.[key]?.[subkey] : parsed?.[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+function tryOutputLauncherVersion(argv) {
+  try {
+    if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+      return false;
+    }
+    if (!isLauncherVersionFastPathArgv(argv)) {
+      return false;
+    }
+    const version = resolveLauncherVersion();
+    const commit = resolveLauncherCommit();
+    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLauncherVersionFastPathArgv(argv) {
+  return argv.length === 3 && (argv[2] === "--version" || argv[2] === "-V" || argv[2] === "-v");
+}
+
+function normalizeLauncherMetadataValue(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+}
+
+function readLauncherJson(relativePath) {
+  try {
+    return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherVersion() {
+  // Report what is built, not what the source says: resolveLauncherCommit already
+  // prefers dist provenance, so reading package.json first pairs a source version
+  // with a built commit and hides a checkout that pulled without rebuilding.
+  const buildInfo = readLauncherJson("./dist/build-info.json");
+  const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
+  if (buildVersion) {
+    return buildVersion;
+  }
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
+  }
+  return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
+}
+
+function resolveLauncherCommit() {
+  const envCommit = formatLauncherCommit(process.env.GIT_COMMIT ?? process.env.GIT_SHA);
+  if (envCommit) {
+    return envCommit;
+  }
+  return (
+    formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.githead)
+  );
+}
+
+function formatLauncherCommit(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : null;
+}
+
+function readLauncherGitCommit() {
+  try {
+    const gitPath = fileURLToPath(new URL("./.git", import.meta.url));
+    const headPath = resolveLauncherGitHeadPath(gitPath);
+    if (!headPath) {
+      return null;
+    }
+    const head = readFileSync(headPath, "utf8").trim();
+    if (!head) {
+      return null;
+    }
+    if (!head.startsWith("ref:")) {
+      return formatLauncherCommit(head);
+    }
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    if (!ref.startsWith("refs/") || path.isAbsolute(ref) || ref.split("/").includes("..")) {
+      return null;
+    }
+    const refsBase = resolveLauncherGitRefsBase(headPath);
+    const refPath = path.resolve(refsBase, ref);
+    const rel = path.relative(refsBase, refPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return null;
+    }
+    try {
+      return formatLauncherCommit(readFileSync(refPath, "utf8"));
+    } catch {
+      return readLauncherPackedRef(refsBase, ref);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitHeadPath(gitPath) {
+  try {
+    if (statSync(gitPath).isDirectory()) {
+      return path.join(gitPath, "HEAD");
+    }
+    const raw = readFileSync(gitPath, "utf8").trim();
+    if (!raw.startsWith("gitdir:")) {
+      return null;
+    }
+    return path.join(
+      path.resolve(path.dirname(gitPath), raw.slice("gitdir:".length).trim()),
+      "HEAD",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitRefsBase(headPath) {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : gitDir;
+  } catch {
+    return gitDir;
+  }
+}
+
+function readLauncherPackedRef(refsBase, ref) {
+  try {
+    const packedRefs = readFileSync(path.join(refsBase, "packed-refs"), "utf8");
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [commit, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef === ref) {
+        return formatLauncherCommit(commit);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+const tryOutputBareRootHelp = async () => {
+  if (!isBareRootHelpInvocation(process.argv)) {
+    return false;
+  }
+  if (hasLauncherContainerTarget(process.argv) || shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText("rootHelpText");
+  if (precomputed) {
+    process.stdout.write(precomputed);
+    return true;
+  }
+  for (const specifier of ["./dist/cli/program/root-help.js", "./dist/cli/program/root-help.mjs"]) {
+    try {
+      const mod = await import(specifier);
+      if (typeof mod.outputRootHelp === "function") {
+        await mod.outputRootHelp();
+        return true;
+      }
+    } catch (err) {
+      if (isDirectModuleNotFoundError(err, specifier)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+};
+
+const tryOutputPrecomputedCommandHelp = () => {
+  const commandHelp = resolvePrecomputedCommandHelp(process.argv);
+  if (!commandHelp) {
+    return false;
+  }
+  if (hasLauncherContainerTarget(process.argv)) {
+    return false;
+  }
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey, commandHelp.subcommandKey);
+  if (!precomputed) {
+    return false;
+  }
+  process.stdout.write(precomputed);
+  return true;
+};
+
+// Native launchers pin state/config through their environment and invoke this exact
+// command. Enter the installed protocol owner before plugin discovery, dotenv,
+// package repair, or CLI diagnostics can inspect/migrate Gateway configuration.
+// No general CLI command receives a config exemption; the native owner still
+// admits the frame, manifest, exact origin and Windows binding/ACLs before keys.
+const isBrowserNativeHostInvocation =
+  process.argv[2] === "browser" &&
+  process.argv[3] === "extension" &&
+  process.argv[4] === "native-host";
+
+if (isBrowserNativeHostInvocation) {
+  try {
+    // A browser-owned pipe must never launch an interactive runtime installer.
+    const supported = process.versions.bun
+      ? Boolean(process.getBuiltinModule?.("node:sqlite"))
+      : !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
+    if (!supported) {
+      process.exitCode = 1;
+    } else {
+      await installProcessWarningFilter();
+      // Fixed package artifact, not a path selected by argv, config or plugin discovery.
+      // Its async entry owns stdin and drains the single response before process exit.
+      await import("./dist/extensions/browser/native-host-entry.js");
+    }
+  } catch {
+    // Fail closed without falling through to config loading or text on protocol stdout.
+    process.exitCode = 1;
+  }
 } else {
-  throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  // Resolve Node before loading pending package lifecycle code or any built runtime modules.
+  const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+  if (
+    !waitingForNodeUpdateRespawn &&
+    (await runNodeHostLauncher({
+      entryPath: fileURLToPath(import.meta.url),
+      packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+    }))
+  ) {
+    process.exit(process.exitCode ?? 0);
+  }
+  const currentNodeRuntimeFailure = process.versions.bun
+    ? null
+    : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
+
+  if (!waitingForNodeUpdateRespawn) {
+    // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
+    if (
+      !currentNodeRuntimeFailure &&
+      !isSourceCheckoutLauncher() &&
+      (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
+        existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
+    ) {
+      try {
+        const { completePendingPackageLifecycle } =
+          await import("./dist/infra/package-lifecycle.js");
+        await completePendingPackageLifecycle({
+          packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+        });
+      } catch (error) {
+        process.stderr.write(
+          `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        process.exit(1);
+      }
+    }
+    if (tryOutputLauncherVersion(process.argv)) {
+      if (currentNodeRuntimeFailure) {
+        process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+      }
+      process.exit(0);
+    }
+  }
+
+  // Codex owns the relay timeout by PID. Keep the launcher as that exact process
+  // so a timeout cannot strand a compile-cache respawn child.
+  const waitingForCompileCacheRespawn =
+    waitingForNodeUpdateRespawn ||
+    (!isNodeHostLauncherChild() &&
+      !isForegroundGmailRunInvocation(process.argv) &&
+      !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+      (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
+
+  // https://nodejs.org/api/module.html#module-compile-cache
+  if (
+    !waitingForCompileCacheRespawn &&
+    module.enableCompileCache &&
+    !isNodeCompileCacheDisabled() &&
+    !isSourceCheckoutLauncher()
+  ) {
+    try {
+      const directory = resolvePackagedCompileCacheDirectory();
+      const baseDirectory = path.resolve(directory);
+      const result = module.enableCompileCache(directory);
+      const enabled = module.constants?.compileCacheStatus?.ENABLED;
+      if (enabled !== undefined && result?.status === enabled) {
+        // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
+        // successful input without importing runtime code before cache activation.
+        const key = Symbol.for("openclaw.nodeCompileCacheBase");
+        const owner = (globalThis[key] ??= {});
+        owner.baseDirectory ??= baseDirectory;
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+
+  if (!waitingForCompileCacheRespawn) {
+    if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
+      if (currentNodeRuntimeFailure) {
+        process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+      }
+    } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
+      // OK
+    } else {
+      await installProcessWarningFilter();
+      if (await tryImport("./dist/entry.js")) {
+        // OK
+      } else if (await tryImport("./dist/entry.mjs")) {
+        // OK
+      } else {
+        throw new Error(await buildMissingEntryErrorMessage());
+      }
+    }
+  }
 }

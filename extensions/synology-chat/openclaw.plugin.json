@@ -1,0 +1,16 @@
+{
+  "id": "synology-chat",
+  "categories": ["channels"],
+  "doctorContract": {},
+  "name": "Synology Chat",
+  "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["synology-chat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,128 +1,31 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import * as pendingUploads from "./pending-uploads.js";
 
 describe("requiresFileConsent", () => {
-  const thresholdBytes = 4 * 1024 * 1024; // 4MB
+  const thresholdBytes = 4 * 1024 * 1024;
 
-  it("returns true for personal chat with non-image", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: "application/pdf",
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true for personal chat with large image", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: "image/png",
-        bufferSize: 5 * 1024 * 1024, // 5MB
-        thresholdBytes,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for personal chat with small image", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: "image/png",
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns false for group chat with large non-image", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "groupChat",
-        contentType: "application/pdf",
-        bufferSize: 5 * 1024 * 1024,
-        thresholdBytes,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns false for channel with large non-image", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "channel",
-        contentType: "application/pdf",
-        bufferSize: 5 * 1024 * 1024,
-        thresholdBytes,
-      }),
-    ).toBe(false);
-  });
-
-  it("handles case-insensitive conversation type", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "Personal",
-        contentType: "application/pdf",
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(true);
-
-    expect(
-      requiresFileConsent({
-        conversationType: "PERSONAL",
-        contentType: "application/pdf",
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false when conversationType is undefined", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: undefined,
-        contentType: "application/pdf",
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true for personal chat when contentType is undefined (non-image)", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: undefined,
-        bufferSize: 1000,
-        thresholdBytes,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true for personal chat with file exactly at threshold", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: "image/jpeg",
-        bufferSize: thresholdBytes, // exactly 4MB
-        thresholdBytes,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for personal chat with file just below threshold", () => {
-    expect(
-      requiresFileConsent({
-        conversationType: "personal",
-        contentType: "image/jpeg",
-        bufferSize: thresholdBytes - 1, // 4MB - 1 byte
-        thresholdBytes,
-      }),
-    ).toBe(false);
-  });
+  it.each([
+    ["personal", "application/pdf", 1000, true],
+    ["personal", "image/png", 5 * 1024 * 1024, true],
+    ["personal", "image/png", 1000, false],
+    ["groupChat", "application/pdf", 5 * 1024 * 1024, false],
+    ["channel", "application/pdf", 5 * 1024 * 1024, false],
+    ["Personal", "application/pdf", 1000, true],
+    ["PERSONAL", "application/pdf", 1000, true],
+    [undefined, "application/pdf", 1000, false],
+    ["personal", undefined, 1000, true],
+    ["personal", "image/jpeg", thresholdBytes, true],
+    ["personal", "image/jpeg", thresholdBytes - 1, false],
+  ] as const)(
+    "%s chat with %s at %i bytes requires consent: %s",
+    (conversationType, contentType, bufferSize, expected) => {
+      expect(
+        requiresFileConsent({ conversationType, contentType, bufferSize, thresholdBytes }),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("prepareFileConsentActivity", () => {
@@ -186,10 +89,10 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv456",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "default file-consent attachment",
+    );
     expect(attachment.content.description).toBe("File: document.docx");
   });
 
@@ -204,10 +107,10 @@ describe("prepareFileConsentActivity", () => {
       description: "Q4 Financial Report",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "described file-consent attachment",
+    );
     expect(attachment.content.description).toBe("Q4 Financial Report");
   });
 
@@ -221,10 +124,14 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv000",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { acceptContext: { uploadId: string } }
-    >;
+    const attachment = expectDefined(
+      (
+        result.activity.attachments as Array<{
+          content: { acceptContext: { uploadId: string } };
+        }>
+      )[0],
+      "file-consent upload attachment",
+    );
     expect(attachment.content.acceptContext.uploadId).toBe(mockUploadId);
   });
 

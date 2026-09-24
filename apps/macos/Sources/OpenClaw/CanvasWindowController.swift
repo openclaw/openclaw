@@ -1,25 +1,25 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 import WebKit
 
 @MainActor
-final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NSWindowDelegate {
+final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let sessionKey: String
     private let root: URL
     private let sessionDir: URL
     private let schemeHandler: CanvasSchemeHandler
     let webView: WKWebView
-    private var a2uiActionMessageHandler: CanvasA2UIActionMessageHandler?
     private let watcher: CanvasFileWatcher
     private let container: HoverChromeContainerView
     let presentation: CanvasPresentation
     var preferredPlacement: CanvasPlacement?
-    private(set) var currentTarget: String?
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
     private var debugStatusSubtitle: String?
+    private var canvasVisible = false
+    private var watchesLocalCanvasFiles = false
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -41,99 +41,16 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let config = WKWebViewConfiguration()
         config.userContentController = WKUserContentController()
         config.preferences.isElementFullscreenEnabled = true
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        config.preferences.tabFocusesLinks = true
         canvasWindowLogger.debug("CanvasWindowController init config ready")
         for scheme in CanvasScheme.allSchemes {
             config.setURLSchemeHandler(self.schemeHandler, forURLScheme: scheme)
         }
         canvasWindowLogger.debug("CanvasWindowController init scheme handler installed")
 
-        // Bridge A2UI "a2uiaction" DOM events back into the native agent loop.
-        //
-        // Prefer WKScriptMessageHandler when WebKit exposes it, otherwise fall back to an unattended deep link
-        // (includes the app-generated key so it won't prompt).
-        canvasWindowLogger.debug("CanvasWindowController init building A2UI bridge script")
-        let deepLinkKey = DeepLinkHandler.currentCanvasKey()
-        let injectedSessionKey = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "main"
-        let bridgeScript = """
-        (() => {
-          try {
-            const allowedSchemes = \(String(describing: CanvasScheme.allSchemes));
-            const protocol = location.protocol.replace(':', '');
-            if (!allowedSchemes.includes(protocol)) return;
-            if (globalThis.__openclawA2UIBridgeInstalled) return;
-            globalThis.__openclawA2UIBridgeInstalled = true;
-
-            const deepLinkKey = \(Self.jsStringLiteral(deepLinkKey));
-            const sessionKey = \(Self.jsStringLiteral(injectedSessionKey));
-            const machineName = \(Self.jsStringLiteral(InstanceIdentity.displayName));
-            const instanceId = \(Self.jsStringLiteral(InstanceIdentity.instanceId));
-
-            globalThis.addEventListener('a2uiaction', (evt) => {
-              try {
-                const payload = evt?.detail ?? evt?.payload ?? null;
-                if (!payload || payload.eventType !== 'a2ui.action') return;
-
-                const action = payload.action ?? null;
-                const name = action?.name ?? '';
-                if (!name) return;
-
-                const context = Array.isArray(action?.context) ? action.context : [];
-                const userAction = {
-                  id: (globalThis.crypto?.randomUUID?.() ?? String(Date.now())),
-                  name,
-                  surfaceId: payload.surfaceId ?? 'main',
-                  sourceComponentId: payload.sourceComponentId ?? '',
-                  dataContextPath: payload.dataContextPath ?? '',
-                  timestamp: new Date().toISOString(),
-                  ...(context.length ? { context } : {}),
-                };
-
-                const handler = globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction;
-
-                // If the bundled A2UI shell is present, let it forward actions so we keep its richer
-                // context resolution (data model path lookups, surface detection, etc.).
-                const hasBundledA2UIHost =
-                  !!globalThis.openclawA2UI ||
-                  !!document.querySelector('openclaw-a2ui-host');
-                if (hasBundledA2UIHost && handler?.postMessage) return;
-
-                // Otherwise, forward directly when possible.
-                if (!hasBundledA2UIHost && handler?.postMessage) {
-                  handler.postMessage({ userAction });
-                  return;
-                }
-
-                const ctx = userAction.context ? (' ctx=' + JSON.stringify(userAction.context)) : '';
-                const message =
-                  'CANVAS_A2UI action=' + userAction.name +
-                  ' session=' + sessionKey +
-                  ' surface=' + userAction.surfaceId +
-                  ' component=' + (userAction.sourceComponentId || '-') +
-                  ' host=' + machineName.replace(/\\s+/g, '_') +
-                  ' instance=' + instanceId +
-                  ctx +
-                  ' default=update_canvas';
-                const params = new URLSearchParams();
-                params.set('message', message);
-                params.set('sessionKey', sessionKey);
-                params.set('thinking', 'low');
-                params.set('deliver', 'false');
-                params.set('channel', 'last');
-                params.set('key', deepLinkKey);
-                location.href = 'openclaw://agent?' + params.toString();
-              } catch {}
-            }, true);
-          } catch {}
-        })();
-        """
-        config.userContentController.addUserScript(
-            WKUserScript(source: bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        canvasWindowLogger.debug("CanvasWindowController init A2UI bridge installed")
-
         canvasWindowLogger.debug("CanvasWindowController init creating WKWebView")
         self.webView = WKWebView(frame: .zero, configuration: config)
-        // Canvas scaffold is a fully self-contained HTML page; avoid relying on transparency underlays.
+        // Presented documents render against an opaque surface.
         self.webView.setValue(true, forKey: "drawsBackground")
 
         let sessionDir = self.sessionDir
@@ -166,29 +83,25 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         canvasWindowLogger.debug("CanvasWindowController init makeWindow done")
         super.init(window: window)
 
-        let handler = CanvasA2UIActionMessageHandler(sessionKey: sessionKey)
-        self.a2uiActionMessageHandler = handler
-        for name in CanvasA2UIActionMessageHandler.allMessageNames {
-            self.webView.configuration.userContentController.add(handler, name: name)
-        }
-
         self.webView.navigationDelegate = self
+        self.webView.uiDelegate = self
         self.window?.delegate = self
         self.container.onClose = { [weak self] in
             self?.hideCanvas()
         }
 
-        self.watcher.start()
+        // Keep event delivery active while hidden so file changes are not lost.
+        // The recursive polling fallback is enabled only for visible local Canvas content.
+        self.watcher.startEventStream()
         canvasWindowLogger.debug("CanvasWindowController init done")
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
 
     @MainActor deinit {
-        for name in CanvasA2UIActionMessageHandler.allMessageNames {
-            self.webView.configuration.userContentController.removeScriptMessageHandler(forName: name)
-        }
         self.watcher.stop()
     }
 
@@ -197,74 +110,84 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func showCanvas(path: String? = nil) {
-        if case let .panel(anchorProvider) = self.presentation {
-            self.presentAnchoredPanel(anchorProvider: anchorProvider)
+        if case let .panel(anchorProvider) = presentation {
+            presentAnchoredPanel(anchorProvider: anchorProvider)
             if let path {
                 self.load(target: path)
             }
             return
         }
 
-        self.showWindow(nil)
-        self.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // The window is built in init, so skip showWindow(_:); it would make the
+        // window key and steal focus from the user's current window.
+        window?.orderFrontRegardless()
         if let path {
             self.load(target: path)
         }
-        self.onVisibilityChanged?(true)
+        self.setCanvasVisible(true)
     }
 
     func hideCanvas() {
         if case .panel = self.presentation {
-            self.persistFrameIfPanel()
+            persistFrameIfPanel()
         }
-        self.window?.orderOut(nil)
-        self.onVisibilityChanged?(false)
+        window?.orderOut(nil)
+        self.setCanvasVisible(false)
     }
 
     func load(target: String) {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.currentTarget = trimmed
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if scheme == "https" || scheme == "http" {
-                canvasWindowLogger.debug("canvas load url \(url.absoluteString, privacy: .public)")
+            if CanvasScheme.allSchemes.contains(scheme) {
+                canvasWindowLogger.debug("canvas load app-local URL")
                 self.webView.load(URLRequest(url: url))
                 return
             }
-            if scheme == "file" {
-                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
-                self.loadFile(url)
-                return
-            }
-        }
-
-        // Convenience: absolute file paths resolve as local files when they exist.
-        // (Avoid treating Canvas routes like "/" as filesystem paths.)
-        if trimmed.hasPrefix("/") {
-            var isDir: ObjCBool = false
-            if FileManager().fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
-                let url = URL(fileURLWithPath: trimmed)
-                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
-                self.loadFile(url)
+            if scheme == "https" || scheme == "http" {
+                canvasWindowLogger.debug(
+                    "canvas load web scheme=\(scheme, privacy: .public) host=\(url.host ?? "-", privacy: .public)")
+                self.webView.load(URLRequest(url: url))
                 return
             }
         }
 
         guard let url = CanvasScheme.makeURL(
-            session: CanvasWindowController.sanitizeSessionKey(self.sessionKey),
+            session: CanvasWindowController.sanitizeSessionKey(sessionKey),
             path: trimmed)
         else {
             canvasWindowLogger
                 .error(
-                    "invalid canvas url session=\(self.sessionKey, privacy: .public) path=\(trimmed, privacy: .public)")
+                    "invalid canvas url session=\(self.sessionKey, privacy: .public)")
             return
         }
-        canvasWindowLogger.debug("canvas load canvas \(url.absoluteString, privacy: .public)")
+        canvasWindowLogger.debug("canvas load local canvas")
         self.webView.load(URLRequest(url: url))
     }
 
+    func setCanvasVisible(_ visible: Bool) {
+        self.canvasVisible = visible
+        self.updateFilePolling()
+        self.onVisibilityChanged?(visible)
+    }
+
+    func updateFilePollingForCommittedNavigation(to url: URL) {
+        // Requested navigations can fail or redirect, so polling follows the
+        // committed main-frame document rather than the requested target.
+        self.watchesLocalCanvasFiles = CanvasScheme.allSchemes.contains(url.scheme?.lowercased() ?? "")
+        self.updateFilePolling()
+    }
+
+    private func updateFilePolling() {
+        self.watcher.setPollingEnabled(self.canvasVisible && self.watchesLocalCanvasFiles)
+    }
+
+    var _testIsFilePollingActive: Bool {
+        self.watcher.isPolling
+    }
+
     func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {
+        self.webView.configuration.preferences.setValue(enabled, forKey: "developerExtrasEnabled")
         self.debugStatusEnabled = enabled
         self.debugStatusTitle = title
         self.debugStatusSubtitle = subtitle
@@ -272,100 +195,14 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func applyDebugStatusIfNeeded() {
-        let enabled = self.debugStatusEnabled
-        let title = Self.jsOptionalStringLiteral(self.debugStatusTitle)
-        let subtitle = Self.jsOptionalStringLiteral(self.debugStatusSubtitle)
-        let js = """
-        (() => {
-          try {
-            const api = globalThis.__openclaw;
-            if (!api) return;
-            if (typeof api.setDebugStatusEnabled === 'function') {
-              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
-            }
-            if (!\(enabled ? "true" : "false")) return;
-            if (typeof api.setStatus === 'function') {
-              api.setStatus(\(title), \(subtitle));
-            }
-          } catch (_) {}
-        })();
-        """
-        self.webView.evaluateJavaScript(js) { _, _ in }
-    }
-
-    private func loadFile(_ url: URL) {
-        let fileURL = url.isFileURL ? url : URL(fileURLWithPath: url.path)
-        let accessDir = fileURL.deletingLastPathComponent()
-        self.webView.loadFileURL(fileURL, allowingReadAccessTo: accessDir)
-    }
-
-    func eval(javaScript: String) async throws -> String {
-        try await withCheckedThrowingContinuation { cont in
-            self.webView.evaluateJavaScript(javaScript) { result, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                if let result {
-                    cont.resume(returning: String(describing: result))
-                } else {
-                    cont.resume(returning: "")
-                }
-            }
-        }
-    }
-
-    func snapshot(to outPath: String?) async throws -> String {
-        let image: NSImage = try await withCheckedThrowingContinuation { cont in
-            self.webView.takeSnapshot(with: nil) { image, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                guard let image else {
-                    cont.resume(throwing: NSError(domain: "Canvas", code: 11, userInfo: [
-                        NSLocalizedDescriptionKey: "snapshot returned nil image",
-                    ]))
-                    return
-                }
-                cont.resume(returning: image)
-            }
-        }
-
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:])
-        else {
-            throw NSError(domain: "Canvas", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "failed to encode png",
-            ])
-        }
-
-        let path: String
-        if let outPath, !outPath.isEmpty {
-            path = outPath
-        } else {
-            let ts = Int(Date().timeIntervalSince1970)
-            path = "/tmp/openclaw-canvas-\(CanvasWindowController.sanitizeSessionKey(self.sessionKey))-\(ts).png"
-        }
-
-        try png.write(to: URL(fileURLWithPath: path), options: [.atomic])
-        return path
+        WebViewJavaScriptSupport.applyDebugStatus(
+            webView: self.webView,
+            enabled: self.debugStatusEnabled,
+            title: self.debugStatusTitle,
+            subtitle: self.debugStatusSubtitle)
     }
 
     var directoryPath: String {
         self.sessionDir.path
-    }
-
-    func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
-        let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "/" { return true }
-        if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !lastAuto.isEmpty,
-           trimmed == lastAuto
-        {
-            return true
-        }
-        return false
     }
 }

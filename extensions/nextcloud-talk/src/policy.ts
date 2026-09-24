@@ -1,29 +1,32 @@
-import type {
-  AllowlistMatch,
-  ChannelGroupContext,
-  GroupPolicy,
-  GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import {
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
+// Nextcloud Talk plugin module implements policy behavior.
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
-  resolveMentionGatingWithBypass,
-  resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk";
-import type { NextcloudTalkRoomConfig } from "./types.js";
+} from "openclaw/plugin-sdk/channel-targets";
+import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
+import type { CoreConfig, NextcloudTalkRoomConfig } from "./types.js";
 
-function normalizeAllowEntry(raw: string): string {
+export function normalizeNextcloudTalkAllowEntry(raw: string): string {
   return raw
     .trim()
-    .toLowerCase()
-    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .toLowerCase();
 }
 
 export function normalizeNextcloudTalkAllowlist(
   values: Array<string | number> | undefined,
 ): string[] {
-  return (values ?? []).map((value) => normalizeAllowEntry(String(value))).filter(Boolean);
+  return (values ?? [])
+    .map((value) => normalizeNextcloudTalkAllowEntry(String(value)))
+    .filter(Boolean);
 }
 
 export function resolveNextcloudTalkAllowlistMatch(params: {
@@ -31,54 +34,27 @@ export function resolveNextcloudTalkAllowlistMatch(params: {
   senderId: string;
 }): AllowlistMatch<"wildcard" | "id"> {
   const allowFrom = normalizeNextcloudTalkAllowlist(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return { allowed: false };
-  }
-  if (allowFrom.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
-  const senderId = normalizeAllowEntry(params.senderId);
-  if (allowFrom.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  return { allowed: false };
+  const senderId = normalizeNextcloudTalkAllowEntry(params.senderId);
+  return resolveAllowlistMatchByCandidates({
+    allowList: allowFrom,
+    candidates: [{ value: senderId, source: "id" }],
+  });
 }
-
-export type NextcloudTalkRoomMatch = {
-  roomConfig?: NextcloudTalkRoomConfig;
-  wildcardConfig?: NextcloudTalkRoomConfig;
-  roomKey?: string;
-  matchSource?: "direct" | "parent" | "wildcard";
-  allowed: boolean;
-  allowlistConfigured: boolean;
-};
 
 export function resolveNextcloudTalkRoomMatch(params: {
   rooms?: Record<string, NextcloudTalkRoomConfig>;
   roomToken: string;
-  roomName?: string | null;
-}): NextcloudTalkRoomMatch {
+}) {
   const rooms = params.rooms ?? {};
   const allowlistConfigured = Object.keys(rooms).length > 0;
-  const roomName = params.roomName?.trim() || undefined;
-  const roomCandidates = buildChannelKeyCandidates(
-    params.roomToken,
-    roomName,
-    roomName ? normalizeChannelSlug(roomName) : undefined,
-  );
   const match = resolveChannelEntryMatchWithFallback({
     entries: rooms,
-    keys: roomCandidates,
+    keys: buildChannelKeyCandidates(params.roomToken),
     wildcardKey: "*",
     normalizeKey: normalizeChannelSlug,
   });
   const roomConfig = match.entry;
-  const allowed = resolveNestedAllowlistDecision({
-    outerConfigured: allowlistConfigured,
-    outerMatched: Boolean(roomConfig),
-    innerConfigured: false,
-    innerMatched: false,
-  });
+  const allowed = !allowlistConfigured || Boolean(roomConfig);
 
   return {
     roomConfig,
@@ -93,88 +69,43 @@ export function resolveNextcloudTalkRoomMatch(params: {
 export function resolveNextcloudTalkGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const cfg = params.cfg as {
-    channels?: { "nextcloud-talk"?: { rooms?: Record<string, NextcloudTalkRoomConfig> } };
-  };
   const roomToken = params.groupId?.trim();
   if (!roomToken) {
     return undefined;
   }
-  const roomName = params.groupChannel?.trim() || undefined;
-  const match = resolveNextcloudTalkRoomMatch({
-    rooms: cfg.channels?.["nextcloud-talk"]?.rooms,
-    roomToken,
-    roomName,
+  const account = resolveNextcloudTalkAccount({
+    cfg: params.cfg as CoreConfig,
+    accountId: params.accountId,
   });
-  return match.roomConfig?.tools ?? match.wildcardConfig?.tools;
+  const { tree, toolsPath } = buildNextcloudTalkRoomScope(account.config.rooms, roomToken);
+  return resolveScopeToolsPolicy({ tree, path: toolsPath });
 }
 
-export function resolveNextcloudTalkRequireMention(params: {
-  roomConfig?: NextcloudTalkRoomConfig;
-  wildcardConfig?: NextcloudTalkRoomConfig;
-}): boolean {
-  if (typeof params.roomConfig?.requireMention === "boolean") {
-    return params.roomConfig.requireMention;
-  }
-  if (typeof params.wildcardConfig?.requireMention === "boolean") {
-    return params.wildcardConfig.requireMention;
-  }
-  return true;
+function buildNextcloudTalkRoomScope(
+  rooms: Record<string, NextcloudTalkRoomConfig> | undefined,
+  roomToken: string,
+) {
+  const { "*": defaults, ...scopes } = rooms ?? {};
+  const tree: ScopeTree = { defaults, scopes };
+  // Mentions use exact room tokens; tools retain legacy slug matching.
+  // Separate paths prevent one question from widening the other.
+  const exactPath = Object.hasOwn(scopes, roomToken) ? [roomToken] : [];
+  const toolsMatch = resolveChannelEntryMatchWithFallback({
+    entries: scopes,
+    keys: buildChannelKeyCandidates(roomToken),
+    normalizeKey: normalizeChannelSlug,
+  });
+  return { tree, exactPath, toolsPath: toolsMatch.matchKey ? [toolsMatch.matchKey] : [] };
 }
 
-export function resolveNextcloudTalkGroupAllow(params: {
-  groupPolicy: GroupPolicy;
-  outerAllowFrom: Array<string | number> | undefined;
-  innerAllowFrom: Array<string | number> | undefined;
-  senderId: string;
-}): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
-  if (params.groupPolicy === "disabled") {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
+export function resolveNextcloudTalkGroupRequireMention(params: ChannelGroupContext): boolean {
+  if (!params.groupId) {
+    return true;
   }
-  if (params.groupPolicy === "open") {
-    return { allowed: true, outerMatch: { allowed: true }, innerMatch: { allowed: true } };
-  }
-
-  const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
-  const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
-  if (outerAllow.length === 0 && innerAllow.length === 0) {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
-  }
-
-  const outerMatch = resolveNextcloudTalkAllowlistMatch({
-    allowFrom: params.outerAllowFrom,
-    senderId: params.senderId,
+  const account = resolveNextcloudTalkAccount({
+    cfg: params.cfg as CoreConfig,
+    accountId: params.accountId,
   });
-  const innerMatch = resolveNextcloudTalkAllowlistMatch({
-    allowFrom: params.innerAllowFrom,
-    senderId: params.senderId,
-  });
-  const allowed = resolveNestedAllowlistDecision({
-    outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
-    outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
-    innerConfigured: innerAllow.length > 0,
-    innerMatched: innerMatch.allowed,
-  });
-
-  return { allowed, outerMatch, innerMatch };
-}
-
-export function resolveNextcloudTalkMentionGate(params: {
-  isGroup: boolean;
-  requireMention: boolean;
-  wasMentioned: boolean;
-  allowTextCommands: boolean;
-  hasControlCommand: boolean;
-  commandAuthorized: boolean;
-}): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const result = resolveMentionGatingWithBypass({
-    isGroup: params.isGroup,
-    requireMention: params.requireMention,
-    canDetectMention: true,
-    wasMentioned: params.wasMentioned,
-    allowTextCommands: params.allowTextCommands,
-    hasControlCommand: params.hasControlCommand,
-    commandAuthorized: params.commandAuthorized,
-  });
-  return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
+  const { tree, exactPath } = buildNextcloudTalkRoomScope(account.config.rooms, params.groupId);
+  return resolveScopeRequireMention({ tree, path: exactPath });
 }

@@ -1,6 +1,31 @@
+// Thread command registration, including channel-specific create request normalization.
 import type { Command } from "commander";
+import { getChannelPlugin } from "../../../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
+import { resolveMessageSecretScope } from "../../message-secret-scope.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+function resolveThreadCreateRequest(opts: Record<string, unknown>) {
+  const { channel } = resolveMessageSecretScope(opts);
+  if (channel) {
+    const request = getChannelPlugin(channel)?.actions?.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: opts,
+    });
+    if (request) {
+      return {
+        action: request.action,
+        params: request.args,
+      };
+    }
+  }
+  return {
+    action: "thread-create" as ChannelMessageActionName,
+    params: opts,
+  };
+}
+
+/** Register thread create/list/reply commands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 
@@ -17,7 +42,8 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
     .option("-m, --message <text>", "Initial thread message text")
     .option("--auto-archive-min <n>", "Thread auto-archive minutes")
     .action(async (opts) => {
-      await helpers.runMessageAction("thread-create", opts);
+      const request = resolveThreadCreateRequest(opts);
+      await helpers.runMessageAction(request.action, request.params);
     });
 
   helpers
@@ -31,9 +57,7 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
     .option("--include-archived", "Include archived threads", false)
     .option("--before <id>", "Read/search before id")
     .option("--limit <n>", "Result limit")
-    .action(async (opts) => {
-      await helpers.runMessageAction("thread-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("thread-list", opts));
 
   helpers
     .withMessageBase(
@@ -49,7 +73,5 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
       "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
     .option("--reply-to <id>", "Reply-to message id")
-    .action(async (opts) => {
-      await helpers.runMessageAction("thread-reply", opts);
-    });
+    .action((opts) => helpers.runMessageAction("thread-reply", opts));
 }

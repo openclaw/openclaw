@@ -1,11 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type { ZaloFetch } from "./api.js";
+// Zalo plugin module implements send behavior.
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripChannelTargetPrefix, stripTargetKindPrefix } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveZaloAccount } from "./accounts.js";
+import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { resolveZaloToken } from "./token.js";
 
-export type ZaloSendOptions = {
+type ZaloSendOptions = {
   token?: string;
   accountId?: string;
   cfg?: OpenClawConfig;
@@ -13,13 +22,97 @@ export type ZaloSendOptions = {
   caption?: string;
   verbose?: boolean;
   proxy?: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
-export type ZaloSendResult = {
+type ZaloSendResult = {
   ok: boolean;
   messageId?: string;
+  receipt: MessageReceipt;
   error?: string;
 };
+
+function createZaloSendReceipt(params: {
+  messageId?: string;
+  chatId: string;
+  kind: MessageReceiptPartKind;
+}): MessageReceipt {
+  const messageId = params.messageId?.trim();
+  return createMessageReceiptFromOutboundResults({
+    results: messageId
+      ? [
+          {
+            channel: "zalo",
+            messageId,
+            chatId: params.chatId,
+          },
+        ]
+      : [],
+    kind: params.kind,
+  });
+}
+
+function toZaloSendResult(
+  response: {
+    ok?: boolean;
+    result?: { message_id?: string };
+  },
+  params: { chatId: string; kind: MessageReceiptPartKind },
+): ZaloSendResult {
+  if (response.ok && response.result) {
+    return {
+      ok: true,
+      messageId: response.result.message_id,
+      receipt: createZaloSendReceipt({
+        messageId: response.result.message_id,
+        chatId: params.chatId,
+        kind: params.kind,
+      }),
+    };
+  }
+  return {
+    ok: false,
+    error: "Failed to send message",
+    receipt: createZaloSendReceipt({ chatId: params.chatId, kind: params.kind }),
+  };
+}
+
+async function runZaloSend(
+  failureMessage: string,
+  params: { chatId: string; kind: MessageReceiptPartKind },
+  assertDirectAdapterHandoff: (() => void) | undefined,
+  send: (assertCurrent: (() => void) | undefined) => Promise<{
+    ok?: boolean;
+    result?: { message_id?: string };
+  }>,
+): Promise<ZaloSendResult> {
+  let handoffRejected = false;
+  let handoffError: unknown;
+  const assertCurrent = assertDirectAdapterHandoff
+    ? () => {
+        try {
+          assertDirectAdapterHandoff();
+        } catch (error) {
+          handoffRejected = true;
+          handoffError = error;
+          throw error;
+        }
+      }
+    : undefined;
+  try {
+    const result = toZaloSendResult(await send(assertCurrent), params);
+    return result.ok ? result : { ok: false, error: failureMessage, receipt: result.receipt };
+  } catch (err) {
+    if (handoffRejected && Object.is(handoffError, err)) {
+      throw err;
+    }
+    return {
+      ok: false,
+      error: formatErrorMessage(err),
+      receipt: createZaloSendReceipt({ chatId: params.chatId, kind: params.kind }),
+    };
+  }
+}
 
 function resolveSendContext(options: ZaloSendOptions): {
   token: string;
@@ -40,85 +133,95 @@ function resolveSendContext(options: ZaloSendOptions): {
   return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
 
+function resolveValidatedSendContext(
+  chatId: string,
+  options: ZaloSendOptions,
+): { ok: true; chatId: string; token: string; fetcher?: ZaloFetch } | { ok: false; error: string } {
+  const { token, fetcher } = resolveSendContext(options);
+  if (!token) {
+    return { ok: false, error: "No Zalo bot token configured" };
+  }
+  const trimmedChatId = normalizeZaloSendChatId(chatId);
+  if (!trimmedChatId) {
+    return { ok: false, error: "No chat_id provided" };
+  }
+  return { ok: true, chatId: trimmedChatId, token, fetcher };
+}
+
+function normalizeZaloSendChatId(chatId: string): string {
+  return stripTargetKindPrefix(stripChannelTargetPrefix(chatId, "zalo", "zl"));
+}
+
+function resolveSendContextOrFailure(
+  chatId: string,
+  options: ZaloSendOptions,
+):
+  | { context: { chatId: string; token: string; fetcher?: ZaloFetch } }
+  | { failure: ZaloSendResult } {
+  const context = resolveValidatedSendContext(chatId, options);
+  return context.ok
+    ? { context }
+    : {
+        failure: {
+          ok: false,
+          error: context.error,
+          receipt: createZaloSendReceipt({ chatId, kind: "unknown" }),
+        },
+      };
+}
+
 export async function sendMessageZalo(
   chatId: string,
   text: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const { token, fetcher } = resolveSendContext(options);
-
-  if (!token) {
-    return { ok: false, error: "No Zalo bot token configured" };
+  const resolved = resolveSendContextOrFailure(chatId, options);
+  if ("failure" in resolved) {
+    return resolved.failure;
   }
+  const { context } = resolved;
 
-  if (!chatId?.trim()) {
-    return { ok: false, error: "No chat_id provided" };
-  }
-
-  if (options.mediaUrl) {
-    return sendPhotoZalo(chatId, options.mediaUrl, {
-      ...options,
-      token,
-      caption: text || options.caption,
-    });
-  }
-
-  try {
-    const response = await sendMessage(
-      token,
-      {
-        chat_id: chatId.trim(),
-        text: text.slice(0, 2000),
-      },
-      fetcher,
-    );
-
-    if (response.ok && response.result) {
-      return { ok: true, messageId: response.result.message_id };
+  if (options.mediaUrl && (options.mediaUrl.trim() || !text)) {
+    const photoUrl = options.mediaUrl.trim();
+    if (!photoUrl) {
+      return {
+        ok: false,
+        error: "No photo URL provided",
+        receipt: createZaloSendReceipt({ chatId: context.chatId, kind: "media" }),
+      };
     }
-
-    return { ok: false, error: "Failed to send message" };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-export async function sendPhotoZalo(
-  chatId: string,
-  photoUrl: string,
-  options: ZaloSendOptions = {},
-): Promise<ZaloSendResult> {
-  const { token, fetcher } = resolveSendContext(options);
-
-  if (!token) {
-    return { ok: false, error: "No Zalo bot token configured" };
-  }
-
-  if (!chatId?.trim()) {
-    return { ok: false, error: "No chat_id provided" };
-  }
-
-  if (!photoUrl?.trim()) {
-    return { ok: false, error: "No photo URL provided" };
-  }
-
-  try {
-    const response = await sendPhoto(
-      token,
-      {
-        chat_id: chatId.trim(),
-        photo: photoUrl.trim(),
-        caption: options.caption?.slice(0, 2000),
-      },
-      fetcher,
+    const caption = text || options.caption;
+    return await runZaloSend(
+      "Failed to send photo",
+      { chatId: context.chatId, kind: "media" },
+      options.assertDirectAdapterHandoff,
+      (assertCurrent) =>
+        sendPhoto(
+          context.token,
+          {
+            chat_id: context.chatId,
+            photo: photoUrl,
+            caption,
+          },
+          context.fetcher,
+          assertCurrent,
+        ),
     );
-
-    if (response.ok && response.result) {
-      return { ok: true, messageId: response.result.message_id };
-    }
-
-    return { ok: false, error: "Failed to send photo" };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+
+  return await runZaloSend(
+    "Failed to send message",
+    { chatId: context.chatId, kind: "text" },
+    options.assertDirectAdapterHandoff,
+    (assertCurrent) =>
+      sendMessage(
+        context.token,
+        {
+          chat_id: context.chatId,
+          text: truncateUtf16Safe(text, 2000),
+        },
+        context.fetcher,
+        assertCurrent,
+      ),
+  );
 }

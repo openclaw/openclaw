@@ -1,0 +1,317 @@
+// Config schema tests cover channel plugin config schema validation and defaults.
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { z } from "zod";
+import { z as z3 } from "zod/v3";
+import {
+  ChannelGroupEntrySchema,
+  buildCatchallMultiAccountChannelSchema,
+  buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildJsonChannelConfigSchema,
+  buildMultiAccountChannelSchema,
+  emptyChannelConfigSchema,
+} from "./config-schema.js";
+
+describe("channel config composition", () => {
+  it("builds canonical and channel-extended group entries", () => {
+    const extended = buildGroupEntrySchema({ topic: z.boolean().optional() });
+    expect(
+      ChannelGroupEntrySchema.safeParse({
+        requireMention: true,
+        tools: { allow: ["read"] },
+        toolsBySender: { U1: { deny: ["write"] } },
+        skills: ["search"],
+        enabled: true,
+        allowFrom: ["U1", 2],
+        systemPrompt: "Be concise",
+      }).success,
+    ).toBe(true);
+    expect(extended.safeParse({ topic: true }).success).toBe(true);
+    expectTypeOf<z.infer<typeof extended>["tools"]>().toEqualTypeOf<
+      z.infer<typeof ChannelGroupEntrySchema>["tools"]
+    >();
+    expectTypeOf<z.infer<typeof extended>["topic"]>().toEqualTypeOf<boolean | undefined>();
+    expect(ChannelGroupEntrySchema.safeParse({ unknown: true }).success).toBe(false);
+  });
+
+  it("can omit canonical group leaves without duplicating the remaining shape", () => {
+    const schema = buildGroupEntrySchema({ topic: z.boolean().optional() }, { omit: ["skills"] });
+
+    expect(schema.safeParse({ topic: true, allowFrom: ["U1"] }).success).toBe(true);
+    expect(schema.safeParse({ skills: ["search"] }).success).toBe(false);
+  });
+
+  it("applies one shared refinement to root and account entries", () => {
+    const base = z.object({
+      policy: z.enum(["closed", "open"]).optional(),
+      allow: z.boolean().optional(),
+    });
+    const schema = buildMultiAccountChannelSchema(base, {
+      optionalAccount: true,
+      refine: (value, ctx) => {
+        if (value.policy === "open" && !value.allow) {
+          ctx.addIssue({ code: "custom", path: ["allow"], message: "open requires allow" });
+        }
+      },
+    });
+
+    expect(schema.safeParse({ policy: "open" }).success).toBe(false);
+    expect(schema.safeParse({ accounts: { work: { policy: "open" } } }).success).toBe(false);
+    expect(
+      schema.safeParse({ policy: "open", allow: true, accounts: { work: undefined } }).success,
+    ).toBe(true);
+    expectTypeOf<z.infer<typeof schema>["policy"]>().toEqualTypeOf<"closed" | "open" | undefined>();
+  });
+
+  it("awaits an asynchronous shared refinement for root and account entries", async () => {
+    const base = z.object({ enabled: z.boolean().optional() });
+    const schema = buildMultiAccountChannelSchema(base, {
+      refine: async (value, ctx) => {
+        expect(ctx.value).toBe(value);
+        await Promise.resolve();
+        if (value.enabled) {
+          ctx.addIssue({ code: "custom", path: ["enabled"], message: "disabled required" });
+        }
+      },
+    });
+
+    await expect(schema.safeParseAsync({ enabled: true })).resolves.toMatchObject({
+      success: false,
+    });
+    await expect(
+      schema.safeParseAsync({ accounts: { work: { enabled: true } } }),
+    ).resolves.toMatchObject({ success: false });
+  });
+
+  it.each(["record", "catchall"] as const)(
+    "preserves root and account transforms and catchalls with %s accounts",
+    (mode) => {
+      const account = z
+        .object({ port: z.string().transform((value) => Number(value)) })
+        .catchall(z.string());
+      const schema =
+        mode === "record"
+          ? buildMultiAccountChannelSchema(account)
+          : buildCatchallMultiAccountChannelSchema(account);
+      const rootOnlyInput: z.input<typeof schema> = { port: "80", custom: "root" };
+
+      type AccountInput = NonNullable<z.input<typeof schema>["accounts"]>[string];
+      type AccountOutput = NonNullable<z.output<typeof schema>["accounts"]>[string];
+      expectTypeOf<AccountInput["port"]>().toEqualTypeOf<string>();
+      expectTypeOf<AccountOutput["port"]>().toEqualTypeOf<number>();
+      expectTypeOf<AccountInput["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<AccountOutput["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<z.input<typeof schema>["custom"]>().toEqualTypeOf<string>();
+      expectTypeOf<z.output<typeof schema>["custom"]>().toEqualTypeOf<string>();
+      expect(schema.parse(rootOnlyInput)).toEqual({ port: 80, custom: "root" });
+      expect(
+        schema.parse({
+          ...rootOnlyInput,
+          defaultAccount: "work",
+          accounts: { work: { port: "443", custom: "account" } },
+        }),
+      ).toEqual({
+        port: 80,
+        custom: "root",
+        defaultAccount: "work",
+        accounts: { work: { port: 443, custom: "account" } },
+      });
+    },
+  );
+});
+
+describe("buildChannelConfigSchema", () => {
+  it("builds draft-07 json schema in output mode by default", () => {
+    const schema = z.object({ enabled: z.boolean().default(true) });
+    const result = buildChannelConfigSchema(schema);
+    expect(result.schema).toEqual({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          default: true,
+        },
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    });
+  });
+
+  it("preserves permissive json schema and runtime parsing for zod v3 plugins", () => {
+    const legacySchema = z3.object({ enabled: z3.boolean().default(true) }).strict();
+    const result = buildChannelConfigSchema(
+      legacySchema as unknown as Parameters<typeof buildChannelConfigSchema>[0],
+    );
+    expect(result.schema).toEqual({ type: "object", additionalProperties: true });
+    expect(result.runtime?.safeParse({})).toEqual({ success: true, data: { enabled: true } });
+    expect(result.runtime?.safeParse({ enabled: "yes" })).toMatchObject({
+      success: false,
+      issues: [{ path: ["enabled"] }],
+    });
+  });
+
+  it("converts SDK schemas with the host while retaining metadata, references and defaults", () => {
+    const policy = z.string().describe("Policy name").meta({
+      id: "Channel/Policy~v1",
+      title: "Policy",
+    });
+    const schema = z.object({
+      group: buildGroupEntrySchema(),
+      first: policy,
+      second: policy,
+      enabled: z.boolean().default(true),
+    });
+    vi.spyOn(schema, "toJSONSchema").mockImplementation(() => {
+      throw new Error("schema-owned converter must not run");
+    });
+
+    for (const jsonSchemaMode of ["input", "output"] as const) {
+      const result = buildChannelConfigSchema(schema, { jsonSchemaMode });
+      expect(result.schema).toMatchObject({
+        $schema: "http://json-schema.org/draft-07/schema#",
+        properties: {
+          group: {
+            properties: {
+              toolsBySender: {
+                type: "object",
+                additionalProperties: { properties: { allow: { type: "array" } } },
+              },
+            },
+          },
+          first: { $ref: "#/definitions/Channel~1Policy~0v1" },
+          second: { $ref: "#/definitions/Channel~1Policy~0v1" },
+          enabled: { type: "boolean", default: true },
+        },
+        definitions: {
+          "Channel/Policy~v1": { type: "string", description: "Policy name", title: "Policy" },
+        },
+      });
+      expect(result.schema.required).toEqual(
+        jsonSchemaMode === "output"
+          ? ["group", "first", "second", "enabled"]
+          : ["group", "first", "second"],
+      );
+      const input = {
+        group: { toolsBySender: { sender: { allow: ["read"] } } },
+        first: "read",
+        second: "write",
+      };
+      expect(result.runtime?.safeParse(input)).toEqual({
+        success: true,
+        data: { ...input, enabled: true },
+      });
+      expect(result.runtime?.safeParse({ ...input, enabled: "yes" })).toMatchObject({
+        success: false,
+        issues: [{ path: ["enabled"] }],
+      });
+    }
+  });
+
+  it("can describe accepted transform inputs instead of unrepresentable outputs", () => {
+    const result = buildChannelConfigSchema(
+      z.object({
+        policy: z.union([
+          z.enum(["open", "disabled"]),
+          z.literal("legacy").transform(() => "open" as const),
+        ]),
+      }),
+      { jsonSchemaMode: "input" },
+    );
+
+    expect(result.schema).toMatchObject({
+      properties: {
+        policy: {
+          anyOf: [
+            { type: "string", enum: ["open", "disabled"] },
+            { type: "string", const: "legacy" },
+          ],
+        },
+      },
+    });
+    expect(result.runtime?.safeParse({ policy: "legacy" })).toEqual({
+      success: true,
+      data: { policy: "open" },
+    });
+  });
+
+  it("passes through ui hints and exposes a runtime parser", () => {
+    const result = buildChannelConfigSchema(z.object({ enabled: z.boolean().default(true) }), {
+      uiHints: { enabled: { label: "Enabled" } },
+    });
+
+    expect(result.uiHints).toEqual({ enabled: { label: "Enabled" } });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+  });
+});
+
+describe("buildJsonChannelConfigSchema", () => {
+  it("validates direct JSON schemas without zod conversion", () => {
+    const result = buildJsonChannelConfigSchema(
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean", default: true },
+        },
+      },
+      { cacheKey: "config-schema.test.json-channel" },
+    );
+
+    expect(result.schema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: true },
+      },
+    });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+    expect(result.runtime?.safeParse({ enabled: "yes" })).toEqual({
+      success: false,
+      issues: [{ path: ["enabled"], message: "must be boolean" }],
+    });
+  });
+
+  it("keeps numeric-looking object keys outside array-index range as strings", () => {
+    const result = buildJsonChannelConfigSchema(
+      {
+        type: "object",
+        required: ["100001"],
+        properties: {
+          "100001": { type: "boolean" },
+        },
+      },
+      { cacheKey: "config-schema.test.large-numeric-key-channel" },
+    );
+
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: false,
+      issues: [{ path: ["100001"], message: "must have required property '100001'" }],
+    });
+  });
+});
+
+describe("emptyChannelConfigSchema", () => {
+  it("accepts undefined and empty objects only", () => {
+    const result = emptyChannelConfigSchema();
+
+    expect(result.runtime?.safeParse(undefined)).toEqual({
+      success: true,
+      data: undefined,
+    });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: {},
+    });
+    expect(result.runtime?.safeParse({ enabled: true })).toEqual({
+      success: false,
+      issues: [{ path: [], message: "config must be empty" }],
+    });
+  });
+});

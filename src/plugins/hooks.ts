@@ -1,98 +1,706 @@
-/**
- * Plugin Hook Runner
- *
- * Provides utilities for executing plugin lifecycle hooks with proper
- * error handling, priority ordering, and async support.
- */
-
-import type { PluginRegistry } from "./registry.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import {
+  attachToolAllowlistIntersection,
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolPolicyName,
+  readToolAllowlistIntersection,
+} from "../agents/tool-policy.js";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
+import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
+import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { projectModelContextMessages } from "../shared/model-context-message.js";
+import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import {
+  projectAgentEndEvent,
+  withAgentRunId,
+  withoutIncognitoLlmContent,
+} from "./hook-agent-observations.js";
+import { readClaimingHookAdmission, type ClaimingHookAdmission } from "./hook-claim-admission.js";
+import {
+  type GateHookResult,
+  type InputGateDecision,
+  isHookDecision,
+} from "./hook-decision-types.js";
+import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
+import { withHookTimeout } from "./hook-timeout.js";
+import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
-  PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
+  PluginHookAgentTrigger,
   PluginHookAgentEndEvent,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforeCompactionEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
+  PluginHookHandlerMap,
+  PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
+  PluginHookBeforeAgentRunEvent,
   PluginHookName,
   PluginHookRegistration,
-  PluginHookSessionContext,
-  PluginHookSessionEndEvent,
-  PluginHookSessionStartEvent,
+  PluginHookSubagentDeliveryTargetResult,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
-} from "./types.js";
+  PluginHookToolAuthority,
+  PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeMessageWriteResult,
+  PluginHookResolveExecEnvContext,
+  PluginHookResolveExecEnvEvent,
+  PluginHookSkillContext,
+  PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalEvaluateResult,
+  PluginHookSkillProposalEvaluationOutcome,
+} from "./hook-types.js";
+import { runPluginCleanup } from "./plugin-instance-scope.js";
+import {
+  type PluginSubagentRequesterContext,
+  withPluginSubagentRequesterContext,
+} from "./runtime/subagent-requester-context.js";
+import {
+  createPluginToolMatcherScope,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 // Re-export types for consumers
-export type {
-  PluginHookAgentContext,
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
-  PluginHookAgentEndEvent,
-  PluginHookBeforeCompactionEvent,
-  PluginHookAfterCompactionEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
-  PluginHookToolContext,
-  PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
-  PluginHookAfterToolCallEvent,
-  PluginHookToolResultPersistContext,
-  PluginHookToolResultPersistEvent,
-  PluginHookToolResultPersistResult,
-  PluginHookSessionContext,
-  PluginHookSessionStartEvent,
-  PluginHookSessionEndEvent,
-  PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
-  PluginHookGatewayStopEvent,
-};
 
-export type HookRunnerLogger = {
+type HookRunnerLogger = {
   debug?: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
 };
 
-export type HookRunnerOptions = {
+type HookFailurePolicy = "fail-open" | "fail-closed";
+export type VoidHookRunOptions = {
+  unrefTimeout?: boolean;
+};
+
+type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
+type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
+  retryCandidates?: BeforeAgentFinalizeRetry[];
+};
+
+type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
+  /**
+   * Optional per-hook failure policy.
+   * Defaults to fail-open unless explicitly overridden for a hook name.
+   */
+  failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;
+  /**
+   * Optional timeout for void/observation hooks. A timed-out hook is logged and
+   * the runner continues, but the plugin's underlying work is not cancelled.
+   */
+  voidHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
+  /**
+   * Optional timeout for modifying hooks. A timed-out hook is logged and skipped,
+   * but the plugin's underlying work is not cancelled.
+   */
+  modifyingHookTimeoutMsByHook?: Partial<Record<PluginHookName, number>>;
 };
 
-/**
- * Get hooks for a specific hook name, sorted by priority (higher first).
- */
+const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  agent_end: 30_000,
+  channel_pairing_requested: 2_000,
+  // Defensive default for the compaction lifecycle hooks. Without a budget an
+  // unresponsive handler runs fully unbounded, and in the codex agent harness
+  // these hooks fire on the serialized notification queue
+  // (event-projector handleItemStarted awaits before_compaction / after_compaction
+  // for a contextCompaction item), so a hung handler freezes every later codex
+  // notification — including turn/completed — and the whole turn hangs. These
+  // hooks can legitimately do real work (e.g. a memory flush), so the budget
+  // matches agent_end's 30s rather than the tighter modifying-hook defaults.
+  // The runner is fail-open for void hooks, so a timed-out handler is logged
+  // and compaction proceeds.
+  before_compaction: 30_000,
+  after_compaction: 30_000,
+  skill_changed: 30_000,
+  skill_proposal_changed: 30_000,
+  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
+  // open after logging so one plugin cannot consume the process watchdog.
+  gateway_stop: 5_000,
+};
+const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  before_agent_run: 15_000,
+  // Policy hooks fail closed in the global runner. A bounded timeout turns a
+  // stalled policy process into a denial instead of freezing the operation.
+  before_install: 15_000,
+  before_tool_call: 15_000,
+  // Terminal finalization hooks sit on the runner's completion path. A hung
+  // handler must not freeze final delivery or keep compaction retry recovery
+  // unresolved; timeout fail-opens with the original final answer.
+  before_agent_finalize: 15_000,
+  before_prompt_build: 15_000,
+  // Outbound modifying hooks run inside the serialized reply delivery lane.
+  // A hung plugin must fail open so later hooks and queued replies can settle.
+  message_sending: 15_000,
+  reply_payload_sending: 15_000,
+  resolve_exec_env: 15_000,
+  skill_proposal_evaluate: 120_000,
+};
+
+function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(object)) {
+    deepFreezeHookValue(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
+type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
+type HookResult<K extends PluginHookName> = Exclude<
+  Awaited<ReturnType<PluginHookHandlerMap[K]>>,
+  void
+>;
+type ClaimingHookName = {
+  [K in PluginHookName]: [HookResult<K>] extends [never]
+    ? never
+    : HookResult<K> extends { handled: boolean }
+      ? K
+      : never;
+}[PluginHookName];
+
+type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
+  mergeResults?: (
+    accumulated: TResult | undefined,
+    next: TResult,
+    registration: PluginHookRegistration<K>,
+    event: HookEvent<K>,
+  ) => TResult;
+  isolateEventPerHandler?: boolean;
+  eventForHandler?: (event: HookEvent<K>, result: TResult | undefined) => HookEvent<K>;
+  mergeNullResults?: boolean;
+  shouldStop?: (result: TResult) => boolean;
+  terminalLabel?: string;
+  onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
+  assertHandlerBoundaryActive?: () => void;
+  onHandlerResult?: (params: {
+    hook: PluginHookRegistration<K>;
+    result: TResult | undefined;
+  }) => void;
+  onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
+};
+
+type PluginTargetedInboundClaimOutcome =
+  | {
+      status: "handled";
+      result: PluginHookInboundClaimResult;
+    }
+  | {
+      status: "missing_plugin";
+    }
+  | {
+      status: "no_handler";
+    }
+  | {
+      status: "declined";
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
+type SyncHookName = "tool_result_persist" | "before_message_write";
+type SyncHookHandler<K extends SyncHookName> = NonNullable<PluginHookRegistration<K>["handler"]>;
+type SyncHookEvent<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[0];
+type SyncHookContext<K extends SyncHookName> = Parameters<SyncHookHandler<K>>[1];
+type SyncHookMessage = PluginHookToolResultPersistEvent["message"];
+type SyncMessageHookStepResult = { message?: SyncHookMessage; block?: true };
+
+function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknown): boolean {
+  if (hook.hookName === "reply_dispatch" && hook.eligibleDispatchKinds !== undefined) {
+    const kind =
+      typeof ctx === "object" && ctx !== null && "dispatchKind" in ctx
+        ? ctx.dispatchKind
+        : undefined;
+    // Unknown callers cannot prove exclusion from a hook, including during recovery checks.
+    return !isPluginHookReplyDispatchKind(kind) || hook.eligibleDispatchKinds.includes(kind);
+  }
+  if (hook.hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
+    return true;
+  }
+  const trigger =
+    typeof ctx === "object" && ctx !== null && "trigger" in ctx
+      ? (ctx as { trigger?: unknown }).trigger
+      : undefined;
+  return (
+    typeof trigger === "string" && hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
+  );
+}
+
+/** Get hooks for a specific hook name, sorted by priority (higher first). */
 function getHooksForName<K extends PluginHookName>(
-  registry: PluginRegistry,
+  registry: HookRunnerRegistry,
   hookName: K,
+  ctx?: unknown,
+  toolName?: string,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
+    .filter((hook) => hook.hookName === hookName && isHookContextEligible(hook, ctx))
+    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+export function getToolHookMatcherScope(
+  registry: HookRunnerRegistry,
+  hookName: "before_tool_call" | "after_tool_call",
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    getHooksForName(registry, hookName).map((registration) => registration.matcher),
+  );
+}
+
+function getHooksForNameAndPlugin<K extends PluginHookName>(
+  registry: HookRunnerRegistry,
+  hookName: K,
+  pluginId: string,
+): PluginHookRegistration<K>[] {
+  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
 }
 
 /**
  * Create a hook runner for a specific registry.
  */
-export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
+export function createHookRunner(
+  registry: GlobalHookRunnerRegistry,
+  options: HookRunnerOptions = {},
+) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const failurePolicyByHook = {
+    before_agent_run: "fail-closed",
+    ...options.failurePolicyByHook,
+  } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
+  const voidHookTimeoutMsByHook = {
+    ...DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK,
+    ...options.voidHookTimeoutMsByHook,
+  };
+  const modifyingHookTimeoutMsByHook = {
+    ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
+    ...options.modifyingHookTimeoutMsByHook,
+  };
+  // Prompt-build hooks may start nested agent runs through any caller. The
+  // mutable token lets detached descendants dispatch after the outer run settles.
+  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
+  const runtimeDecisionScopeId = randomUUID();
+  let runtimeDecisionOrdinal = 0;
+
+  const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
+    catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
+
+  const recordBeforeToolCallDecision = (params: {
+    event: PluginHookBeforeToolCallEvent;
+    hook: PluginHookRegistration<"before_tool_call">;
+    token?: ExecutionIdentityAdmissionToken;
+    result?: PluginHookBeforeToolCallResult;
+    failOpen?: boolean;
+    receiptAuthority?: () => boolean | void;
+  }): void => {
+    if (!params.receiptAuthority) {
+      return;
+    }
+    try {
+      if (params.receiptAuthority() === false) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    const failed = params.failOpen !== undefined;
+    const blocked = params.result?.block === true || params.failOpen === false;
+    recordRuntimeActionDecision({
+      token: params.token,
+      family: "plugin",
+      operation: "before_tool_call",
+      outcome: blocked ? "denied" : params.failOpen ? "unknown" : "allowed",
+      coverageState: blocked || !failed ? "enforced" : "unknown",
+      reasonCode: failed
+        ? params.failOpen
+          ? "plugin_hook_failed_open"
+          : "plugin_hook_failed_closed"
+        : blocked
+          ? "plugin_hook_blocked"
+          : params.result?.requireApproval
+            ? "plugin_hook_approval_required"
+            : "plugin_hook_allowed",
+      owner: "plugin-hook",
+      decisionBoundary: "plugin.before-tool-call",
+      policyRefs: ["plugin-hook:before-tool-call"],
+      summary: failed
+        ? params.failOpen
+          ? "A plugin hook failed open, so its policy outcome is unknown."
+          : "A plugin hook failed closed before tool execution."
+        : blocked
+          ? "A registered plugin hook denied tool execution."
+          : params.result?.requireApproval
+            ? "A registered plugin hook required a separate owner-native approval decision."
+            : "A registered plugin hook allowed tool execution to continue.",
+      missingEvidence: params.failOpen ? ["plugin.hook_decision"] : [],
+      remediation: params.failOpen
+        ? [
+            {
+              code: "repair_plugin_hook",
+              text: "Inspect the registered plugin hook failure before relying on this action.",
+            },
+          ]
+        : [],
+      discriminator: JSON.stringify([
+        params.hook.pluginId,
+        params.hook.registrationId ?? null,
+        params.event.toolCallId ?? null,
+        ++runtimeDecisionOrdinal,
+        params.event.toolName,
+        runtimeDecisionScopeId,
+      ]),
+    });
+  };
+
+  const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
+  const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
+  const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
+    prev === true || next === true ? true : undefined;
+  const mergeBeforeModelResolve = (
+    acc: PluginHookBeforeModelResolveResult | undefined,
+    next: PluginHookBeforeModelResolveResult,
+  ): PluginHookBeforeModelResolveResult => ({
+    // Keep the first defined override so higher-priority hooks win.
+    modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
+    providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
+  });
+
+  const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    if (value.some((entry) => typeof entry !== "string")) {
+      return [];
+    }
+    return value as string[];
+  };
+
+  const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
+    const normalized = normalizeHookToolsAllow(value);
+    if (normalized === undefined) {
+      return [];
+    }
+    const attached = Array.isArray(value) ? readToolAllowlistIntersection(value) : undefined;
+    return attached
+      ? attached.map((restriction) => normalizeHookToolsAllow(restriction) ?? [])
+      : [normalized];
+  };
+
+  const intersectToolsAllow = (left: string[] | undefined, right: string[]): string[] => {
+    if (left === undefined) {
+      return right;
+    }
+    if (left.length === 0 || right.length === 0) {
+      return [];
+    }
+    const normalizedLeft = normalizeToolList(expandToolGroups(left));
+    const normalizedRight = normalizeToolList(expandToolGroups(right));
+    if (normalizedLeft.includes("*")) {
+      return normalizedRight;
+    }
+    if (normalizedRight.includes("*")) {
+      return normalizedLeft;
+    }
+    const matchesLeft = createToolPolicyMatcher({ allow: normalizedLeft });
+    const matchesRight = createToolPolicyMatcher({ allow: normalizedRight });
+    return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
+      (name) => matchesLeft(name) && matchesRight(name),
+    );
+  };
+
+  const mergeBeforePromptBuild = (
+    acc: PluginHookBeforePromptBuildResult | undefined,
+    next: PluginHookBeforePromptBuildResult,
+  ): PluginHookBeforePromptBuildResult => {
+    const toolRestrictions = [
+      ...readHookToolsAllowRestrictions(acc?.toolsAllow),
+      ...readHookToolsAllowRestrictions(next.toolsAllow),
+    ];
+    const toolsAllow =
+      toolRestrictions.length === 0
+        ? undefined
+        : attachToolAllowlistIntersection(
+            [
+              ...(toolRestrictions.reduce<string[] | undefined>(intersectToolsAllow, undefined) ??
+                []),
+            ],
+            toolRestrictions,
+          );
+    return {
+      // Keep the first defined system prompt so higher-priority hooks win.
+      systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
+      prependContext: concatOptionalTextSegments({
+        left: acc?.prependContext,
+        right: next.prependContext,
+      }),
+      appendContext: concatOptionalTextSegments({
+        left: acc?.appendContext,
+        right: next.appendContext,
+      }),
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+      prependSystemContext: concatOptionalTextSegments({
+        left: acc?.prependSystemContext,
+        right: next.prependSystemContext,
+      }),
+      appendSystemContext: concatOptionalTextSegments({
+        left: acc?.appendSystemContext,
+        right: next.appendSystemContext,
+      }),
+    };
+  };
+
+  const mergeAgentTurnPrepare = <
+    TResult extends { prependContext?: string; appendContext?: string },
+  >(
+    acc: TResult | undefined,
+    next: TResult,
+  ): TResult =>
+    ({
+      prependContext: concatOptionalTextSegments({
+        left: acc?.prependContext,
+        right: next.prependContext,
+      }),
+      appendContext: concatOptionalTextSegments({
+        left: acc?.appendContext,
+        right: next.appendContext,
+      }),
+    }) as TResult;
+
+  const mergeBeforeAgentFinalize = (
+    acc: PluginHookBeforeAgentFinalizeResult | undefined,
+    next: PluginHookBeforeAgentFinalizeResult,
+  ): PluginHookBeforeAgentFinalizeResult => {
+    const normalizeRetry = (
+      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
+    ): BeforeAgentFinalizeRetry | undefined => {
+      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
+      if (!instruction) {
+        return undefined;
+      }
+      return {
+        ...retry,
+        instruction,
+      };
+    };
+    const readRetryCandidates = (
+      result: PluginHookBeforeAgentFinalizeResult | undefined,
+    ): BeforeAgentFinalizeRetry[] => {
+      if (!result || result.action !== "revise") {
+        return [];
+      }
+      const candidateList = (result as BeforeAgentFinalizeResultWithRetryCandidates)
+        .retryCandidates;
+      if (Array.isArray(candidateList) && candidateList.length > 0) {
+        return candidateList
+          .map((retry) => normalizeRetry(retry))
+          .filter((retry): retry is BeforeAgentFinalizeRetry => retry !== undefined);
+      }
+      const retry = normalizeRetry(result.retry);
+      return retry ? [retry] : [];
+    };
+    const attachRetryCandidates = (
+      result: PluginHookBeforeAgentFinalizeResult,
+      candidates: BeforeAgentFinalizeRetry[],
+    ): PluginHookBeforeAgentFinalizeResult => {
+      if (result.action !== "revise" || candidates.length <= 1) {
+        return result;
+      }
+      Object.defineProperty(result, "retryCandidates", {
+        configurable: true,
+        enumerable: false,
+        value: candidates,
+      });
+      return result;
+    };
+    if (acc?.action === "finalize") {
+      return acc;
+    }
+    if (next.action === "finalize") {
+      return { action: "finalize", reason: next.reason };
+    }
+    if (acc?.action === "revise" && next.action === "revise") {
+      const retryCandidates = [...readRetryCandidates(acc), ...readRetryCandidates(next)];
+      const retry = retryCandidates[0];
+      return attachRetryCandidates(
+        {
+          action: "revise",
+          reason: concatOptionalTextSegments({
+            left: acc.reason,
+            right: next.reason,
+          }),
+          ...(retry ? { retry } : {}),
+        },
+        retryCandidates,
+      );
+    }
+    if (acc?.action === "revise") {
+      return acc;
+    }
+    if (next.action === "revise") {
+      const retry = normalizeRetry(next.retry);
+      return {
+        action: "revise",
+        reason: next.reason,
+        ...(retry ? { retry } : {}),
+      };
+    }
+    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
+  };
+
+  const mergeSubagentDeliveryTargetResult = (
+    acc: PluginHookSubagentDeliveryTargetResult | undefined,
+    next: PluginHookSubagentDeliveryTargetResult,
+  ): PluginHookSubagentDeliveryTargetResult => {
+    if (acc?.origin) {
+      return acc;
+    }
+    return next;
+  };
+
+  const handleHookError = (params: {
+    hookName: PluginHookName;
+    pluginId: string;
+    error: unknown;
+  }): never | void => {
+    const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${formatHookErrorForLog(params.error)}`;
+    if (shouldCatchHookErrors(params.hookName)) {
+      logger?.error(msg);
+      return;
+    }
+    throw new Error(msg, { cause: params.error });
+  };
+
+  const sanitizeHookError = (error: unknown): string => {
+    const raw = formatErrorMessage(error);
+    const firstLine = raw.split("\n")[0]?.trim();
+    return firstLine || "unknown error";
+  };
+
+  const getPluginPackageVersion = (pluginId: string): string | undefined =>
+    registry.plugins.find((plugin) => plugin.id === pluginId)?.packageVersion;
+
+  const normalizePositiveTimeoutMs = (timeoutMs: number | undefined): number | undefined => {
+    return clampPositiveTimerTimeoutMs(timeoutMs);
+  };
+
+  const getVoidHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(voidHookTimeoutMsByHook[hookName]);
+
+  const getModifyingHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+
+  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs);
+
+  const runSyncMessageHookStep = <K extends SyncHookName>(
+    hook: PluginHookRegistration<K>,
+    hookName: K,
+    event: SyncHookEvent<K> & { message: SyncHookMessage },
+    message: SyncHookMessage,
+    ctx: SyncHookContext<K>,
+  ): SyncMessageHookStepResult | undefined => {
+    try {
+      const handler = hook.handler as (
+        event: SyncHookEvent<K>,
+        ctx: SyncHookContext<K>,
+      ) => { message?: SyncHookMessage; block?: boolean } | PromiseLike<unknown> | void;
+      const result = handler({ ...event, message }, ctx);
+      if (isPromiseLike(result)) {
+        // Sync-only hooks ignore async results; observe rejections so the global fatal handler cannot crash.
+        void Promise.resolve(result).catch(() => undefined);
+        const msg =
+          `[hooks] ${hookName} handler from ${hook.pluginId} returned a Promise; ` +
+          `this hook is synchronous and the result was ignored.`;
+        if (!shouldCatchHookErrors(hookName)) {
+          throw new Error(msg);
+        }
+        logger?.warn?.(msg);
+        return undefined;
+      }
+      if (!result) {
+        return undefined;
+      }
+      if (hookName === "before_message_write" && result.block) {
+        return { block: true };
+      }
+      const nextMessage = result.message;
+      return nextMessage ? { message: nextMessage } : undefined;
+    } catch (err) {
+      const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
+      if (shouldCatchHookErrors(hookName)) {
+        logger?.error(msg);
+        return undefined;
+      }
+      throw new Error(msg, { cause: err });
+    }
+  };
+
+  const runSyncMessageHooks = <K extends SyncHookName>(
+    hookName: K,
+    event: SyncHookEvent<K> & { message: SyncHookMessage },
+    ctx: SyncHookContext<K>,
+  ): { message: SyncHookMessage; block?: true } | undefined => {
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    let current = event.message;
+    for (const hook of hooks) {
+      const result = runSyncMessageHookStep(hook, hookName, event, current, ctx);
+      if (result?.block) {
+        return { message: current, block: true };
+      }
+      if (result?.message) {
+        current = result.message;
+      }
+    }
+    return { message: current };
+  };
 
   /**
    * Run a hook that doesn't return a value (fire-and-forget style).
@@ -102,8 +710,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    optionsValue: VoidHookRunOptions = {},
+    matcherToolName?: string,
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
     }
@@ -112,19 +722,52 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     const promises = hooks.map(async (hook) => {
       try {
-        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
-      } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
+        const invoke = () =>
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx);
+        const promise = Promise.resolve(
+          hookName === "gateway_stop" ? runPluginCleanup(hook.handler, invoke) : invoke(),
+        );
+        const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
+        if (timeoutMs) {
+          await withHookTimeout(promise, timeoutMs, { unref: optionsValue.unrefTimeout ?? true });
         } else {
-          throw new Error(msg, { cause: err });
+          await promise;
         }
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     });
 
-    await Promise.all(promises);
+    // Strict lifecycle callers settle every handler's bounded outcome before advancing.
+    const failures = (await Promise.allSettled(promises)).flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+    }
   }
+
+  const bindVoidHook =
+    <K extends PluginHookName>(hookName: K) =>
+    (event: HookEvent<K>, ctx: HookContext<K>) =>
+      runVoidHook(hookName, event, ctx);
+
+  const bindModifyingHook =
+    <K extends PluginHookName>(hookName: K, policy: ModifyingHookPolicy<K> = {}) =>
+    (event: HookEvent<K>, ctx: HookContext<K>) =>
+      runModifyingHook<K, HookResult<K>>(hookName, event, ctx, policy);
+
+  const bindClaimingHook =
+    <K extends ClaimingHookName>(hookName: K) =>
+    (event: HookEvent<K>, ctx: HookContext<K>) =>
+      runClaimingHook<K, HookResult<K>>(hookName, event, ctx);
+
+  const bindFrozenVoidHook =
+    <K extends PluginHookName>(hookName: K) =>
+    (event: HookEvent<K>, ctx: HookContext<K>) =>
+      runVoidHook(hookName, deepFreezeHookValue(structuredClone(event)), ctx);
 
   /**
    * Run a hook that can return a modifying result.
@@ -134,41 +777,199 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
-    mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult,
+    policy: ModifyingHookPolicy<K, TResult> = {},
+    matcherToolName?: string,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
-    if (hooks.length === 0) {
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
+    const selectedHooks = policy.includeRegistration
+      ? hooks.filter(policy.includeRegistration)
+      : hooks;
+    if (selectedHooks.length === 0) {
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
+    // Snapshot only after registration/authority filtering. Handlers in this dispatch
+    // intentionally share its event, while later dispatches and the caller stay isolated.
+    const dispatchEvent =
+      (hookName === "before_prompt_build" || hookName === "agent_turn_prepare") &&
+      "messages" in event &&
+      Array.isArray(event.messages)
+        ? cloneHookIsolationValue(hookName, {
+            ...event,
+            messages: projectModelContextMessages(event.messages),
+          })
+        : event;
+
+    logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);
 
     let result: TResult | undefined;
 
-    for (const hook of hooks) {
+    for (const hook of selectedHooks) {
+      policy.assertHandlerBoundaryActive?.();
+      let shouldStop = false;
       try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>
-        )(event, ctx);
+        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
+        const handlerEvent = policy.eventForHandler
+          ? policy.eventForHandler(dispatchEvent, result)
+          : policy.isolateEventPerHandler
+            ? cloneHookIsolationValue(hookName, dispatchEvent)
+            : dispatchEvent;
+        const invocation = hookName === "before_prompt_build" ? { active: true } : undefined;
+        const handlerContext = invocation
+          ? {
+              ...ctx,
+              hookInvocation: Object.freeze({
+                assertActive() {
+                  if (!invocation.active) {
+                    throw new Error("prompt hook invocation is no longer active");
+                  }
+                },
+              }),
+            }
+          : ctx;
+        let handlerResult: TResult | undefined;
+        try {
+          const promise = Promise.resolve(handler(handlerEvent, handlerContext));
+          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+          handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        } finally {
+          // Expiry closes this handler even while its work or a later handler continues.
+          if (invocation) {
+            invocation.active = false;
+          }
+        }
 
-        if (handlerResult !== undefined && handlerResult !== null) {
-          if (mergeResults && result !== undefined) {
-            result = mergeResults(result, handlerResult);
+        policy.onHandlerResult?.({ hook, result: handlerResult });
+
+        const shouldMergeResult =
+          handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
+        if (shouldMergeResult) {
+          if (policy.mergeResults) {
+            result = policy.mergeResults(result, handlerResult, hook, dispatchEvent);
           } else {
             result = handlerResult;
           }
+          if (result && policy.shouldStop?.(result)) {
+            const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
+            const priority = hook.priority ?? 0;
+            logger?.debug?.(
+              `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+            );
+            policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
+            shouldStop = true;
+          }
         }
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
+        const failOpen = !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName);
+        policy.onHandlerError?.(hook, failOpen);
+        if (err instanceof HookIsolationError) {
+          throw err;
         }
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+      policy.assertHandlerBoundaryActive?.();
+      if (shouldStop) {
+        break;
       }
     }
 
     return result;
+  }
+
+  /**
+   * Run a sequential claim hook where the first `{ handled: true }` result wins.
+   */
+  async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1] & ClaimingHookAdmission,
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+  ): Promise<TResult | undefined> {
+    const hooks = getHooksForName(registry, hookName, ctx);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
+
+    const outcome = await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
+    return outcome.status === "handled" ? outcome.result : undefined;
+  }
+
+  async function runClaimingHooksList<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hooks: Array<PluginHookRegistration<K> & { pluginId: string }>,
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1] & ClaimingHookAdmission,
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+  ): Promise<
+    | { status: "handled"; result: TResult }
+    | { status: "declined" }
+    | { status: "error"; error: string }
+  > {
+    const assertCurrent = readClaimingHookAdmission(ctx);
+    let firstError: string | undefined;
+    for (const hook of hooks) {
+      // Host admission failures end dispatch; plugin fail-open policy cannot swallow them.
+      if (assertCurrent) {
+        await assertCurrent();
+      }
+      try {
+        const invokeHandler = async (): Promise<TResult | void> => {
+          const promise = Promise.resolve(
+            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+          );
+          const timeoutMs = getClaimingHookTimeoutMs(hook);
+          return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        };
+        const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
+        if (handlerResult?.handled) {
+          return { status: "handled", result: handlerResult };
+        }
+      } catch (err) {
+        firstError ??= sanitizeHookError(err);
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+    return firstError ? { status: "error", error: firstError } : { status: "declined" };
+  }
+
+  async function runClaimingHookForPluginOutcome<
+    K extends PluginHookName,
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Targeted hook outcomes preserve caller-specific handled result types.
+    TResult extends { handled: boolean },
+  >(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<
+    | { status: "handled"; result: TResult }
+    | { status: "missing_plugin" }
+    | { status: "no_handler" }
+    | { status: "declined" }
+    | { status: "error"; error: string }
+  > {
+    const pluginLoaded = registry.plugins.some(
+      (plugin) => plugin.id === pluginId && plugin.status === "loaded",
+    );
+    if (!pluginLoaded) {
+      return { status: "missing_plugin" };
+    }
+
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return { status: "no_handler" };
+    }
+
+    logger?.debug?.(
+      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
+    );
+
+    return runClaimingHooksList<K, TResult>(hooks, hookName, event, ctx);
   }
 
   // =========================================================================
@@ -176,107 +977,232 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
 
   /**
-   * Run before_agent_start hook.
-   * Allows plugins to inject context into the system prompt.
-   * Runs sequentially, merging systemPrompt and prependContext from all handlers.
+   * Run before_prompt_build hook.
+   * Allows plugins to inject context and system prompt before prompt submission.
    */
-  async function runBeforeAgentStart(
-    event: PluginHookBeforeAgentStartEvent,
+  async function runBeforePromptBuild(
+    event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<PluginHookBeforeAgentStartResult | undefined> {
-    return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
-      "before_agent_start",
-      event,
-      ctx,
-      (acc, next) => ({
-        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-        prependContext:
-          acc?.prependContext && next.prependContext
-            ? `${acc.prependContext}\n\n${next.prependContext}`
-            : (next.prependContext ?? acc?.prependContext),
-      }),
-    );
+  ): Promise<PluginHookBeforePromptBuildResult | undefined> {
+    if (beforePromptBuildDispatch.getStore()?.active) {
+      return undefined;
+    }
+    const token = { active: true };
+    return await beforePromptBuildDispatch.run(token, async () => {
+      try {
+        return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+          "before_prompt_build",
+          event,
+          ctx,
+          {
+            mergeResults: mergeBeforePromptBuild,
+            includeRegistration: (registration) => registration.requiresToolAuthority !== true,
+          },
+        );
+      } finally {
+        token.active = false;
+      }
+    });
+  }
+
+  /** Runs context enrichment only after the host has finalized the turn's tool surface. */
+  async function runAuthorizedPromptBuild(
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+    params: {
+      toolAuthorityFingerprint: string;
+      activeToolNames: readonly string[];
+      assertHostActive: () => void;
+    },
+  ): Promise<PluginHookBeforePromptBuildResult | undefined> {
+    const sourceFingerprint = params.toolAuthorityFingerprint.trim();
+    if (!sourceFingerprint) {
+      return undefined;
+    }
+    const activeToolNames = [
+      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
+    ].toSorted();
+    const activeToolNameSet = new Set(activeToolNames);
+    const token = { active: true };
+    const assertActive = () => {
+      if (!token.active) {
+        throw new Error("prompt tool authority is no longer active");
+      }
+      params.assertHostActive();
+    };
+    const authority: PluginHookToolAuthority = Object.freeze({
+      fingerprint: createHash("sha256")
+        .update(sourceFingerprint)
+        .update("\0")
+        .update(activeToolNames.join("\0"))
+        .digest("hex"),
+      allows(toolName: string): boolean {
+        assertActive();
+        return activeToolNameSet.has(normalizeToolPolicyName(toolName));
+      },
+      assertActive,
+    });
+    try {
+      const result = await runModifyingHook<
+        "before_prompt_build",
+        PluginHookBeforePromptBuildResult
+      >(
+        "before_prompt_build",
+        event,
+        { ...ctx, toolAuthority: authority },
+        {
+          mergeResults: mergeBeforePromptBuild,
+          includeRegistration: (registration) => registration.requiresToolAuthority === true,
+          assertHandlerBoundaryActive: assertActive,
+        },
+      );
+      if (!result) {
+        return undefined;
+      }
+      return {
+        ...(result.prependContext ? { prependContext: result.prependContext } : {}),
+        ...(result.appendContext ? { appendContext: result.appendContext } : {}),
+      };
+    } finally {
+      token.active = false;
+    }
   }
 
   /**
    * Run agent_end hook.
    * Allows plugins to analyze completed conversations.
-   * Runs in parallel (fire-and-forget).
+   * Runs handlers in parallel.
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
+    optionsLocal?: VoidHookRunOptions,
   ): Promise<void> {
-    return runVoidHook("agent_end", event, ctx);
+    return runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal);
   }
 
   /**
-   * Run before_compaction hook.
+   * Run before_agent_finalize hook.
+   * Allows plugins to request one more model pass before a natural final reply
+   * is accepted. This is not the user-facing /stop cancellation path.
    */
-  async function runBeforeCompaction(
-    event: PluginHookBeforeCompactionEvent,
+  async function runBeforeAgentFinalize(
+    event: PluginHookBeforeAgentFinalizeEvent,
     ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("before_compaction", event, ctx);
-  }
-
-  /**
-   * Run after_compaction hook.
-   */
-  async function runAfterCompaction(
-    event: PluginHookAfterCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("after_compaction", event, ctx);
+  ): Promise<PluginHookBeforeAgentFinalizeResult | undefined> {
+    return runModifyingHook<"before_agent_finalize", PluginHookBeforeAgentFinalizeResult>(
+      "before_agent_finalize",
+      withAgentRunId(event, ctx),
+      ctx,
+      { mergeResults: mergeBeforeAgentFinalize },
+    );
   }
 
   // =========================================================================
   // Message Hooks
   // =========================================================================
 
-  /**
-   * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runMessageReceived(
-    event: PluginHookMessageReceivedEvent,
-    ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
-  }
-
-  /**
-   * Run message_sending hook.
-   * Allows plugins to modify or cancel outgoing messages.
-   * Runs sequentially.
-   */
-  async function runMessageSending(
-    event: PluginHookMessageSendingEvent,
-    ctx: PluginHookMessageContext,
-  ): Promise<PluginHookMessageSendingResult | undefined> {
-    return runModifyingHook<"message_sending", PluginHookMessageSendingResult>(
-      "message_sending",
+  async function runInboundClaimForPlugin(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginHookInboundClaimResult | undefined> {
+    const hooks = getHooksForNameAndPlugin(registry, "inbound_claim", pluginId);
+    const outcome = await runClaimingHooksList<"inbound_claim", PluginHookInboundClaimResult>(
+      hooks,
+      "inbound_claim",
       event,
       ctx,
-      (acc, next) => ({
-        content: next.content ?? acc?.content,
-        cancel: next.cancel ?? acc?.cancel,
-      }),
+    );
+    return outcome.status === "handled" ? outcome.result : undefined;
+  }
+
+  async function runInboundClaimForPluginOutcome(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginTargetedInboundClaimOutcome> {
+    return runClaimingHookForPluginOutcome<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      pluginId,
+      event,
+      ctx,
     );
   }
 
   /**
-   * Run message_sent hook.
-   * Runs in parallel (fire-and-forget).
+   * Run before_dispatch hook.
+   * Allows plugins to inspect or handle a message before model dispatch.
+   * First handler returning { handled: true } wins.
    */
-  async function runMessageSent(
-    event: PluginHookMessageSentEvent,
-    ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_sent", event, ctx);
+  async function runBeforeDispatch(
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+    requester?: PluginSubagentRequesterContext,
+  ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    const runHandler = requester
+      ? (run: () => Promise<PluginHookBeforeDispatchResult | void>) =>
+          withPluginSubagentRequesterContext(requester, run)
+      : undefined;
+    return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
+      "before_dispatch",
+      event,
+      ctx,
+      runHandler,
+    );
   }
 
-  // =========================================================================
+  /**
+   * Run before_agent_run gate hook.
+   * Fires after session resolution and workspace preparation, before model inference.
+   * Returns the most-restrictive pass/block decision from all handlers.
+   * Handlers that return void are treated as pass.
+   */
+  async function runBeforeAgentRun(
+    event: PluginHookBeforeAgentRunEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<GateHookResult<InputGateDecision> | undefined> {
+    let winningPluginId: string | undefined;
+    const decision = await runModifyingHook<"before_agent_run", InputGateDecision | undefined>(
+      "before_agent_run",
+      event,
+      ctx,
+      {
+        mergeResults: (_acc, next, reg) => {
+          if (next === undefined || next === null) {
+            const normalized: InputGateDecision = {
+              outcome: "block",
+              reason: "before_agent_run returned an invalid decision",
+            };
+            winningPluginId = reg.pluginId;
+            return normalized;
+          }
+          const normalized: InputGateDecision = isHookDecision(next)
+            ? next
+            : {
+                outcome: "block",
+                reason: "before_agent_run returned an invalid decision",
+              };
+          const merged =
+            !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
+              ? normalized
+              : _acc;
+          if (merged === normalized) {
+            winningPluginId = reg.pluginId;
+          }
+          return merged;
+        },
+        mergeNullResults: true,
+        shouldStop: (result) => result?.outcome === "block",
+        terminalLabel: "gate-decision",
+      },
+    );
+    if (!decision) {
+      return undefined;
+    }
+    return { decision, pluginId: winningPluginId ?? "unknown" };
+  }
+
   // Tool Hooks
   // =========================================================================
 
@@ -288,16 +1214,68 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   async function runBeforeToolCall(
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
+    receipt?: Readonly<{
+      token: ExecutionIdentityAdmissionToken;
+      assertAuthority: () => boolean | void;
+      markOwnerDecision?: () => void;
+    }>,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
       "before_tool_call",
       event,
       ctx,
-      (acc, next) => ({
-        params: next.params ?? acc?.params,
-        block: next.block ?? acc?.block,
-        blockReason: next.blockReason ?? acc?.blockReason,
-      }),
+      {
+        // A plugin may mutate its local event, but direct writes must not alter
+        // the caller's params or the event observed by another plugin.
+        isolateEventPerHandler: true,
+        mergeResults: (acc, next, reg) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          const approvalAlreadyRequested = acc?.requireApproval !== undefined;
+          let params = lastDefined(acc?.params, next.params);
+          if (approvalAlreadyRequested) {
+            params = acc?.params;
+          } else if (next.requireApproval && params !== undefined) {
+            // Approval covers one detached snapshot. Later hooks may still
+            // block, but they cannot change what the operator reviewed.
+            params = cloneHookIsolationValue("before_tool_call", params);
+          }
+          return {
+            params,
+            block: stickyTrue(acc?.block, next.block),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            requireApproval:
+              acc?.requireApproval ??
+              (next.requireApproval
+                ? { ...next.requireApproval, pluginId: reg.pluginId }
+                : undefined),
+          };
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+        onHandlerResult: ({ hook, result }) => {
+          receipt?.markOwnerDecision?.();
+          recordBeforeToolCallDecision({
+            event,
+            hook,
+            token: receipt?.token,
+            result,
+            receiptAuthority: receipt?.assertAuthority,
+          });
+        },
+        onHandlerError: (hook, failOpen) => {
+          receipt?.markOwnerDecision?.();
+          recordBeforeToolCallDecision({
+            event,
+            hook,
+            token: receipt?.token,
+            failOpen,
+            receiptAuthority: receipt?.assertAuthority,
+          });
+        },
+      },
+      event.toolName,
     );
   }
 
@@ -309,7 +1287,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
   /**
@@ -326,112 +1304,120 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ): PluginHookToolResultPersistResult | undefined {
-    const hooks = getHooksForName(registry, "tool_result_persist");
-    if (hooks.length === 0) {
-      return undefined;
+    const result = runSyncMessageHooks("tool_result_persist", event, ctx);
+    return result ? { message: result.message } : undefined;
+  }
+
+  // =========================================================================
+  // Message Write Hooks
+  // =========================================================================
+
+  /**
+   * Run before_message_write hook.
+   *
+   * This hook is intentionally synchronous: it runs on the hot path where
+   * session transcripts are appended synchronously.
+   *
+   * Handlers are executed sequentially in priority order (higher first).
+   * If any handler returns { block: true }, the message is NOT written
+   * to the session JSONL and we return immediately.
+   * If a handler returns { message }, the modified message replaces the
+   * original for subsequent handlers and the final write.
+   */
+  function runBeforeMessageWrite(
+    event: PluginHookBeforeMessageWriteEvent,
+    ctx: { agentId?: string; sessionKey?: string },
+  ): PluginHookBeforeMessageWriteResult | undefined {
+    const result = runSyncMessageHooks("before_message_write", event, ctx);
+    if (result?.block) {
+      return { block: true };
     }
-
-    let current = event.message;
-
-    for (const hook of hooks) {
-      try {
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
-          | PluginHookToolResultPersistResult
-          | void
-          | Promise<unknown>;
-
-        // Guard against accidental async handlers (this hook is sync-only).
-        // oxlint-disable-next-line typescript/no-explicit-any
-        if (out && typeof (out as any).then === "function") {
-          const msg =
-            `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
-            `this hook is synchronous and the result was ignored.`;
-          if (catchErrors) {
-            logger?.warn?.(msg);
-            continue;
-          }
-          throw new Error(msg);
-        }
-
-        const next = (out as PluginHookToolResultPersistResult | undefined)?.message;
-        if (next) {
-          current = next;
-        }
-      } catch (err) {
-        const msg = `[hooks] tool_result_persist handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
-      }
-    }
-
-    return { message: current };
+    return result && result.message !== event.message ? { message: result.message } : undefined;
   }
 
   // =========================================================================
   // Session Hooks
   // =========================================================================
 
-  /**
-   * Run session_start hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSessionStart(
-    event: PluginHookSessionStartEvent,
-    ctx: PluginHookSessionContext,
-  ): Promise<void> {
-    return runVoidHook("session_start", event, ctx);
-  }
-
-  /**
-   * Run session_end hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSessionEnd(
-    event: PluginHookSessionEndEvent,
-    ctx: PluginHookSessionContext,
-  ): Promise<void> {
-    return runVoidHook("session_end", event, ctx);
-  }
-
   // =========================================================================
-  // Gateway Hooks
+  // Skill Hooks
   // =========================================================================
 
   /**
-   * Run gateway_start hook.
-   * Runs in parallel (fire-and-forget).
+   * Run every registered proposal evaluator and retain its attribution.
+   *
+   * Evaluator failures are returned as data so Workshop can persist and show
+   * them. A broken optional evaluator must not make proposal state unreadable.
    */
-  async function runGatewayStart(
-    event: PluginHookGatewayStartEvent,
-    ctx: PluginHookGatewayContext,
-  ): Promise<void> {
-    return runVoidHook("gateway_start", event, ctx);
+  async function runSkillProposalEvaluate(
+    event: PluginHookSkillProposalEvaluateEvent,
+    ctx: PluginHookSkillContext,
+  ): Promise<PluginHookSkillProposalEvaluationOutcome[]> {
+    const hookName = "skill_proposal_evaluate";
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return [];
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return await Promise.all(
+      hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
+        const pluginVersion = getPluginPackageVersion(hook.pluginId);
+        const attribution = {
+          evaluatorId: hook.registrationId ?? hook.pluginId,
+          pluginId: hook.pluginId,
+          ...(pluginVersion ? { pluginVersion } : {}),
+        };
+        try {
+          const handler = hook.handler as (
+            event: PluginHookSkillProposalEvaluateEvent,
+            ctx: PluginHookSkillContext,
+          ) => Promise<PluginHookSkillProposalEvaluateResult | void>;
+          const promise = Promise.resolve(handler(immutableEvent, ctx));
+          const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
+          const result = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+          return result
+            ? Object.assign({}, attribution, { status: "completed" as const, result })
+            : Object.assign({}, attribution, { status: "skipped" as const });
+        } catch (error) {
+          const message = sanitizeHookError(error);
+          logger?.error(
+            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
+          );
+          return Object.assign({}, attribution, { status: "error" as const, error: message });
+        }
+      }),
+    );
   }
 
-  /**
-   * Run gateway_stop hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runGatewayStop(
-    event: PluginHookGatewayStopEvent,
-    ctx: PluginHookGatewayContext,
-  ): Promise<void> {
-    return runVoidHook("gateway_stop", event, ctx);
+  async function runResolveExecEnv(
+    event: PluginHookResolveExecEnvEvent,
+    ctx: PluginHookResolveExecEnvContext,
+  ): Promise<Record<string, string>> {
+    const result = await runModifyingHook<"resolve_exec_env", Record<string, string>>(
+      "resolve_exec_env",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
+      },
+    );
+    return result ?? {};
   }
 
   // =========================================================================
   // Utility
   // =========================================================================
 
-  /**
-   * Check if any hooks are registered for a given hook name.
-   */
-  function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+  function hasHooks<K extends PluginHookName>(
+    hookName: K,
+    ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
+  ): boolean {
+    return registry.typedHooks.some(
+      (hook) =>
+        hook.hookName === hookName && (ctx === undefined || isHookContextEligible(hook, ctx)),
+    );
   }
 
   /**
@@ -443,24 +1429,122 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   return {
     // Agent hooks
-    runBeforeAgentStart,
+    runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
+      mergeResults: mergeBeforeModelResolve,
+    }),
+    runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
+      mergeResults: mergeAgentTurnPrepare,
+    }),
+    runBeforePromptBuild,
+    runAuthorizedPromptBuild,
+    runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
+    runModelCallStarted: bindVoidHook("model_call_started"),
+    runModelCallEnded: bindVoidHook("model_call_ended"),
+    runLlmInput: withoutIncognitoLlmContent(bindVoidHook("llm_input")),
+    runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
+    runBeforeAgentFinalize,
     runAgentEnd,
-    runBeforeCompaction,
-    runAfterCompaction,
+    /**
+     * Run before_compaction hook.
+     */
+    runBeforeCompaction: bindVoidHook("before_compaction"),
+    /**
+     * Run after_compaction hook.
+     */
+    runAfterCompaction: bindVoidHook("after_compaction"),
+    runBeforeReset: bindVoidHook("before_reset"),
+    // Lifecycle gate hooks
+    runBeforeAgentRun,
     // Message hooks
-    runMessageReceived,
-    runMessageSending,
-    runMessageSent,
+    runInboundClaim: bindClaimingHook("inbound_claim"),
+    runInboundClaimForPlugin,
+    runInboundClaimForPluginOutcome,
+    runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
+    runMessageReceived: bindVoidHook("message_received"),
+    runBeforeDispatch,
+    runReplyDispatch: bindClaimingHook("reply_dispatch"),
+    runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
+      // Handlers see the latest payload without inheriting host-only media trust.
+      eventForHandler: (event, result) => ({
+        ...event,
+        payload: toPluginReplyPayload(result?.payload ?? event.payload),
+      }),
+      mergeResults: (acc, next, _registration, event) => ({
+        payload:
+          next.payload === undefined
+            ? (acc?.payload ?? event.payload)
+            : acceptPluginReplyPayload(acc?.payload ?? event.payload, next.payload),
+        cancel: stickyTrue(acc?.cancel, next.cancel),
+        reason: lastDefined(acc?.reason, next.reason),
+      }),
+      shouldStop: (result) => result.cancel === true,
+      terminalLabel: "cancel=true",
+    }),
+    runMessageSending: async (
+      event: HookEvent<"message_sending">,
+      ctx: HookContext<"message_sending">,
+    ) => {
+      const result = await runModifyingHook<"message_sending", HookResult<"message_sending">>(
+        "message_sending",
+        event,
+        ctx,
+        {
+          mergeResults: (acc, next) => ({
+            content: lastDefined(acc?.content, next.content),
+            cancel: stickyTrue(acc?.cancel, next.cancel),
+            cancelReason: lastDefined(acc?.cancelReason, next.cancelReason),
+            metadata: next.metadata ?? acc?.metadata,
+          }),
+          shouldStop: (decision) => decision.cancel === true,
+          terminalLabel: "cancel=true",
+        },
+      );
+      const original = result?.cancel ? undefined : (result?.content ?? event.content);
+      const content = finalizeGroupThreadToolReply(original, event, ctx);
+      return content !== original ? { ...result, content } : result;
+    },
+    runMessageSent: bindVoidHook("message_sent"),
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    // Message write hooks
+    runBeforeMessageWrite,
     // Session hooks
-    runSessionStart,
-    runSessionEnd,
+    runSessionStart: bindVoidHook("session_start"),
+    runSessionEnd: bindVoidHook("session_end"),
+    runSubagentDeliveryTarget: bindModifyingHook("subagent_delivery_target", {
+      mergeResults: mergeSubagentDeliveryTargetResult,
+    }),
+    runSubagentSpawned: bindVoidHook("subagent_spawned"),
+    runSubagentProgress: bindVoidHook("subagent_progress"),
+    runSubagentEnded: bindVoidHook("subagent_ended"),
     // Gateway hooks
-    runGatewayStart,
-    runGatewayStop,
+    runGatewayStart: bindVoidHook("gateway_start"),
+    runGatewayStop: bindVoidHook("gateway_stop"),
+    runHeartbeatPromptContribution: bindModifyingHook("heartbeat_prompt_contribution", {
+      mergeResults: mergeAgentTurnPrepare,
+    }),
+    runCronReconciled: bindVoidHook("cron_reconciled"),
+    runCronChanged: bindVoidHook("cron_changed"),
+    // Skill hooks
+    runSkillProposalEvaluate,
+    runSkillProposalChanged: bindFrozenVoidHook("skill_proposal_changed"),
+    runSkillChanged: bindFrozenVoidHook("skill_changed"),
+    // Install hooks
+    runBeforeInstall: bindModifyingHook("before_install", {
+      mergeResults: (acc, next) => {
+        const findings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
+        return {
+          findings: findings.length ? findings : undefined,
+          block: stickyTrue(acc?.block, next.block),
+          blockReason: lastDefined(acc?.blockReason, next.blockReason),
+        };
+      },
+      shouldStop: (result) => result.block === true,
+      terminalLabel: "block=true",
+    }),
+    runResolveExecEnv,
     // Utility
     hasHooks,
     getHookCount,
@@ -468,3 +1552,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 }
 
 export type HookRunner = ReturnType<typeof createHookRunner>;
+
+export type SubagentLifecycleHookRunner = Pick<
+  HookRunner,
+  "hasHooks" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
+>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

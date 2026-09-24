@@ -1,7 +1,11 @@
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-sdk";
+// Nostr helper module supports config schema behavior.
+import {
+  AllowFromListSchema,
+  DmPolicySchema,
+  MarkdownConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
@@ -60,31 +64,28 @@ export const NostrConfigSchema = z.object({
   /** Account name (optional display name) */
   name: z.string().optional(),
 
+  /** Optional default account id for routing/account selection. */
+  defaultAccount: z.string().optional(),
+
   /** Whether this channel is enabled */
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
 
   /** Markdown formatting overrides (tables). */
   markdown: MarkdownConfigSchema,
 
   /** Private key in hex or nsec bech32 format */
-  privateKey: z.string().optional(),
+  privateKey: buildSecretInputSchema().optional(),
 
   /** WebSocket relay URLs to connect to */
   relays: z.array(z.string()).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+  dmPolicy: DmPolicySchema.optional(),
 
   /** Allowed sender pubkeys (npub or hex format) */
-  allowFrom: z.array(allowFromEntry).optional(),
+  allowFrom: AllowFromListSchema,
 
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),
 });
-
-export type NostrConfig = z.infer<typeof NostrConfigSchema>;
-
-/**
- * JSON Schema for Control UI (converted from Zod)
- */
-export const nostrChannelConfigSchema = buildChannelConfigSchema(NostrConfigSchema);

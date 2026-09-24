@@ -1,105 +1,132 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { getMatrixRuntime } from "../runtime.js";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { openMatrixCredentialsAsyncStore, openMatrixCredentialsStore } from "./credentials-read.js";
+import {
+  isMatrixCredentialRevocation,
+  matrixCredentialsStoreKey,
+  normalizeMatrixStoredCredentials,
+} from "./credentials-state.js";
+import type {
+  MatrixCredentialStateRecord,
+  MatrixStoredCredentialRecord,
+  MatrixStoredCredentials,
+} from "./credentials-state.js";
 
-export type MatrixStoredCredentials = {
-  homeserver: string;
-  userId: string;
-  accessToken: string;
-  deviceId?: string;
-  createdAt: string;
-  lastUsedAt?: string;
-};
+export {
+  clearMatrixCredentials,
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+  resolveMatrixCredentialsDir,
+  resolveMatrixCredentialsPath,
+} from "./credentials-read.js";
+export type { MatrixStoredCredentials } from "./credentials-state.js";
 
-const CREDENTIALS_FILENAME = "credentials.json";
-
-export function resolveMatrixCredentialsDir(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir?: string,
-): string {
-  const resolvedStateDir = stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
-  return path.join(resolvedStateDir, "credentials", "matrix");
-}
-
-export function resolveMatrixCredentialsPath(env: NodeJS.ProcessEnv = process.env): string {
-  const dir = resolveMatrixCredentialsDir(env);
-  return path.join(dir, CREDENTIALS_FILENAME);
-}
-
-export function loadMatrixCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixStoredCredentials | null {
-  const credPath = resolveMatrixCredentialsPath(env);
-  try {
-    if (!fs.existsSync(credPath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(credPath, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<MatrixStoredCredentials>;
-    if (
-      typeof parsed.homeserver !== "string" ||
-      typeof parsed.userId !== "string" ||
-      typeof parsed.accessToken !== "string"
-    ) {
-      return null;
-    }
-    return parsed as MatrixStoredCredentials;
-  } catch {
-    return null;
-  }
-}
-
-export function saveMatrixCredentials(
+export async function saveMatrixCredentials(
   credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
   env: NodeJS.ProcessEnv = process.env,
-): void {
-  const dir = resolveMatrixCredentialsDir(env);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const credPath = resolveMatrixCredentialsPath(env);
-
-  const existing = loadMatrixCredentials(env);
+  accountId?: string | null,
+): Promise<void> {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const preparedCredentials = { ...credentials };
   const now = new Date().toISOString();
-
-  const toSave: MatrixStoredCredentials = {
-    ...credentials,
-    createdAt: existing?.createdAt ?? now,
-    lastUsedAt: now,
-  };
-
-  fs.writeFileSync(credPath, JSON.stringify(toSave, null, 2), "utf-8");
+  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    return {
+      accountId: normalizedAccountId,
+      homeserver: preparedCredentials.homeserver,
+      userId: preparedCredentials.userId,
+      accessToken: preparedCredentials.accessToken,
+      ...(typeof preparedCredentials.deviceId === "string"
+        ? { deviceId: preparedCredentials.deviceId }
+        : {}),
+      createdAt: existing?.createdAt ?? now,
+      lastUsedAt: now,
+    } satisfies MatrixStoredCredentialRecord;
+  });
 }
 
-export function touchMatrixCredentials(env: NodeJS.ProcessEnv = process.env): void {
-  const existing = loadMatrixCredentials(env);
-  if (!existing) {
+export async function saveBackfilledMatrixDeviceId(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<"saved" | "skipped"> {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const preparedCredentials = { ...credentials };
+  const now = new Date().toISOString();
+  let result: "saved" | "skipped" = "saved";
+  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+    result = "saved";
+    // A delayed login backfill must not resurrect credentials after logout.
+    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      result = "skipped";
+      return current;
+    }
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    if (
+      existing &&
+      (existing.homeserver !== preparedCredentials.homeserver ||
+        existing.userId !== preparedCredentials.userId ||
+        existing.accessToken !== preparedCredentials.accessToken)
+    ) {
+      result = "skipped";
+      return existing;
+    }
+    return {
+      accountId: normalizedAccountId,
+      homeserver: preparedCredentials.homeserver,
+      userId: preparedCredentials.userId,
+      accessToken: preparedCredentials.accessToken,
+      ...(typeof preparedCredentials.deviceId === "string"
+        ? { deviceId: preparedCredentials.deviceId }
+        : {}),
+      createdAt: existing?.createdAt ?? now,
+      lastUsedAt: now,
+    } satisfies MatrixStoredCredentialRecord;
+  });
+  return result;
+}
+
+export async function touchMatrixCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<void> {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
+    // A delayed activity touch must preserve an explicit logout tombstone.
+    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      return current;
+    }
+    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
+    return existing ? { ...existing, lastUsedAt: new Date().toISOString() } : undefined;
+  });
+}
+
+async function updateMatrixCredentials(
+  env: NodeJS.ProcessEnv,
+  accountId: string,
+  update: (
+    current: MatrixCredentialStateRecord | undefined,
+  ) => MatrixCredentialStateRecord | undefined,
+): Promise<void> {
+  const store = openMatrixCredentialsAsyncStore(env);
+  const key = matrixCredentialsStoreKey(accountId);
+  if (!store.observe || !store.compareAndApply) {
+    // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
+    openMatrixCredentialsStore(env).update(key, update);
     return;
   }
-
-  existing.lastUsedAt = new Date().toISOString();
-  const credPath = resolveMatrixCredentialsPath(env);
-  fs.writeFileSync(credPath, JSON.stringify(existing, null, 2), "utf-8");
-}
-
-export function clearMatrixCredentials(env: NodeJS.ProcessEnv = process.env): void {
-  const credPath = resolveMatrixCredentialsPath(env);
-  try {
-    if (fs.existsSync(credPath)) {
-      fs.unlinkSync(credPath);
+  let observation = await store.observe(key);
+  for (;;) {
+    const value = update(observation.value);
+    const result = await store.compareAndApply(
+      key,
+      observation.comparison,
+      value === undefined
+        ? { operation: "update", action: "keep" }
+        : { operation: "update", action: "set", value },
+    );
+    if (result.status !== "conflict") {
+      return;
     }
-  } catch {
-    // ignore
+    observation = result.current;
   }
-}
-
-export function credentialsMatchConfig(
-  stored: MatrixStoredCredentials,
-  config: { homeserver: string; userId: string },
-): boolean {
-  // If userId is empty (token-based auth), only match homeserver
-  if (!config.userId) {
-    return stored.homeserver === config.homeserver;
-  }
-  return stored.homeserver === config.homeserver && stored.userId === config.userId;
 }

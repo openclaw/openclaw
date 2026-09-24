@@ -1,0 +1,460 @@
+import { composedParent } from "../lib/navigation-click.ts";
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+
+const CARD_GAP = 10;
+const VIEWPORT_PADDING = 12;
+
+type PortaledHovercardPlacement = "horizontal" | "vertical";
+
+export class PortaledHovercardController {
+  card: HTMLDivElement | null = null;
+  pointerInside = false;
+  pointerOverCard = false;
+  focusInside = false;
+  cardFocusInside = false;
+  explicitHold = false;
+  restoringFocus = false;
+
+  private closeTimer: number | null = null;
+  private exitCleanup: (() => void) | null = null;
+  private anchor: HTMLElement | null = null;
+  private openTimer: number | null = null;
+  private placement: PortaledHovercardPlacement = "vertical";
+  private stopPositioning: (() => void) | null = null;
+  private trigger: HTMLElement | null = null;
+  private triggerAncestors: Node[] = [];
+  private readonly presentationObserver = new MutationObserver(() => {
+    if (this.checkPresentation()) {
+      this.observePresentation();
+    }
+  });
+  private unmountContents: (() => void) | null = null;
+  private readonly handleCardPointerEnter = (event: PointerEvent) => {
+    if (event.currentTarget === this.card) {
+      this.pointerOverCard = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusIn = (event: FocusEvent) => {
+    if (event.currentTarget === this.card) {
+      this.cardFocusInside = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusOut = (event: FocusEvent) => {
+    const card = this.card;
+    if (!card || event.currentTarget !== this.card) {
+      return;
+    }
+    if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
+      return;
+    }
+    this.cardFocusInside = false;
+    this.scheduleClose();
+  };
+
+  constructor(
+    private readonly close: () => void,
+    private readonly closeDelayMs = 120,
+    private readonly dismiss: () => void = close,
+  ) {}
+
+  readonly handleTriggerKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      this.dismiss();
+      return;
+    }
+    // A portal is outside its trigger's tab sequence. Enter at the first link,
+    // then let native Tab traversal own the links inside the card.
+    if (event.key !== "Tab" || event.shiftKey || event.composedPath()[0] !== this.trigger) {
+      return;
+    }
+    const first = this.focusables()[0];
+    if (first) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  readonly handleCardKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" && event.key !== "Tab") {
+      return;
+    }
+    const focusables = this.focusables();
+    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
+    if (event.key === "Tab" && document.activeElement !== edge) {
+      return;
+    }
+    event.preventDefault();
+    // Capture before dismissal retires the trigger; focus must not reopen the
+    // card being dismissed. Scheduled pointer exit may animate, keyboard exit does not.
+    const trigger = this.trigger;
+    this.dismiss();
+    this.returnFocus(trigger);
+  };
+
+  renderContents(card: HTMLDivElement, update: () => void): void {
+    const focused = card.contains(document.activeElement) ? document.activeElement : null;
+    update();
+    if (focused && !card.contains(document.activeElement)) {
+      // Live session links can move between sections or disappear after a roster update.
+      const replacement =
+        focused instanceof HTMLAnchorElement
+          ? this.focusables().find(
+              (link) => link instanceof HTMLAnchorElement && link.href === focused.href,
+            )
+          : undefined;
+      if (replacement) {
+        replacement.focus({ preventScroll: true });
+      } else {
+        this.returnFocus(this.trigger);
+        this.focusInside = document.activeElement === this.trigger;
+      }
+    }
+  }
+
+  returnFocus(trigger: HTMLElement | null): void {
+    this.restoringFocus = true;
+    trigger?.focus({ preventScroll: true });
+    this.restoringFocus = false;
+  }
+
+  get held(): boolean {
+    return (
+      this.explicitHold ||
+      this.pointerInside ||
+      this.pointerOverCard ||
+      this.focusInside ||
+      this.cardFocusInside
+    );
+  }
+
+  schedulePointerExit(bridgeMs = 220): void {
+    this.pointerInside = false;
+    // Portaled cards can be viewport-clamped diagonally from their trigger, so
+    // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+    this.scheduleClose(bridgeMs);
+  }
+
+  focusables(): HTMLElement[] {
+    // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
+    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
+  }
+
+  scheduleOpen(delay: number, open: () => void, trigger = this.trigger): void {
+    this.trigger = trigger;
+    this.observePresentation();
+    this.openTimer = window.setTimeout(() => {
+      this.openTimer = null;
+      if (this.checkPresentation()) {
+        open();
+      }
+    }, delay);
+  }
+
+  clearClose(): void {
+    if (this.closeTimer !== null) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+  }
+
+  scheduleClose(delayMs = this.closeDelayMs): void {
+    this.clearClose();
+    if (this.held) {
+      return;
+    }
+    // A pending open has no portal gap to cross, so it closes immediately.
+    if (!this.card) {
+      this.close();
+      return;
+    }
+    this.closeTimer = window.setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.held) {
+        this.close();
+      }
+    }, delayMs);
+  }
+
+  markTrigger(trigger: HTMLElement): void {
+    if (this.trigger !== trigger) {
+      clearPortaledHovercardTrigger(this.trigger);
+    }
+    this.trigger = trigger;
+    markPortaledHovercardTrigger(trigger);
+    this.observePresentation();
+  }
+
+  private presentationAncestors(): Node[] {
+    const ancestors: Node[] = [];
+    let node: Node | null = this.trigger;
+    while (node) {
+      ancestors.push(node);
+      node =
+        node instanceof Element && node.assignedSlot
+          ? node.assignedSlot
+          : node instanceof ShadowRoot
+            ? node.host
+            : node.parentNode;
+    }
+    return ancestors;
+  }
+
+  private checkPresentation(): boolean {
+    if (
+      this.trigger &&
+      (!this.trigger.isConnected ||
+        this.presentationAncestors().some(
+          (node) =>
+            node instanceof Element &&
+            (node.hasAttribute("inert") ||
+              node.hasAttribute("hidden") ||
+              node.getAttribute("aria-hidden") === "true"),
+        ))
+    ) {
+      this.dismiss();
+      return false;
+    }
+    return true;
+  }
+
+  private observePresentation(): void {
+    const ancestors = this.presentationAncestors();
+    if (
+      ancestors.length === this.triggerAncestors.length &&
+      ancestors.every((node, index) => node === this.triggerAncestors[index])
+    ) {
+      return;
+    }
+    this.presentationObserver.disconnect();
+    this.triggerAncestors = ancestors;
+    // Only the active trigger's ancestry: retained panes can retire without removal,
+    // and document subtree observers cannot see inside a shadow root.
+    for (const node of ancestors) {
+      this.presentationObserver.observe(node, {
+        childList: true,
+        attributes: true,
+        attributeFilter: ["inert", "hidden", "aria-hidden", "slot", "name"],
+      });
+    }
+  }
+
+  mount(
+    anchor: HTMLElement,
+    card: HTMLDivElement,
+    placement: PortaledHovercardPlacement,
+    observeVisualViewport = true,
+    unmountContents?: () => void,
+  ): void {
+    if (!this.checkPresentation()) {
+      unmountContents?.();
+      card.remove();
+      return;
+    }
+    this.clearCard();
+    this.anchor = anchor;
+    this.card = card;
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
+    this.placement = placement;
+    this.unmountContents = unmountContents ?? null;
+    this.stopPositioning = mountPortaledHovercard({
+      anchor,
+      trigger: this.trigger ?? anchor,
+      card,
+      placement,
+      observeVisualViewport,
+    });
+  }
+
+  clearCard(exitDurationMs = 0): void {
+    this.stopPositioning?.();
+    this.stopPositioning = null;
+    this.exitCleanup?.();
+    this.exitCleanup = null;
+    const card = this.card;
+    const unmountContents = this.unmountContents;
+    this.card = null;
+    this.unmountContents = null;
+    if (!card) {
+      return;
+    }
+    if (
+      exitDurationMs <= 0 ||
+      !card.isConnected ||
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      unmountContents?.();
+      card.remove();
+      return;
+    }
+    card.dataset.open = "false";
+    card.style.pointerEvents = "none";
+    let exitTimer: number | null = null;
+    const finish = () => {
+      if (exitTimer !== null) {
+        window.clearTimeout(exitTimer);
+        exitTimer = null;
+      }
+      card.removeEventListener("transitionend", handleTransitionEnd);
+      unmountContents?.();
+      card.remove();
+      if (this.exitCleanup === finish) {
+        this.exitCleanup = null;
+      }
+    };
+    const handleTransitionEnd = (event: TransitionEvent) => {
+      if (event.target === card && event.propertyName === "opacity") {
+        finish();
+      }
+    };
+    card.addEventListener("transitionend", handleTransitionEnd);
+    exitTimer = window.setTimeout(finish, exitDurationMs + 50);
+    this.exitCleanup = finish;
+  }
+
+  position(): void {
+    if (this.anchor && this.card) {
+      positionPortaledHovercard(this.anchor, this.card, this.placement);
+    }
+  }
+
+  reset(exitDurationMs = 0): void {
+    this.presentationObserver.disconnect();
+    this.triggerAncestors = [];
+    if (this.openTimer !== null) {
+      window.clearTimeout(this.openTimer);
+      this.openTimer = null;
+    }
+    this.clearClose();
+    this.pointerInside = false;
+    this.pointerOverCard = false;
+    this.focusInside = false;
+    this.cardFocusInside = false;
+    this.explicitHold = false;
+    clearPortaledHovercardTrigger(this.trigger);
+    this.clearCard(exitDurationMs);
+    this.anchor = null;
+    this.trigger = null;
+  }
+}
+
+function markPortaledHovercardTrigger(trigger: HTMLElement): void {
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-expanded", "false");
+}
+
+function clearPortaledHovercardTrigger(trigger: HTMLElement | null): void {
+  trigger?.removeAttribute("aria-controls");
+  trigger?.removeAttribute("aria-expanded");
+  trigger?.removeAttribute("aria-haspopup");
+}
+
+export function createPortaledHovercard(id: string, className: string): HTMLDivElement {
+  const card = document.createElement("div");
+  card.id = id;
+  card.className = className;
+  card.dataset.open = "true";
+  card.setAttribute("role", "dialog");
+  return card;
+}
+
+function mountPortaledHovercard(params: {
+  anchor: HTMLElement;
+  trigger: HTMLElement;
+  card: HTMLDivElement;
+  placement: PortaledHovercardPlacement;
+  observeVisualViewport?: boolean;
+}): () => void {
+  // A modal drawer makes body siblings inert. Keep its card inside the same
+  // dialog, then use the existing menu top layer to escape clipping and stacking.
+  let owner: Element = document.body;
+  for (
+    let ancestor: Element | null = params.anchor;
+    ancestor;
+    ancestor = composedParent(ancestor)
+  ) {
+    if (ancestor.localName === "openclaw-modal-dialog") {
+      owner = ancestor;
+      break;
+    }
+  }
+  owner.append(params.card);
+  promoteToPopoverTopLayer(params.card);
+  params.trigger.setAttribute("aria-controls", params.card.id);
+  params.trigger.setAttribute("aria-expanded", "true");
+  const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);
+  let frame: number | null = null;
+  const schedulePosition = () => {
+    if (frame === null) {
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        position();
+      });
+    }
+  };
+  const handleScroll = (event: Event) => {
+    const source = event.composedPath()[0];
+    if (source === window || source === document) {
+      schedulePosition();
+      return;
+    }
+    // Transcript auto-scroll and scrolling inside the card cannot move a
+    // sidebar trigger. Only a scroll in its rendered ancestry needs geometry.
+    for (let node: Element | null = params.anchor; node; node = composedParent(node)) {
+      if (node === source) {
+        schedulePosition();
+        return;
+      }
+    }
+  };
+  window.addEventListener("resize", schedulePosition);
+  window.addEventListener("scroll", handleScroll, true);
+  if (params.observeVisualViewport !== false) {
+    window.visualViewport?.addEventListener("resize", schedulePosition);
+    window.visualViewport?.addEventListener("scroll", schedulePosition);
+  }
+  position();
+  return () => {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+    }
+    window.removeEventListener("resize", schedulePosition);
+    window.removeEventListener("scroll", handleScroll, true);
+    window.visualViewport?.removeEventListener("resize", schedulePosition);
+    window.visualViewport?.removeEventListener("scroll", schedulePosition);
+  };
+}
+
+function positionPortaledHovercard(
+  anchor: HTMLElement,
+  card: HTMLDivElement,
+  placement: PortaledHovercardPlacement,
+): void {
+  const anchorRect = anchor.getBoundingClientRect();
+  const cardWidth = card.offsetWidth;
+  const cardHeight = card.offsetHeight;
+  const maxLeft = Math.max(VIEWPORT_PADDING, innerWidth - cardWidth - VIEWPORT_PADDING);
+  const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardHeight - VIEWPORT_PADDING);
+  const fitsBelow = anchorRect.bottom + CARD_GAP + cardHeight + VIEWPORT_PADDING <= innerHeight;
+  if (placement === "horizontal") {
+    const fitsRight = anchorRect.right + CARD_GAP + cardWidth + VIEWPORT_PADDING <= innerWidth;
+    const fitsLeft = anchorRect.left - CARD_GAP - cardWidth >= VIEWPORT_PADDING;
+    const fitsAbove = anchorRect.top - CARD_GAP - cardHeight >= VIEWPORT_PADDING;
+    // Keep the existing clamp when neither axis has room; switch axes only to clear the trigger.
+    if (fitsRight || fitsLeft || (!fitsBelow && !fitsAbove)) {
+      const left = fitsRight ? anchorRect.right + CARD_GAP : anchorRect.left - cardWidth - CARD_GAP;
+      card.dataset.side = fitsRight ? "right" : "left";
+      card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
+      card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
+      return;
+    }
+  }
+  const side = fitsBelow ? "bottom" : "top";
+  const top = fitsBelow ? anchorRect.bottom + CARD_GAP : anchorRect.top - cardHeight - CARD_GAP;
+  card.dataset.side = side;
+  card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
+  card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
+}

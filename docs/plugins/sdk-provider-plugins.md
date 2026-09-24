@@ -1,0 +1,549 @@
+---
+summary: "Step-by-step guide to building a model provider plugin for OpenClaw"
+title: "Building provider plugins"
+sidebarTitle: "Provider plugins"
+read_when:
+  - You are building a new model provider plugin
+  - You want to add an OpenAI-compatible proxy or custom LLM to OpenClaw
+  - You need to understand provider auth, catalogs, and runtime hooks
+---
+
+Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
+catalog, API-key auth, and dynamic model resolution.
+
+Acme AI is a fictional vendor used throughout this guide and its child pages.
+Helpers named `fetchAcme*` in the samples are placeholders for your own vendor
+API calls, not exported OpenClaw functions.
+
+<Info>
+  New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
+  first for package structure and manifest setup.
+</Info>
+
+<Tip>
+  Provider plugins add models to OpenClaw's normal inference loop. If the
+  model must run through a native agent daemon that owns threads, compaction,
+  or tool events, pair the provider with an [agent
+  harness](/plugins/sdk-agent-harness) instead of putting daemon protocol
+  details in core.
+</Tip>
+
+## Import an existing credential during sign-in
+
+An auth method can declare `credentialImport` with a `migrationProviderId`,
+an exact `itemId`, and a `credentialKind` (`api_key`, `oauth`, or `token`).
+`models auth login` asks that migration owner for an auth-only plan before
+starting interactive sign-in. `--force`, `--profile-id`, and `--set-default` skip
+import. `--set-default` uses the auth method's recommended model through the normal
+sign-in flow.
+
+The migration plugin declares its ID in `contracts.migrationProviders` and can
+export `buildMigrationProvider()` from a top-level `migration-provider-api.ts`
+public artifact. Keep that entry lightweight. Bundled plugins and enabled
+installed plugins can supply it without replacing the running plugin registry.
+Explicitly disabled or denied migration owners cannot execute their artifacts.
+The existing bundled migration compatibility rules still apply.
+
+The login caller selects only the declared auth item. Its details must contain
+the matching `provider` and `credentialKind`. A migrated result also supplies
+the saved `profileId`. The owner must honor cancellation, reread the selected
+source before persistence, and reject a changed credential. Login passes
+`configPatchMode: "none"` so import preserves model defaults and restrictions.
+Unavailable storage or an unusable matching OAuth profile continues to interactive
+sign-in. A matching account identity alone does not make expired credentials usable.
+A failed selected import stops the operation instead of silently starting a different login.
+
+## Handle model access after sign-in
+
+Existing consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
+after credentials are saved. When effective restrictions can hide the provider's
+models, the existing `prompter.select` receives these options:
+
+| Value  | Label                        | Effect                                                      |
+| ------ | ---------------------------- | ----------------------------------------------------------- |
+| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
+| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
+
+Render the supplied message and options, and return the selected option's value.
+Do not assume that every `select` call chooses a provider or auth method. Neither
+choice activates a new default model. No choice is requested when restrictions
+are absent or already allow the whole provider.
+
+Canceling or rejecting this post-save selection does not undo saved credentials.
+The flow throws `ProviderAuthConfigApplyError`, which extends
+`ProviderCredentialsSavedError`; report that credentials were saved instead of
+treating it as a failed credential exchange. Cancellation at the selection leaves
+restrictions unchanged. A later application failure can leave the policy saved
+but not active in the running Gateway. Keep credential persistence and model
+visibility outcomes distinct.
+
+### Defer the choice to a later reply
+
+For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
+receives a `PreparedProviderModelAccess` request and replaces the post-save
+`select` call; it does not apply the choice. Retain the prepared request until
+login finishes. Use `createProviderLoginFlowRegistry` and
+`reserveProviderLoginFlow` to reserve only the credential exchange.
+
+After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
+`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
+the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
+The pending model-access question has its own lifetime and remains answerable
+after that release; it does not block another login.
+
+Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
+`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
+optional. `readConfig` must return the host's current config. The owner validates
+the answer, applies the choice, and consumes that question. Expired or conflicting
+choices receive a fresh question based on current restrictions.
+Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
+Do not reconstruct a wildcard write from button text or reuse a prepared request
+for a new login.
+
+### Keep hosted writes authorized
+
+Hosted callers supply `signal` and `assertCurrent` to check the current login,
+sender authority, and selected provider/method before effects and after awaited
+work. An abort signal or matching login identifier alone is not current
+authorization. `beforePersistentEffect` remains the credential-persistence
+preparation callback. Browser authorization ends after the credential phase;
+the later model choice uses the current conversation or wizard authority.
+
+For a deferred choice, pass the answering command's current authority check as
+`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
+supplied: it is the policy writer's current config. Otherwise read the host's
+current config. The original login callback does not authorize a later command.
+Let the shared owner report the visibility outcome:
+a saved policy is not proof that the running Gateway applied it.
+
+## Walkthrough
+
+<Steps>
+  <Step title="Package and manifest">
+    ### Step 1: Package and manifest
+
+    <CodeGroup>
+    ```json package.json
+    {
+      "name": "@myorg/openclaw-acme-ai",
+      "version": "1.0.0",
+      "type": "module",
+      "openclaw": {
+        "extensions": ["./index.ts"],
+        "providers": ["acme-ai"],
+        "compat": {
+          "pluginApi": ">=2026.3.24-beta.2",
+          "minGatewayVersion": "2026.3.24-beta.2"
+        },
+        "build": {
+          "openclawVersion": "2026.3.24-beta.2",
+          "pluginSdkVersion": "2026.3.24-beta.2"
+        }
+      }
+    }
+    ```
+
+    ```json openclaw.plugin.json
+    {
+      "id": "acme-ai",
+      "name": "Acme AI",
+      "description": "Acme AI model provider",
+      "providers": ["acme-ai"],
+      "modelSupport": {
+        "modelPrefixes": ["acme-"]
+      },
+      "setup": {
+        "providers": [
+          {
+            "id": "acme-ai",
+            "envVars": ["ACME_AI_API_KEY"]
+          }
+        ]
+      },
+      "providerAuthAliases": {
+        "acme-ai-coding": "acme-ai"
+      },
+      "providerAuthChoices": [
+        {
+          "provider": "acme-ai",
+          "method": "api-key",
+          "choiceId": "acme-ai-api-key",
+          "choiceLabel": "Acme AI API key",
+          "groupId": "acme-ai",
+          "groupLabel": "Acme AI",
+          "cliFlag": "--acme-ai-api-key",
+          "cliOption": "--acme-ai-api-key <key>",
+          "cliDescription": "Acme AI API key"
+        }
+      ],
+      "configSchema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    }
+    ```
+    </CodeGroup>
+
+    `setup.providers[].envVars` lets OpenClaw detect credentials without
+    loading your plugin runtime. Add `providerAuthAliases` when a provider
+    variant should reuse another provider id's auth. `modelSupport` is
+    optional and lets OpenClaw auto-load your provider plugin from shorthand
+    model ids like `acme-large` before runtime hooks exist. `openclaw.compat`
+    and `openclaw.build` in `package.json` are required for ClawHub
+    publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
+    are the two required fields. `minGatewayVersion` falls back to
+    `openclaw.install.minHostVersion` when omitted).
+
+    The version strings in the sample manifests are placeholders. Pin them to
+    the OpenClaw release your plugin builds and tests against.
+
+  </Step>
+
+  <Step title="Register the provider">
+    A minimal text provider needs an `id`, `label`, `auth`, and `catalog`.
+    `catalog` is the provider-owned runtime/config hook. It can call live
+    vendor APIs and returns `models.providers` entries.
+
+    ```typescript index.ts
+    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+    import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+
+    export default definePluginEntry({
+      id: "acme-ai",
+      name: "Acme AI",
+      description: "Acme AI model provider",
+      register(api) {
+        api.registerProvider({
+          id: "acme-ai",
+          label: "Acme AI",
+          docsPath: "/providers/acme-ai",
+          envVars: ["ACME_AI_API_KEY"],
+
+          auth: [
+            createProviderApiKeyAuthMethod({
+              providerId: "acme-ai",
+              methodId: "api-key",
+              label: "Acme AI API key",
+              hint: "API key from your Acme AI dashboard",
+              optionKey: "acmeAiApiKey",
+              flagName: "--acme-ai-api-key",
+              envVar: "ACME_AI_API_KEY",
+              promptMessage: "Enter your Acme AI API key",
+              defaultModel: "acme-ai/acme-large",
+            }),
+          ],
+
+          catalog: {
+            order: "simple",
+            run: async (ctx) => {
+              const apiKey =
+                ctx.resolveProviderApiKey("acme-ai").apiKey;
+              if (!apiKey) return null;
+              return {
+                provider: {
+                  baseUrl: "https://api.acme-ai.com/v1",
+                  apiKey,
+                  api: "openai-completions",
+                  models: [
+                    {
+                      id: "acme-large",
+                      name: "Acme Large",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+                      contextWindow: 200000,
+                      maxTokens: 32768,
+                    },
+                    {
+                      id: "acme-small",
+                      name: "Acme Small",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+                      contextWindow: 128000,
+                      maxTokens: 8192,
+                    },
+                  ],
+                },
+              };
+            },
+          },
+        });
+
+        api.registerModelCatalogProvider({
+          provider: "acme-ai",
+          kinds: ["text"],
+          liveCatalog: async (ctx) => {
+            const apiKey = ctx.resolveProviderApiKey("acme-ai").apiKey;
+            if (!apiKey) return null;
+            return [
+              {
+                kind: "text",
+                provider: "acme-ai",
+                model: "acme-large",
+                label: "Acme Large",
+                source: "live",
+              },
+            ];
+          },
+        });
+      },
+    });
+    ```
+
+    `registerModelCatalogProvider` is the newer control-plane catalog surface
+    for list/help/picker UI, covering `text`, `voice`, `image_generation`,
+    `video_generation`, and `music_generation` rows. Keep vendor endpoint
+    calls and response mapping in the plugin. OpenClaw owns the shared row
+    shape, source labels, and help rendering.
+
+    That is a working provider. Users can now run
+    `openclaw onboard --acme-ai-api-key <key>` and select
+    `acme-ai/acme-large` as their model.
+
+    For provider-key lookup and selection from an already loaded auth store,
+    import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
+    `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
+    loading the full agent runtime just to select a credential. The deprecated
+    `agent-runtime` exports remain available for compatibility. Use the narrower
+    `provider-auth` route in new code. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
+    that govern deprecated surfaces named on this page and its child pages.
+
+    Bundled custom API-key methods can use `captureProviderApiKey` and
+    `persistProviderApiKey` from `openclaw/plugin-sdk/provider-auth-api-key`
+    when vendor prompts or validation need to stay between auth steps.
+    `captureProviderApiKey(ctx, options)` accepts the existing token/provider,
+    environment, and prompt options. It returns the resolved `apiKey` for
+    validation alongside the original storage `input` and `mode`, without
+    saving credentials. Build returned profiles from `input` and `mode` so
+    SecretRefs remain references. The helper preserves the context's staged
+    workspace and secret-storage prompt preference.
+
+    `persistProviderApiKey(ctx, profileId, { provider, resolved, metadata })`
+    accepts an already resolved non-interactive key. It leaves profile-sourced
+    credentials unchanged, returns `false` if credential conversion fails,
+    and propagates persistence errors. Keep vendor checks before this call;
+    apply auth-profile config and model defaults afterward through their
+    existing owners. Neither helper chooses an endpoint or model.
+
+    A custom interactive auth method that mints a static token or API key can
+    request protected persistence on its returned profile:
+
+    ```typescript
+    return {
+      profiles: [
+        {
+          profileId: "acme-ai:device",
+          credential: { type: "token", provider: "acme-ai", token },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "ACME_AI_TOKEN",
+          },
+        },
+      ],
+    };
+    ```
+
+    OpenClaw keeps the inline value only while staged validation runs. At the
+    final persistence boundary it writes the value to the protected local store
+    and saves a `tokenRef` or `keyRef` in the auth profile. `namePrefix` must be
+    an uppercase environment-style name. OpenClaw adds a stable suffix derived
+    from the provider and final profile id so multiple profiles remain separate.
+    Use this only for provider-minted static credentials, not rotating OAuth
+    credentials or values already supplied as SecretRefs.
+
+    For live `/models` discovery, catalog helpers, pricing normalization, and
+    the narrower single-provider entry point, see [Provider model
+    catalogs](/plugins/sdk-provider-plugins/model-catalogs).
+
+  </Step>
+
+  <Step title="Add dynamic model resolution">
+    If your provider accepts arbitrary model IDs (like a proxy or router),
+    add `resolveDynamicModel`:
+
+    ```typescript
+    api.registerProvider({
+      // ... id, label, auth, catalog from above
+
+      resolveDynamicModel: (ctx) => ({
+        id: ctx.modelId,
+        name: ctx.modelId,
+        provider: "acme-ai",
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      }),
+    });
+    ```
+
+    If resolving requires a network call, return the requested model directly
+    from `prepareDynamicModel`. OpenClaw applies the same configured overrides
+    and normalization as synchronous dynamic resolution. Existing hooks that
+    return nothing still retry `resolveDynamicModel` after preparation.
+
+  </Step>
+
+  <Step title="Add runtime hooks (as needed)">
+    Most providers only need `catalog` + `resolveDynamicModel`. Add hooks
+    incrementally as your provider requires them.
+
+    Start with the shared family builders in [Provider hook
+    families](/plugins/sdk-provider-plugins/hook-families), then wire individual
+    hooks with [Provider hook wiring](/plugins/sdk-provider-plugins/runtime-hooks).
+
+  </Step>
+
+  <Step title="Add extra capabilities (optional)">
+    ### Step 5: Add extra capabilities
+
+    A provider plugin can register embeddings, speech, realtime transcription,
+    realtime voice, media understanding, image generation, video generation,
+    web fetch, and web search alongside text inference. OpenClaw classifies this as a
+    **hybrid-capability** plugin - the recommended pattern for company plugins
+    (one plugin per vendor). See
+    [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
+
+    Register the audio capabilities from [Provider voice
+    capabilities](/plugins/sdk-provider-plugins/voice-and-audio). Register
+    embeddings, generation, fetch, and search from [Provider media and
+    search](/plugins/sdk-provider-plugins/media-and-search).
+
+  </Step>
+
+  <Step title="Test">
+    ### Step 6: Test
+
+    ```typescript src/provider.test.ts
+    import { describe, it, expect } from "vitest";
+    // Export your provider config object from index.ts or a dedicated file
+    import { acmeProvider } from "./provider.js";
+
+    describe("acme-ai provider", () => {
+      it("resolves dynamic models", () => {
+        const model = acmeProvider.resolveDynamicModel!({
+          modelId: "acme-beta-v3",
+        } as any);
+        expect(model.id).toBe("acme-beta-v3");
+        expect(model.provider).toBe("acme-ai");
+      });
+
+      it("returns catalog when key is available", async () => {
+        const result = await acmeProvider.catalog!.run({
+          resolveProviderApiKey: () => ({ apiKey: "test-key" }),
+        } as any);
+        expect(result?.provider?.models).toHaveLength(2);
+      });
+
+      it("returns null catalog when no key", async () => {
+        const result = await acmeProvider.catalog!.run({
+          resolveProviderApiKey: () => ({ apiKey: undefined }),
+        } as any);
+        expect(result).toBeNull();
+      });
+    });
+    ```
+
+  </Step>
+</Steps>
+
+## Publish to ClawHub
+
+Provider plugins publish the same way as any other external code plugin:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+```
+
+`clawhub skill publish <path>` is a different command for publishing a skill
+folder, not a plugin package - do not use it here.
+
+## File structure
+
+```
+<bundled-plugin-root>/acme-ai/
+├── package.json              # openclaw.providers metadata
+├── openclaw.plugin.json      # Manifest with provider auth metadata
+├── index.ts                  # definePluginEntry + registerProvider
+└── src/
+    ├── provider.test.ts      # Tests
+    └── usage.ts              # Usage endpoint (optional)
+```
+
+## Catalog order reference
+
+`catalog.order` controls when your catalog merges relative to built-in
+providers:
+
+| Order     | When          | Use case                                        |
+| --------- | ------------- | ----------------------------------------------- |
+| `simple`  | First pass    | Plain API-key providers                         |
+| `profile` | After simple  | Providers gated on auth profiles                |
+| `paired`  | After profile | Synthesize multiple related entries             |
+| `late`    | Last pass     | Override existing providers (wins on collision) |
+
+## Next steps
+
+- [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel
+- [SDK Runtime](/plugins/sdk-runtime) - `api.runtime` helpers (TTS, search, subagent)
+- [SDK Overview](/plugins/sdk-overview) - full subpath import reference
+- [Plugin Internals](/plugins/architecture-internals#provider-runtime-hooks) - hook details and bundled examples
+
+## Where each section moved
+
+Every section of the single-page version now lives on this page or on one of
+the five child pages below. The anchors from the single-page version still
+resolve here.
+
+### Provider model catalogs
+
+[Provider model catalogs](/plugins/sdk-provider-plugins/model-catalogs) — Live model discovery, catalog helpers, pricing normalization, and the single-provider entry helper.
+
+- <a id="live-model-discovery"></a>[Live model discovery](/plugins/sdk-provider-plugins/model-catalogs#live-model-discovery)
+
+### Provider hook families
+
+[Provider hook families](/plugins/sdk-provider-plugins/hook-families) — Shared replay, stream, and tool-compat family builders and the SDK seams behind them.
+
+- <a id="sdk-seams-powering-the-family-builders"></a>[SDK seams powering the family builders](/plugins/sdk-provider-plugins/hook-families#sdk-seams-powering-the-family-builders)
+
+### Provider hook wiring
+
+[Provider hook wiring](/plugins/sdk-provider-plugins/runtime-hooks) — Per-hook wiring for auth exchange, headers, transport identity, usage, and the hook order table.
+
+- <a id="token-exchange"></a>[Token exchange](/plugins/sdk-provider-plugins/runtime-hooks#token-exchange)
+- <a id="custom-headers"></a>[Custom headers](/plugins/sdk-provider-plugins/runtime-hooks#custom-headers)
+- <a id="native-transport-identity"></a>[Native transport identity](/plugins/sdk-provider-plugins/runtime-hooks#native-transport-identity)
+- <a id="usage-and-billing"></a>[Usage and billing](/plugins/sdk-provider-plugins/runtime-hooks#usage-and-billing)
+- <a id="common-provider-hooks"></a>[Common provider hooks](/plugins/sdk-provider-plugins/runtime-hooks#common-provider-hooks)
+
+### Provider voice capabilities
+
+[Provider voice capabilities](/plugins/sdk-provider-plugins/voice-and-audio) — Speech, realtime transcription, realtime voice, and media understanding capabilities.
+
+- <a id="speech-tts"></a>[Speech (TTS)](/plugins/sdk-provider-plugins/voice-and-audio#speech-tts)
+- <a id="realtime-transcription"></a>[Realtime transcription](/plugins/sdk-provider-plugins/voice-and-audio#realtime-transcription)
+- <a id="realtime-voice"></a>[Realtime voice](/plugins/sdk-provider-plugins/voice-and-audio#realtime-voice)
+- <a id="media-understanding"></a>[Media understanding](/plugins/sdk-provider-plugins/voice-and-audio#media-understanding)
+
+### Provider media and search
+
+[Provider media and search](/plugins/sdk-provider-plugins/media-and-search) — Embeddings, image and video generation, web fetch, and web search capabilities.
+
+- <a id="embeddings"></a>[Embeddings](/plugins/sdk-provider-plugins/media-and-search#embeddings)
+- <a id="image-and-video-generation"></a>[Image and video generation](/plugins/sdk-provider-plugins/media-and-search#image-and-video-generation)
+- <a id="web-fetch-and-search"></a>[Web fetch and search](/plugins/sdk-provider-plugins/media-and-search#web-fetch-and-search)
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Building channel plugins](/plugins/sdk-channel-plugins)
+- [Model providers](/concepts/model-providers)

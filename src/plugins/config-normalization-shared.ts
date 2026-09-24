@@ -1,0 +1,257 @@
+// Shares plugin config normalization helpers across control-plane paths.
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
+
+/** Canonical plugin config shape consumed by runtime policy and loaders. */
+export type NormalizedPluginsConfig = {
+  enabled: boolean;
+  allow: string[];
+  deny: string[];
+  loadPaths: string[];
+  slots: {
+    memory?: string | null;
+    contextEngine?: string | null;
+  };
+  entries: Record<
+    string,
+    {
+      enabled?: boolean;
+      hooks?: {
+        allowPromptInjection?: boolean;
+        allowConversationAccess?: boolean;
+        timeoutMs?: number;
+        timeouts?: Record<string, number>;
+      };
+      subagent?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+      };
+      llm?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+        allowedCompletionModels?: string[];
+        hasAllowedCompletionModelsConfig?: boolean;
+        allowAuthProfileOverride?: boolean;
+        allowAgentIdOverride?: boolean;
+      };
+      config?: unknown;
+    }
+  >;
+};
+
+/** Plugin id normalizer used while loading aliases or raw config. */
+export type NormalizePluginId = (id: string) => string;
+
+/** Default plugin id normalizer for already-canonical ids. */
+const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
+
+export function normalizePluginConfigList(
+  value: unknown,
+  normalizePluginId: NormalizePluginId,
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
+    .filter(Boolean);
+}
+
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: 1, max: 600_000 });
+}
+
+function normalizeHookTimeouts(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, number> = {};
+  for (const [hookName, timeoutMs] of Object.entries(value)) {
+    const normalizedTimeoutMs = normalizeHookTimeoutMs(timeoutMs);
+    if (normalizedTimeoutMs !== undefined) {
+      normalized[hookName] = normalizedTimeoutMs;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizePluginEntries(
+  entries: unknown,
+  normalizePluginId: NormalizePluginId,
+): NormalizedPluginsConfig["entries"] {
+  if (!isRecord(entries)) {
+    return {};
+  }
+  const normalized: NormalizedPluginsConfig["entries"] = {};
+  for (const [key, value] of Object.entries(entries)) {
+    const normalizedKey = normalizePluginId(key);
+    if (!normalizedKey) {
+      continue;
+    }
+    if (!isRecord(value)) {
+      normalized[normalizedKey] = {};
+      continue;
+    }
+    const entry = value;
+    const hooksRaw = entry.hooks;
+    const hooks = isRecord(hooksRaw)
+      ? {
+          allowPromptInjection: hooksRaw.allowPromptInjection,
+          allowConversationAccess: hooksRaw.allowConversationAccess,
+          timeoutMs: normalizeHookTimeoutMs(hooksRaw.timeoutMs),
+          timeouts: normalizeHookTimeouts(hooksRaw.timeouts),
+        }
+      : undefined;
+    const normalizedHooks =
+      hooks &&
+      (typeof hooks.allowPromptInjection === "boolean" ||
+        typeof hooks.allowConversationAccess === "boolean" ||
+        hooks.timeoutMs !== undefined ||
+        hooks.timeouts !== undefined)
+        ? {
+            ...(typeof hooks.allowPromptInjection === "boolean"
+              ? { allowPromptInjection: hooks.allowPromptInjection }
+              : {}),
+            ...(typeof hooks.allowConversationAccess === "boolean"
+              ? { allowConversationAccess: hooks.allowConversationAccess }
+              : {}),
+            ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
+            ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
+          }
+        : undefined;
+    const subagentRaw = entry.subagent;
+    const subagent = isRecord(subagentRaw)
+      ? {
+          allowModelOverride: subagentRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(subagentRaw.allowedModels),
+          allowedModels: Array.isArray(subagentRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(subagentRaw.allowedModels)
+            : undefined,
+        }
+      : undefined;
+    const normalizedSubagent =
+      subagent &&
+      (typeof subagent.allowModelOverride === "boolean" ||
+        subagent.hasAllowedModelsConfig ||
+        (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
+        ? {
+            ...(typeof subagent.allowModelOverride === "boolean"
+              ? { allowModelOverride: subagent.allowModelOverride }
+              : {}),
+            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
+              ? { allowedModels: subagent.allowedModels }
+              : {}),
+          }
+        : undefined;
+    const llmRaw = entry.llm;
+    const llm = isRecord(llmRaw)
+      ? {
+          allowModelOverride: llmRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(llmRaw.allowedModels),
+          allowedModels: Array.isArray(llmRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedModels)
+            : undefined,
+          hasAllowedCompletionModelsConfig: Array.isArray(llmRaw.allowedCompletionModels),
+          allowedCompletionModels: Array.isArray(llmRaw.allowedCompletionModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedCompletionModels)
+            : undefined,
+          allowAuthProfileOverride: llmRaw.allowAuthProfileOverride,
+          allowAgentIdOverride: llmRaw.allowAgentIdOverride,
+        }
+      : undefined;
+    const normalizedLlm =
+      llm &&
+      (typeof llm.allowModelOverride === "boolean" ||
+        llm.hasAllowedModelsConfig ||
+        (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
+        llm.hasAllowedCompletionModelsConfig ||
+        (Array.isArray(llm.allowedCompletionModels) && llm.allowedCompletionModels.length > 0) ||
+        typeof llm.allowAuthProfileOverride === "boolean" ||
+        typeof llm.allowAgentIdOverride === "boolean")
+        ? {
+            ...(typeof llm.allowModelOverride === "boolean"
+              ? { allowModelOverride: llm.allowModelOverride }
+              : {}),
+            ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
+              ? { allowedModels: llm.allowedModels }
+              : {}),
+            ...(llm.hasAllowedCompletionModelsConfig
+              ? { hasAllowedCompletionModelsConfig: true }
+              : {}),
+            ...(Array.isArray(llm.allowedCompletionModels) && llm.allowedCompletionModels.length > 0
+              ? { allowedCompletionModels: llm.allowedCompletionModels }
+              : {}),
+            ...(typeof llm.allowAuthProfileOverride === "boolean"
+              ? { allowAuthProfileOverride: llm.allowAuthProfileOverride }
+              : {}),
+            ...(typeof llm.allowAgentIdOverride === "boolean"
+              ? { allowAgentIdOverride: llm.allowAgentIdOverride }
+              : {}),
+          }
+        : undefined;
+    normalized[normalizedKey] = {
+      ...normalized[normalizedKey],
+      enabled:
+        typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
+      subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
+      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
+      config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
+    };
+  }
+  return normalized;
+}
+
+/** Normalizes plugin config while allowing callers to resolve aliases first. */
+export function normalizePluginsConfigWithResolverCore(
+  config?: OpenClawConfig["plugins"],
+  normalizePluginId: NormalizePluginId = identityNormalizePluginId,
+): NormalizedPluginsConfig {
+  const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
+  return {
+    enabled: config?.enabled !== false,
+    allow: normalizePluginConfigList(config?.allow, normalizePluginId),
+    deny: normalizePluginConfigList(config?.deny, normalizePluginId),
+    loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),
+    slots: {
+      memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
+      contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
+    },
+    entries: normalizePluginEntries(config?.entries, normalizePluginId),
+  };
+}
+
+/**
+ * Enables an owner for any enabled channel; disables it only when all channels are off.
+ * Unspecified channels leave the plugin's own activation policy in control.
+ */
+export function resolveChannelConfigEnablement(
+  cfg: OpenClawConfig | undefined,
+  pluginId: string,
+  channelIds: readonly string[] = [],
+): boolean | undefined {
+  const channels = cfg?.channels as Record<string, unknown> | undefined;
+  if (!channels) {
+    return undefined;
+  }
+  // Declared ownership is authoritative; infer from the plugin id only when absent.
+  const candidateIds = channelIds.length
+    ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
+    : [normalizeChatChannelId(pluginId)];
+  const enablement = candidateIds.map((channelId) => {
+    const entry = channelId ? channels[channelId] : undefined;
+    return isRecord(entry) ? entry.enabled : undefined;
+  });
+  if (enablement.includes(true)) {
+    return true;
+  }
+  return enablement.every((enabled) => enabled === false) ? false : undefined;
+}

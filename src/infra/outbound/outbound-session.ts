@@ -1,95 +1,149 @@
+// Outbound session routing maps send targets back into route/session metadata
+// so outbound-only messages can be mirrored into conversation state.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ResolvedMessagingTarget } from "./target-resolver.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
-import { parseDiscordTarget } from "../../discord/targets.js";
-import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
-import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../routing/session-key.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { PreparedConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import {
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "../../signal/identity.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { createSlackWebClient } from "../../slack/client.js";
-import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
-import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+  resolveSessionStorePathCore,
+  updateSessionLastRoute,
+} from "../../config/sessions/inbound.runtime.js";
+import {
+  loadSessionEntryReadOnly,
+  loadSessionEntryReadOnlyInScope,
+  updateSessionLastRouteInScope,
+  type SessionAccessScope,
+} from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveStateDir } from "../../config/state-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentRoute, type RoutePeer } from "../../routing/resolve-route.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { isGatewayExternallySupervised } from "../gateway-supervision.js";
+import { buildOutboundBaseSessionKey } from "./base-session-key.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "./channel-target-prefix.js";
+import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
+/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
+  /** Canonical conversation identity mirrored into MsgContext.From. */
   from: string;
+  /** Routable delivery address mirrored into MsgContext.To. */
   to: string;
   threadId?: string | number;
+  /** Trusted human-readable target name resolved before delivery. */
+  displayName?: string;
 };
 
+/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  plugin?: ChannelPlugin;
   agentId: string;
   accountId?: string | null;
   target: string;
+  deliveryPurpose?: "heartbeat-owner";
+  currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
 };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
-// Cache Slack channel type lookups to avoid repeated API calls.
-const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
-
-function looksLikeUuid(value: string): boolean {
-  if (UUID_RE.test(value) || UUID_COMPACT_RE.test(value)) {
-    return true;
+function rebaseOutboundSessionRoute(
+  route: OutboundSessionRoute,
+  baseSessionKey: string,
+): OutboundSessionRoute | null {
+  if (
+    route.sessionKey !== route.baseSessionKey &&
+    !route.sessionKey.startsWith(`${route.baseSessionKey}:`)
+  ) {
+    return null;
   }
-  const compact = value.replace(/-/g, "");
-  if (!/^[0-9a-f]+$/i.test(compact)) {
-    return false;
-  }
-  return /[a-f]/i.test(compact);
+  return {
+    ...route,
+    sessionKey: `${baseSessionKey}${route.sessionKey.slice(route.baseSessionKey.length)}`,
+    baseSessionKey,
+  };
 }
 
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
+const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> = [
+  { kind: "direct", pattern: /^(user:|dm:)/i },
+  { kind: "channel", pattern: /^(channel:|conversation:|thread:)/i },
+  { kind: "group", pattern: /^(group:|room:)/i },
+];
+
+function normalizeInferredPeerKind(value: ChatType | undefined): ChatType | undefined {
+  return value === "direct" || value === "group" || value === "channel" ? value : undefined;
+}
+
+function inferPeerKindFromPlugin(params: {
+  plugin: ChannelPlugin | undefined;
+  targets: readonly string[];
+}): ChatType | undefined {
+  for (const target of params.targets) {
+    const inferred = normalizeInferredPeerKind(
+      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
+    );
+    if (inferred) {
+      return inferred;
     }
-    return String(Math.trunc(value));
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return undefined;
 }
 
-function stripProviderPrefix(raw: string, channel: string): string {
-  const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  const prefix = `${channel.toLowerCase()}:`;
-  if (lower.startsWith(prefix)) {
-    return trimmed.slice(prefix.length).trim();
+function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
+  for (const target of targets) {
+    for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
+      if (fallback.pattern.test(target)) {
+        return fallback.kind;
+      }
+    }
   }
-  return trimmed;
+  return undefined;
 }
 
-function stripKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
+function inferPeerKindFromCapabilities(plugin: ChannelPlugin | undefined): ChatType | undefined {
+  const chatTypes: ChatType[] = [];
+  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
+    if (
+      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
+      !chatTypes.includes(chatType)
+    ) {
+      chatTypes.push(chatType);
+    }
+  }
+  return chatTypes.length === 1 ? chatTypes[0] : undefined;
 }
 
 function inferPeerKind(params: {
   channel: ChannelId;
+  plugin?: ChannelPlugin;
+  target: string;
   resolvedTarget?: ResolvedMessagingTarget;
 }): ChatType {
   const resolvedKind = params.resolvedTarget?.kind;
@@ -100,7 +154,7 @@ function inferPeerKind(params: {
     return "channel";
   }
   if (resolvedKind === "group") {
-    const plugin = getChannelPlugin(params.channel);
+    const plugin = params.plugin ?? getChannelPlugin(params.channel);
     const chatTypes = plugin?.capabilities?.chatTypes ?? [];
     const supportsChannel = chatTypes.includes("channel");
     const supportsGroup = chatTypes.includes("group");
@@ -109,788 +163,42 @@ function inferPeerKind(params: {
     }
     return "group";
   }
-  return "direct";
-}
-
-function buildBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: ChannelId;
-  accountId?: string | null;
-  peer: RoutePeer;
-}): string {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
-}
-
-// Best-effort mpim detection: allowlist/config, then Slack API (if token available).
-async function resolveSlackChannelType(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  channelId: string;
-}): Promise<"channel" | "group" | "dm" | "unknown"> {
-  const channelId = params.channelId.trim();
-  if (!channelId) {
-    return "unknown";
-  }
-  const cached = SLACK_CHANNEL_TYPE_CACHE.get(`${params.accountId ?? "default"}:${channelId}`);
-  if (cached) {
-    return cached;
-  }
-
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const groupChannels = normalizeAllowListLower(account.dm?.groupChannels);
-  const channelIdLower = channelId.toLowerCase();
-  if (
-    groupChannels.includes(channelIdLower) ||
-    groupChannels.includes(`slack:${channelIdLower}`) ||
-    groupChannels.includes(`channel:${channelIdLower}`) ||
-    groupChannels.includes(`group:${channelIdLower}`) ||
-    groupChannels.includes(`mpim:${channelIdLower}`)
-  ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "group");
-    return "group";
-  }
-
-  const channelKeys = Object.keys(account.channels ?? {});
-  if (
-    channelKeys.some((key) => {
-      const normalized = key.trim().toLowerCase();
-      return (
-        normalized === channelIdLower ||
-        normalized === `channel:${channelIdLower}` ||
-        normalized.replace(/^#/, "") === channelIdLower
-      );
-    })
-  ) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "channel");
-    return "channel";
-  }
-
-  const token =
-    account.botToken?.trim() ||
-    (typeof account.config.userToken === "string" ? account.config.userToken.trim() : "");
-  if (!token) {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
-    return "unknown";
-  }
-
-  try {
-    const client = createSlackWebClient(token);
-    const info = await client.conversations.info({ channel: channelId });
-    const channel = info.channel as { is_im?: boolean; is_mpim?: boolean } | undefined;
-    const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, type);
-    return type;
-  } catch {
-    SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
-    return "unknown";
-  }
-}
-
-async function resolveSlackSession(
-  params: ResolveOutboundSessionRouteParams,
-): Promise<OutboundSessionRoute | null> {
-  const parsed = parseSlackTarget(params.target, { defaultKind: "channel" });
-  if (!parsed) {
-    return null;
-  }
-  const isDm = parsed.kind === "user";
-  let peerKind: ChatType = isDm ? "direct" : "channel";
-  if (!isDm && /^G/i.test(parsed.id)) {
-    // Slack mpim/group DMs share the G-prefix; detect to align session keys with inbound.
-    const channelType = await resolveSlackChannelType({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      channelId: parsed.id,
-    });
-    if (channelType === "group") {
-      peerKind = "group";
-    }
-    if (channelType === "dm") {
-      peerKind = "direct";
-    }
-  }
-  const peer: RoutePeer = {
-    kind: peerKind,
-    id: parsed.id,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "slack",
-    accountId: params.accountId,
-    peer,
-  });
-  const threadId = normalizeThreadId(params.threadId ?? params.replyToId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId,
-  });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: peerKind === "direct" ? "direct" : "channel",
-    from:
-      peerKind === "direct"
-        ? `slack:${parsed.id}`
-        : peerKind === "group"
-          ? `slack:group:${parsed.id}`
-          : `slack:channel:${parsed.id}`,
-    to: peerKind === "direct" ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId,
-  };
-}
-
-function resolveDiscordSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const parsed = parseDiscordTarget(params.target, { defaultKind: "channel" });
-  if (!parsed) {
-    return null;
-  }
-  const isDm = parsed.kind === "user";
-  const peer: RoutePeer = {
-    kind: isDm ? "direct" : "channel",
-    id: parsed.id,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "discord",
-    accountId: params.accountId,
-    peer,
-  });
-  const explicitThreadId = normalizeThreadId(params.threadId);
-  const threadCandidate = explicitThreadId ?? normalizeThreadId(params.replyToId);
-  // Discord threads use their own channel id; avoid adding a :thread suffix.
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: threadCandidate,
-    useSuffix: false,
-  });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isDm ? "direct" : "channel",
-    from: isDm ? `discord:${parsed.id}` : `discord:channel:${parsed.id}`,
-    to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId: explicitThreadId ?? undefined,
-  };
-}
-
-function resolveTelegramSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const parsed = parseTelegramTarget(params.target);
-  const chatId = parsed.chatId.trim();
-  if (!chatId) {
-    return null;
-  }
-  const parsedThreadId = parsed.messageThreadId;
-  const fallbackThreadId = normalizeThreadId(params.threadId);
-  const resolvedThreadId =
-    parsedThreadId ?? (fallbackThreadId ? Number.parseInt(fallbackThreadId, 10) : undefined);
-  // Telegram topics are encoded in the peer id (chatId:topic:<id>).
-  const chatType = resolveTelegramTargetChatType(params.target);
-  // If the target is a username and we lack a resolvedTarget, default to DM to avoid group keys.
-  const isGroup =
-    chatType === "group" ||
-    (chatType === "unknown" &&
-      params.resolvedTarget?.kind &&
-      params.resolvedTarget.kind !== "user");
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
-  const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
-    id: peerId,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "telegram",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `telegram:group:${peerId}` : `telegram:${chatId}`,
-    to: `telegram:${chatId}`,
-    threadId: resolvedThreadId,
-  };
-}
-
-function resolveWhatsAppSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const normalized = normalizeWhatsAppTarget(params.target);
-  if (!normalized) {
-    return null;
-  }
-  const isGroup = isWhatsAppGroupJid(normalized);
-  const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
-    id: normalized,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "whatsapp",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: normalized,
-    to: normalized,
-  };
-}
-
-function resolveSignalSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const stripped = stripProviderPrefix(params.target, "signal");
-  const lowered = stripped.toLowerCase();
-  if (lowered.startsWith("group:")) {
-    const groupId = stripped.slice("group:".length).trim();
-    if (!groupId) {
-      return null;
-    }
-    const peer: RoutePeer = { kind: "group", id: groupId };
-    const baseSessionKey = buildBaseSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: "signal",
-      accountId: params.accountId,
-      peer,
-    });
-    return {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      peer,
-      chatType: "group",
-      from: `group:${groupId}`,
-      to: `group:${groupId}`,
-    };
-  }
-
-  let recipient = stripped.trim();
-  if (lowered.startsWith("username:")) {
-    recipient = stripped.slice("username:".length).trim();
-  } else if (lowered.startsWith("u:")) {
-    recipient = stripped.slice("u:".length).trim();
-  }
-  if (!recipient) {
-    return null;
-  }
-
-  const uuidCandidate = recipient.toLowerCase().startsWith("uuid:")
-    ? recipient.slice("uuid:".length)
-    : recipient;
-  const sender = resolveSignalSender({
-    sourceUuid: looksLikeUuid(uuidCandidate) ? uuidCandidate : null,
-    sourceNumber: looksLikeUuid(uuidCandidate) ? null : recipient,
-  });
-  const peerId = sender ? resolveSignalPeerId(sender) : recipient;
-  const displayRecipient = sender ? resolveSignalRecipient(sender) : recipient;
-  const peer: RoutePeer = { kind: "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "signal",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: "direct",
-    from: `signal:${displayRecipient}`,
-    to: `signal:${displayRecipient}`,
-  };
-}
-
-function resolveIMessageSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const parsed = parseIMessageTarget(params.target);
-  if (parsed.kind === "handle") {
-    const handle = normalizeIMessageHandle(parsed.to);
-    if (!handle) {
-      return null;
-    }
-    const peer: RoutePeer = { kind: "direct", id: handle };
-    const baseSessionKey = buildBaseSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: "imessage",
-      accountId: params.accountId,
-      peer,
-    });
-    return {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      peer,
-      chatType: "direct",
-      from: `imessage:${handle}`,
-      to: `imessage:${handle}`,
-    };
-  }
-
-  const peerId =
-    parsed.kind === "chat_id"
-      ? String(parsed.chatId)
-      : parsed.kind === "chat_guid"
-        ? parsed.chatGuid
-        : parsed.chatIdentifier;
-  if (!peerId) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: "group", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "imessage",
-    accountId: params.accountId,
-    peer,
-  });
-  const toPrefix =
-    parsed.kind === "chat_id"
-      ? "chat_id"
-      : parsed.kind === "chat_guid"
-        ? "chat_guid"
-        : "chat_identifier";
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: "group",
-    from: `imessage:group:${peerId}`,
-    to: `${toPrefix}:${peerId}`,
-  };
-}
-
-function resolveMatrixSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const stripped = stripProviderPrefix(params.target, "matrix");
-  const isUser =
-    params.resolvedTarget?.kind === "user" || stripped.startsWith("@") || /^user:/i.test(stripped);
-  const rawId = stripKindPrefix(stripped);
-  if (!rawId) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "matrix",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `matrix:${rawId}` : `matrix:channel:${rawId}`,
-    to: `room:${rawId}`,
-  };
-}
-
-function resolveMSTeamsSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  let trimmed = params.target.trim();
-  if (!trimmed) {
-    return null;
-  }
-  trimmed = trimmed.replace(/^(msteams|teams):/i, "").trim();
-
-  const lower = trimmed.toLowerCase();
-  const isUser = lower.startsWith("user:");
-  const rawId = stripKindPrefix(trimmed);
-  if (!rawId) {
-    return null;
-  }
-  const conversationId = rawId.split(";")[0] ?? rawId;
-  const isChannel = !isUser && /@thread\.tacv2/i.test(conversationId);
-  const peer: RoutePeer = {
-    kind: isUser ? "direct" : isChannel ? "channel" : "group",
-    id: conversationId,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "msteams",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isUser ? "direct" : isChannel ? "channel" : "group",
-    from: isUser
-      ? `msteams:${conversationId}`
-      : isChannel
-        ? `msteams:channel:${conversationId}`
-        : `msteams:group:${conversationId}`,
-    to: isUser ? `user:${conversationId}` : `conversation:${conversationId}`,
-  };
-}
-
-function resolveMattermostSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  let trimmed = params.target.trim();
-  if (!trimmed) {
-    return null;
-  }
-  trimmed = trimmed.replace(/^mattermost:/i, "").trim();
-  const lower = trimmed.toLowerCase();
-  const isUser = lower.startsWith("user:") || trimmed.startsWith("@");
-  if (trimmed.startsWith("@")) {
-    trimmed = trimmed.slice(1).trim();
-  }
-  const rawId = stripKindPrefix(trimmed);
-  if (!rawId) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "mattermost",
-    accountId: params.accountId,
-    peer,
-  });
-  const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId,
-  });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
-    to: isUser ? `user:${rawId}` : `channel:${rawId}`,
-    threadId,
-  };
-}
-
-function resolveBlueBubblesSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const stripped = stripProviderPrefix(params.target, "bluebubbles");
-  const lower = stripped.toLowerCase();
-  const isGroup =
-    lower.startsWith("chat_id:") ||
-    lower.startsWith("chat_guid:") ||
-    lower.startsWith("chat_identifier:") ||
-    lower.startsWith("group:");
-  const rawPeerId = isGroup
-    ? stripKindPrefix(stripped)
-    : stripped.replace(/^(imessage|sms|auto):/i, "");
-  // BlueBubbles inbound group ids omit chat_* prefixes; strip them to align sessions.
-  const peerId = isGroup
-    ? rawPeerId.replace(/^(chat_id|chat_guid|chat_identifier):/i, "")
-    : rawPeerId;
-  if (!peerId) {
-    return null;
-  }
-  const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
-    id: peerId,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "bluebubbles",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `group:${peerId}` : `bluebubbles:${peerId}`,
-    to: `bluebubbles:${stripped}`,
-  };
-}
-
-function resolveNextcloudTalkSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  let trimmed = params.target.trim();
-  if (!trimmed) {
-    return null;
-  }
-  trimmed = trimmed.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").trim();
-  trimmed = trimmed.replace(/^room:/i, "").trim();
-  if (!trimmed) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: "group", id: trimmed };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "nextcloud-talk",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: "group",
-    from: `nextcloud-talk:room:${trimmed}`,
-    to: `nextcloud-talk:${trimmed}`,
-  };
-}
-
-function resolveZaloSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalo")
-    .replace(/^(zl):/i, "")
-    .trim();
-  if (!trimmed) {
-    return null;
-  }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
-  const peerId = stripKindPrefix(trimmed);
-  const peer: RoutePeer = { kind: isGroup ? "group" : "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "zalo",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalo:group:${peerId}` : `zalo:${peerId}`,
-    to: `zalo:${peerId}`,
-  };
-}
-
-function resolveZalouserSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalouser")
-    .replace(/^(zlu):/i, "")
-    .trim();
-  if (!trimmed) {
-    return null;
-  }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
-  const peerId = stripKindPrefix(trimmed);
-  // Keep DM vs group aligned with inbound sessions for Zalo Personal.
-  const peer: RoutePeer = { kind: isGroup ? "group" : "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "zalouser",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalouser:group:${peerId}` : `zalouser:${peerId}`,
-    to: `zalouser:${peerId}`,
-  };
-}
-
-function resolveNostrSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "nostr").trim();
-  if (!trimmed) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: "direct", id: trimmed };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "nostr",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: "direct",
-    from: `nostr:${trimmed}`,
-    to: `nostr:${trimmed}`,
-  };
-}
-
-function normalizeTlonShip(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  return trimmed.startsWith("~") ? trimmed : `~${trimmed}`;
-}
-
-function resolveTlonSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  let trimmed = stripProviderPrefix(params.target, "tlon");
-  trimmed = trimmed.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const lower = trimmed.toLowerCase();
-  let isGroup =
-    lower.startsWith("group:") || lower.startsWith("room:") || lower.startsWith("chat/");
-  let peerId = trimmed;
-  if (lower.startsWith("group:") || lower.startsWith("room:")) {
-    peerId = trimmed.replace(/^(group|room):/i, "").trim();
-    if (!peerId.startsWith("chat/")) {
-      const parts = peerId.split("/").filter(Boolean);
-      if (parts.length === 2) {
-        peerId = `chat/${normalizeTlonShip(parts[0])}/${parts[1]}`;
-      }
-    }
-    isGroup = true;
-  } else if (lower.startsWith("dm:")) {
-    peerId = normalizeTlonShip(trimmed.slice("dm:".length));
-    isGroup = false;
-  } else if (lower.startsWith("chat/")) {
-    peerId = trimmed;
-    isGroup = true;
-  } else if (trimmed.includes("/")) {
-    const parts = trimmed.split("/").filter(Boolean);
-    if (parts.length === 2) {
-      peerId = `chat/${normalizeTlonShip(parts[0])}/${parts[1]}`;
-      isGroup = true;
-    }
-  } else {
-    peerId = normalizeTlonShip(trimmed);
-  }
-
-  const peer: RoutePeer = { kind: isGroup ? "group" : "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "tlon",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `tlon:group:${peerId}` : `tlon:${peerId}`,
-    to: `tlon:${peerId}`,
-  };
-}
-
-/**
- * Feishu ID formats:
- * - oc_xxx: chat_id (group chat)
- * - ou_xxx: user open_id (DM)
- * - on_xxx: user union_id (DM)
- * - cli_xxx: app_id (not a valid send target)
- */
-function resolveFeishuSession(
-  params: ResolveOutboundSessionRouteParams,
-): OutboundSessionRoute | null {
-  let trimmed = stripProviderPrefix(params.target, "feishu");
-  trimmed = stripProviderPrefix(trimmed, "lark").trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const lower = trimmed.toLowerCase();
-  let isGroup = false;
-
-  if (lower.startsWith("group:") || lower.startsWith("chat:")) {
-    trimmed = trimmed.replace(/^(group|chat):/i, "").trim();
-    isGroup = true;
-  } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
-    trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
-    isGroup = false;
-  }
-
-  const idLower = trimmed.toLowerCase();
-  if (idLower.startsWith("oc_")) {
-    isGroup = true;
-  } else if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
-    isGroup = false;
-  }
-
-  const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
-    id: trimmed,
-  };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "feishu",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
-    to: trimmed,
-  };
+  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const strippedTarget = stripTargetProviderPrefix(params.target, params.channel);
+  const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
+  return (
+    inferPeerKindFromPlugin({ plugin, targets }) ??
+    inferPeerKindFromFallbackPrefixes(targets) ??
+    inferPeerKindFromCapabilities(plugin) ??
+    "direct"
+  );
 }
 
 function resolveFallbackSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, params.channel).trim();
+  const trimmed = stripTargetProviderPrefix(params.target, params.channel);
   if (!trimmed) {
     return null;
   }
   const peerKind = inferPeerKind({
     channel: params.channel,
+    plugin: params.plugin,
+    target: params.target,
     resolvedTarget: params.resolvedTarget,
   });
-  const peerId = stripKindPrefix(trimmed);
+  const peerId = stripOutboundTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
   }
   const peer: RoutePeer = { kind: peerKind, id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
+  const baseSessionKey = buildOutboundBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
+    accountId: params.accountId,
     peer,
   });
-  const chatType = peerKind === "direct" ? "direct" : peerKind === "channel" ? "channel" : "group";
   const from =
     peerKind === "direct"
       ? `${params.channel}:${peerId}`
@@ -899,13 +207,36 @@ function resolveFallbackSession(
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact: false,
     peer,
-    chatType,
+    chatType: peerKind,
     from,
     to: `${toPrefix}:${peerId}`,
   };
 }
 
+function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRouteParams) {
+  const resolvedTarget = params.resolvedTarget;
+  const displayName = normalizeOptionalString(resolvedTarget?.display);
+  if (!displayName) {
+    return undefined;
+  }
+  if (params.channel === "imessage" && resolvedTarget?.resolutionSource === "plugin") {
+    return displayName;
+  }
+  if (resolvedTarget?.resolutionSource !== "directory") {
+    return undefined;
+  }
+  const target = stripTargetProviderPrefix(resolvedTarget.to, params.channel);
+  const identifier = stripOutboundTargetKindPrefix(target);
+  const normalizedDisplay = normalizeLowercaseStringOrEmpty(displayName);
+  const identifierDisplays = uniqueStrings([resolvedTarget.to, target, identifier])
+    .map(normalizeLowercaseStringOrEmpty)
+    .filter(Boolean);
+  return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
+}
+
+/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -913,54 +244,139 @@ export async function resolveOutboundSessionRoute(
   if (!target) {
     return null;
   }
-  switch (params.channel) {
-    case "slack":
-      return await resolveSlackSession({ ...params, target });
-    case "discord":
-      return resolveDiscordSession({ ...params, target });
-    case "telegram":
-      return resolveTelegramSession({ ...params, target });
-    case "whatsapp":
-      return resolveWhatsAppSession({ ...params, target });
-    case "signal":
-      return resolveSignalSession({ ...params, target });
-    case "imessage":
-      return resolveIMessageSession({ ...params, target });
-    case "matrix":
-      return resolveMatrixSession({ ...params, target });
-    case "msteams":
-      return resolveMSTeamsSession({ ...params, target });
-    case "mattermost":
-      return resolveMattermostSession({ ...params, target });
-    case "bluebubbles":
-      return resolveBlueBubblesSession({ ...params, target });
-    case "nextcloud-talk":
-      return resolveNextcloudTalkSession({ ...params, target });
-    case "zalo":
-      return resolveZaloSession({ ...params, target });
-    case "zalouser":
-      return resolveZalouserSession({ ...params, target });
-    case "nostr":
-      return resolveNostrSession({ ...params, target });
-    case "tlon":
-      return resolveTlonSession({ ...params, target });
-    case "feishu":
-      return resolveFeishuSession({ ...params, target });
-    default:
-      return resolveFallbackSession({ ...params, target });
+  const nextParams = { ...params, target };
+  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
+  const route = resolver ? await resolver(nextParams) : resolveFallbackSession(nextParams);
+  const displayName = resolveOutboundSessionDisplayName(params);
+  const namedRoute = route && displayName ? { ...route, displayName } : route;
+  if (!namedRoute || namedRoute.recipientSessionExact !== true) {
+    return namedRoute;
   }
+  const bindingRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: params.channel,
+    defaultAgentId: params.agentId,
+    accountId: params.accountId,
+    peer: namedRoute.peer,
+  });
+  const isDirect = namedRoute.peer.kind === "direct";
+  const globalScope = isDirect
+    ? (params.cfg.session?.dmScope ?? "main")
+    : (params.cfg.session?.groupScope ?? "per-group");
+  const bindingScope = isDirect ? bindingRoute.dmScope : bindingRoute.groupScope;
+  if (normalizeAgentId(bindingRoute.agentId) !== normalizeAgentId(params.agentId)) {
+    // Another agent owns the canonical inbound session. Keep the transport
+    // route, but never authorize this agent-local candidate as exact.
+    return { ...namedRoute, recipientSessionExact: false };
+  }
+  return bindingScope !== globalScope
+    ? rebaseOutboundSessionRoute(namedRoute, bindingRoute.sessionKey)
+    : namedRoute;
 }
 
-export async function ensureOutboundSessionEntry(params: {
+type OutboundSessionEntryParams = {
   cfg: OpenClawConfig;
-  agentId: string;
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
-}): Promise<void> {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
+  creation?: MsgContext["SessionCreation"];
+  sourceSessionKey?: string;
+  /** Revalidates caller-owned route authority at the final persistence boundary. */
+  assertCommitAllowed?: () => void;
+};
+
+type CapturedOutboundSessionBinding = {
+  destination: PreparedConversationRegistryScope;
+  source?: SessionAccessScope & { storePath: string };
+};
+
+type PreparedOutboundSessionBinding = Omit<CapturedOutboundSessionBinding, "source"> & {
+  source?: SessionAccessScope & { databaseAgentId: string };
+};
+
+/** Capture logical locators without opening a source store that a completed retry never needs. */
+export function captureOutboundSessionBinding(params: {
+  cfg: OpenClawConfig;
+  scope: CapturedOutboundSessionBinding["destination"];
+  sourceSessionKey?: string;
+}): CapturedOutboundSessionBinding {
+  const destination = {
+    agentId: params.scope.agentId,
+    databaseAgentId: params.scope.databaseAgentId,
+    storePath: params.scope.storePath,
+    env: {
+      OPENCLAW_STATE_DIR: resolveStateDir(params.scope.env),
+      ...(isGatewayExternallySupervised(params.scope.env)
+        ? { OPENCLAW_SUPERVISOR_MODE: "external" }
+        : {}),
+    },
+  };
+  if (!params.sourceSessionKey) {
+    return { destination };
+  }
+  const source = {
+    agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+    env: destination.env,
+    sessionKey: params.sourceSessionKey,
+  };
+  return {
+    destination,
+    source: {
+      ...source,
+      storePath: resolveSessionStorePathForScope({ ...source, env: params.scope.env }, params.cfg),
+    },
+  };
+}
+
+/** Resolve source ownership only when binding is needed, before asynchronous plugin routing. */
+export function prepareOutboundSessionBinding(
+  captured: CapturedOutboundSessionBinding,
+): PreparedOutboundSessionBinding {
+  const { destination, source } = captured;
+  if (!source) {
+    return { destination };
+  }
+  const target = toDatabaseOptions(resolveSqliteReadScope(source));
+  return {
+    destination,
+    source: {
+      ...source,
+      databaseAgentId: target.agentId,
+      storePath: resolveOpenClawAgentSqlitePath(target),
+    },
+  };
+}
+
+function resolveOutboundSessionCreation(
+  params: OutboundSessionEntryParams,
+  sourceScope?: PreparedOutboundSessionBinding["source"],
+) {
+  if (params.creation || !params.sourceSessionKey) {
+    return params.creation;
+  }
+  const source = sourceScope
+    ? loadSessionEntryReadOnlyInScope(sourceScope)
+    : loadSessionEntryReadOnly({
+        sessionKey: params.sourceSessionKey,
+        storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+          agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+        }),
+      });
+  return source?.sandbox === "required"
+    ? { via: source.createdVia ?? "channel", ...inheritSessionCreationPolicy(source) }
+    : undefined;
+}
+
+async function persistOutboundSessionEntry(
+  params: OutboundSessionEntryParams,
+  prepared?: PreparedOutboundSessionBinding,
+): Promise<SessionEntry | null> {
+  const storePath =
+    prepared?.destination.storePath ??
+    resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
+    });
   const ctx: MsgContext = {
     From: params.route.from,
     To: params.route.to,
@@ -972,14 +388,58 @@ export async function ensureOutboundSessionEntry(params: {
     MessageThreadId: params.route.threadId,
     OriginatingChannel: params.channel,
     OriginatingTo: params.route.to,
+    NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
+    NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
+    ConversationLabel: params.route.displayName,
+    GroupSubject: params.route.peer.kind === "direct" ? undefined : params.route.displayName,
+    SessionCreation: resolveOutboundSessionCreation(params, prepared?.source),
   };
+  // Shared-main context may still point at another channel. Commit route and
+  // origin together so its conversation identity binds the exact destination.
+  const update = {
+    storePath,
+    sessionKey: params.route.sessionKey,
+    // Creation is part of this helper's contract: directory-discovered peers
+    // may not have a local session row until their first outbound turn.
+    createIfMissing: true,
+    channel: params.channel,
+    to: params.route.to,
+    accountId: params.accountId ?? undefined,
+    threadId: params.route.threadId,
+    ctx,
+    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+  };
+  return prepared
+    ? await updateSessionLastRouteInScope(
+        { ...prepared.destination, sessionKey: params.route.sessionKey },
+        update,
+      )
+    : await updateSessionLastRoute(update);
+}
+
+/** Persists best-effort session metadata for an outbound-only route. */
+export async function ensureOutboundSessionEntry(
+  params: OutboundSessionEntryParams,
+): Promise<void> {
   try {
-    await recordSessionMetaFromInbound({
-      storePath,
-      sessionKey: params.route.sessionKey,
-      ctx,
-    });
-  } catch {
+    await persistOutboundSessionEntry(params);
+  } catch (error) {
+    if (params.creation?.sandbox === "required" || params.sourceSessionKey) {
+      createSubsystemLogger("outbound/session").warn(
+        `Failed to preserve outbound session creation policy for ${params.route.sessionKey}: ${String(error)}`,
+      );
+    }
     // Do not block outbound sends on session meta writes.
+  }
+}
+
+/** Persists the route required to bind an exact conversation address to local context. */
+export async function bindOutboundSessionEntry(
+  params: OutboundSessionEntryParams,
+  prepared?: PreparedOutboundSessionBinding,
+): Promise<void> {
+  const entry = await persistOutboundSessionEntry(params, prepared);
+  if (!entry) {
+    throw new Error(`Failed to bind outbound session ${params.route.sessionKey}`);
   }
 }

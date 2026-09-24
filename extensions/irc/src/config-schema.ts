@@ -1,25 +1,17 @@
+// Irc helper module supports config schema behavior.
 import {
-  BlockStreamingCoalesceSchema,
-  DmConfigSchema,
+  ChannelGroupEntrySchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
-  ToolPolicySchema,
+  ReplyRuntimeConfigSchemaShape,
+  ReplyToModeSchema,
+  buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-
-const IrcGroupSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    systemPrompt: z.string().optional(),
-  })
-  .strict();
+import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcNickServSchema = z
   .object({
@@ -41,10 +33,23 @@ const IrcNickServSchema = z
     }
   });
 
-export const IrcAccountSchemaBase = z
+// Mirrors the core channel health-monitor leaf; the gateway supervisor reads
+// channels.irc.healthMonitor.enabled for any started account.
+const IrcHealthMonitorSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    healthMonitor: IrcHealthMonitorSchema,
+    replyToMode: ReplyToModeSchema.optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
     tls: z.boolean().optional(),
@@ -58,40 +63,28 @@ export const IrcAccountSchemaBase = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
+    groups: z.record(z.string(), ChannelGroupEntrySchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
-    mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    responsePrefix: z.string().optional(),
-    mediaMaxMb: z.number().positive().optional(),
+    ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
-  });
+export type IrcAccountConfigInput = z.input<typeof IrcAccountSchemaBase>;
+
+const IrcConfigSchema = buildMultiAccountChannelSchema(IrcAccountSchemaBase, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+    });
+  },
 });
 
-export const IrcConfigSchema = IrcAccountSchemaBase.extend({
-  accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
-}).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
-  });
+export const IrcChannelConfigSchema = buildChannelConfigSchema(IrcConfigSchema, {
+  uiHints: ircChannelConfigUiHints,
 });

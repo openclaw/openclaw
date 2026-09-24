@@ -4,13 +4,13 @@ import OpenClawProtocol
 import OSLog
 import SwiftUI
 
-struct SessionPreviewItem: Identifiable, Sendable {
+struct SessionPreviewItem: Identifiable {
     let id: String
     let role: PreviewRole
     let text: String
 }
 
-enum PreviewRole: String, Sendable {
+enum PreviewRole: String {
     case user
     case assistant
     case tool
@@ -98,29 +98,12 @@ actor SessionPreviewLimiter {
     }
 }
 
-#if DEBUG
-extension SessionPreviewCache {
-    func _testSet(
-        snapshot: SessionMenuPreviewSnapshot,
-        for sessionKey: String,
-        updatedAt: Date = Date())
-    {
-        self.entries[sessionKey] = CacheEntry(snapshot: snapshot, updatedAt: updatedAt)
-    }
-
-    func _testReset() {
-        self.entries = [:]
-    }
-}
-#endif
-
-struct SessionMenuPreviewSnapshot: Sendable {
+struct SessionMenuPreviewSnapshot {
     let items: [SessionPreviewItem]
     let status: SessionMenuPreviewView.LoadStatus
 }
 
 struct SessionMenuPreviewView: View {
-    let width: CGFloat
     let maxLines: Int
     let title: String
     let items: [SessionPreviewItem]
@@ -180,10 +163,9 @@ struct SessionMenuPreviewView: View {
         .padding(.vertical, 6)
         .padding(.leading, 16)
         .padding(.trailing, 11)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
     private func previewRow(_ item: SessionPreviewItem) -> some View {
         HStack(alignment: .top, spacing: 4) {
             Text(item.role.label)
@@ -212,7 +194,6 @@ struct SessionMenuPreviewView: View {
         }
     }
 
-    @ViewBuilder
     private func placeholder(_ text: String) -> some View {
         Text(text)
             .font(.caption)
@@ -227,7 +208,9 @@ enum SessionMenuPreviewLoader {
     private static let previewMaxChars = 240
 
     private struct PreviewTimeoutError: LocalizedError {
-        var errorDescription: String? { "preview timeout" }
+        var errorDescription: String? {
+            "preview timeout"
+        }
     }
 
     static func prewarm(sessionKeys: [String], maxItems: Int) async {
@@ -342,7 +325,9 @@ enum SessionMenuPreviewLoader {
         case "empty":
             return SessionMenuPreviewSnapshot(items: items, status: .empty)
         case "missing":
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Session missing"))
+            return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
+        case "cold":
+            return SessionMenuPreviewSnapshot(items: [], status: .error("History archived; open chat to restore"))
         default:
             return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
         }

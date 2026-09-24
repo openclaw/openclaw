@@ -1,0 +1,396 @@
+---
+name: openclaw-changelog-update
+description: Regenerate OpenClaw release changelog sections from git history before beta, stable, or extended-stable releases.
+---
+
+# OpenClaw Changelog Update
+
+Use this for changelog rewrites and GitHub release-note source text. For regular
+beta/stable, prepare complete notes before final-source qualification when
+possible; Code SHA may then also be Release SHA. Editorial work may overlap
+Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
+may use the existing product-evidence reuse policy. For
+extended-stable, run it before final exact-head validation and tagging. Do not
+rerun it for tooling retries, resumed publication, or promotion.
+Use it with `release-openclaw-maintainer`; this skill owns changelog content,
+ordering, grouping, and attribution discipline.
+
+## Goal
+
+Rebuild the target `CHANGELOG/YYYY.M.PATCH.md` release section from a complete, generated
+history manifest, not stale draft notes. Produce grouped user-facing release
+notes sorted by user interest while preserving every relevant issue/PR ref and
+every human `Thanks @...` attribution.
+
+`CHANGELOG.md` is the generated release index. The shared owner
+`scripts/lib/release-changelog.mjs` resolves release sections and contribution
+records from a working tree or a pinned Git ref, including historical refs
+that still contain a monolith. Use `node scripts/release-changelog.mjs read
+--version <version> [--ref <sha-or-tag>]` for a section, or add `--record` for
+its contribution record. A missing split artifact must not fall back to the
+root index. Historical releases without records gain no invented provenance.
+Generated `CHANGELOG/**` files retain exact migrated or mirrored bytes and are
+excluded from generic formatting, like the root changelog. Validate them through
+their owner with `pnpm changelog:check`.
+
+Current writes use the split layout. To save a complete initial section, use
+`node scripts/release-changelog.mjs write --version <version> --file <section.md>`;
+it updates the release entry, matching `CHANGELOG/records/<version>.md` when
+present, and index together. Initial generation retains the section format
+below. Published docs mirrors follow the separate post-release route at the end
+of this skill; initial generation must never overwrite them.
+
+## Inputs
+
+- Target base version: `YYYY.M.PATCH`, without beta suffix.
+- Base tag: last reachable shipped release tag, usually the previous stable or
+  the previous beta train requested by the operator. It must be an ancestor of
+  the target; a newer but divergent tag is not a valid history boundary. Use
+  an explicit shipped/main-closeout SHA only when it is also reachable from the
+  target.
+- Target ref: the exact product-complete history being documented. Its
+  contribution-record target must be an ancestor of the final release target;
+  it need not name a not-yet-created changelog commit. Include any later fixes
+  before finalizing notes. Final notes may be committed before qualification,
+  or afterward as a CHANGELOG-only descendant of a green Code SHA.
+- Canonical main ref: current `origin/main`, fetched before verification. Release
+  notes cite the original merged main PR when the same work is carried by a
+  backport. A release-branch PR is used only while no forward-port exists on
+  current main.
+
+## Workflow
+
+1. Confirm the release branch and exact history target:
+   - `git fetch --tags origin`
+   - confirm clean `git status -sb`
+   - record `git rev-parse HEAD` as the history target
+   - record the Full Release Validation run id and attempt when qualification already exists
+   - finish pending product/version/backport changes before freezing final source; refresh the inventory for actual changes
+2. Audit history, including direct commits:
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
+   - also inspect `--since='24 hours ago'` when main moved during the release.
+3. Generate the complete contribution record and editorial manifest before
+   writing grouped prose:
+
+   ```bash
+   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+     --base <base-tag> \
+     --target <target-ref> \
+     --main-ref origin/main \
+     --version <YYYY.M.PATCH> \
+     --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
+     --write-ledger
+   ```
+
+   Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
+   release commits cannot carry provenance metadata. These use the same exact
+   marker grammar and current-main validation as commit-body markers.
+
+   The verifier automatically reuses public GitHub GraphQL responses from an
+   exact base/target SHA snapshot under the worktree's git metadata. Iterative
+   rewrites at the same target avoid repeated network discovery. Use
+   `--refresh-github-snapshot` after suspect API data, `--github-snapshot
+<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   audit. GitHub release bodies are always read live.
+   Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
+   in active source are classified separately only when issue/PR resolution
+   fails and a live same-repository Actions lookup confirms the exact run ID.
+   Any ordinary occurrence of that number in active source, notes, or the
+   contribution record remains a strict issue/PR requirement. Confirmed runs
+   appear as `workflowRuns` in verification output and the manifest, never as
+   PR associations or contributor credit.
+   - the manifest is the required input to the rewrite, not an after-the-fact
+     audit; it contains every referenced PR, eligible contributor credit,
+     inline issue context, every direct commit, and an editorial-eligibility
+     classification for PRs and direct commits
+   - schema version 3 is the required ephemeral manifest contract. Regenerate
+     older manifests; version 2 is not a supported downstream-reader boundary
+   - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
+     contribution records from the prior changelog are retained even when an
+     older merged commit omitted its PR number; the verifier excludes records
+     for work reverted after the base tag, including beta work reverted before
+     the stable release
+   - generated provenance reports in-range PRs separately from retained
+     seed-only PRs, then states the unique row total. A PR present in both
+     inventories counts as in-range; never describe the seed-inclusive total
+     as work merged in the current release range
+   - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
+     closeout differs from the shipped tag or later forward-port commits
+     re-associate PRs that were already released. Each tag is a cumulative
+     shipped boundary: the verifier unions explicit PR rows from complete
+     contribution records in numbered release sections, excludes only overlapping PRs,
+     and ignores `Unreleased`. Never infer this boundary from the base SHA,
+     target prose, or target record. The manifest and generated provenance retain
+     each tag plus the exact excluded PR inventory and count for deterministic
+     candidate validation
+   - source PR discovery bounds GitHub commit associations to the selected target
+     history, or the frozen main history for canonical carriers. A contextual
+     source reference becomes a contribution only when its merged commit is
+     reachable in the target history and its merge time is within the target.
+     Keep all references resolvable, but do not promote unrelated PRs merely
+     because they merge while release preparation continues. Explicit seeds
+     retain their historical membership and remain seed-only unless independently
+     proven in-range. Resolve every association page; existing canonical,
+     cherry-pick, and provenance contracts remain authoritative.
+   - explicit multi-commit reverts require a revert subject and one standalone
+     `Reverts <full SHA> and <full SHA>.` declaration (comma-separated lists
+     with final `and` also work). The exact ending ` to restore the previous behavior.`
+     is accepted. Duplicate, abbreviated, embedded, or repeated declarations do
+     not establish reversal. Each named commit must be a single-parent ancestor,
+     and reverse-applying all named patches must reproduce the complete revert
+     tree. Recognized declarations that fail this proof stop verification. Proof
+     uses private Git index/object storage without hooks or external diffs;
+     canonical single-revert and revert-of-revert accounting stays intact.
+   - canonicalize backports to the original merged PR on `main`: explicit
+     cherry-pick origins win, then a unique normalized-subject match requires
+     the same author and an overlapping changed path. Suppress release/backport
+     PRs whenever the corresponding main PR exists on current `origin/main`.
+     Keep a release-branch PR only when that change landed there first and has
+     not yet been forward-ported to `main`
+   - read the manifest before editing `### Highlights`, `### Changes`, or
+     `### Fixes`; do not carry old grouped prose forward without re-auditing it
+   - inspect linked PRs/issues or diffs for ambiguous commits. Direct commits
+     are editorial input, not public ledger rows; infer material user outcomes
+     from subject, body, touched files, tests, and nearby commits
+
+4. Rewrite one stable-base section only:
+   - use `## YYYY.M.PATCH`
+   - do not create beta-specific headings
+   - do not leave a stale `## Unreleased` section above the target release
+   - if `Unreleased` contains release-bound notes, fold them into the target
+     section instead of deleting them
+5. Section shape:
+   - `### Highlights`: 5-8 bullets, broad user wins first
+     - include only a clear user-visible capability or workflow unlock, a
+       material reliability/safety fix, a broad cross-surface improvement, or
+       a release-defining integration/compatibility milestone
+     - every highlight must say what changed for a user in one sentence; use
+       one user story per bullet and group its supporting PRs
+     - exclude tests, CI, refactors, docs, catalog churn, and implementation
+       detail unless the outcome is a material install/update, data-safety, or
+       widely visible user improvement
+   - `### Changes`: new capabilities and behavior changes
+   - `### Fixes`: user-facing fixes first, grouped by impact and surface
+   - group related changes/fixes by surface and user impact; avoid one bullet
+     per tiny commit when several commits tell one user-facing story
+   - `### Complete contribution record`: generated PR-first record after the
+     grouped prose; it is the exhaustive accounting surface, not a second
+     release summary
+6. Preserve attribution:
+   - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
+   - every human-authored merged PR represented by a user-facing entry needs
+     its PR ref and `Thanks @author`, even when the PR had no linked issue
+   - every human issue reporter for a `Fixes #...` or referenced bug issue
+     represented by a user-facing entry needs `Thanks @reporter` unless the
+     same handle is already thanked in that bullet
+   - every human `Co-authored-by` contributor on represented user-facing work
+     needs `Thanks @handle` when a GitHub handle is known
+   - when grouping multiple PRs/issues in one bullet, include every relevant
+     PR/issue ref and every human contributor handle in that same bullet
+   - multiple `Thanks @...` handles in one bullet are expected; do not drop or
+     collapse contributor credit just because the note is grouped
+   - if one grouped bullet covers both direct commits and PRs, keep all PR refs
+     and thanks, plus any issue refs and human credit from the direct work
+   - issues remain normal inline `#NNN` references. Do not add a separate
+     linked-issues inventory. The generated PR record keeps source issues
+     inline as `Related #NNN` on the PR that shipped them
+   - when backfilling an older linked-issues inventory, preserve reporter
+     credit inline for every GitHub-confirmed closing PR relationship. Do not
+     infer a PR relationship from a generic cross-reference event, invent an
+     unrelated PR link for a standalone report, or recreate the retired
+     inventory
+   - the complete contribution record lists every verified in-range PR and
+     explicitly retained seed-only PR exactly once as `**PR #NNN**`. Discovery
+     preserves canonical/cherry-pick provenance and requires frozen-history
+     membership for contextual references; inline context alone cannot create a
+     contribution row. It preserves author/co-author credit and any issue
+     references in the original title
+   - the provenance arithmetic and unique total must match the rendered PR
+     rows exactly; candidate validation rejects malformed or forged counts
+   - direct commits remain in the manifest with GitHub-resolved author,
+     co-author, issue, and editorial-eligibility data. They inform grouped
+     prose but are never rendered as a public `#### Direct commits` dump. Add
+     direct-commit credit to a grouped bullet only when it shares an explicit
+     closing issue reference or at least two distinctive subject terms
+   - the verifier rejects ordinary `docs`, `test`, `refactor`, `ci`, `build`,
+     `chore`, and `style` PRs in Highlights, Changes, or Fixes. An explicit
+     Conventional Commits `!` marker makes any type editorial-eligible; include
+     its verified user-facing breaking change and migration guidance with the
+     original PR ref and credit. Keep other internal contributions only in the
+     complete PR record
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
+   - do not add GHSA references, advisory IDs, or security advisory slugs to
+     changelog entries or GitHub release-note text unless explicitly requested
+   - initial release generation keeps its existing credit policy: never thank
+     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
+     The separately approved post-docs GitHub body uses its complete verified
+     human roster, including `@steipete` when credited
+   - do not use GitHub's release contributor count as the source of truth; the
+     changelog must carry the complete human credit set itself
+7. Sorting preference:
+   - security/data-loss and content-boundary fixes
+   - transcript/replay/reply delivery correctness
+   - channels and mobile integrations
+   - providers/Codex/local model reliability
+   - install/update/release path reliability
+   - performance and observability
+   - docs and contributor-only/internal details last or omitted
+8. Keep bullets single-line unless existing file style forces otherwise. Avoid
+   internal release-process noise unless it changes user install/update safety.
+9. Check release-note side conditions:
+   - inspect `src/plugins/compat/registry.ts`
+   - inspect `src/commands/doctor/shared/deprecation-compat.ts`
+   - if a deprecated compatibility record reaches `removeAfter`, remove it when
+     proven safe or move it to `removal-pending` and record the blocker; keep a
+     due `removal-pending` record only until its documented conditions are met
+10. Validate and ship:
+
+- after the manifest-driven rewrite, regenerate and verify the complete
+  contribution record before committing:
+  ```bash
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+    --base <base-tag> \
+    --target <target-ref> \
+    --main-ref origin/main \
+    --version <YYYY.M.PATCH> \
+    --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
+    --write-ledger
+  ```
+- the command fails when any `#NNN` reference in release history or the
+  rendered release section cannot resolve, when reverted work is presented
+  as shipped, when a source PR is absent from the contribution record, when
+  direct commits are rendered as a public record dump, when non-editorial
+  PRs appear in grouped prose, or when an eligible PR author or known
+  co-author is missing from that PR's `Thanks @...` credit. It also fails
+  before history collection when `--base` is not an ancestor of `--target`,
+  when `### Highlights` has fewer than five or more than eight top-level
+  bullets, or when the existing prose/record names a PR outside the source
+  range. Only an explicit `--seed-ref` may add historical PR inventory; an
+  explicit repeatable `--shipped-ref` may subtract PRs proven present in a
+  prior shipped tag
+- when grouped prose names a PR, that same bullet must retain every
+  contributor and linked-reporter credit from its generated PR record
+- unqualified `#NNN` references resolve against `openclaw/openclaw`;
+  cross-repository references such as `openclaw/imsg#141` remain literal
+  text and must not be rewritten as local issue links
+- after the GitHub release or prerelease is published, verify every matching
+  release page against the same source section:
+  ```bash
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+    --base <base-tag> \
+    --target <target-ref> \
+    --version <YYYY.M.PATCH> \
+    --release-tag v<YYYY.M.PATCH> \
+    --check-github
+  ```
+- add one `--release-tag` for every beta, stable, and extended-stable page in
+  the train; a `### Release verification` tail is permitted, but any other
+  body drift fails the check
+- `scripts/render-github-release-notes.mts` is the canonical release-body
+  renderer used by candidate validation, publish, and verification. When the
+  complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
+  the renderer's matching 125,000-byte safety ceiling, the body must contain
+  that exact section including its heading
+- when the complete source section exceeds either limit, the renderer keeps the exact
+  grouped editorial notes through the line before
+  `### Complete contribution record`, then emits that heading with a stable
+  link to the full contribution record in the tag-pinned
+  `CHANGELOG/records/YYYY.M.PATCH.md` (historical monolithic tags retain their
+  original `CHANGELOG.md` record link).
+  Never truncate a bullet or partial record, and never hand-author a different
+  compact form
+- append `### Release verification` only when it fits after the canonical full
+  or compact body is chosen. If it does not fit, omit the body tail and retain
+  the immutable attached release evidence; never compact a fitting full
+  contribution record just to preserve the optional tail
+- `pnpm release:candidate` performs this deterministic render check from the
+  exact target before it dispatches Full Release Validation, including when local
+  generated checks are explicitly skipped
+- `git diff --check`
+- `pnpm changelog:check` validates the split index, records, and marked docs mirrors
+- for docs/changelog-only changes, no broad tests are required
+- stage the target release entry, its generated record, and changed index; commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
+- push the release branch without rebasing it onto moving `main`
+- when all fixes and final notes are committed before fresh full qualification,
+  record that commit as both Code SHA and Release SHA; use the same successful
+  full parent/attempt and its exact publication bytes for both roles
+- only when notes change after Code qualification, require
+  `git diff --name-only <code-sha>..<release-sha>` to include
+  `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching record, and
+  `CHANGELOG.md` before optionally using `split-changelog-release-v1`. Additions
+  or modifications of the selected entry/record are allowed; renames, deletions,
+  other releases, and docs source changes are not. Historical root-only receipts
+  retain `changelog-only-release-v1`. The split path
+  retains green Code proof and qualifies new Release SHA package bytes. Any
+  other changed path requires fresh product qualification
+
+## Post-release docs mirrors
+
+After explicit approval of the docs publication, publish the approved docs
+sources and their mechanically flattened changelog in the same source PR.
+This is separate from initial release generation; do not run an editorial
+rewrite automatically during release preparation or publication.
+
+Render the ordered docs sources into one full Markdown file, even for a large
+release or a release spanning several docs pages:
+
+```bash
+pnpm changelog:from-docs --version YYYY.M.PATCH \
+  --source docs/releases/YYYY.M.PATCH.md \
+  --output CHANGELOG/YYYY.M.PATCH.md
+pnpm changelog:check
+```
+
+Repeat `--source` in the approved reading order for a multipart release. The
+converter removes presentation wrappers, turns accordion titles into headings,
+expands docs links, and preserves source text, credits, code, tables, and images.
+Unsupported markup fails instead of silently dropping content. Its first-line
+marker binds the ordered source paths and exact source digest. Checks compare
+only marked mirrors against their sources; untouched historical originals stay
+in their initial format. Preserve `CHANGELOG/records/YYYY.M.PATCH.md` as the
+frozen accounting record when replacing reader prose, and regenerate the mirror
+in the same PR whenever its docs sources change.
+
+The approved publication bundle owns source merge, verified docs deployment,
+and the later GitHub Release body update as separate recorded steps. After
+deployment, freshly read the existing release, then update only its body with
+version/statistics, Raw changelog and docs links, one alphabetically deduplicated
+verified human thanks roster, and the unchanged release-verification section.
+Include verified PR, direct-commit, coauthor, and issue credit, including
+`@steipete`; exclude bots. Keep both the 125,000-character and 125,000-byte
+ceilings without truncating credits or proof. GitHub owns native avatars and
+assets. Verify the body readback, resume only incomplete steps, and never retag,
+rebuild, republish assets, or rerun initial publication to replace this body.
+The initial history verifier rejects docs mirrors; use the docs-publication
+workflow for their verification.
+
+## Extended-Stable Variant
+
+Extended-stable has one release commit and one canonical GitHub Release body.
+After version prep and approved backports, regenerate `CHANGELOG/YYYY.M.P.md`
+with the regular manifest and original-main-PR provenance rules. Land it by PR, then
+validate the final branch tip before tagging. The release closeout renders that
+tag-owned section into the shared draft before the parent pipeline publishes
+the non-Latest release page. Re-audit after a product
+backport; a tooling-only repair needs no changelog entry. Never rewrite a
+published tag or changelog.
+
+## Quota / API Outage Rule
+
+If GitHub API quota is exhausted, do not idle. Continue work that does not need
+GitHub API:
+
+- local changelog rewrite and release-note extraction
+- local pretag checks and package/build sanity
+- git push/tag checks over git protocol
+- npm registry `npm view` checks
+- exact workflow-dispatch command preparation
+
+Only GitHub Release creation, workflow dispatch, run polling, artifact download,
+and issue/PR mutation need API quota.

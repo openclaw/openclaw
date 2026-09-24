@@ -1,204 +1,306 @@
-import type { CommandHandler } from "./commands-types.js";
-import { logVerbose } from "../../globals.js";
-import { listSkillCommandsForAgents } from "../skill-commands.js";
+/** Handles informational commands such as /help, /commands, /tools, and exports. */
+import {
+  resolveEffectiveToolInventory,
+  acquireEffectiveToolInventoryRuntimeModelContext,
+} from "../../agents/tools-effective-inventory.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import {
+  prepareSkillCommandsForAgents,
+  resolveSkillCommandInvocation,
+} from "../../skills/discovery/chat-commands.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
+  buildToolsMessage,
 } from "../status.js";
-import { buildContextReply } from "./commands-context-report.js";
-import { buildStatusReply } from "./commands-status.js";
+import { buildThreadingToolContext } from "./agent-runner-utils.js";
+import { resolveChannelAccountId } from "./channel-context.js";
+import {
+  commandReply,
+  defineAuthorizedTextCommand,
+  matchCommandPrefix,
+  rejectUnauthorizedCommand,
+} from "./command-gates.js";
+import { buildExportSessionReply } from "./commands-export-session.js";
+import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
+import { buildStatusPluginsReply, buildStatusReply } from "./commands-status.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { extractExplicitGroupId } from "./group-id.js";
+import { resolveReplyToMode } from "./reply-threading.js";
 
-export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
+async function resolveSkillCommands(
+  params: HandleCommandsParams,
+  options?: { requireFullList?: boolean },
+) {
+  if (
+    params.skillCommands !== undefined &&
+    (!options?.requireFullList || params.skillCommands.length > 0 || !params.loadSkillCommands)
+  ) {
+    return params.skillCommands;
   }
-  if (params.command.commandBodyNormalized !== "/help") {
-    return null;
+  if (params.loadSkillCommands) {
+    return params.loadSkillCommands();
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /help from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  return {
-    shouldContinue: false,
-    reply: { text: buildHelpMessage(params.cfg) },
-  };
-};
+  return prepareSkillCommandsForAgents({
+    cfg: params.cfg,
+    agentIds: [params.agentId],
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
+  });
+}
 
-export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/commands") {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /commands from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const skillCommands =
-    params.skillCommands ??
-    listSkillCommandsForAgents({
-      cfg: params.cfg,
-      agentIds: params.agentId ? [params.agentId] : undefined,
-    });
-  const surface = params.ctx.Surface;
+/** Command handler for /help. */
+export const handleHelpCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/help", match: (body) => (body === "/help" ? true : null), silentUnauthorized: true },
+  (params) => commandReply(buildHelpMessage(params.cfg)),
+);
 
-  if (surface === "telegram") {
-    const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {
+/** Command handler for /commands. */
+export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/commands",
+    match: (body) => (body === "/commands" ? true : null),
+    silentUnauthorized: true,
+  },
+  async (params) => {
+    const skillCommands = await resolveSkillCommands(params);
+    const surface = params.ctx.Surface;
+    const commandPlugin = surface ? getChannelPlugin(surface) : null;
+    const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
       page: 1,
       surface,
     });
-
-    if (result.totalPages > 1) {
+    const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
+      currentPage: paginated.currentPage,
+      totalPages: paginated.totalPages,
+      agentId: params.agentId,
+    });
+    if (channelData) {
       return {
         shouldContinue: false,
         reply: {
-          text: result.text,
-          channelData: {
-            telegram: {
-              buttons: buildCommandsPaginationKeyboard(
-                result.currentPage,
-                result.totalPages,
-                params.agentId,
-              ),
-            },
-          },
+          text: paginated.text,
+          channelData,
         },
       };
     }
 
-    return {
-      shouldContinue: false,
-      reply: { text: result.text },
-    };
+    return commandReply(buildCommandsMessage(params.cfg, skillCommands, { surface }));
+  },
+);
+
+function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams["skillCommands"]>) {
+  const lines = ["Usage: /skill <name> [input]"];
+  if (skillCommands.length > 0) {
+    const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
+    lines.push("", `Available: ${names.join(", ")}`);
+    if (skillCommands.length > names.length) {
+      lines.push(`More: /commands (${skillCommands.length - names.length} more)`);
+    } else {
+      lines.push("More: /commands");
+    }
+  } else {
+    lines.push("", "Use /commands to list available skill commands.");
   }
-
-  return {
-    shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
-  };
-};
-
-export function buildCommandsPaginationKeyboard(
-  currentPage: number,
-  totalPages: number,
-  agentId?: string,
-): Array<Array<{ text: string; callback_data: string }>> {
-  const buttons: Array<{ text: string; callback_data: string }> = [];
-  const suffix = agentId ? `:${agentId}` : "";
-
-  if (currentPage > 1) {
-    buttons.push({
-      text: "◀ Prev",
-      callback_data: `commands_page_${currentPage - 1}${suffix}`,
-    });
-  }
-
-  buttons.push({
-    text: `${currentPage}/${totalPages}`,
-    callback_data: `commands_page_noop${suffix}`,
-  });
-
-  if (currentPage < totalPages) {
-    buttons.push({
-      text: "Next ▶",
-      callback_data: `commands_page_${currentPage + 1}${suffix}`,
-    });
-  }
-
-  return [buttons];
+  return lines.join("\n");
 }
 
-export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const statusRequested =
-    params.directives.hasStatusDirective || params.command.commandBodyNormalized === "/status";
-  if (!statusRequested) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /status from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const reply = await buildStatusReply({
-    cfg: params.cfg,
-    command: params.command,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    sessionScope: params.sessionScope,
-    provider: params.provider,
-    model: params.model,
-    contextTokens: params.contextTokens,
-    resolvedThinkLevel: params.resolvedThinkLevel,
-    resolvedVerboseLevel: params.resolvedVerboseLevel,
-    resolvedReasoningLevel: params.resolvedReasoningLevel,
-    resolvedElevatedLevel: params.resolvedElevatedLevel,
-    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-    isGroup: params.isGroup,
-    defaultGroupActivation: params.defaultGroupActivation,
-    mediaDecisions: params.ctx.MediaUnderstandingDecisions,
-  });
-  return { shouldContinue: false, reply };
-};
+/** Command handler for /skill usage help. */
+export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/skill",
+    match: (body) => matchCommandPrefix(body, "/skill"),
+    silentUnauthorized: true,
+  },
+  async (params) => {
+    const normalized = params.command.commandBodyNormalized;
+    // Bare or unknown /skill commands are deterministic help responses; handling
+    // them here avoids falling through into a full agent/model turn.
+    const [, rawName] = normalized.match(/^\/skill(?:\s+([^\s]+))?/u) ?? [];
+    const skillCommands = await resolveSkillCommands(params, { requireFullList: true });
+    if (
+      rawName &&
+      resolveSkillCommandInvocation({ commandBodyNormalized: normalized, skillCommands })
+    ) {
+      return null;
+    }
+    const prefix = rawName ? `Unknown skill: ${rawName}\n\n` : "";
+    return commandReply(`${prefix}${buildSkillCommandUsage(skillCommands)}`);
+  },
+);
 
-export const handleContextCommand: CommandHandler = async (params, allowTextCommands) => {
+/** Command handler for /tools. */
+export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
   }
   const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/context" && !normalized.startsWith("/context ")) {
+  let verbose;
+  if (normalized === "/tools" || normalized === "/tools compact") {
+    verbose = false;
+  } else if (normalized === "/tools verbose") {
+    verbose = true;
+  } else if (normalized.startsWith("/tools ")) {
+    return { shouldContinue: false, reply: { text: "Usage: /tools [compact|verbose]" } };
+  } else {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /context from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
+  if (rejectUnauthorizedCommand(params, "/tools")) {
     return { shouldContinue: false };
   }
-  return { shouldContinue: false, reply: await buildContextReply(params) };
+
+  try {
+    const effectiveAccountId = resolveChannelAccountId({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      command: params.command,
+    });
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const sessionBound = Boolean(params.sessionKey);
+    const threadingContext = buildThreadingToolContext({
+      sessionCtx: params.ctx,
+      config: params.cfg,
+      hasRepliedRef: undefined,
+    });
+    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentDir: sessionBound ? undefined : params.agentDir,
+      workspaceDir: params.workspaceDir,
+      modelProvider: params.provider,
+      modelId: params.model,
+    });
+    try {
+      return acquired.run((runtimeModelContext) => {
+        const result = resolveEffectiveToolInventory({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentDir: sessionBound ? undefined : params.agentDir,
+          modelProvider: params.provider,
+          modelId: params.model,
+          modelApi: runtimeModelContext.modelApi,
+          runtimeModel: runtimeModelContext.runtimeModel,
+          messageProvider: params.command.channel,
+          senderId: params.command.senderId,
+          senderName: params.ctx.SenderName,
+          senderUsername: params.ctx.SenderUsername,
+          senderE164: params.ctx.SenderE164,
+          accountId: effectiveAccountId,
+          currentChannelId: threadingContext.currentChannelId,
+          currentThreadTs:
+            typeof params.ctx.MessageThreadId === "string" ||
+            typeof params.ctx.MessageThreadId === "number"
+              ? String(params.ctx.MessageThreadId)
+              : undefined,
+          currentMessageId: threadingContext.currentMessageId,
+          groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+          groupChannel:
+            targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+          groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
+          replyToMode: resolveReplyToMode(
+            params.cfg,
+            params.ctx.OriginatingChannel ?? params.ctx.Provider,
+            effectiveAccountId,
+            params.ctx.ChatType,
+          ),
+        });
+        return commandReply(buildToolsMessage(result, { verbose }));
+      });
+    } finally {
+      await acquired[Symbol.asyncDispose]();
+    }
+  } catch {
+    // Inventory resolves in-process after sender authorization; this path cannot receive
+    // gateway RPC scope errors, so failures here are local discovery failures.
+    return commandReply("Couldn't load available tools right now. Try again in a moment.");
+  }
 };
 
-export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/whoami") {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /whoami from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  const senderId = params.ctx.SenderId ?? "";
-  const senderUsername = params.ctx.SenderUsername ?? "";
-  const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
-  if (senderId) {
-    lines.push(`User id: ${senderId}`);
-  }
-  if (senderUsername) {
-    const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
-    lines.push(`Username: ${handle}`);
-  }
-  if (params.ctx.ChatType === "group" && params.ctx.From) {
-    lines.push(`Chat: ${params.ctx.From}`);
-  }
-  if (params.ctx.MessageThreadId != null) {
-    lines.push(`Thread: ${params.ctx.MessageThreadId}`);
-  }
-  if (senderId) {
-    lines.push(`AllowFrom: ${senderId}`);
-  }
-  return { shouldContinue: false, reply: { text: lines.join("\n") } };
-};
+/** Command handler for /status. */
+export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/status",
+    match: (body, params) => {
+      const normalized = body.trim();
+      return params.directives.hasStatusDirective ||
+        matchCommandPrefix(normalized, "/status") !== null
+        ? normalized
+        : null;
+    },
+    silentUnauthorized: true,
+  },
+  async (params, normalizedStatusCommand) => {
+    if (normalizedStatusCommand === "/status plugins") {
+      const reply = await buildStatusPluginsReply({
+        cfg: params.cfg,
+        command: params.command,
+        workspaceDir: params.workspaceDir,
+      });
+      return { shouldContinue: false, reply };
+    }
+    if (normalizedStatusCommand.startsWith("/status ")) {
+      return {
+        shouldContinue: false,
+        reply: setReplyPayloadMetadata(
+          { text: "⚠️ Unknown /status subcommand. Try /status or /status plugins." },
+          { contextFreeCommand: true },
+        ),
+      };
+    }
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const reply = await buildStatusReply({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      command: params.command,
+      sessionEntry: targetSessionEntry,
+      sessionKey: params.sessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
+      sessionScope: params.sessionScope,
+      storePath: params.storePath,
+      provider: params.provider,
+      model: params.model,
+      contextTokens: params.contextTokens,
+      thinkingCatalog: params.thinkingCatalog,
+      workspaceDir: params.workspaceDir,
+      resolvedThinkLevel: params.resolvedThinkLevel,
+      resolvedFastMode: params.resolvedFastMode,
+      resolvedVerboseLevel: params.resolvedVerboseLevel,
+      resolvedReasoningLevel: params.resolvedReasoningLevel,
+      resolvedElevatedLevel: params.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
+      isGroup: params.isGroup,
+      defaultGroupActivation: params.defaultGroupActivation,
+      mediaDecisions: params.ctx.MediaUnderstandingDecisions,
+    });
+    return { shouldContinue: false, reply };
+  },
+);
+
+/** Command handler for /export-session. */
+export const handleExportSessionCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/export-session",
+    match: (body) =>
+      matchCommandPrefix(body, "/export-session") ?? matchCommandPrefix(body, "/export"),
+    ownerOnly: true,
+  },
+  async (params) => ({ shouldContinue: false, reply: await buildExportSessionReply(params) }),
+);
+
+/** Command handler for /export-trajectory. */
+export const handleExportTrajectoryCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/export-trajectory",
+    match: (body) =>
+      matchCommandPrefix(body, "/export-trajectory") ?? matchCommandPrefix(body, "/trajectory"),
+    ownerOnly: true,
+  },
+  async (params) => ({
+    shouldContinue: false,
+    reply: await buildExportTrajectoryCommandReply(params),
+  }),
+);

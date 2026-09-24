@@ -1,22 +1,6 @@
-export type QueueMode =
-  | "steer"
-  | "followup"
-  | "collect"
-  | "steer-backlog"
-  | "steer+backlog"
-  | "queue"
-  | "interrupt";
-export type QueueDropPolicy = "old" | "new" | "summarize";
+import type { QueueConfig } from "./types.messages.js";
 
-export type QueueModeByProvider = {
-  whatsapp?: QueueMode;
-  telegram?: QueueMode;
-  discord?: QueueMode;
-  irc?: QueueMode;
-  googlechat?: QueueMode;
-  slack?: QueueMode;
-  signal?: QueueMode;
-  imessage?: QueueMode;
-  msteams?: QueueMode;
-  webchat?: QueueMode;
-};
+/** Queue overflow policy for inbound channel messages. */
+export type QueueDropPolicy = NonNullable<QueueConfig["drop"]>;
+
+export type QueueModeByProvider = NonNullable<QueueConfig["byChannel"]>;

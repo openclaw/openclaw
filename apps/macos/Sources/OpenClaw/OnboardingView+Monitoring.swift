@@ -1,178 +1,258 @@
-import OpenClawIPC
 import Foundation
 
 extension OnboardingView {
-    @MainActor
-    func refreshPerms() async {
-        await self.permissionMonitor.refreshNow()
-    }
-
-    @MainActor
-    func request(_ cap: Capability) async {
-        guard !self.isRequesting else { return }
-        self.isRequesting = true
-        defer { isRequesting = false }
-        _ = await PermissionManager.ensure([cap], interactive: true)
-        await self.refreshPerms()
-    }
-
-    func updatePermissionMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == self.permissionsPageIndex
-        if shouldMonitor, !self.monitoringPermissions {
-            self.monitoringPermissions = true
-            PermissionMonitor.shared.register()
-        } else if !shouldMonitor, self.monitoringPermissions {
-            self.monitoringPermissions = false
-            PermissionMonitor.shared.unregister()
-        }
-    }
-
     func updateDiscoveryMonitoring(for pageIndex: Int) {
-        let isConnectionPage = pageIndex == self.connectionPageIndex
+        let isConnectionPage = pageIndex == connectionPageIndex
         let shouldMonitor = isConnectionPage
-        if shouldMonitor, !self.monitoringDiscovery {
-            self.monitoringDiscovery = true
+        if shouldMonitor, !monitoringDiscovery {
+            monitoringDiscovery = true
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard self.monitoringDiscovery else { return }
                 self.gatewayDiscovery.start()
                 await self.refreshLocalGatewayProbe()
             }
-        } else if !shouldMonitor, self.monitoringDiscovery {
-            self.monitoringDiscovery = false
-            self.gatewayDiscovery.stop()
+        } else if !shouldMonitor, monitoringDiscovery {
+            monitoringDiscovery = false
+            gatewayDiscovery.stop()
         }
     }
 
     func updateMonitoring(for pageIndex: Int) {
-        self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
-        self.updateAuthMonitoring(for: pageIndex)
-        self.maybeKickoffOnboardingChat(for: pageIndex)
+        self.maybeInstallCLI(for: pageIndex)
+        self.maybeStartAISetup(for: pageIndex)
     }
 
-    func stopPermissionMonitoring() {
-        guard self.monitoringPermissions else { return }
-        self.monitoringPermissions = false
-        PermissionMonitor.shared.unregister()
+    func maybeInstallCLI(for pageIndex: Int) {
+        guard self.requiresLocalCLI else { return }
+        if pageIndex == cliPageIndex, cliExecutableReady {
+            self.startExistingCLIActivationIfNeeded()
+            return
+        }
+        guard Self.shouldAutoInstallCLI(
+            onCLIPage: pageIndex == cliPageIndex,
+            visible: onboardingVisible,
+            statusKnown: cliStatusKnown,
+            executableReady: cliExecutableReady,
+            installed: cliInstalled,
+            installing: installingCLI)
+        else { return }
+        self.startCLIInstall()
+    }
+
+    static func shouldAutoInstallCLI(
+        onCLIPage: Bool,
+        visible: Bool,
+        statusKnown: Bool,
+        executableReady: Bool,
+        installed: Bool,
+        installing: Bool) -> Bool
+    {
+        onCLIPage && visible && statusKnown && !executableReady && !installed && !installing
+    }
+
+    func startExistingCLIActivationIfNeeded() {
+        guard state.connectionMode == .local,
+              GatewayProcessManager.shared.installation == .managed,
+              cliExecutableReady, !installingCLI
+        else { return }
+        // Keep the CLI setup gate in the page order until its Gateway is reachable.
+        cliInstalled = false
+        installingCLI = true
+        cliInstallPhase = .startingService
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        OnboardingController.shared.busyReason = "OpenClaw is starting the Gateway service."
+        cliStatus = "Starting OpenClaw Gateway…"
+        Task { @MainActor in await self.finishExistingCLIActivation() }
+    }
+
+    static func shouldReviseCLIActivationFailure(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        executableReady: Bool,
+        installed: Bool) -> Bool
+    {
+        guard isLocal, executableReady, !installed else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
+    static func shouldResolveInstallPromptForRunningGateway(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        phase: CLIInstallPhase) -> Bool
+    {
+        guard isLocal, phase == .choosingTarget else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
+    func reviseCLIActivationFailureIfGatewayReady(_ status: GatewayProcessManager.Status) {
+        guard self.requiresLocalCLI else {
+            if self.cliInstallPhase == .choosingTarget { OnboardingController.shared.dismissAttachedSheet() }
+            return
+        }
+        let resolvesInstallPrompt = Self.shouldResolveInstallPromptForRunningGateway(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            phase: cliInstallPhase)
+        guard resolvesInstallPrompt || Self.shouldReviseCLIActivationFailure(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            executableReady: cliExecutableReady,
+            installed: cliInstalled)
+        else { return }
+        cliInstalled = true
+        cliStatusKnown = true
+        cliStatus = nil
+        if resolvesInstallPrompt {
+            // A running local gateway already fulfills the pending install prompt.
+            OnboardingController.shared.dismissAttachedSheet()
+        }
+    }
+
+    /// LocalGatewayActivation.failed carries the reason bound to that specific activation
+    /// attempt. Append it here so onboarding does not fall back to a generic retry message
+    /// with no diagnosable cause.
+    static func gatewayStartFailureMessage(prefix: String, reason: String?) -> String {
+        guard let reason, !reason.isEmpty else { return prefix }
+        return "\(prefix) (\(reason))"
+    }
+
+    func finishExistingCLIActivation() async {
+        defer {
+            installingCLI = false
+            cliInstallPhase = .idle
+            OnboardingController.shared.setWindowCloseEnabled(true)
+            OnboardingController.shared.busyReason = nil
+        }
+
+        let result = await CLIInstaller.activateLocalGateway()
+        guard self.requiresLocalCLI else { return }
+
+        (cliInstalled, cliStatus) = Self.localGatewayActivationOutcome(result, afterFreshInstall: false)
+    }
+
+    static func localGatewayActivationOutcome(
+        _ result: CLIInstaller.LocalGatewayActivation,
+        afterFreshInstall: Bool) -> (ready: Bool, status: String)
+    {
+        switch result {
+        case .ready:
+            (true, "OpenClaw Gateway is ready.")
+        case .deferred:
+            (false, "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
+        case let .failed(reason):
+            (false, Self.gatewayStartFailureMessage(
+                prefix: "OpenClaw \(afterFreshInstall ? "was" : "is") installed, " +
+                    "but the Gateway did not start. Retry setup.",
+                reason: reason))
+        }
+    }
+
+    func startCLIInstall() {
+        guard self.onboardingVisible, self.requiresLocalCLI, !installingCLI else { return }
+        installingCLI = true
+        Task { @MainActor in await self.runCLIInstall() }
     }
 
     func stopDiscovery() {
-        guard self.monitoringDiscovery else { return }
-        self.monitoringDiscovery = false
-        self.gatewayDiscovery.stop()
+        guard monitoringDiscovery else { return }
+        monitoringDiscovery = false
+        gatewayDiscovery.stop()
     }
 
-    func updateAuthMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == self.anthropicAuthPageIndex && self.state.connectionMode == .local
-        if shouldMonitor, !self.monitoringAuth {
-            self.monitoringAuth = true
-            self.startAuthMonitoring()
-        } else if !shouldMonitor, self.monitoringAuth {
-            self.stopAuthMonitoring()
+    func runCLIInstall() async {
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        self.cliInstallPhase = .choosingTarget
+        defer {
+            self.installingCLI = false
+            self.cliInstallPhase = .idle
+            OnboardingController.shared.setWindowCloseEnabled(true)
+            OnboardingController.shared.busyReason = nil
         }
-    }
-
-    func startAuthMonitoring() {
-        self.refreshAnthropicOAuthStatus()
-        self.authMonitorTask?.cancel()
-        self.authMonitorTask = Task {
-            while !Task.isCancelled {
-                await MainActor.run { self.refreshAnthropicOAuthStatus() }
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
+        guard self.requiresLocalCLI else { return }
+        guard GatewayProcessManager.shared.installation == .managed else {
+            self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
+            return
         }
-    }
-
-    func stopAuthMonitoring() {
-        self.monitoringAuth = false
-        self.authMonitorTask?.cancel()
-        self.authMonitorTask = nil
-    }
-
-    func installCLI() async {
-        guard !self.installingCLI else { return }
-        self.installingCLI = true
-        defer { installingCLI = false }
-        await CLIInstaller.install { message in
+        // Choosing a target is not installation: keep its spinner and close/busy guards inactive.
+        guard let target = await CLIInstallPrompter.shared.installTargetForCurrentBuild(
+            presentingSheetOn: OnboardingController.shared.sheetPresentationWindow)
+        else {
+            // Gateway readiness can resolve onboarding while this sheet is open.
+            guard !cliInstalled else { return }
+            cliStatus = "CLI installation cancelled."
+            return
+        }
+        guard self.requiresLocalCLI, GatewayProcessManager.shared.installation == .managed else { return }
+        self.cliInstallPhase = .installing
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        // Cmd-W bypasses the disabled close button; the delegate asks first.
+        OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
+        let installed = await CLIInstaller.install(target: target) { message in
             self.cliStatus = message
         }
-        self.refreshCLIStatus()
+        guard installed else { return }
+        cliExecutableReady = true
+        cliInstallLocation = CLIInstaller.managedExecutableLocation()
+        guard self.requiresLocalCLI else { return }
+        cliStatus = "Starting OpenClaw Gateway…"
+        // The step checklist shows one spinner at a time: install first,
+        // then the service start.
+        self.cliInstallPhase = .startingService
+        (cliInstalled, cliStatus) = await Self.localGatewayActivationOutcome(
+            CLIInstaller.activateLocalGateway(),
+            afterFreshInstall: true)
     }
 
-    func refreshCLIStatus() {
-        let installLocation = CLIInstaller.installedLocation()
-        self.cliInstallLocation = installLocation
-        self.cliInstalled = installLocation != nil
+    func refreshCLIStatus() async {
+        guard self.requiresLocalCLI else { return }
+        await GatewayProcessManager.shared.waitForStartupAttempt()
+        guard self.requiresLocalCLI else { return }
+        guard GatewayProcessManager.shared.installation == .managed else {
+            self.cliStatusKnown = true
+            self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
+            return
+        }
+        let status = await CLIInstaller.status()
+        // A startup probe may still be running when the user reaches the install page.
+        // Never let that stale result replace live installation progress.
+        guard self.onboardingVisible, self.requiresLocalCLI, !Task.isCancelled, !installingCLI else { return }
+        cliInstallLocation = status.location
+        cliExecutableReady = status.isReady
+        cliInstalled = status.isReady
+        cliStatusKnown = true
+        cliStatus = status.message
+        self.startExistingCLIActivationIfNeeded()
+        self.maybeInstallCLI(for: self.activePageIndex)
     }
 
     func refreshLocalGatewayProbe() async {
         let port = GatewayEnvironment.gatewayPort()
         let desc = await PortGuardian.shared.describe(port: port)
+        let managedServicePID: Int32? = if AppProfile.current.isActive, desc != nil {
+            await GatewayLaunchAgentManager.runningGatewayPID()
+        } else {
+            nil
+        }
         await MainActor.run {
             guard let desc else {
                 self.localGatewayProbe = nil
                 return
             }
             let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
-            let lower = command.lowercased()
-            let expected = expectedTokens.contains { lower.contains($0) }
             self.localGatewayProbe = LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
                 command: command,
-                expected: expected)
-        }
-    }
-
-    func refreshAnthropicOAuthStatus() {
-        _ = OpenClawOAuthStore.importLegacyAnthropicOAuthIfNeeded()
-        let previous = self.anthropicAuthDetectedStatus
-        let status = OpenClawOAuthStore.anthropicOAuthStatus()
-        self.anthropicAuthDetectedStatus = status
-        self.anthropicAuthConnected = status.isConnected
-
-        if previous != status {
-            self.anthropicAuthVerified = false
-            self.anthropicAuthVerificationAttempted = false
-            self.anthropicAuthVerificationFailed = false
-            self.anthropicAuthVerifiedAt = nil
-        }
-    }
-
-    @MainActor
-    func verifyAnthropicOAuthIfNeeded(force: Bool = false) async {
-        guard self.state.connectionMode == .local else { return }
-        guard self.anthropicAuthDetectedStatus.isConnected else { return }
-        if self.anthropicAuthVerified, !force { return }
-        if self.anthropicAuthVerifying { return }
-        if self.anthropicAuthVerificationAttempted, !force { return }
-
-        self.anthropicAuthVerificationAttempted = true
-        self.anthropicAuthVerifying = true
-        self.anthropicAuthVerificationFailed = false
-        defer { self.anthropicAuthVerifying = false }
-
-        guard let refresh = OpenClawOAuthStore.loadAnthropicOAuthRefreshToken(), !refresh.isEmpty else {
-            self.anthropicAuthStatus = "OAuth verification failed: missing refresh token."
-            self.anthropicAuthVerificationFailed = true
-            return
-        }
-
-        do {
-            let updated = try await AnthropicOAuth.refresh(refreshToken: refresh)
-            try OpenClawOAuthStore.saveAnthropicOAuth(updated)
-            self.refreshAnthropicOAuthStatus()
-            self.anthropicAuthVerified = true
-            self.anthropicAuthVerifiedAt = Date()
-            self.anthropicAuthVerificationFailed = false
-            self.anthropicAuthStatus = "OAuth detected and verified."
-        } catch {
-            self.anthropicAuthVerified = false
-            self.anthropicAuthVerifiedAt = nil
-            self.anthropicAuthVerificationFailed = true
-            self.anthropicAuthStatus = "OAuth verification failed: \(error.localizedDescription)"
+                profile: .current,
+                managedServicePID: managedServicePID)
         }
     }
 }

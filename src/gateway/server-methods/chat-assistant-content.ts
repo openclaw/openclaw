@@ -1,0 +1,389 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  readPairingQrReplyChannelData,
+  stripReplyMediaFailureFallback,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { renderQrPngDataUrl } from "../../media/qr-image.js";
+import { renderQrTerminal } from "../../media/qr-terminal.js";
+import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
+import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import {
+  buildManagedMediaFailureBlock,
+  createManagedOutgoingMediaBlocks,
+  prepareOutgoingMediaFromReplyPayload,
+} from "../managed-image-attachments.js";
+import { formatForLog } from "../ws-log.js";
+import type { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+
+const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
+
+export type AssistantDisplayContentBlock = Record<string, unknown>;
+
+/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
+export function combineNonStreamingReplyParts(parts: readonly string[]): string {
+  let combined = "";
+  for (const part of parts) {
+    if (!part.trim()) {
+      continue;
+    }
+    if (!combined) {
+      combined = part;
+      continue;
+    }
+    // Outbound media normalization trims a chunk's trailing newline, so an
+    // indented following chunk still needs its original single-line boundary.
+    const separator =
+      /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
+        ? ""
+        : /^[\t ]+\S/.test(part)
+          ? "\n"
+          : "\n\n";
+    combined += separator + part;
+  }
+  return trimTextPreservingCode(combined);
+}
+
+export function isMediaBearingPayload(payload: ReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return false;
+  }
+  if (payload.mediaUrl?.trim()) {
+    return true;
+  }
+  return Boolean(payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
+  return payloads.some(
+    (payload) =>
+      payload.sensitiveMedia === true &&
+      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
+  );
+}
+
+async function buildPairingQrAssistantContentBlock(
+  payload: ReplyPayload,
+): Promise<AssistantDisplayContentBlock | undefined> {
+  const qr = readPairingQrReplyChannelData(payload);
+  if (!qr) {
+    return undefined;
+  }
+  const [imageUrl, terminalText] = await Promise.all([
+    renderQrPngDataUrl(qr.setupCode),
+    renderQrTerminal(qr.setupCode, { small: true }),
+  ]);
+  return {
+    type: "openclaw_pairing_qr",
+    image_url: imageUrl,
+    terminalText,
+    alt: "OpenClaw pairing QR code",
+    expiresAtMs: qr.expiresAtMs,
+    sensitive: true,
+  };
+}
+
+export function sanitizeAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  const stripped = stripInlineDirectiveTagsForDelivery(normalized);
+  const visible = trimTextPreservingCode(stripped.text);
+  return visible
+    ? options?.preserveBoundaries && !stripped.changed
+      ? normalized
+      : visible
+    : undefined;
+}
+
+export function prepareAssistantDisplayText(
+  value?: string | null,
+  options?: { preserveBoundaries?: boolean },
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const withoutEnvelope = stripEnvelopeFromMessage(value);
+  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  return normalized.trim()
+    ? options?.preserveBoundaries
+      ? normalized
+      : trimTextPreservingCode(normalized)
+    : undefined;
+}
+
+export function extractAssistantDisplayText(
+  content?: readonly AssistantDisplayContentBlock[] | null,
+): string | undefined {
+  if (!Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block?.type === "text" && typeof block.text === "string" && block.text) {
+      parts.push(block.text);
+    }
+  }
+  return combineNonStreamingReplyParts(parts) || undefined;
+}
+
+type AssistantReplyContentParams = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+  sessionKey: string;
+  agentId?: string;
+  payloads: ReplyPayload[];
+  managedMediaLocalRoots?: Parameters<typeof createManagedOutgoingMediaBlocks>[0]["localRoots"];
+  includeSensitiveMedia?: boolean;
+  includeSensitiveDisplay?: boolean;
+  onManagedMediaPrepareError?: (message: string) => void;
+  onSensitiveDisplayPrepareError?: (message: string) => void;
+  transcriptMediaMessage?: Awaited<
+    ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>
+  >;
+};
+
+export function buildAssistantReplyContent(params: AssistantReplyContentParams) {
+  return buildAssistantReplyContentFromInputs({
+    ...params,
+    inputs: params.payloads.map((payload) => ({ kind: "raw", payload })),
+  });
+}
+
+export async function buildAssistantReplyContentFromInputs(
+  params: Omit<AssistantReplyContentParams, "payloads"> & {
+    inputs: readonly ReplyDispatchOperation[];
+  },
+): Promise<{
+  assistantContent: AssistantDisplayContentBlock[] | undefined;
+  persistedAssistantContent: AssistantDisplayContentBlock[] | undefined;
+}> {
+  const payloads = params.inputs.map((input) =>
+    input.kind === "raw" ? input.payload : input.plan.payload,
+  );
+  const rawTextPayloadCount = payloads.filter(
+    (payload) =>
+      payload.isReasoning !== true &&
+      typeof payload.text === "string" &&
+      payload.text.trim().length > 0,
+  ).length;
+  const plan = params.inputs.flatMap((input, sourceIndex) => {
+    if (payloads[sourceIndex]?.isReasoning === true) {
+      return [];
+    }
+    return (input.kind === "raw" ? createOutboundPayloadPlan([input.payload]) : [input.plan]).map(
+      (entry) => Object.assign({}, entry, { sourceIndex }),
+    );
+  });
+  if (plan.length === 0) {
+    const failureBlocks = payloads.flatMap((payload) =>
+      payload.isReasoning === true
+        ? []
+        : (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+            buildManagedMediaFailureBlock,
+          ),
+    );
+    const assistantContent =
+      failureBlocks.length > 0
+        ? failureBlocks
+        : rawTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined;
+    return { assistantContent, persistedAssistantContent: assistantContent };
+  }
+
+  const preserveTextBoundaries =
+    plan.filter(({ payload }) => typeof payload.text === "string" && payload.text.trim()).length >
+    1;
+  const content: Array<AssistantDisplayContentBlock | [string, ...string[]]> = [];
+  const persistedContent: AssistantDisplayContentBlock[] = [];
+  const persistSensitiveDisplay = !hasSensitiveMediaPayload(payloads);
+  let strippedTextPayloadCount = 0;
+  for (const entry of plan) {
+    const payload = entry.payload;
+    const metadataSource = payloads[entry.sourceIndex] ?? payload;
+    const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
+    const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
+    const statusNotice = isReplyPayloadStatusNotice(payload);
+    const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
+    const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
+      preserveBoundaries: preserveTextBoundaries,
+    });
+    if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
+      if (statusNotice) {
+        content.push({ type: "text", text, openclawStatusNotice: true });
+      } else {
+        const previousBlock = content.at(-1);
+        if (Array.isArray(previousBlock)) {
+          previousBlock.push(text);
+        } else {
+          content.push([text]);
+        }
+      }
+    } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+      strippedTextPayloadCount += 1;
+    }
+    // Display text may merge across payloads. Transcript captions and directives
+    // stay attached to their source payload instead of matching display slots.
+    const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
+    if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
+      persistedContent.push({
+        type: "text",
+        text: transcriptText,
+        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+      });
+    }
+    if (params.includeSensitiveDisplay === true) {
+      try {
+        const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
+        if (pairingQrBlock) {
+          content.push(pairingQrBlock);
+          if (persistSensitiveDisplay) {
+            persistedContent.push(pairingQrBlock);
+          }
+        }
+      } catch (err) {
+        params.onSensitiveDisplayPrepareError?.(formatForLog(err));
+      }
+    }
+    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
+      continue;
+    }
+    const mediaBlocks = await createManagedOutgoingMediaBlocks({
+      assertCurrent: params.assertCurrent,
+      abortSignal: params.abortSignal,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
+      localRoots: params.managedMediaLocalRoots,
+      continueOnPrepareError: true,
+      onPrepareError: (error) => {
+        params.onManagedMediaPrepareError?.(error.message);
+      },
+    });
+    if (payload.audioAsVoice === true) {
+      for (const block of mediaBlocks) {
+        if (block.type === "audio") {
+          block.isVoiceNote = true;
+        }
+      }
+    }
+    const mediaContent = [...mediaBlocks, ...mediaFailures.map(buildManagedMediaFailureBlock)];
+    content.push(...mediaContent);
+    persistedContent.push(...mediaContent);
+  }
+
+  const assistantContent =
+    content.length > 0
+      ? content.map((block) =>
+          Array.isArray(block)
+            ? {
+                type: "text",
+                text: block.length === 1 ? block[0] : combineNonStreamingReplyParts(block),
+              }
+            : block,
+        )
+      : strippedTextPayloadCount > 0
+        ? [{ type: "text", text: "" }]
+        : undefined;
+  return {
+    assistantContent,
+    persistedAssistantContent:
+      persistedContent.length > 0
+        ? persistedContent
+        : strippedTextPayloadCount > 0
+          ? [{ type: "text", text: "" }]
+          : undefined,
+  };
+}
+
+function isManagedOutgoingMediaUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_MEDIA_PATH_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+export function stripManagedOutgoingAssistantContentBlocks(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): AssistantDisplayContentBlock[] | undefined {
+  if (!content || content.length === 0) {
+    return undefined;
+  }
+  const filtered = content.filter((block) => {
+    const attachment =
+      block?.type === "attachment" ? asOptionalRecord(block.attachment) : undefined;
+    if (
+      block?.type !== "image" &&
+      block?.type !== "audio" &&
+      block?.type !== "video" &&
+      !attachment
+    ) {
+      return true;
+    }
+    return !(
+      isManagedOutgoingMediaUrl(block.url) ||
+      isManagedOutgoingMediaUrl(block.openUrl) ||
+      isManagedOutgoingMediaUrl(attachment?.url)
+    );
+  });
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+export function hasAssistantDisplayMediaContent(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): boolean {
+  return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+export function hasVisibleAssistantFinalMessage(
+  message: Record<string, unknown> | undefined,
+): boolean {
+  if (!message) {
+    return false;
+  }
+  if (typeof message.text === "string" && message.text.trim()) {
+    return true;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "text") {
+      return typeof record.text === "string" && record.text.trim().length > 0;
+    }
+    return true;
+  });
+}
+
+export function hasManagedOutgoingAssistantContent(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): boolean {
+  return Boolean(
+    content?.some(
+      (block) =>
+        ((block?.type === "image" || block?.type === "audio" || block?.type === "video") &&
+          (isManagedOutgoingMediaUrl(block.url) || isManagedOutgoingMediaUrl(block.openUrl))) ||
+        (block?.type === "attachment" &&
+          isManagedOutgoingMediaUrl(asOptionalRecord(block.attachment)?.url)),
+    ),
+  );
+}

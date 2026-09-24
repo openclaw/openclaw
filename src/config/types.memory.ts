@@ -1,52 +1,27 @@
-import type { SessionSendPolicyConfig } from "./types.base.js";
+/**
+ * Memory config types shared by core context-engine paths and memory host/plugin runtimes.
+ * Builtin memory stays core-owned.
+ */
+import type { MemorySearchConfigInput } from "./zod-schema.memory-search.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
+
+/** Citation rendering mode for memory-injected context. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
-export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
+/** Top-level memory config block. */
 export type MemoryConfig = {
-  backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
-  qmd?: MemoryQmdConfig;
+  /** Shared embedding/search defaults. Per-agent overrides live under agents.entries.*.memory.search. */
+  search?: MemorySearchConfig;
 };
 
-export type MemoryQmdConfig = {
-  command?: string;
-  searchMode?: MemoryQmdSearchMode;
-  includeDefaultMemory?: boolean;
-  paths?: MemoryQmdIndexPath[];
-  sessions?: MemoryQmdSessionConfig;
-  update?: MemoryQmdUpdateConfig;
-  limits?: MemoryQmdLimitsConfig;
-  scope?: SessionSendPolicyConfig;
-};
-
-export type MemoryQmdIndexPath = {
-  path: string;
-  name?: string;
-  pattern?: string;
-};
-
-export type MemoryQmdSessionConfig = {
-  enabled?: boolean;
-  exportDir?: string;
-  retentionDays?: number;
-};
-
-export type MemoryQmdUpdateConfig = {
-  interval?: string;
-  debounceMs?: number;
-  onBoot?: boolean;
-  waitForBootSync?: boolean;
-  embedInterval?: string;
-  commandTimeoutMs?: number;
-  updateTimeoutMs?: number;
-  embedTimeoutMs?: number;
-};
-
-export type MemoryQmdLimitsConfig = {
-  maxResults?: number;
-  maxSnippetChars?: number;
-  maxInjectedChars?: number;
-  timeoutMs?: number;
+export type MemorySearchConfig = Omit<MemorySearchConfigInput, "store"> & {
+  /** Preserve legacy embedding-cache authoring accepted by Doctor migrations. */
+  store?: NonNullable<MemorySearchConfigInput["store"]> & {
+    cache?: {
+      enabled?: boolean;
+      maxEntries?: number;
+    };
+  };
 };

@@ -1,3 +1,2 @@
-import type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk";
-
-export type { GoogleChatAccountConfig, GoogleChatConfig };
+// Googlechat helper module supports types behavior.
+export type { GoogleChatAccountConfig } from "../runtime-api.js";

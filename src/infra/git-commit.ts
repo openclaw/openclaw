@@ -1,6 +1,13 @@
-import fs from "node:fs";
+// Resolves git commit metadata for build/runtime diagnostics.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isMissingPathError } from "./errors.js";
+import { readGitHead, readGitMetadataPrefix } from "./git-root.js";
+import { pruneMapToMaxSize } from "./map-size.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
   if (!value) {
@@ -10,41 +17,78 @@ const formatCommit = (value?: string | null) => {
   if (!trimmed) {
     return null;
   }
-  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
-};
-
-const resolveGitHead = (startDir: string) => {
-  let current = startDir;
-  for (let i = 0; i < 12; i += 1) {
-    const gitPath = path.join(current, ".git");
-    try {
-      const stat = fs.statSync(gitPath);
-      if (stat.isDirectory()) {
-        return path.join(gitPath, "HEAD");
-      }
-      if (stat.isFile()) {
-        const raw = fs.readFileSync(gitPath, "utf-8");
-        const match = raw.match(/gitdir:\s*(.+)/i);
-        if (match?.[1]) {
-          const resolved = path.resolve(current, match[1].trim());
-          return path.join(resolved, "HEAD");
-        }
-      }
-    } catch {
-      // ignore missing .git at this level
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
+  const match = trimmed.match(/[0-9a-fA-F]{7,40}/);
+  if (!match) {
+    return null;
   }
-  return null;
+  return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
 };
 
-let cachedCommit: string | null | undefined;
+export function gitCommitPrefixesMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+  const normalizedRight = normalizeLowercaseStringOrEmpty(right);
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
+
+const cachedGitCommitBySearchDir = new Map<string, string | null>();
+const GIT_COMMIT_CACHE_LIMIT = 256;
+declare const WORKER_DEPLOY_BUILD: boolean;
+
+type CommitMetadataReaders = {
+  readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
+  readBuildInfoCommit?: () => string | null;
+  readPackageJsonCommit?: () => string | null;
+};
+
+const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
+  if (options.cwd) {
+    return path.resolve(options.cwd);
+  }
+  if (options.moduleUrl) {
+    try {
+      return path.dirname(fileURLToPath(options.moduleUrl));
+    } catch {
+      // moduleUrl is not a valid file:// URL; fall back to process.cwd().
+    }
+  }
+  return process.cwd();
+};
+
+const cacheGitCommit = (searchDir: string, commit: string | null) => {
+  cachedGitCommitBySearchDir.set(searchDir, commit);
+  pruneMapToMaxSize(cachedGitCommitBySearchDir, GIT_COMMIT_CACHE_LIMIT);
+  return commit;
+};
+const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
+  if (!packageRoot) {
+    return undefined;
+  }
+  const relative = path.relative(packageRoot, searchDir);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  const depth = relative ? relative.split(path.sep).filter(Boolean).length : 0;
+  return depth + 1;
+};
+
+const readCommitFromGit = (
+  searchDir: string,
+  packageRoot: string | null,
+): string | null | undefined => {
+  const head = readGitHead(searchDir, {
+    maxDepth: resolveGitLookupDepth(searchDir, packageRoot),
+  });
+  return head === undefined ? undefined : formatCommit(head.value);
+};
 
 const readCommitFromPackageJson = () => {
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    return null;
+  }
   try {
     const require = createRequire(import.meta.url);
     const pkg = require("../../package.json") as {
@@ -57,72 +101,115 @@ const readCommitFromPackageJson = () => {
   }
 };
 
-const readCommitFromBuildInfo = () => {
+const readCommitProbe = (
+  moduleUrl: string,
+  candidates: readonly string[],
+  field: "commit" | "head",
+): string | null | undefined => {
   try {
-    const require = createRequire(import.meta.url);
-    const candidates = ["../build-info.json", "./build-info.json"];
     for (const candidate of candidates) {
+      const filePath = fileURLToPath(new URL(candidate, moduleUrl));
+      let raw: string;
       try {
-        const info = require(candidate) as {
-          commit?: string | null;
-        };
-        const formatted = formatCommit(info.commit ?? null);
-        if (formatted) {
-          return formatted;
+        raw = readGitMetadataPrefix(filePath, 1024);
+      } catch (error) {
+        if (isMissingPathError(error)) {
+          continue;
         }
+        return null;
+      }
+      try {
+        const value = asNullableRecord(JSON.parse(raw))?.[field];
+        return typeof value === "string" ? formatCommit(value) : null;
       } catch {
-        // ignore missing candidate
+        return null;
       }
     }
-    return null;
   } catch {
-    return null;
+    // Invalid module URL means no loaded build metadata is available.
   }
+  return undefined;
 };
 
-export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
-  if (cachedCommit !== undefined) {
-    return cachedCommit;
+const readCommitFromBuildInfo = (moduleUrl = import.meta.url) => {
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit") ?? null;
+};
+
+const readLoadedCommit = (moduleUrl: string): string | null | undefined => {
+  const buildStamp = readCommitProbe(moduleUrl, ["../.buildstamp", "./.buildstamp"], "head");
+  const runtimeStamp = readCommitProbe(
+    moduleUrl,
+    ["../.runtime-postbuildstamp", "./.runtime-postbuildstamp"],
+    "head",
+  );
+  if (buildStamp !== undefined || runtimeStamp !== undefined) {
+    if (buildStamp || runtimeStamp) {
+      return buildStamp && buildStamp === runtimeStamp ? buildStamp : null;
+    }
+    return readCommitFromBuildInfo(moduleUrl);
   }
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit");
+};
+
+export const resolveCommitHash = (
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    moduleUrl?: string;
+    readers?: CommitMetadataReaders;
+  } = {},
+) => {
   const env = options.env ?? process.env;
+  const readers = options.readers ?? {};
+  const readGitCommit = readers.readGitCommit ?? readCommitFromGit;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
-    cachedCommit = normalized;
-    return cachedCommit;
+    return normalized;
   }
-  const buildInfoCommit = readCommitFromBuildInfo();
+  const searchDir = resolveCommitSearchDir(options);
+  if (cachedGitCommitBySearchDir.has(searchDir)) {
+    const cached = cachedGitCommitBySearchDir.get(searchDir) ?? null;
+    // Git discovery reads multiple files; keep active directories ahead of cold entries when
+    // the shared insertion-order pruning helper enforces the bound.
+    cachedGitCommitBySearchDir.delete(searchDir);
+    cachedGitCommitBySearchDir.set(searchDir, cached);
+    return cached;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: options.cwd,
+    moduleUrl: options.moduleUrl,
+  });
+  try {
+    const gitCommit = readGitCommit(searchDir, packageRoot);
+    if (gitCommit !== undefined) {
+      return cacheGitCommit(searchDir, gitCommit);
+    }
+  } catch {
+    // Fall through to baked metadata for packaged installs that are not in a live checkout.
+  }
+  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
   if (buildInfoCommit) {
-    cachedCommit = buildInfoCommit;
-    return cachedCommit;
+    return cacheGitCommit(searchDir, buildInfoCommit);
   }
-  const pkgCommit = readCommitFromPackageJson();
+  const pkgCommit = readers.readPackageJsonCommit?.() ?? readCommitFromPackageJson();
   if (pkgCommit) {
-    cachedCommit = pkgCommit;
-    return cachedCommit;
+    return cacheGitCommit(searchDir, pkgCommit);
   }
   try {
-    const headPath = resolveGitHead(options.cwd ?? process.cwd());
-    if (!headPath) {
-      cachedCommit = null;
-      return cachedCommit;
-    }
-    const head = fs.readFileSync(headPath, "utf-8").trim();
-    if (!head) {
-      cachedCommit = null;
-      return cachedCommit;
-    }
-    if (head.startsWith("ref:")) {
-      const ref = head.replace(/^ref:\s*/i, "").trim();
-      const refPath = path.resolve(path.dirname(headPath), ref);
-      const refHash = fs.readFileSync(refPath, "utf-8").trim();
-      cachedCommit = formatCommit(refHash);
-      return cachedCommit;
-    }
-    cachedCommit = formatCommit(head);
-    return cachedCommit;
+    return cacheGitCommit(searchDir, readGitCommit(searchDir, packageRoot) ?? null);
   } catch {
-    cachedCommit = null;
-    return cachedCommit;
+    return cacheGitCommit(searchDir, null);
   }
 };
+
+/** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */
+export function resolveLoadedCommitHash(
+  options: { env?: NodeJS.ProcessEnv; moduleUrl?: string } = {},
+): string | null {
+  const moduleUrl = options.moduleUrl ?? import.meta.url;
+  const loaded = readLoadedCommit(moduleUrl);
+  return loaded === undefined
+    ? resolveCommitHash({ moduleUrl, ...(options.env ? { env: options.env } : {}) })
+    : loaded;
+}

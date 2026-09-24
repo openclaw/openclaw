@@ -1,15 +1,23 @@
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
-  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../daemon/launchd.js";
+import { formatRuntimeStatus } from "../daemon/runtime-format.js";
+import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
+import {
+  getSystemdCgroupHygieneSummary,
+  isSystemdCgroupHygieneRisk,
+  isSystemdStartLimitHit,
+  type GatewayServiceRuntime,
+} from "../daemon/service-runtime.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../daemon/systemd-hints.js";
+import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
@@ -18,41 +26,14 @@ type RuntimeHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
+/** Formats the platform-specific gateway service runtime into a compact status line. */
 export function formatGatewayRuntimeSummary(
   runtime: GatewayServiceRuntime | undefined,
 ): string | null {
-  if (!runtime) {
-    return null;
-  }
-  const status = runtime.status ?? "unknown";
-  const details: string[] = [];
-  if (runtime.pid) {
-    details.push(`pid ${runtime.pid}`);
-  }
-  if (runtime.state && runtime.state.toLowerCase() !== status) {
-    details.push(`state ${runtime.state}`);
-  }
-  if (runtime.subState) {
-    details.push(`sub ${runtime.subState}`);
-  }
-  if (runtime.lastExitStatus !== undefined) {
-    details.push(`last exit ${runtime.lastExitStatus}`);
-  }
-  if (runtime.lastExitReason) {
-    details.push(`reason ${runtime.lastExitReason}`);
-  }
-  if (runtime.lastRunResult) {
-    details.push(`last run ${runtime.lastRunResult}`);
-  }
-  if (runtime.lastRunTime) {
-    details.push(`last run time ${runtime.lastRunTime}`);
-  }
-  if (runtime.detail) {
-    details.push(runtime.detail);
-  }
-  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
+  return formatRuntimeStatus(runtime);
 }
 
+/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},
@@ -70,8 +51,15 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
-    hints.push(...renderSystemdUnavailableHints({ wsl: isWSLEnv() }));
+  const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
+  if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
+    hints.push(
+      ...renderSystemdUnavailableHints({
+        wsl: isWSLEnv(env),
+        kind: classifySystemdUnavailableDetail(systemdDetail),
+        env,
+      }),
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
@@ -91,21 +79,46 @@ export function buildGatewayRuntimeHints(
     }
     return hints;
   }
-  if (runtime.status === "stopped") {
-    hints.push("Service is loaded but not running (likely exited immediately).");
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
+  const missingGuiSession = runtime.missingGuiSession && platform === "darwin";
+  if (missingGuiSession || runtime.status === "stopped") {
+    if (!missingGuiSession && platform === "linux" && isSystemdStartLimitHit(runtime)) {
+      // start-limit-hit means systemd gave up restarting after repeated crashes;
+      // a plain "exited immediately" hint would hide that recovery needs a restart.
+      hints.push(
+        "systemd stopped restarting the gateway after repeated crashes.",
+        `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
+      );
+    } else if (!missingGuiSession) {
+      hints.push("Service is loaded but not running (likely exited immediately).");
     }
-    if (platform === "darwin") {
-      const logs = resolveGatewayLogPaths(env);
-      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
-      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
-    } else if (platform === "win32") {
-      const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
+    hints.push(
+      ...buildGatewayRuntimeRecoveryHints({
+        kind: missingGuiSession ? "gui-session" : "stopped",
+        restartCommand: formatCliCommand("openclaw gateway restart", env),
+        logFile: fileLog,
+        platform,
+        env,
+        systemd: runtime.systemd,
+      }),
+    );
+    if (missingGuiSession) {
+      return hints;
+    }
+  }
+  if (platform === "linux" && isSystemdCgroupHygieneRisk(runtime.systemd)) {
+    const unit = quoteCliArg(
+      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`,
+    );
+    const system = runtime.systemd?.scope === "system";
+    const summary = getSystemdCgroupHygieneSummary(runtime.systemd);
+    if (summary) {
+      hints.push(
+        `Systemd cgroup hygiene looks elevated: ${summary}.`,
+        "This usually means old helper or browser processes may still be attached to the gateway service.",
+        `Run: systemctl ${system ? "--system" : "--user"} show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+        `Run: systemd-cgls ${system ? "--unit" : "--user-unit"} ${unit}`,
+        `After reviewing service settings, run: ${formatCliCommand("openclaw gateway restart", env)}`,
+      );
     }
   }
   return hints;

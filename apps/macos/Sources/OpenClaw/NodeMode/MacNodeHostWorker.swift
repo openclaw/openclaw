@@ -1,0 +1,932 @@
+import CoreFoundation
+import Darwin
+import Foundation
+import OpenClawKit
+import OpenClawProtocol
+import OSLog
+import Subprocess
+
+extension Notification.Name {
+    static let openclawNodeHostManifestChanged = Notification.Name("openclaw.node-host-worker.manifest-changed")
+    static let openclawNodeHostHostingChanged = Notification.Name("openclaw.node-host-worker.hosting-changed")
+    static let openclawNodeHostWorkerFailed = Notification.Name("openclaw.node-host-worker.failed")
+    static let openclawNodeHostWorkerRetryExhausted = Notification.Name(
+        "openclaw.node-host-worker.retry-exhausted")
+}
+
+struct MacNodeHostManifest: Equatable, Sendable {
+    let version: String
+    let caps: [String]
+    let commands: [String]
+    let computerUse: AnyCodable?
+    let pathEnv: String
+
+    init(
+        version: String,
+        caps: [String],
+        commands: [String],
+        computerUse: AnyCodable? = nil,
+        pathEnv: String)
+    {
+        self.version = version
+        self.caps = caps
+        self.commands = commands
+        self.computerUse = computerUse
+        self.pathEnv = pathEnv
+    }
+}
+
+struct MacNodeHostWorkerLaunch: Equatable, Sendable {
+    let command: [String]
+    let currentDirectoryURL: URL?
+    let environment: [String: String]
+    let configurationGeneration: UInt64
+
+    init(
+        command: [String],
+        currentDirectoryURL: URL? = nil,
+        environment: [String: String] = [:],
+        configurationGeneration: UInt64 = 0)
+    {
+        self.command = command
+        self.currentDirectoryURL = currentDirectoryURL
+        self.environment = environment
+        self.configurationGeneration = configurationGeneration
+    }
+}
+
+protocol MacNodeHostWorking: Sendable {
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest
+    func supports(_ command: String) async -> Bool
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse
+    func handleInput(invokeId: String, seq: Int, payloadJSON: String) async
+    func cancel(invokeId: String) async
+    func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool
+    func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async
+
+    func stop() async
+}
+
+/// Runs the canonical TypeScript node-host runtime as an app-owned JSONL worker.
+/// The worker never connects to Gateway; this app remains the sole node identity
+/// and keeps TCC-sensitive execution behind the native exec-host socket.
+final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
+    nonisolated static let defaultStartupTimeout: TimeInterval = 300
+    private static let maxPendingInvokeControlIDs = 32
+    private static let maxPendingInvokeControlsPerID = 64
+
+    private enum PendingInvokeControl {
+        case input(seq: Int, payloadJSON: String)
+        case cancel
+    }
+
+    private final class InvokeReservation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        func cancel() {
+            self.lock.withLock { self.cancelled = true }
+        }
+
+        var isCancelled: Bool {
+            self.lock.withLock { self.cancelled }
+        }
+    }
+
+    private struct PendingInvoke {
+        let reservation: InvokeReservation
+        let processGeneration: UUID
+        let gatewayGeneration: UInt64
+        let continuation: CheckedContinuation<BridgeInvokeResponse, Never>
+    }
+
+    enum WorkerError: LocalizedError {
+        case unavailable(reason: String, diagnostic: String? = nil)
+
+        var errorDescription: String? {
+            switch self {
+            case let .unavailable(reason, diagnostic):
+                diagnostic?
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .first
+                    .map { "\(reason): \($0)" } ?? reason
+            }
+        }
+    }
+
+    private let logger = Logger(subsystem: "ai.openclaw", category: "node-host-worker")
+    private let queue = DispatchQueue(label: "ai.openclaw.node-host-worker")
+    private let writerQueue = DispatchQueue(label: "ai.openclaw.node-host-worker.writer")
+    private let session: GatewayNodeSession
+    private let startupTimeout: TimeInterval
+    private let onUnexpectedExit: @Sendable (UInt64) -> Void
+    private var process: ManagedProcess?
+    private var processCleanupTask: Task<Void, Never>?
+    private var stdinPipe: Pipe?
+    private var readers: [PipeReadStream] = []
+    private var processGeneration: UUID?
+    private var launchedWorker: MacNodeHostWorkerLaunch?
+    private var stdoutBuffer = Data()
+    // Bounded head of worker stderr. CLI startup failures print their cause
+    // first; without this the operator-visible error is just "exited(1)".
+    private var stderrCapture = PipeTextCapture(characterLimit: 700, retention: .head)
+    private var manifest: MacNodeHostManifest?
+    private var workerHostingEnabled = false
+    private var route: GatewayNodeSessionRoute?
+    private var routeAuthorityGeneration: UInt64 = 0
+    private var startContinuation: CheckedContinuation<MacNodeHostManifest, Error>?
+    private var pendingInvokes: [String: PendingInvoke] = [:]
+    private var pendingInvokeControls: [String: [PendingInvokeControl]] = [:]
+    private var pendingInvokeControlOrder: [String] = []
+    private var startTimer: DispatchSourceTimer?
+    private var eventDeliveryTask: Task<Void, Never>?
+    private var runnerInventoryRefreshTask: Task<Void, Never>?
+    private var gatewayGeneration: UInt64 = 0
+
+    init(
+        session: GatewayNodeSession,
+        startupTimeout: TimeInterval = MacNodeHostWorker.defaultStartupTimeout,
+        onUnexpectedExit: @escaping @Sendable (UInt64) -> Void = { _ in })
+    {
+        self.session = session
+        self.startupTimeout = startupTimeout
+        self.onUnexpectedExit = onUnexpectedExit
+    }
+
+    deinit {
+        self.runnerInventoryRefreshTask?.cancel()
+    }
+
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+        try await withCheckedThrowingContinuation { continuation in
+            self.queue.async {
+                if let manifest = self.manifest,
+                   self.process?.isRunning == true,
+                   self.launchedWorker == launch
+                {
+                    continuation.resume(returning: manifest)
+                    return
+                }
+                guard self.startContinuation == nil else {
+                    continuation.resume(throwing: WorkerError.unavailable(
+                        reason: "node-host worker is already starting"))
+                    return
+                }
+                self.startContinuation = continuation
+                self.startLocked(launch: launch)
+            }
+        }
+    }
+
+    func supports(_ command: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                continuation.resume(returning: self.manifest?.commands.contains(command) == true)
+            }
+        }
+    }
+
+    func isWorkerHostingEnabled() async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                continuation.resume(returning: self.workerHostingEnabled)
+            }
+        }
+    }
+
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        let reservation = InvokeReservation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.queue.async {
+                    guard !reservation.isCancelled else {
+                        _ = self.takePendingInvokeControlsLocked(invokeId: request.id)
+                        continuation.resume(returning: Self.unavailableResponse(
+                            request.id,
+                            "UNAVAILABLE: node-host worker invocation cancelled"))
+                        return
+                    }
+                    guard self.process?.isRunning == true, self.manifest != nil,
+                          let processGeneration = self.processGeneration
+                    else {
+                        continuation.resume(returning: Self.unavailableResponse(
+                            request.id,
+                            "UNAVAILABLE: node-host worker is not running"))
+                        return
+                    }
+                    guard self.pendingInvokes[request.id] == nil else {
+                        continuation.resume(returning: Self.unavailableResponse(
+                            request.id,
+                            "UNAVAILABLE: duplicate node-host worker request"))
+                        return
+                    }
+                    self.pendingInvokes[request.id] = PendingInvoke(
+                        reservation: reservation,
+                        processGeneration: processGeneration,
+                        gatewayGeneration: self.gatewayGeneration,
+                        continuation: continuation)
+                    do {
+                        let workerRequest: [String: Any] = [
+                            "id": request.id,
+                            "nodeId": request.nodeId ?? "",
+                            "command": request.command,
+                            "paramsJSON": request.paramsJSON ?? NSNull(),
+                            "sessionKey": request.sessionKey ?? NSNull(),
+                            "timeoutMs": request.timeoutMs ?? NSNull(),
+                            "idempotencyKey": request.idempotencyKey ?? NSNull(),
+                        ]
+                        try self.enqueueWriteLocked([
+                            "type": "invoke",
+                            "generation": self.gatewayGeneration,
+                            "request": workerRequest,
+                        ])
+                        for control in self.takePendingInvokeControlsLocked(invokeId: request.id) {
+                            try self.enqueueInvokeControlLocked(control, invokeId: request.id)
+                            if case .cancel = control {
+                                self.finishCancelledInvokeLocked(invokeId: request.id)
+                            }
+                        }
+                    } catch {
+                        self.pendingInvokes.removeValue(forKey: request.id)?.continuation.resume(returning:
+                            Self.unavailableResponse(request.id, "UNAVAILABLE: node-host worker write failed"))
+                    }
+                }
+            }
+        } onCancel: {
+            reservation.cancel()
+            self.queue.async {
+                self.cancelInvokeLocked(invokeId: request.id, reservation: reservation)
+            }
+        }
+    }
+
+    private func cancelInvokeLocked(invokeId: String, reservation: InvokeReservation) {
+        // The queued handler must not cancel a later reuse of this ID or a replacement worker.
+        guard let pending = self.pendingInvokes[invokeId], pending.reservation === reservation else { return }
+        if pending.processGeneration == self.processGeneration,
+           pending.gatewayGeneration == self.gatewayGeneration
+        {
+            try? self.enqueueInvokeControlLocked(.cancel, invokeId: invokeId)
+        }
+        self.finishCancelledInvokeLocked(invokeId: invokeId)
+    }
+
+    func handleInput(invokeId: String, seq: Int, payloadJSON: String) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                let control = PendingInvokeControl.input(seq: seq, payloadJSON: payloadJSON)
+                if self.pendingInvokes[invokeId] != nil {
+                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                } else if self.process?.isRunning == true, self.manifest != nil {
+                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    func cancel(invokeId: String) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                let control = PendingInvokeControl.cancel
+                if self.pendingInvokes[invokeId] != nil {
+                    try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                    self.finishCancelledInvokeLocked(invokeId: invokeId)
+                } else if self.process?.isRunning == true, self.manifest != nil {
+                    self.bufferInvokeControlLocked(control, invokeId: invokeId)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    private func bufferInvokeControlLocked(_ control: PendingInvokeControl, invokeId: String) {
+        // Gateway control events can overtake detached invoke dispatch. Keep the
+        // short race window bounded, then flush controls after the invoke frame.
+        if self.pendingInvokeControls[invokeId] == nil {
+            if self.pendingInvokeControlOrder.count >= Self.maxPendingInvokeControlIDs,
+               let oldest = self.pendingInvokeControlOrder.first
+            {
+                self.pendingInvokeControlOrder.removeFirst()
+                self.pendingInvokeControls.removeValue(forKey: oldest)
+            }
+            self.pendingInvokeControlOrder.append(invokeId)
+            self.pendingInvokeControls[invokeId] = []
+        }
+        var controls = self.pendingInvokeControls[invokeId] ?? []
+        if controls.contains(where: {
+            if case .cancel = $0 { return true }
+            return false
+        }) {
+            return
+        }
+        if controls.count >= Self.maxPendingInvokeControlsPerID {
+            controls.removeFirst()
+        }
+        controls.append(control)
+        self.pendingInvokeControls[invokeId] = controls
+    }
+
+    private func takePendingInvokeControlsLocked(invokeId: String) -> [PendingInvokeControl] {
+        self.pendingInvokeControlOrder.removeAll { $0 == invokeId }
+        return self.pendingInvokeControls.removeValue(forKey: invokeId) ?? []
+    }
+
+    private func enqueueInvokeControlLocked(_ control: PendingInvokeControl, invokeId: String) throws {
+        switch control {
+        case let .input(seq, payloadJSON):
+            try self.enqueueWriteLocked([
+                "type": "invoke-input",
+                "generation": self.gatewayGeneration,
+                "invokeId": invokeId,
+                "seq": seq,
+                "payloadJSON": payloadJSON,
+            ])
+        case .cancel:
+            try self.enqueueWriteLocked([
+                "type": "invoke-cancel",
+                "generation": self.gatewayGeneration,
+                "invokeId": invokeId,
+            ])
+        }
+    }
+
+    private func finishCancelledInvokeLocked(invokeId: String) {
+        self.pendingInvokes.removeValue(forKey: invokeId)?.continuation.resume(returning:
+            Self.unavailableResponse(invokeId, "UNAVAILABLE: node-host worker invocation cancelled"))
+    }
+
+    func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                guard Self.routeUpdateIsCurrent(
+                    candidateGeneration: authorityGeneration,
+                    currentGeneration: self.routeAuthorityGeneration)
+                else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.routeAuthorityGeneration = authorityGeneration
+                self.runnerInventoryRefreshTask?.cancel()
+                self.runnerInventoryRefreshTask = nil
+                self.route = route
+                self.gatewayGeneration &+= 1
+                try? self.enqueueWriteLocked([
+                    "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": NSNull(),
+                ])
+                let pending = self.pendingInvokes
+                self.pendingInvokes.removeAll()
+                self.pendingInvokeControls.removeAll()
+                self.pendingInvokeControlOrder.removeAll()
+                for (id, waiter) in pending {
+                    waiter.continuation.resume(returning: Self.unavailableResponse(
+                        id,
+                        "UNAVAILABLE: Gateway route changed"))
+                }
+                self.eventDeliveryTask?.cancel()
+                self.eventDeliveryTask = nil
+                continuation.resume(returning: true)
+            }
+        }
+    }
+
+    nonisolated static func routeUpdateIsCurrent(
+        candidateGeneration: UInt64,
+        currentGeneration: UInt64) -> Bool
+    {
+        candidateGeneration >= currentGeneration
+    }
+
+    func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {
+        let context: (UUID, UInt64)? = await withCheckedContinuation { continuation in
+            self.queue.async {
+                guard self.route == route, let processGeneration = self.processGeneration else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: (processGeneration, self.gatewayGeneration))
+            }
+        }
+        guard let (processGeneration, previousGatewayGeneration) = context else { return }
+        // Buffer approvals before publishing the connection: a same-socket approval
+        // can retire inventory while the worker is handling its initial publication.
+        let subscription = await self.session.makeServerEventSubscription(bufferingNewest: 1) { event in
+            event.event == "node.pair.resolved" &&
+                event.payload?.dictionaryValue?["decision"]?.stringValue == "approved"
+        }
+        guard let data = await self.session.workerConnectionData(ifCurrentRoute: route) else {
+            subscription.cancel()
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.queue.async {
+                defer { continuation.resume() }
+                guard self.route == route,
+                      self.processGeneration == processGeneration,
+                      self.gatewayGeneration == previousGatewayGeneration,
+                      let connection = try? JSONSerialization.jsonObject(with: data)
+                else {
+                    subscription.cancel()
+                    return
+                }
+                self.gatewayGeneration &+= 1
+                try? self.enqueueWriteLocked([
+                    "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": connection,
+                ])
+                let gatewayGeneration = self.gatewayGeneration
+                let session = self.session
+                self.runnerInventoryRefreshTask?.cancel()
+                self.runnerInventoryRefreshTask = Task { [weak self] in
+                    defer { subscription.cancel() }
+                    for await _ in subscription.events {
+                        guard !Task.isCancelled, await session.currentRoute() == route else { break }
+                        await self?.refreshRunnerInventory(
+                            ifCurrentRoute: route,
+                            processGeneration: processGeneration,
+                            gatewayGeneration: gatewayGeneration)
+                    }
+                }
+            }
+        }
+    }
+
+    private func refreshRunnerInventory(
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        processGeneration: UUID,
+        gatewayGeneration: UInt64) async
+    {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.queue.async {
+                defer { continuation.resume() }
+                guard self.route == route,
+                      self.processGeneration == processGeneration,
+                      self.gatewayGeneration == gatewayGeneration
+                else { return }
+                try? self.enqueueWriteLocked([
+                    "type": "runner-inventory-refresh", "generation": gatewayGeneration,
+                ])
+            }
+        }
+    }
+
+    func stop() async {
+        let cleanup: Task<Void, Never>? = await withCheckedContinuation { continuation in
+            self.queue.async {
+                continuation.resume(returning: self.stopLocked(reason: "worker stopped"))
+            }
+        }
+        await cleanup?.value
+    }
+
+    private func startLocked(launch: MacNodeHostWorkerLaunch) {
+        let command = launch.command
+        guard let executable = command.first, !executable.isEmpty else {
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "node-host worker command missing")))
+            return
+        }
+        if self.process != nil {
+            let cleanup = self.stopLocked(reason: "worker restarted", preserveStart: true)
+            Task { [weak self] in
+                await cleanup?.value
+                self?.queue.async { [weak self] in
+                    guard let self, self.startContinuation != nil else { return }
+                    self.startLocked(launch: launch)
+                }
+            }
+            return
+        }
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        defer {
+            try? stdoutPipe.fileHandleForReading.close()
+            try? stderrPipe.fileHandleForReading.close()
+        }
+        guard stdinPipe.fileHandleForWriting.disableSIGPIPE() else {
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "could not protect worker input pipe")))
+            return
+        }
+        let processGeneration = UUID()
+        let stderrCapture = self.stderrCapture
+        let consumeStderr: @Sendable (Data, Bool) -> Void = { [weak self] data, atEOF in
+            guard let self, self.processGeneration == processGeneration, self.processCleanupTask == nil else { return }
+            let message = stderrCapture.append(data, atEOF: atEOF)
+            if !message.isEmpty { self.logger.error("node-host worker stderr: \(message, privacy: .private)") }
+        }
+        do {
+            self.readers = try [
+                PipeReadStream(handle: stdoutPipe.fileHandleForReading, queue: self.queue, onData: { [weak self] data in
+                    guard let self, self.processGeneration == processGeneration,
+                          self.processCleanupTask == nil else { return }
+                    self.consumeStdoutLocked(data)
+                }),
+                PipeReadStream(
+                    handle: stderrPipe.fileHandleForReading,
+                    queue: self.queue,
+                    onData: { consumeStderr($0, false) },
+                    onClose: { consumeStderr(Data(), true) }),
+            ]
+        } catch {
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "could not read worker output")))
+            return
+        }
+        var environment = ProcessInfo.processInfo.environment.filter { key, _ in
+            !CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.contains { key.hasPrefix($0) }
+        }
+        environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
+        let privateRuntimePath = launch.environment["PATH"].map { $0 + ":" } ?? ""
+        environment["PATH"] = privateRuntimePath + CommandResolver.preferredPaths().joined(separator: ":")
+        environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
+        environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
+        // ManagedProcess owns this worker by process group. The CLI startup respawn
+        // would setsid() the real worker out of that group, so it must stay in-process.
+        environment["OPENCLAW_NO_RESPAWN"] = "1"
+        self.launchedWorker = launch
+        self.stdinPipe = stdinPipe
+        self.processGeneration = processGeneration
+
+        let timer = DispatchSource.makeTimerSource(queue: self.queue)
+        // Cold config and plugin discovery can exceed the old 20-second bound.
+        // Keep a hard deadline, but leave enough room for a cold CLI worker start.
+        timer.schedule(deadline: .now() + self.startupTimeout)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let state = self.process?.isRunning == true ? "running" : "exited"
+            self.finishStartLocked(.failure(WorkerError.unavailable(
+                reason: "node-host worker startup timed out (process \(state), " +
+                    "buffered \(self.stdoutBuffer.count) bytes)")))
+            self.stopLocked(reason: "worker startup timed out", notifyUnexpectedExit: true)
+        }
+        self.startTimer = timer
+        timer.resume()
+
+        let configuration = Subprocess.Configuration(
+            executable: .path(.init(executable)),
+            arguments: Arguments(Array(command.dropFirst())),
+            environment: ManagedProcess.environment(from: environment),
+            workingDirectory: launch.currentDirectoryURL.map { .init($0.path) })
+        let process = ManagedProcess.launch(
+            configuration: configuration,
+            stdin: stdinPipe.fileHandleForReading,
+            stdout: stdoutPipe.fileHandleForWriting,
+            stderr: stderrPipe.fileHandleForWriting)
+        self.process = process
+        Task { [weak self] in
+            let started = await (try? process.waitUntilStarted()) != nil
+            self?.queue.async { [weak self] in
+                self?.finishProcessLaunch(started: started, generation: processGeneration)
+            }
+        }
+    }
+
+    private func finishProcessLaunch(
+        started: Bool,
+        generation: UUID)
+    {
+        guard self.processGeneration == generation, self.processCleanupTask == nil else { return }
+        guard started, let process else {
+            self.stopLocked(reason: "worker launch failed")
+            return
+        }
+        Task { [weak self, completionTask = process.completionTask] in
+            let status = await completionTask.value
+            // Retire the route before draining queued worker messages; unlike
+            // diagnostic-only pipes, stdout can request privileged operations.
+            self?.queue.async { [weak self] in
+                guard let self,
+                      self.processGeneration == generation,
+                      self.processCleanupTask == nil
+                else { return }
+                self.stopLocked(
+                    reason: status.map {
+                        String(format: String(localized: "worker exited with status %@"), String(describing: $0))
+                    }
+                        ?? String(localized: "worker exited with unknown status"),
+                    notifyUnexpectedExit: true)
+            }
+        }
+    }
+
+    private func consumeStdoutLocked(_ data: Data) {
+        var searchStart = self.stdoutBuffer.count
+        self.stdoutBuffer.append(data)
+        guard self.stdoutBuffer.count <= 25 * 1024 * 1024 else {
+            self.stopLocked(reason: "worker response exceeded limit", notifyUnexpectedExit: true)
+            return
+        }
+        while let newline = self.stdoutBuffer[searchStart...].firstIndex(of: 0x0A) {
+            let line = self.stdoutBuffer.prefix(upTo: newline)
+            self.stdoutBuffer.removeSubrange(...newline)
+            searchStart = 0
+            guard !line.isEmpty,
+                  let message = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
+            else { continue }
+            self.handleMessageLocked(message)
+        }
+    }
+
+    private func handleMessageLocked(_ message: [String: Any]) {
+        let type = message["type"] as? String
+        if type == "invoke-result" || type == "node-event" || type == "gateway-request" {
+            guard (message["generation"] as? NSNumber)?.uint64Value == self.gatewayGeneration else { return }
+        }
+        switch type {
+        case "ready", "manifest":
+            guard let version = message["version"] as? String,
+                  let rawManifest = message["manifest"] as? [String: Any],
+                  let caps = rawManifest["caps"] as? [String],
+                  let commands = rawManifest["commands"] as? [String],
+                  let pathEnv = rawManifest["pathEnv"] as? String
+            else {
+                self.stopLocked(reason: "worker returned invalid manifest")
+                return
+            }
+            let computerUse: AnyCodable?
+            if let rawComputerUse = rawManifest["computerUse"] {
+                guard let rawComputerUse = rawComputerUse as? [String: Any],
+                      let data = try? JSONSerialization.data(withJSONObject: rawComputerUse),
+                      let decoded = try? JSONDecoder().decode(AnyCodable.self, from: data)
+                else {
+                    self.stopLocked(reason: "worker returned invalid computer-use descriptor")
+                    return
+                }
+                computerUse = decoded
+            } else {
+                computerUse = nil
+            }
+            let manifest = MacNodeHostManifest(
+                version: version,
+                caps: caps,
+                commands: commands,
+                computerUse: computerUse,
+                pathEnv: pathEnv)
+            self.manifest = manifest
+            if type == "ready" {
+                self.updateWorkerHostingLocked(Self.decodeWorkerHosting(message["workerHostingEnabled"]) ?? false)
+                self.finishStartLocked(.success(manifest))
+            } else {
+                NotificationCenter.default.post(name: .openclawNodeHostManifestChanged, object: nil)
+            }
+        case "worker-hosting":
+            guard self.manifest != nil,
+                  let enabled = Self.decodeWorkerHosting(message["enabled"])
+            else { return }
+            self.updateWorkerHostingLocked(enabled)
+        case "invoke-result":
+            guard let result = message["result"] as? [String: Any],
+                  let id = result["id"] as? String,
+                  let pending = self.pendingInvokes.removeValue(forKey: id)
+            else { return }
+            pending.continuation.resume(returning: Self.decodeInvokeResponse(result, id: id))
+        case "node-event":
+            guard let event = message["event"] as? [String: Any],
+                  let name = event["event"] as? String,
+                  let route = self.route
+            else { return }
+            let payload = event["payloadJSON"] as? String
+            let previous = self.eventDeliveryTask
+            let session = self.session
+            let delivery = Task {
+                await previous?.value
+                guard !Task.isCancelled else { return }
+                _ = await session.sendEvent(
+                    event: name,
+                    payloadJSON: payload,
+                    ifCurrentRoute: route)
+            }
+            self.eventDeliveryTask = delivery
+        case "gateway-request":
+            guard let id = message["id"] as? String,
+                  let method = message["method"] as? String
+            else { return }
+            guard let route = self.route else {
+                self.writeGatewayUnavailableLocked(id: id)
+                return
+            }
+            guard let paramsData = Self.jsonData(message["params"] ?? [:]),
+                  let processGeneration = self.processGeneration
+            else {
+                self.writeGatewayUnavailableLocked(id: id)
+                return
+            }
+            let timeoutMs = (message["timeoutMs"] as? NSNumber)?.intValue ?? 15000
+            let gatewayGeneration = self.gatewayGeneration
+            Task {
+                await self.handleGatewayRequest(
+                    id: id,
+                    method: method,
+                    paramsData: paramsData,
+                    timeoutMs: timeoutMs,
+                    route: route,
+                    processGeneration: processGeneration,
+                    gatewayGeneration: gatewayGeneration)
+            }
+        case "protocol-error":
+            self.logger.error("node-host worker rejected a protocol frame")
+        default:
+            break
+        }
+    }
+
+    private func updateWorkerHostingLocked(_ enabled: Bool) {
+        guard self.workerHostingEnabled != enabled else { return }
+        self.workerHostingEnabled = enabled
+        NotificationCenter.default.post(name: .openclawNodeHostHostingChanged, object: self)
+    }
+
+    private static func decodeWorkerHosting(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    private func handleGatewayRequest(
+        id: String,
+        method: String,
+        paramsData: Data,
+        timeoutMs: Int,
+        route: GatewayNodeSessionRoute,
+        processGeneration: UUID,
+        gatewayGeneration: UInt64) async
+    {
+        do {
+            guard let paramsJSON = String(bytes: paramsData, encoding: .utf8) else {
+                throw WorkerError.unavailable(reason: "node-host worker gateway request was not UTF-8")
+            }
+            let data = try await self.session.request(
+                method: method,
+                paramsJSON: paramsJSON,
+                timeoutSeconds: max(1, Int(ceil(Double(timeoutMs) / 1000.0))),
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            self.queue.async {
+                // A replacement worker restarts request ids. Never deliver an old
+                // route response into the replacement process.
+                guard self.processGeneration == processGeneration,
+                      self.gatewayGeneration == gatewayGeneration,
+                      self.route == route else { return }
+                guard let result = try? JSONSerialization.jsonObject(with: data) else { return }
+                try? self.enqueueWriteLocked([
+                    "type": "gateway-response",
+                    "generation": gatewayGeneration,
+                    "id": id,
+                    "ok": true,
+                    "result": result,
+                ])
+            }
+        } catch {
+            // Preserve only the public RPC code/message for shared publication classification.
+            let responseError = error as? GatewayResponseError
+            let code = responseError?.code ?? "UNAVAILABLE"
+            let publicMessage = responseError?.message
+            let message = code == "INVALID_REQUEST" &&
+                (publicMessage == "unknown method: \(method)" || publicMessage == "unauthorized role: node")
+                ? publicMessage! : "Gateway request unavailable"
+            self.queue.async {
+                guard self.processGeneration == processGeneration,
+                      self.gatewayGeneration == gatewayGeneration,
+                      self.route == route else { return }
+                self.writeGatewayUnavailableLocked(id: id, code: code, message: message)
+            }
+        }
+    }
+
+    private func writeGatewayUnavailableLocked(
+        id: String, code: String = "UNAVAILABLE", message: String = "Gateway request unavailable")
+    {
+        try? self.enqueueWriteLocked([
+            "type": "gateway-response",
+            "generation": self.gatewayGeneration,
+            "id": id,
+            "ok": false,
+            "error": ["code": code, "message": message],
+        ])
+    }
+
+    private func enqueueWriteLocked(_ object: [String: Any]) throws {
+        guard let handle = self.stdinPipe?.fileHandleForWriting,
+              self.process?.isRunning == true,
+              let processGeneration = self.processGeneration
+        else {
+            throw WorkerError.unavailable(reason: "node-host worker is not running")
+        }
+        var data = try JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        let frame = data
+        self.writerQueue.async { [weak self] in
+            do {
+                try handle.write(contentsOf: frame)
+            } catch {
+                self?.queue.async { [weak self] in
+                    guard let self, self.processGeneration == processGeneration else { return }
+                    self.stopLocked(reason: "worker input write failed", notifyUnexpectedExit: true)
+                }
+            }
+        }
+    }
+
+    private func finishStartLocked(_ result: Result<MacNodeHostManifest, Error>) {
+        self.startTimer?.cancel()
+        self.startTimer = nil
+        self.eventDeliveryTask?.cancel()
+        self.eventDeliveryTask = nil
+        guard let continuation = self.startContinuation else { return }
+        self.startContinuation = nil
+        continuation.resume(with: result)
+    }
+
+    @discardableResult
+    private func stopLocked(
+        reason: String,
+        preserveStart: Bool = false,
+        notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
+    {
+        let stoppedWorker = self.launchedWorker
+        // A worker that dies before its ready manifest still needs its stderr
+        // surfaced: the raw exit status alone cannot explain a CLI bootstrap
+        // refusal (missing runtime, incompatible state database, bad install).
+        let diagnostic = self.stderrCapture.snapshot().nonEmpty
+        self.stderrCapture = PipeTextCapture(characterLimit: 700, retention: .head)
+        self.startTimer?.cancel()
+        self.startTimer = nil
+        self.launchedWorker = nil
+        self.stdoutBuffer.removeAll(keepingCapacity: false)
+        self.manifest = nil
+        self.updateWorkerHostingLocked(false)
+        self.runnerInventoryRefreshTask?.cancel()
+        self.runnerInventoryRefreshTask = nil
+        self.route = nil
+        if !preserveStart {
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: reason, diagnostic: diagnostic)))
+        }
+        if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
+        let readers = self.readers
+        self.readers.removeAll()
+        let pending = self.pendingInvokes
+        self.pendingInvokes.removeAll()
+        self.pendingInvokeControls.removeAll()
+        self.pendingInvokeControlOrder.removeAll()
+        for (id, invocation) in pending {
+            invocation.continuation.resume(returning: Self.unavailableResponse(
+                id,
+                "UNAVAILABLE: node-host worker stopped"))
+        }
+        // Startup-time exits count too: without this, a worker that dies before
+        // its ready manifest never consumes retry budget and the coordinator
+        // respawns a broken CLI forever instead of latching retry exhaustion.
+        if notifyUnexpectedExit, let stoppedWorker {
+            self.onUnexpectedExit(stoppedWorker.configurationGeneration)
+        }
+        guard let process = self.process else {
+            return nil
+        }
+        let cleanupTask = Task { [weak self] in
+            // Keep draining through TERM cleanup: closing the pipes early can
+            // interrupt the child's shutdown handler with SIGPIPE.
+            await process.terminate()
+            readers.forEach { $0.close() }
+            for reader in readers {
+                await reader.finish()
+            }
+            await withCheckedContinuation { continuation in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                self.queue.async {
+                    try? self.stdinPipe?.fileHandleForWriting.close()
+                    self.process = nil
+                    self.processCleanupTask = nil
+                    self.stdinPipe = nil
+                    self.processGeneration = nil
+                    continuation.resume()
+                }
+            }
+        }
+        self.processCleanupTask = cleanupTask
+        return cleanupTask
+    }
+
+    private static func decodeInvokeResponse(_ result: [String: Any], id: String) -> BridgeInvokeResponse {
+        let ok = result["ok"] as? Bool ?? false
+        let payload = result["payload"].map(AnyCodable.init)
+        let payloadJSON = result["payloadJSON"] as? String
+        let rawError = result["error"] as? [String: Any]
+        let code = OpenClawNodeErrorCode(rawValue: rawError?["code"] as? String ?? "UNAVAILABLE") ?? .unavailable
+        let error = ok ? nil : OpenClawNodeError(
+            code: code,
+            message: rawError?["message"] as? String ?? "UNAVAILABLE: node-host worker failed")
+        return BridgeInvokeResponse(id: id, ok: ok, payload: payload, payloadJSON: payloadJSON, error: error)
+    }
+
+    private static func unavailableResponse(_ id: String, _ message: String) -> BridgeInvokeResponse {
+        BridgeInvokeResponse(
+            id: id,
+            ok: false,
+            error: OpenClawNodeError(code: .unavailable, message: message))
+    }
+
+    private static func jsonData(_ object: Any) -> Data? {
+        guard JSONSerialization.isValidJSONObject(object) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: object)
+    }
+}

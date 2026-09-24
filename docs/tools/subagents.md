@@ -1,470 +1,152 @@
 ---
-summary: "Sub-agents: spawning isolated agent runs that announce results back to the requester chat"
+summary: "Index of the OpenClaw sub-agent documentation, one page per reader job"
 read_when:
-  - You want background/parallel work via the agent
+  - You want background or parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
-title: "Sub-Agents"
+  - You are implementing or troubleshooting thread-bound subagent sessions
+  - You are looking for the sub-agent page that matches your task
+title: "Sub-agents"
+sidebarTitle: "Sub-agents"
 ---
 
-# Sub-Agents
+Sub-agents are background agent runs spawned from an existing agent run.
+Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
+by default, **announces** its result back to the requester for review.
+Every sub-agent run is tracked as a [background task](/automation/tasks).
 
-Sub-agents let you run background tasks without blocking the main conversation. When you spawn a sub-agent, it runs in its own isolated session, does its work, and announces the result back to the chat when finished.
+Goals:
 
-**Use cases:**
-
-- Research a topic while the main agent continues answering questions
-- Run multiple long tasks in parallel (web scraping, code analysis, file processing)
-- Delegate tasks to specialized agents in a multi-agent setup
-
-## Quick Start
-
-The simplest way to use sub-agents is to ask your agent naturally:
-
-> "Spawn a sub-agent to research the latest Node.js release notes"
-
-The agent will call the `sessions_spawn` tool behind the scenes. When the sub-agent finishes, it announces its findings back into your chat.
-
-You can also be explicit about options:
-
-> "Spawn a sub-agent to analyze the server logs from today. Use gpt-5.2 and set a 5-minute timeout."
-
-## How It Works
-
-<Steps>
-  <Step title="Main agent spawns">
-    The main agent calls `sessions_spawn` with a task description. The call is **non-blocking** — the main agent gets back `{ status: "accepted", runId, childSessionKey }` immediately.
-  </Step>
-  <Step title="Sub-agent runs in the background">
-    A new isolated session is created (`agent:<agentId>:subagent:<uuid>`) on the dedicated `subagent` queue lane.
-  </Step>
-  <Step title="Result is announced">
-    When the sub-agent finishes, it announces its findings back to the requester chat. The main agent posts a natural-language summary.
-  </Step>
-  <Step title="Session is archived">
-    The sub-agent session is auto-archived after 60 minutes (configurable). Transcripts are preserved.
-  </Step>
-</Steps>
-
-<Tip>
-Each sub-agent has its **own** context and token usage. Set a cheaper model for sub-agents to save costs — see [Setting a Default Model](#setting-a-default-model) below.
-</Tip>
-
-## Configuration
-
-Sub-agents work out of the box with no configuration. Defaults:
-
-- Model: target agent’s normal model selection (unless `subagents.model` is set)
-- Thinking: no sub-agent override (unless `subagents.thinking` is set)
-- Max concurrent: 8
-- Auto-archive: after 60 minutes
-
-### Setting a Default Model
-
-Use a cheaper model for sub-agents to save on token costs:
-
-```json5
-{
-  agents: {
-    defaults: {
-      subagents: {
-        model: "minimax/MiniMax-M2.1",
-      },
-    },
-  },
-}
-```
-
-### Setting a Default Thinking Level
-
-```json5
-{
-  agents: {
-    defaults: {
-      subagents: {
-        thinking: "low",
-      },
-    },
-  },
-}
-```
-
-### Per-Agent Overrides
-
-In a multi-agent setup, you can set sub-agent defaults per agent:
-
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "researcher",
-        subagents: {
-          model: "anthropic/claude-sonnet-4",
-        },
-      },
-      {
-        id: "assistant",
-        subagents: {
-          model: "minimax/MiniMax-M2.1",
-        },
-      },
-    ],
-  },
-}
-```
-
-### Concurrency
-
-Control how many sub-agents can run at the same time:
-
-```json5
-{
-  agents: {
-    defaults: {
-      subagents: {
-        maxConcurrent: 4, // default: 8
-      },
-    },
-  },
-}
-```
-
-Sub-agents use a dedicated queue lane (`subagent`) separate from the main agent queue, so sub-agent runs don't block inbound replies.
-
-### Auto-Archive
-
-Sub-agent sessions are automatically archived after a configurable period:
-
-```json5
-{
-  agents: {
-    defaults: {
-      subagents: {
-        archiveAfterMinutes: 120, // default: 60
-      },
-    },
-  },
-}
-```
+- Parallelize research, long tasks, and slow tool work without blocking the main run.
+- Keep sub-agents isolated by default (session separation, optional sandboxing).
+- Keep the tool surface hard to misuse: sub-agents do **not** get session or message tools by default.
+- Support configurable nesting depth for orchestrator patterns.
 
 <Note>
-Archive renames the transcript to `*.deleted.<timestamp>` (same folder) — transcripts are preserved, not deleted. Auto-archive timers are best-effort; pending timers are lost if the gateway restarts.
+**Cost note:** each sub-agent has its own context and token usage by
+default. For heavy or repetitive tasks, set a cheaper model for sub-agents
+and keep your main agent on a higher-quality model via
+`agents.defaults.subagents.model` or per-agent overrides. When a child
+genuinely needs the requester's current transcript, spawn it with
+`context: "fork"`. Thread-bound subagent sessions default to
+`context: "fork"` because they branch the current conversation into a
+follow-up thread.
 </Note>
 
-## The `sessions_spawn` Tool
-
-This is the tool the agent calls to create sub-agents.
-
-### Parameters
-
-| Parameter           | Type                   | Default            | Description                                                    |
-| ------------------- | ---------------------- | ------------------ | -------------------------------------------------------------- |
-| `task`              | string                 | _(required)_       | What the sub-agent should do                                   |
-| `label`             | string                 | —                  | Short label for identification                                 |
-| `agentId`           | string                 | _(caller's agent)_ | Spawn under a different agent id (must be allowed)             |
-| `model`             | string                 | _(optional)_       | Override the model for this sub-agent                          |
-| `thinking`          | string                 | _(optional)_       | Override thinking level (`off`, `low`, `medium`, `high`, etc.) |
-| `runTimeoutSeconds` | number                 | `0` (no limit)     | Abort the sub-agent after N seconds                            |
-| `cleanup`           | `"delete"` \| `"keep"` | `"keep"`           | `"delete"` archives immediately after announce                 |
-
-### Model Resolution Order
-
-The sub-agent model is resolved in this order (first match wins):
-
-1. Explicit `model` parameter in the `sessions_spawn` call
-2. Per-agent config: `agents.list[].subagents.model`
-3. Global default: `agents.defaults.subagents.model`
-4. Target agent’s normal model resolution for that new session
-
-Thinking level is resolved in this order:
-
-1. Explicit `thinking` parameter in the `sessions_spawn` call
-2. Per-agent config: `agents.list[].subagents.thinking`
-3. Global default: `agents.defaults.subagents.thinking`
-4. Otherwise no sub-agent-specific thinking override is applied
-
-<Note>
-Invalid model values are silently skipped — the sub-agent runs on the next valid default with a warning in the tool result.
-</Note>
-
-### Cross-Agent Spawning
-
-By default, sub-agents can only spawn under their own agent id. To allow an agent to spawn sub-agents under other agent ids:
-
-```json5
-{
-  agents: {
-    list: [
-      {
-        id: "orchestrator",
-        subagents: {
-          allowAgents: ["researcher", "coder"], // or ["*"] to allow any
-        },
-      },
-    ],
-  },
-}
-```
-
-<Tip>
-Use the `agents_list` tool to discover which agent ids are currently allowed for `sessions_spawn`.
-</Tip>
-
-## Managing Sub-Agents (`/subagents`)
-
-Use the `/subagents` slash command to inspect and control sub-agent runs for the current session:
-
-| Command                                  | Description                                    |
-| ---------------------------------------- | ---------------------------------------------- |
-| `/subagents list`                        | List all sub-agent runs (active and completed) |
-| `/subagents stop <id\|#\|all>`           | Stop a running sub-agent                       |
-| `/subagents log <id\|#> [limit] [tools]` | View sub-agent transcript                      |
-| `/subagents info <id\|#>`                | Show detailed run metadata                     |
-| `/subagents send <id\|#> <message>`      | Send a message to a running sub-agent          |
-
-You can reference sub-agents by list index (`1`, `2`), run id prefix, full session key, or `last`.
-
-<AccordionGroup>
-  <Accordion title="Example: list and stop a sub-agent">
-    ```
-    /subagents list
-    ```
-
-    ```
-    🧭 Subagents (current session)
-    Active: 1 · Done: 2
-    1) ✅ · research logs · 2m31s · run a1b2c3d4 · agent:main:subagent:...
-    2) ✅ · check deps · 45s · run e5f6g7h8 · agent:main:subagent:...
-    3) 🔄 · deploy staging · 1m12s · run i9j0k1l2 · agent:main:subagent:...
-    ```
-
-    ```
-    /subagents stop 3
-    ```
-
-    ```
-    ⚙️ Stop requested for deploy staging.
-    ```
-
-  </Accordion>
-  <Accordion title="Example: inspect a sub-agent">
-    ```
-    /subagents info 1
-    ```
-
-    ```
-    ℹ️ Subagent info
-    Status: ✅
-    Label: research logs
-    Task: Research the latest server error logs and summarize findings
-    Run: a1b2c3d4-...
-    Session: agent:main:subagent:...
-    Runtime: 2m31s
-    Cleanup: keep
-    Outcome: ok
-    ```
-
-  </Accordion>
-  <Accordion title="Example: view sub-agent log">
-    ```
-    /subagents log 1 10
-    ```
-
-    Shows the last 10 messages from the sub-agent's transcript. Add `tools` to include tool call messages:
-
-    ```
-    /subagents log 1 10 tools
-    ```
-
-  </Accordion>
-  <Accordion title="Example: send a follow-up message">
-    ```
-    /subagents send 3 "Also check the staging environment"
-    ```
-
-    Sends a message into the running sub-agent's session and waits up to 30 seconds for a reply.
-
-  </Accordion>
-</AccordionGroup>
-
-## Announce (How Results Come Back)
-
-When a sub-agent finishes, it goes through an **announce** step:
-
-1. The sub-agent's final reply is captured
-2. A summary message is sent to the main agent's session with the result, status, and stats
-3. The main agent posts a natural-language summary to your chat
-
-Announce replies preserve thread/topic routing when available (Slack threads, Telegram topics, Matrix threads).
-
-### Announce Stats
-
-Each announce includes a stats line with:
-
-- Runtime duration
-- Token usage (input/output/total)
-- Estimated cost (when model pricing is configured via `models.providers.*.models[].cost`)
-- Session key, session id, and transcript path
-
-### Announce Status
-
-The announce message includes a status derived from the runtime outcome (not from model output):
-
-- **successful completion** (`ok`) — task completed normally
-- **error** — task failed (error details in notes)
-- **timeout** — task exceeded `runTimeoutSeconds`
-- **unknown** — status could not be determined
-
-<Tip>
-If no user-facing announcement is needed, the main-agent summarize step can return `NO_REPLY` and nothing is posted.
-This is different from `ANNOUNCE_SKIP`, which is used in agent-to-agent announce flow (`sessions_send`).
-</Tip>
-
-## Tool Policy
-
-By default, sub-agents get **all tools except** a set of denied tools that are unsafe or unnecessary for background tasks:
-
-<AccordionGroup>
-  <Accordion title="Default denied tools">
-    | Denied tool | Reason |
-    |-------------|--------|
-    | `sessions_list` | Session management — main agent orchestrates |
-    | `sessions_history` | Session management — main agent orchestrates |
-    | `sessions_send` | Session management — main agent orchestrates |
-    | `sessions_spawn` | No nested fan-out (sub-agents cannot spawn sub-agents) |
-    | `gateway` | System admin — dangerous from sub-agent |
-    | `agents_list` | System admin |
-    | `whatsapp_login` | Interactive setup — not a task |
-    | `session_status` | Status/scheduling — main agent coordinates |
-    | `cron` | Status/scheduling — main agent coordinates |
-    | `memory_search` | Pass relevant info in spawn prompt instead |
-    | `memory_get` | Pass relevant info in spawn prompt instead |
-  </Accordion>
-</AccordionGroup>
-
-### Customizing Sub-Agent Tools
-
-You can further restrict sub-agent tools:
-
-```json5
-{
-  tools: {
-    subagents: {
-      tools: {
-        // deny always wins over allow
-        deny: ["browser", "firecrawl"],
-      },
-    },
-  },
-}
-```
-
-To restrict sub-agents to **only** specific tools:
-
-```json5
-{
-  tools: {
-    subagents: {
-      tools: {
-        allow: ["read", "exec", "process", "write", "edit", "apply_patch"],
-        // deny still wins if set
-      },
-    },
-  },
-}
-```
-
-<Note>
-Custom deny entries are **added to** the default deny list. If `allow` is set, only those tools are available (the default deny list still applies on top).
-</Note>
-
-## Authentication
-
-Sub-agent auth is resolved by **agent id**, not by session type:
-
-- The auth store is loaded from the target agent's `agentDir`
-- The main agent's auth profiles are merged in as a **fallback** (agent profiles win on conflicts)
-- The merge is additive — main profiles are always available as fallbacks
-
-<Note>
-Fully isolated auth per sub-agent is not currently supported.
-</Note>
-
-## Context and System Prompt
-
-Sub-agents receive a reduced system prompt compared to the main agent:
-
-- **Included:** Tooling, Workspace, Runtime sections, plus `AGENTS.md` and `TOOLS.md`
-- **Not included:** `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
-
-The sub-agent also receives a task-focused system prompt that instructs it to stay focused on the assigned task, complete it, and not act as the main agent.
-
-## Stopping Sub-Agents
-
-| Method                 | Effect                                                                    |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `/stop` in the chat    | Aborts the main session **and** all active sub-agent runs spawned from it |
-| `/subagents stop <id>` | Stops a specific sub-agent without affecting the main session             |
-| `runTimeoutSeconds`    | Automatically aborts the sub-agent run after the specified time           |
-
-<Note>
-`runTimeoutSeconds` does **not** auto-archive the session. The session remains until the normal archive timer fires.
-</Note>
-
-## Full Configuration Example
-
-<Accordion title="Complete sub-agent configuration">
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "anthropic/claude-sonnet-4" },
-      subagents: {
-        model: "minimax/MiniMax-M2.1",
-        thinking: "low",
-        maxConcurrent: 4,
-        archiveAfterMinutes: 30,
-      },
-    },
-    list: [
-      {
-        id: "main",
-        default: true,
-        name: "Personal Assistant",
-      },
-      {
-        id: "ops",
-        name: "Ops Agent",
-        subagents: {
-          model: "anthropic/claude-sonnet-4",
-          allowAgents: ["main"], // ops can spawn sub-agents under "main"
-        },
-      },
-    ],
-  },
-  tools: {
-    subagents: {
-      tools: {
-        deny: ["browser"], // sub-agents can't use the browser
-      },
-    },
-  },
-}
-```
-</Accordion>
-
-## Limitations
-
-<Warning>
-- **Best-effort announce:** If the gateway restarts, pending announce work is lost.
-- **No nested spawning:** Sub-agents cannot spawn their own sub-agents.
-- **Shared resources:** Sub-agents share the gateway process; use `maxConcurrent` as a safety valve.
-- **Auto-archive is best-effort:** Pending archive timers are lost on gateway restart.
-</Warning>
-
-## See Also
-
-- [Session Tools](/concepts/session-tool) — details on `sessions_spawn` and other session tools
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) — per-agent tool restrictions and sandboxing
-- [Configuration](/gateway/configuration) — `agents.defaults.subagents` reference
-- [Queue](/concepts/queue) — how the `subagent` lane works
+A subagent run ends; a session does not. When you open a subagent run in the
+Control UI, its transcript is view-only. Use **Open parent session** in the
+composer area to continue the conversation with the parent. You can still use
+**Stop** when the Gateway reports an abortable run. Persistent sessions created
+with `visible: true` are ordinary sessions in the session tree: they keep their
+parent for navigation and completion announcements, and you can always type in
+them and steer them like any other session.
+
+Use ordinary subagents for internal QA, research, coding, review, and test lanes,
+with results returning to the parent task. Create a persistent visible session
+only when the user requests a separate session or needs to return to and steer
+that work independently. A PR or report, a long run, or an isolated worktree alone
+does not make a worker a separate user-facing task. Asking for subagents does not
+ask for new sidebar sessions or categories.
+
+This page is an index. Sub-agents are documented on seven pages, one per
+reader job. Open the page that matches your task.
+
+| Page                                                                         | Read it when                                                                            |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [Sub-agent slash command](/tools/subagents/slash-command)                    | You want to inspect a run from chat, or need the completion-delivery rules.             |
+| [Sub-agent tool reference](/tools/subagents/tool-reference)                  | You are calling `sessions_spawn`, `sessions_yield`, or `subagents` and need parameters. |
+| [Thread-bound sub-agent sessions](/tools/subagents/thread-bound-sessions)    | You are binding a sub-agent to a channel thread, or need allowlist and archive rules.   |
+| [Nested sub-agents and authentication](/tools/subagents/nesting)             | You are building an orchestrator and need depth caps, the announce chain, or auth.      |
+| [Sub-agent announce](/tools/subagents/announce)                              | You are debugging how a child result reaches the requester.                             |
+| [Sub-agent tool policy](/tools/subagents/tool-policy)                        | You need the tools a sub-agent always loses, or want to narrow them further.            |
+| [Sub-agent concurrency, recovery, and stopping](/tools/subagents/operations) | You are tuning concurrency, recovering after a restart, or stopping a child tree.       |
+
+## Where each section moved
+
+Every section heading, accordion, step, and parameter id from the previous
+single-page version keeps its anchor here, so an existing link such as
+`/tools/subagents#thread-bound-sessions` still resolves. Each entry points at
+the page that now holds the content.
+
+- <a id="slash-command" />[Slash command](/tools/subagents/slash-command#slash-command)
+- <a id="thread-binding-controls" />[Thread binding controls](/tools/subagents/slash-command#thread-binding-controls)
+- <a id="spawn-behavior" />[Spawn behavior](/tools/subagents/slash-command#spawn-behavior)
+- <a id="non-blocking-push-based-completion" />[Non-blocking, push-based completion](/tools/subagents/slash-command#non-blocking-push-based-completion)
+- <a id="completion-delivery" />[Completion delivery](/tools/subagents/slash-command#completion-delivery)
+- <a id="completion-handoff-metadata" />[Completion handoff metadata](/tools/subagents/slash-command#completion-handoff-metadata)
+- <a id="modes-and-acp-runtime" />[Modes and ACP runtime](/tools/subagents/slash-command#modes-and-acp-runtime)
+- <a id="context-modes" />[Context modes](/tools/subagents/tool-reference#context-modes)
+- <a id="tool%3A-sessions_spawn" /><a id="tool-sessions_spawn" />[Tool: `sessions_spawn`](/tools/subagents/tool-reference#tool-sessions_spawn)
+- <a id="delegation-prompt-mode" />[Delegation prompt mode](/tools/subagents/tool-reference#delegation-prompt-mode)
+- <a id="tool-parameters" />[Tool parameters](/tools/subagents/tool-reference#tool-parameters)
+- <a id="param-task" />[`task`](/tools/subagents/tool-reference#param-task)
+- <a id="param-task-name" />[`taskName`](/tools/subagents/tool-reference#param-task-name)
+- <a id="param-label" />[`label`](/tools/subagents/tool-reference#param-label)
+- <a id="param-agent-id" />[`agentId`](/tools/subagents/tool-reference#param-agent-id)
+- <a id="param-cwd" />[`cwd`](/tools/subagents/tool-reference#param-cwd)
+- <a id="param-runtime" />[`runtime`](/tools/subagents/tool-reference#param-runtime)
+- <a id="param-resume-session-id" />[`resumeSessionId`](/tools/subagents/tool-reference#param-resume-session-id)
+- <a id="param-stream-to" />[`streamTo`](/tools/subagents/tool-reference#param-stream-to)
+- <a id="param-model" />[`model`](/tools/subagents/tool-reference#param-model)
+- <a id="param-run-timeout-seconds" />[`runTimeoutSeconds`](/tools/subagents/tool-reference#param-run-timeout-seconds)
+- <a id="param-thinking" />[`thinking`](/tools/subagents/tool-reference#param-thinking)
+- <a id="param-thread" />[`thread`](/tools/subagents/tool-reference#param-thread)
+- <a id="param-mode" />[`mode`](/tools/subagents/tool-reference#param-mode)
+- <a id="param-cleanup" />[`cleanup`](/tools/subagents/tool-reference#param-cleanup)
+- <a id="param-expects-completion-message" />[`expectsCompletionMessage`](/tools/subagents/tool-reference#param-expects-completion-message)
+- <a id="param-sandbox" />[`sandbox`](/tools/subagents/tool-reference#param-sandbox)
+- <a id="param-context" />[`context`](/tools/subagents/tool-reference#param-context)
+- <a id="param-project-id" />[`projectId`](/tools/subagents/tool-reference#param-project-id)
+- <a id="param-project-git-url" />[`projectGitUrl`](/tools/subagents/tool-reference#param-project-git-url)
+- <a id="param-visible" />[`visible`](/tools/subagents/tool-reference#param-visible)
+- <a id="param-group" />[`group`](/tools/subagents/tool-reference#param-group)
+- <a id="param-worktree" />[`worktree`](/tools/subagents/tool-reference#param-worktree)
+- <a id="param-worktree-name" />[`worktreeName`](/tools/subagents/tool-reference#param-worktree-name)
+- <a id="param-worktree-base-ref" />[`worktreeBaseRef`](/tools/subagents/tool-reference#param-worktree-base-ref)
+- <a id="task-names-and-targeting" />[Task names and targeting](/tools/subagents/tool-reference#task-names-and-targeting)
+- <a id="tool%3A-sessions_yield" /><a id="tool-sessions_yield" />[Tool: `sessions_yield`](/tools/subagents/tool-reference#tool-sessions_yield)
+- <a id="tool%3A-subagents" /><a id="tool-subagents" />[Tool: `subagents`](/tools/subagents/tool-reference#tool-subagents)
+- <a id="thread-bound-sessions" />[Thread-bound sessions](/tools/subagents/thread-bound-sessions#thread-bound-sessions)
+- <a id="thread-supporting-channels" />[Thread supporting channels](/tools/subagents/thread-bound-sessions#thread-supporting-channels)
+- <a id="quick-flow" />[Quick flow](/tools/subagents/thread-bound-sessions#quick-flow)
+- <a id="spawn" />[Spawn](/tools/subagents/thread-bound-sessions#spawn)
+- <a id="bind" />[Bind](/tools/subagents/thread-bound-sessions#bind)
+- <a id="route-follow-ups" />[Route follow-ups](/tools/subagents/thread-bound-sessions#route-follow-ups)
+- <a id="inspect-timeouts" />[Inspect timeouts](/tools/subagents/thread-bound-sessions#inspect-timeouts)
+- <a id="detach" />[Detach](/tools/subagents/thread-bound-sessions#detach)
+- <a id="manual-controls" />[Manual controls](/tools/subagents/thread-bound-sessions#manual-controls)
+- <a id="config-switches" />[Config switches](/tools/subagents/thread-bound-sessions#config-switches)
+- <a id="allowlist" />[Allowlist](/tools/subagents/thread-bound-sessions#allowlist)
+- <a id="param-agents-entries-subagents-allow-agents" />[`agents.entries.*.subagents.allowAgents`](/tools/subagents/thread-bound-sessions#param-agents-entries-subagents-allow-agents)
+- <a id="param-agents-defaults-subagents-allow-agents" />[`agents.defaults.subagents.allowAgents`](/tools/subagents/thread-bound-sessions#param-agents-defaults-subagents-allow-agents)
+- <a id="param-agents-defaults-subagents-require-agent-id" />[`agents.defaults.subagents.requireAgentId`](/tools/subagents/thread-bound-sessions#param-agents-defaults-subagents-require-agent-id)
+- <a id="param-agents-defaults-subagents-announce-timeout-ms" />[`agents.defaults.subagents.announceTimeoutMs`](/tools/subagents/thread-bound-sessions#param-agents-defaults-subagents-announce-timeout-ms)
+- <a id="discovery" />[Discovery](/tools/subagents/thread-bound-sessions#discovery)
+- <a id="auto-archive" />[Auto-archive](/tools/subagents/thread-bound-sessions#auto-archive)
+- <a id="nested-sub-agents" />[Nested sub-agents](/tools/subagents/nesting#nested-sub-agents)
+- <a id="depth-levels" />[Depth levels](/tools/subagents/nesting#depth-levels)
+- <a id="announce-chain" />[Announce chain](/tools/subagents/nesting#announce-chain)
+- <a id="tool-policy-by-depth" />[Tool policy by depth](/tools/subagents/nesting#tool-policy-by-depth)
+- <a id="per-agent-spawn-limit" />[Per-agent spawn limit](/tools/subagents/nesting#per-agent-spawn-limit)
+- <a id="reset-a-conversation" />[Reset a conversation](/tools/subagents/nesting#reset-a-conversation)
+- <a id="cascade-stop" />[Cascade stop](/tools/subagents/nesting#cascade-stop)
+- <a id="authentication" />[Authentication](/tools/subagents/nesting#authentication)
+- <a id="announce" />[Announce](/tools/subagents/announce#announce)
+- <a id="announce-context" />[Announce context](/tools/subagents/announce#announce-context)
+- <a id="stats-line" />[Stats line](/tools/subagents/announce#stats-line)
+- <a id="why-prefer-sessions_history" />[Why prefer `sessions_history`](/tools/subagents/announce#why-prefer-sessions_history)
+- <a id="tool-policy" />[Tool policy](/tools/subagents/tool-policy#tool-policy)
+- <a id="override-via-config" />[Override via config](/tools/subagents/tool-policy#override-via-config)
+- <a id="concurrency" />[Concurrency](/tools/subagents/operations#concurrency)
+- <a id="liveness-and-recovery" />[Liveness and recovery](/tools/subagents/operations#liveness-and-recovery)
+- <a id="stopping" />[Stopping](/tools/subagents/operations#stopping)
+- <a id="limitations" />[Limitations](/tools/subagents/operations#limitations)
+
+## Related
+
+- [Session tools and state changes](/concepts/session-tool)
+- [ACP agents](/tools/acp-agents)
+- [Agent send](/tools/agent-send)
+- [Background tasks](/automation/tasks)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — role-scoped lanes for a single job
+- [Steer](/tools/steer) — redirect a running agent mid-task

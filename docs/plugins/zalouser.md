@@ -1,53 +1,52 @@
 ---
-summary: "Zalo Personal plugin: QR login + messaging via zca-cli (plugin install + channel config + CLI + tool)"
+summary: "Zalo Personal plugin: QR login + messaging via native zca-js (plugin install + channel config + tool)"
 read_when:
   - You want Zalo Personal (unofficial) support in OpenClaw
   - You are configuring or developing the zalouser plugin
-title: "Zalo Personal Plugin"
+title: "Zalo personal plugin"
 ---
 
-# Zalo Personal (plugin)
+The zalouser plugin adds unofficial Zalo Personal support to OpenClaw. It uses
+native `zca-js` to automate a normal Zalo user account. No external
+`zca`/`openzca` CLI binary is required.
 
-Zalo Personal support for OpenClaw via a plugin, using `zca-cli` to automate a normal Zalo user account.
-
-> **Warning:** Unofficial automation may lead to account suspension/ban. Use at your own risk.
+<Warning>
+Unofficial automation may lead to account suspension or ban. Use at your own risk.
+</Warning>
 
 ## Naming
 
-Channel id is `zalouser` to make it explicit this automates a **personal Zalo user account** (unofficial). We keep `zalo` reserved for a potential future official Zalo API integration.
+Channel id is `zalouser` to make it explicit this automates a **personal Zalo
+user account** (unofficial). The separate `zalo` channel id is the official,
+bundled Zalo Bot/webhook integration - see [Zalo](/channels/zalo).
 
 ## Where it runs
 
-This plugin runs **inside the Gateway process**.
-
-If you use a remote Gateway, install/configure it on the **machine running the Gateway**, then restart the Gateway.
+This plugin runs **inside the Gateway process**. For a remote Gateway,
+install/configure it on that host. Installation applies to a running Gateway
+automatically; if it is offline, start it after configuration.
 
 ## Install
 
-### Option A: install from npm
+### From npm
 
 ```bash
 openclaw plugins install @openclaw/zalouser
 ```
 
-Restart the Gateway afterwards.
+Use the bare package to follow the current official release tag; pin an exact
+version only when you need a reproducible install. Check the installation's
+application result; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
-### Option B: install from a local folder (dev)
-
-```bash
-openclaw plugins install ./extensions/zalouser
-cd ./extensions/zalouser && pnpm install
-```
-
-Restart the Gateway afterwards.
-
-## Prerequisite: zca-cli
-
-The Gateway machine must have `zca` on `PATH`:
+### From a local folder (dev)
 
 ```bash
-zca --version
+cd ./path/to/local/zalouser-plugin
+pnpm install
+openclaw plugins install --link .
 ```
+
+After subsequent source or manifest edits, run `openclaw plugins reload zalouser`.
 
 ## Config
 
@@ -64,14 +63,21 @@ Channel config lives under `channels.zalouser` (not `plugins.entries.*`):
 }
 ```
 
+See [Zalo personal channel config](/channels/zalouser) for DM/group access
+control, multi-account setup, environment variables, and troubleshooting.
+
 ## CLI
 
 ```bash
 openclaw channels login --channel zalouser
+openclaw channels login --channel zalouser --account <name>
 openclaw channels logout --channel zalouser
 openclaw channels status --probe
 openclaw message send --channel zalouser --target <threadId> --message "Hello from OpenClaw"
+openclaw directory self --channel zalouser
 openclaw directory peers list --channel zalouser --query "name"
+openclaw directory groups list --channel zalouser --query "name"
+openclaw directory groups members --channel zalouser --group-id <id>
 ```
 
 ## Agent tool
@@ -79,3 +85,13 @@ openclaw directory peers list --channel zalouser --query "name"
 Tool name: `zalouser`
 
 Actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
+
+Channel message actions (not the agent tool) also support `react` for message
+reactions.
+
+## Related
+
+- [Zalo personal channel config](/channels/zalouser)
+- [Zalo (official Bot/webhook channel)](/channels/zalo)
+- [Building plugins](/plugins/building-plugins)
+- [ClawHub](/clawhub)

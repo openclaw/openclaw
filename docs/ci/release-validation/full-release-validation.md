@@ -1,0 +1,211 @@
+---
+summary: "The Full Release Validation umbrella, release publish, and Docker Release dispatch"
+read_when:
+  - You are dispatching or rerunning Full Release Validation
+  - You are publishing a release or a Docker image
+title: "Full Release Validation"
+sidebarTitle: "Full Release Validation"
+---
+
+The Full Release Validation umbrella, release publish, and Docker Release dispatch. Part of the [Release validation workflows](/ci/release-validation) index.
+
+## Full Release Validation
+
+`Full Release Validation` is the manual release umbrella. Every run binds an
+exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
+before child dispatch. Validation SHA maps to the Code SHA for product
+validation or the Release SHA for changelog-only validation; it is not a third
+release identity. Beta-publish maps to `release_profile=beta` with
+`run_release_soak=false`. Regular stable releases use `release_profile=stable`.
+
+See [Full release validation](/reference/full-release-validation) for the
+stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
+and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
+
+The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
+without `release_gate`. Complete campaigns (`rerun_group=all`) retain QA Smoke's
+full scenario profile and Control UI performance independently of changed paths.
+Docker seed runs all six lanes in every ordinary manual/release scope:
+`cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`,
+`published-upgrade-survivor`, and `update-channel-switch`. This includes
+`npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
+with `auto-auth`, so the published driver must update
+the running managed Gateway. Every admitted canonical main run retains this
+exact combination; PRs omit Docker seed and QA Smoke. Manual/release CI builds
+the full declaration-complete package. Main's smoke package instead uses the
+existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
+the runtime, public SDK declarations, and unchanged tarball integrity check.
+Hosted manual CI splits QA Smoke into six parts; normal hybrid first attempts use four parts
+with the same coverage.
+
+For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
+`normal_ci` retains the complete Node test inventory and also runs each admitted
+Bun-compatible selection on Bun. Both results are required; they share existing
+jobs and execute sequentially within each worker slot. Older targets without this
+capability retain Node-only testing.
+This includes the Control UI config when the target's runtime owner admits it;
+the targeted CSS-tokenizer optimizer workaround applies to its Bun pass, which excludes two
+GC-sensitive files retained in the full Node pass. An older unit-only runtime
+owner retains the UI's Node pass.
+
+Package Acceptance separately retains expanded published-upgrade scenarios:
+current unpublished candidates include native operator state, and stable/full
+profiles force the `reported-issues` soak. Its ordinary survivor restart mode
+and separate `update-restart-auth` base scenario do not replace the exact Docker
+seed combination. `Full Release Artifacts` and `Full Release Candidate` prepare
+the immutable package/image inputs; candidate-phase release checks consume them
+without moving or weakening that coverage.
+
+Existing frozen-target contracts still apply: Docker seed requires its declared
+capability, and targets without the Docker tier selector retain the survivor
+fallback. QA Smoke requires a supported harness, and historical performance
+checks retain their availability handling. Focused reruns select their requested
+groups, and validated evidence reuse can reuse completed proof. Regressions
+outside the remaining automatic owner paths, or in the five release-only Docker
+seed lanes, can first surface in this manual/release tier.
+
+The live/E2E selected-ref validator fetches the complete commit and ref history
+with a sparse checkout. Ancestry and release-ref checks remain unchanged, while
+historical file contents stay out of this metadata-only job. Build and test jobs
+check out their own complete source trees.
+
+`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch
+regular beta and stable publishes from a protected lightweight
+`release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
+release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
+`pnpm plugins:sync:check` among its checks). The tag still selects the exact
+release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
+publishes keep using their matching alpha branch. For current validation runs,
+set `preflight_run_id` and `full_release_validation_run_id` to the same successful
+Full Release Validation run ID and pin `full_release_validation_run_attempt`.
+The publisher resolves the independent `Full Release Artifacts` producer from
+that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor.
+The producer ID alone does not carry Full Release Validation authorization.
+
+`Docker Release` requests the `docker-release` environment approval in a
+separate job after source identity and image preparation succeed (or prepared
+artifacts are supplied). Approval waits stay outside `docker-release-publish`;
+only the approved publisher enters that global registry/alias lock. It then
+revalidates the immutable source, prepared artifacts, attestations and alias
+state before writing. Docker Hub credentials remain required caller-provided
+secrets. Failed preparation, denied approval and cancellation cannot publish.
+
+Historical recovery may still supply a separate successful `OpenClaw NPM Release`
+preflight run ID alongside the matching successful Full Release Validation run
+and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+real core npm, plugin npm, or ClawHub publication from `main` is rejected before
+child dispatch. Docker-only recovery may still use `main`.
+
+The publisher dispatches `Plugin NPM Release` for all
+publishable plugin packages, dispatches `Plugin ClawHub Release` for the same
+release SHA, then dispatches `OpenClaw NPM Release` after plugin npm succeeds.
+Stable Windows promotion is optional: supply both an exact `windows_node_tag`
+and candidate-approved `windows_node_installer_digests` to dispatch its signed
+installers after GitHub release finalization. Omit both to skip Windows.
+For npm-stable evidence, when the tagged `apps/android/version.json` matches
+the stable tag's base version, a separate native qualification job starts full
+CI for the exact release SHA with Android enabled. A successful result is revalidated
+after core publication before the separate Android job creates its existing
+approval receipt and dispatches the tag-owned APK workflow. This keeps frozen
+release tags usable without allowing narrower npm evidence to authorize an
+unqualified native build. Native failure remains visible and prevents Android
+approval; core npm and GitHub release finalization do not wait for it. The whole
+parent can remain active after core publication while native qualification
+finishes. Existing full evidence and macOS's independent validation retain their
+native qualification contracts. A mismatched Android pin skips both native
+qualification and APK publication, with the pin, release train, and shared
+mobile cutter (`scripts/mobile-release-version.ts --prepare`) remedy recorded
+in the parent summary and release proof.
+Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
+package list. Plugin-only `all-publishable` runs require the same immutable npm
+preflight and Full Release Validation evidence as a core publish.
+
+```bash
+PUBLISH_REF="release-publish/<tooling-sha12>-<epoch>"
+FRV_RUN_ID="<successful-full-release-validation-run-id>"
+FRV_RUN_ATTEMPT="<successful-full-release-validation-run-attempt>"
+gh workflow run openclaw-release-publish.yml \
+  --ref "$PUBLISH_REF" \
+  -f tag=vYYYY.M.PATCH-beta.N \
+  -f preflight_run_id="$FRV_RUN_ID" \
+  -f full_release_validation_run_id="$FRV_RUN_ID" \
+  -f full_release_validation_run_attempt="$FRV_RUN_ATTEMPT" \
+  -f npm_dist_tag=beta
+```
+
+For pinned commit proof on a fast-moving branch, use the helper instead of
+`gh workflow run ... --ref main -f ref=<sha>`:
+
+```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+VALIDATION_SHA="<full-release-candidate-sha>"
+PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION"
+```
+
+Choose `npmDistTag=beta` for a beta and `route=prepared` only for an intended
+prepared-button consumer. Source admission verifies committed metadata; fresh
+publish runs also retain separate selected npm and ClawHub registry admission
+before fanout. Neither grants publication authority. See
+[Dispatch](/reference/full-release-validation/dispatch) for both contracts.
+For nonpublish work, explicitly select
+`diagnostic`, `main-qualification`, or `postpublish-confidence` and omit the
+publication selection; profile and filters still select the actual coverage.
+
+GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
+helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
+SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+strict exact-target evidence when available, and verifies every child workflow
+`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
+it from moving `main`. Regular release branches accept only their final package
+version or a matching beta prerelease; Tideclaw alpha validation uses its exact
+alpha tag and matching alpha branch.
+
+`release_profile` controls live/provider breadth passed into release checks. The
+manual release workflows default to `stable`; use `full` only when you
+intentionally want the broad provider/media matrix. Stable and full
+release checks always run the exhaustive live/E2E and Docker release-path soak;
+the beta profile can opt in with `run_release_soak=true`.
+
+`fail_fast` defaults to `false`: the umbrella waits for each dispatched child
+workflow and reports its independent failures together. Set `fail_fast=true`
+only when cancelling a child after its first failed job is more useful than the
+complete failure inventory. In Release Checks, this also enables the Matrix QA
+CLI's own first-scenario cancellation.
+
+- `beta` keeps the fastest OpenAI/core release-critical lanes.
+- `stable` adds the stable provider/backend set.
+- `full` runs the broad provider/media matrix.
+
+The umbrella records dispatched child run ids, and `Verify full validation`
+checks them during that parent attempt. Parent cancellation or timeout leaves
+adopted exact children running; cancel one explicitly when it is no longer
+needed.
+
+For recovery, classify product, harness/tooling/provenance,
+infrastructure/credential, and wrapper failures before editing. Only confirmed
+product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
+validation run; never retry a failed test automatically or widen to `all`. Narrow evidence is not publish authorization by itself.
+
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
+
+Full Release Validation concurrency is keyed by Validation SHA, Tooling SHA,
+rerun group, release profile, and effective soak coverage with
+`cancel-in-progress: false`. Release Checks uses the same coverage identity in
+each phase, so beta, stable, and full requests do not queue behind each other.
+Stable/full always include soak; setting their soak flag explicitly does not
+create another concurrency group. Parent cancellation does not cancel adopted
+children.
+
+In the canonical repository's `hybrid` runner mode, target resolution, evidence
+reuse, candidate discovery, candidate binding, and candidate resolution use
+the small Blacksmith runner pool. These serial jobs otherwise compound hosted
+runner admission delays before tests can start. Other modes and noncanonical
+repositories retain GitHub-hosted runners; the reusable harness also honors
+its explicit hosted-runner override. Long-running decision and diagnostic
+collectors remain hosted.

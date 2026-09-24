@@ -1,170 +1,712 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import type { AnyAgentTool } from "./tools/common.js";
-import { resolvePluginTools } from "../plugins/tools.js";
-import { resolveSessionAgentId } from "./agent-scope.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
+import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
+import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
+import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
+import {
+  type HookContext,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
+import {
+  isToolExplicitlyAllowedByFactoryPolicy,
+  mergeFactoryPolicyList,
+  resolveImageToolFactoryAvailable,
+  resolveOptionalMediaToolFactoryPlan,
+} from "./openclaw-tools.media-factory-plan.js";
+import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
+import {
+  collectPresentOpenClawTools,
+  shouldIncludeAskUserToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
+  shouldIncludeSecretsToolForOpenClawTools,
+} from "./openclaw-tools.registration.js";
+import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
+import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
+import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createBrowserTool } from "./tools/browser-tool.js";
-import { createCanvasTool } from "./tools/canvas-tool.js";
+import { createAskUserTool } from "./tools/ask-user-tool.js";
+import type { AnyAgentTool } from "./tools/common.js";
+import { createComputerTool } from "./tools/computer-tool.js";
+import {
+  createConversationsListTool,
+  createConversationsSendTool,
+  createConversationsTurnTool,
+} from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
-import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createDashboardTool } from "./tools/dashboard-tool.js";
+import { createDecisionTool } from "./tools/decision-tool.js";
+import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
+import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
+import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
+import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
+import {
+  createCreateGoalTool,
+  createGetGoalTool,
+  createUpdateGoalTool,
+} from "./tools/goal-tools.js";
+import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
-import { createMessageTool } from "./tools/message-tool.js";
+import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
+import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
+import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createPdfTool } from "./tools/pdf-tool.js";
+import { createAvailablePortalTools } from "./tools/portal-tool.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
+import { createScreenTool } from "./tools/screen-tool.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsTool } from "./tools/sessions-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
+import { createTerminalTool } from "./tools/terminal-tool.js";
+import { createThemeTool } from "./tools/theme-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export function createOpenClawTools(options?: {
-  sandboxBrowserBridgeUrl?: string;
-  allowHostBrowserControl?: boolean;
-  agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
-  agentTo?: string;
-  /** Thread/topic identifier for routing replies to the originating thread. */
-  agentThreadId?: string | number;
-  /** Group id for channel-level tool policy inheritance. */
-  agentGroupId?: string | null;
-  /** Group channel label for channel-level tool policy inheritance. */
-  agentGroupChannel?: string | null;
-  /** Group space label for channel-level tool policy inheritance. */
-  agentGroupSpace?: string | null;
-  agentDir?: string;
-  sandboxRoot?: string;
-  workspaceDir?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  pluginToolAllowlist?: string[];
-  /** Current channel ID for auto-threading (Slack). */
-  currentChannelId?: string;
-  /** Current thread timestamp for auto-threading (Slack). */
-  currentThreadTs?: string;
-  /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all";
-  /** Mutable ref to track if a reply was sent (for "first" mode). */
-  hasRepliedRef?: { value: boolean };
-  /** If true, the model has native vision capability */
-  modelHasVision?: boolean;
-  /** Explicit agent ID override for cron/hook sessions. */
-  requesterAgentIdOverride?: string;
-  /** Require explicit message targets (no implicit last-route sends). */
-  requireExplicitMessageTarget?: boolean;
-  /** If true, omit the message tool from the tool list. */
-  disableMessageTool?: boolean;
-}): AnyAgentTool[] {
-  const imageTool = options?.agentDir?.trim()
-    ? createImageTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        sandboxRoot: options?.sandboxRoot,
-        modelHasVision: options?.modelHasVision,
-      })
+export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
+  const resolvedConfig = options?.config;
+  const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
+  const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
+  const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
+  const availabilityConfig = selectApplicableRuntimeConfig({
+    inputConfig: resolvedConfig,
+    runtimeConfig: runtimeSnapshot?.config,
+    runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
+  });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    config: resolvedConfig,
+    agentId: options?.requesterAgentIdOverride,
+  });
+  const swarmToolGroups = createOpenClawSwarmToolGroups({
+    config: sessionConfig ?? getRuntimeConfig(),
+    effectiveRequesterAgentId: sessionAgentId,
+    agentSessionKey: options?.agentSessionKey,
+    runSessionKey: options?.runSessionKey,
+    runId: options?.runId,
+    swarmCollector: options?.swarmCollector,
+    swarmOutputSchema: options?.swarmOutputSchema,
+    assertCollectorWriteAuthority: options?.assertCollectorWriteAuthority,
+  });
+  const inferredWorkspaceDir =
+    options?.workspaceDir || !resolvedConfig
+      ? undefined
+      : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
+  const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
+  const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
+  options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
+  const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
+  const sandbox =
+    options?.sandboxRoot && options?.sandboxFsBridge
+      ? {
+          root: options.sandboxRoot,
+          bridge: options.sandboxFsBridge,
+          readOnlyResourceMounts: options.sandboxReadOnlyResourceMounts,
+          stagedMediaPaths: options.stagedMediaPaths,
+        }
+      : undefined;
+  const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
+    config: availabilityConfig ?? resolvedConfig,
+    workspaceDir,
+    authStore: options?.authProfileStore,
+    toolAllowlist: options?.pluginToolAllowlist,
+    toolDenylist: options?.pluginToolDenylist,
+    preparedModelRuntime: options?.preparedModelRuntime,
+  });
+  const trimmedRunSessionKey = options?.runSessionKey?.trim();
+  const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  const mediaGenerationAgentSessionKey =
+    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
+      ? trimmedRunSessionKey
+      : options?.agentSessionKey;
+  const imageTool =
+    options?.agentDir &&
+    resolveImageToolFactoryAvailable({
+      config: availabilityConfig ?? resolvedConfig,
+      agentDir: options.agentDir,
+      workspaceDir,
+      modelHasVision: options?.modelHasVision,
+      authStore: options?.authProfileStore,
+      preparedModelRuntime: options?.preparedModelRuntime,
+    })
+      ? createImageTool({
+          config: availabilityConfig ?? options?.config,
+          agentId: sessionAgentId,
+          agentDir: options.agentDir,
+          preparedModelRuntime: options?.preparedModelRuntime,
+          authProfileStore: options?.authProfileStore,
+          workspaceDir,
+          sandbox,
+          cwd: options?.cwd,
+          fsPolicy: options?.fsPolicy,
+          agentChannel: options?.agentChannel,
+          agentAccountId: options?.agentAccountId,
+          currentChannelId: options?.currentChannelId,
+          modelHasVision: options?.modelHasVision,
+          deferAutoModelResolution: true,
+        })
+      : null;
+  options?.recordToolPrepStage?.("openclaw-tools:image-tool");
+  const mediaGenerationToolOptions = {
+    config: options?.config,
+    agentDir: options?.agentDir,
+    authProfileStore: options?.authProfileStore,
+    agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterAgentId: sessionAgentId,
+    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    workspaceDir,
+    preparedModelRuntime: options?.preparedModelRuntime,
+    sandbox,
+    cwd: options?.cwd,
+    fsPolicy: options?.fsPolicy,
+  };
+  const imageGenerateTool = optionalMediaTools.imageGenerate
+    ? createImageGenerateTool(mediaGenerationToolOptions)
     : null;
+  options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
+  const videoGenerateTool = optionalMediaTools.videoGenerate
+    ? createVideoGenerateTool(mediaGenerationToolOptions)
+    : null;
+  options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
+  const musicGenerateTool = optionalMediaTools.musicGenerate
+    ? createMusicGenerateTool(mediaGenerationToolOptions)
+    : null;
+  options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
+  const pdfTool =
+    optionalMediaTools.pdf && options?.agentDir?.trim()
+      ? createPdfTool({
+          config: options?.config,
+          agentId: sessionAgentId,
+          agentDir: options.agentDir,
+          preparedModelRuntime: options?.preparedModelRuntime,
+          authProfileStore: options?.authProfileStore,
+          workspaceDir,
+          sandbox,
+          cwd: options?.cwd,
+          fsPolicy: options?.fsPolicy,
+          deferAutoModelResolution: true,
+        })
+      : null;
+  options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
+    enabled: options?.webSearchEnabled,
+    agentDir: options?.agentDir,
     sandboxed: options?.sandboxed,
+    runtimeWebSearch: runtimeWebTools?.search,
+    lateBindRuntimeConfig: true,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:web-search-tool");
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeWebFetch: runtimeWebTools?.fetch,
+    lateBindRuntimeConfig: true,
+    hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
-        agentSessionKey: options?.agentSessionKey,
+        agentSessionKey: options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
+        runSessionKey:
+          options?.runSessionKey ??
+          (options?.messageToolTurnCapability ? options.agentSessionKey : undefined),
+        runId: options?.runId,
+        agentId: sessionAgentId,
+        sessionId: options?.sessionId,
+        messageActionTurnCapability:
+          options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
+        admitScheduledInvocation: options?.admitScheduledMessageInvocation,
         config: options?.config,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
+        currentChatType: options?.currentChatType,
+        currentMessagingTarget:
+          options?.currentMessagingTarget ??
+          (options?.sourceReplyOnly ? options.agentTo : undefined),
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
+        currentInboundAudio: options?.currentInboundAudio,
+        hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
+        agentThreadId: options?.agentThreadId,
+        currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
+        sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
+        sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+        sandboxFsBridge: options?.sandboxFsBridge,
+        sandboxReadOnlyResourceMounts: options?.sandboxReadOnlyResourceMounts,
+        sandboxWorkspaceMediaReadAllowed: options?.sandboxWorkspaceMediaReadAllowed,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        sourceReplyOnly: options?.sourceReplyOnly,
+        inboundEventKind: options?.inboundEventKind,
+        requesterSenderId: options?.requesterSenderId ?? undefined,
+        senderIsOwner: options?.senderIsOwner,
+        conversationReadOrigin: options?.conversationReadOrigin,
+        workspaceDir,
       });
+  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
+  options?.recordToolPrepStage?.("openclaw-tools:message-tool");
+  const nodesToolBase = createNodesTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentId: sessionAgentId,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    currentChannelId: options?.currentChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    config: options?.config,
+    modelHasVision: options?.modelHasVision,
+    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+  });
+  const nodesTool = applyNodesToolWorkspaceGuard(nodesToolBase, {
+    fsPolicy: options?.fsPolicy,
+    sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+    sandboxRoot: options?.sandboxRoot,
+    workspaceDir,
+  });
+  options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
+  const embedded = isEmbeddedMode();
+  const explicitFactoryAllowlist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.allow,
+    resolvedConfig?.tools?.alsoAllow,
+    options?.pluginToolAllowlist,
+  );
+  const explicitFactoryDenylist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.deny,
+    options?.pluginToolDenylist,
+  );
+  const scheduledWidgetExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
+    toolName: "show_widget",
+    allowlist: options?.runtimeToolAllowlist,
+    denylist: explicitFactoryDenylist,
+  });
+  // Admitted Control UI recovery and explicitly capped scheduled turns can
+  // keep authoring their durable board without claiming an inline renderer.
+  const pinnedWidgetOnly =
+    (options?.pinnedWidgetAuthoring === true ||
+      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
+    !inlineWidgetClientAvailable &&
+    !widgetPresentation.currentChannelPresenter &&
+    Boolean(sessionKey) &&
+    !isCronRunSessionKey(sessionKey);
+  const includeMessageTool =
+    !embedded ||
+    options?.sourceReplyDeliveryMode === "message_tool_only" ||
+    isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "message",
+      allowlist: explicitFactoryAllowlist,
+      denylist: explicitFactoryDenylist,
+    });
+  const sessionLookupToolOptions = {
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
+    config: sessionConfig,
+    callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
+    sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
+  };
+  const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
+    ...options,
+    agentId: sessionAgentId,
+  })
+    ? createProgressCardTool({
+        agentSessionKey: sessionKey,
+        agentId: sessionAgentId,
+      })
+    : null;
+  const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
-    createBrowserTool({
-      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-      allowHostControl: options?.allowHostBrowserControl,
+    createDashboardTool({
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentId: sessionAgentId,
     }),
-    createCanvasTool(),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createCronTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    ...(messageTool ? [messageTool] : []),
+    ...(embedded
+      ? []
+      : [
+          nodesTool,
+          createMobileUiTool({ idempotencyScope: options?.runId }),
+          ...(options?.modelHasVision === false || options?.computerTransport === null
+            ? []
+            : [
+                createComputerTool({
+                  transport: options?.computerTransport,
+                  pairedNodeComputerUse: options?.pairedNodeComputerUse,
+                  config: options?.config,
+                  modelHasVision: options?.modelHasVision,
+                  // Run ids expire before later assistant runs can reuse a provider call id.
+                  idempotencyScope: options?.runId,
+                  contextEpoch: options?.computerContextEpoch,
+                  registerRunCleanup: options?.registerRunCleanup,
+                }),
+              ]),
+          createCronTool({
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+            agentAccountId: gatewayCallerAccountId,
+            config: options?.config,
+            currentDeliveryContext: {
+              channel: options?.agentChannel,
+              to: options?.currentChannelId ?? options?.agentTo,
+              accountId: options?.agentAccountId,
+              threadId: options?.currentThreadTs ?? options?.agentThreadId,
+            },
+            creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
+            runId: options?.runId,
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
+          }),
+          createSessionsTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
+            requesterAgentIdOverride: sessionAgentId,
+            sandboxed: options?.sandboxed,
+            config: sessionConfig,
+          }),
+          createScreenTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+          }),
+          createThemeTool(),
+          ...(options?.sandboxed
+            ? []
+            : [
+                createTerminalTool({
+                  agentId: sessionAgentId,
+                  agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                  sessionId: options?.sessionId,
+                  config: resolvedConfig,
+                  execSession: options?.execSession,
+                  execOverrides: options?.execOverrides,
+                  runId: options?.runId,
+                  approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds,
+                }),
+                ...createAvailablePortalTools(options),
+              ]),
+        ]),
+    ...(!embedded && sessionKey && options?.taskSuggestionDeliveryMode === "gateway"
+      ? createTaskSuggestionTools({
+          sessionKey,
+          agentId: sessionAgentId,
+          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
+        })
+      : []),
+    ...(messageTool && includeMessageTool ? [messageTool] : []),
+    ...(!isCoreCanvasHostEnabled(resolvedConfig) &&
+    !hasRegisteredShowWidgetKinds() &&
+    !widgetPresentation.currentChannelPresenter
+      ? []
+      : [
+          createShowWidgetTool({
+            sessionId: options?.sessionId,
+            agentId: sessionAgentId,
+            agentSessionKey: sessionKey,
+            inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
+            inlineClientAvailable: inlineWidgetClientAvailable,
+            pinnedOnly: pinnedWidgetOnly,
+            presenters: widgetPresentation.presenters,
+            presenterContext: widgetPresentation.context,
+          }),
+        ]),
+    ...collectPresentOpenClawTools([heartbeatTool, createDecisionTool(sessionAgentId, options)]),
     createTtsTool({
       agentChannel: options?.agentChannel,
-      config: options?.config,
+      config: resolvedConfig,
+      agentId: sessionAgentId,
+      agentAccountId: options?.agentAccountId,
     }),
-    createGatewayTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
+    ...(options?.githubPublicationAvailable !== undefined
+      ? [createGitHubIdentityStatusTool()]
+      : []),
+    ...(options?.githubPublicationAvailable === true ? [createGitHubPublishTool()] : []),
+    ...collectPresentOpenClawTools([transcriptsTool]),
+    ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
+    ...createHostedGatewayTools(embedded, sessionAgentId, options),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      requesterAgentIdOverride: sessionAgentId,
     }),
-    createSessionsListTool({
+    createGetGoalTool({
       agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createCreateGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    createUpdateGoalTool({
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionAgentId,
+      config: resolvedConfig,
+    }),
+    ...(resolveSkillWorkshopToolConstructionBlock({
       sandboxed: options?.sandboxed,
+      libraryAuthoring: options?.skillWorkshop?.libraryAuthoring,
+    }) || !resolvedConfig
+      ? []
+      : [
+          createConfiguredSkillWorkshopTool({
+            workspaceDir,
+            config: resolvedConfig,
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+            messageId: options?.currentMessageId,
+            run: options?.skillWorkshop,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
+          }),
+        ]),
+    ...collectPresentOpenClawTools([progressCardTool]),
+    ...swarmToolGroups.structuredOutput,
+    ...(shouldIncludeAskUserToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createAskUserTool({
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+          }),
+        ]
+      : []),
+    ...(shouldIncludeSecretsToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createSecretsTool({
+            config: resolvedConfig,
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
+          }),
+        ]
+      : []),
+    createSessionsListTool({
+      ...sessionLookupToolOptions,
+      requesterAgentIdOverride: sessionAgentId,
+      requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
+      supportsActiveOnly: !embedded,
+      requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
+      ...sessionLookupToolOptions,
+      requesterAgentIdOverride: sessionAgentId,
+      sessionReadScopeKey: options?.sessionReadScopeKey,
     }),
-    createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      sandboxed: options?.sandboxed,
+    createSessionsSearchTool({
+      ...sessionLookupToolOptions,
+      agentId: sessionAgentId,
+      sessionReadScopeKey: options?.sessionReadScopeKey,
     }),
-    createSessionsSpawnTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.agentTo,
-      agentThreadId: options?.agentThreadId,
-      agentGroupId: options?.agentGroupId,
-      agentGroupChannel: options?.agentGroupChannel,
-      agentGroupSpace: options?.agentGroupSpace,
-      sandboxed: options?.sandboxed,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+    ...(embedded
+      ? []
+      : [
+          createConversationsListTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsSendTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsTurnTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          // Keep the in-process caller so materialized agent roots retain their creation stamp.
+          createSessionsSendTool({
+            agentId: sessionAgentId,
+            // Match sessions_spawn: spawned children record the durable run
+            // session as spawnedBy, so the parent check must use the same key.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
+            agentChannel: options?.agentChannel,
+            requesterOrigin: {
+              channel: options?.agentChannel,
+              accountId: options?.agentAccountId,
+              to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
+              threadId: options?.currentThreadTs ?? options?.agentThreadId,
+            },
+            sandboxed: options?.sandboxed,
+            config: sessionConfig,
+          }),
+        ]),
+    ...(!embedded || options?.allowGatewaySubagentBinding === true
+      ? [
+          createSessionsSpawnTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            requesterTurnRunId: options?.runId,
+            requesterThinkingLevel: options?.requesterThinkingLevel,
+            requesterModel: options?.requesterModel,
+            completionOwnerKey: options?.runSessionKey,
+            agentChannel: options?.agentChannel,
+            agentAccountId: options?.agentAccountId,
+            agentTo: options?.agentTo,
+            agentThreadId: options?.agentThreadId,
+            currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
+            currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
+            agentGroupId: options?.agentGroupId,
+            agentGroupChannel: options?.agentGroupChannel,
+            agentGroupSpace: options?.agentGroupSpace,
+            agentMemberRoleIds: options?.agentMemberRoleIds,
+            sandboxed: options?.sandboxed,
+            config: sessionConfig,
+            requesterAgentIdOverride: sessionAgentId,
+            requesterRunId: options?.runId,
+            swarmCollector: options?.swarmCollector,
+            workspaceDir: spawnWorkspaceDir,
+            sessionPermissionPolicy: options?.sessionPermissionPolicy,
+            inheritedToolAllowlist: options?.inheritedToolAllowlist,
+            inheritedToolDenylist: options?.inheritedToolDenylist,
+          }),
+        ]
+      : []),
+    ...swarmToolGroups.agentsWait,
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
+      claimYield: createRequesterYieldCallback({
+        requesterSessionKey,
+        requesterAgentId: sessionAgentId,
+        requesterTurnRunId: options?.runId,
+        swarmCollector: options?.swarmCollector,
+        claimYieldCompletion: options?.claimYieldCompletion,
+        processScopeKey: options?.processScopeKey,
+      }),
+      onYield: options?.onYield,
+    }),
+    createSubagentsTool({
+      // Match the durable controller key the spawn tool registers runs under, so split-key
+      // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
+      // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      // Retained task rows created before the durable-key alignment still carry the policy
+      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
+      // for split-key callers instead of disappearing with "Task outside session tree".
+      callerPolicySessionKey: options?.agentSessionKey,
+      agentId: sessionAgentId,
+      config: sessionConfig,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    ...(webSearchTool ? [webSearchTool] : []),
-    ...(webFetchTool ? [webFetchTool] : []),
-    ...(imageTool ? [imageTool] : []),
-  ];
-
-  const pluginTools = resolvePluginTools({
-    context: {
-      config: options?.config,
-      workspaceDir: options?.workspaceDir,
-      agentDir: options?.agentDir,
-      agentId: resolveSessionAgentId({
-        sessionKey: options?.agentSessionKey,
-        config: options?.config,
-      }),
-      sessionKey: options?.agentSessionKey,
-      messageChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
+      requesterAgentIdOverride: sessionAgentId,
+      runSessionKey: options?.runSessionKey,
+      config: sessionConfig,
       sandboxed: options?.sandboxed,
-    },
-    existingToolNames: new Set(tools.map((tool) => tool.name)),
-    toolAllowlist: options?.pluginToolAllowlist,
-  });
+      activeModelProvider: options?.modelProvider,
+      activeModelId: options?.modelId,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
+      activeDeliveryContext: {
+        channel: options?.agentChannel,
+        to: options?.currentChannelId ?? options?.agentTo,
+        accountId: options?.agentAccountId,
+        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+      },
+    }),
+    ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
+  ];
+  options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
+  let allTools = tools;
+  if (!options?.disablePluginTools) {
+    allTools = [
+      ...tools,
+      ...resolveOpenClawPluginToolsForOptions({
+        options: { ...options, activeProjectKeys },
+        resolvedConfig,
+        existingToolNames: new Set(tools.map((tool) => tool.name)),
+      }),
+    ];
+    options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
+  }
 
-  return [...tools, ...pluginTools];
+  allTools = finalizeAgentToolAvailability(filterToolsByClientCaps(allTools, options?.clientCaps));
+  options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
+  for (const tool of allTools) {
+    bindAssembledAgentToolActionDescriptor(tool);
+  }
+
+  const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
+
+  if (options?.wrapBeforeToolCallHook === false) {
+    return allTools.map(wrapGatewayCallerIdentity);
+  }
+  const defaultHookContext: HookContext = {
+    ...(hookAgentId ? { agentId: hookAgentId } : {}),
+    ...(resolvedConfig ? { config: resolvedConfig } : {}),
+    ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+    ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
+    loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
+  };
+  const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
+  options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
+  return allTools
+    .map((tool) =>
+      isToolWrappedWithBeforeToolCallHook(tool)
+        ? tool
+        : wrapToolWithBeforeToolCallHook(tool, hookContext),
+    )
+    .map(wrapGatewayCallerIdentity);
 }

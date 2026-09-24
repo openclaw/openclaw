@@ -1,0 +1,61 @@
+title: "Runtime tool fixture — sessions_spawn"
+
+scenario:
+  id: runtime-tool-sessions-spawn
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-sessions-spawn
+  objective: Verify sessions_spawn executes successfully across OpenClaw and Codex.
+  successCriteria:
+    - Effective tools expose sessions_spawn.
+    - The happy path retains a linked successful sessions_spawn call and result.
+    - The denied-input path retains a linked sessions_spawn failure result.
+    - Runtime parity hard-fails missing call/result evidence in either runtime.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/tools/sessions-spawn-tool.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the sessions_spawn runtime tool family.
+    config:
+      toolName: sessions_spawn
+      happyPrompt: >-
+        QA routing marker: tool search qa check target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="Runtime tool fixture
+        subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+        label="runtime-tool-fixture", mode="run", thread=false, and
+        expectsCompletionMessage=false. Do not call tool_search. Summarize the
+        actual acceptance result.
+      failurePrompt: >-
+        QA routing marker: tool search qa failure target=sessions_spawn. Call
+        sessions_spawn directly exactly once with task="". Do not repair,
+        omit, replace, or retry the empty task. Do not call tool_search.
+        Summarize the actual rejection.
+      toolCoverage:
+        family: sessions_spawn
+        actualTool: sessions_spawn
+        bucket: openclaw-dynamic-integration
+        expectedLayer: openclaw-dynamic
+        capabilityLayer: openclaw-dynamic-direct
+        required: true
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: hard gate in the core runtime-pair lane
+        reason: Canonical fixture session-key capture retains the parent call/result when spawning creates a newer child session, so this OpenClaw integration tool must hard-gate both runtimes.
+      promptSnippet: "target=sessions_spawn"
+      failurePromptSnippet: "failure target=sessions_spawn"
+
+flow:
+  steps:
+    - name: exercises sessions_spawn happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

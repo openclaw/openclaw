@@ -1,489 +1,262 @@
-import fs from "node:fs";
-import type { CronJob } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { migrateLegacyCronPayload } from "../payload-migration.js";
-import { loadCronStore, saveCronStore } from "../store.js";
-import { recomputeNextRuns } from "./jobs.js";
-import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
+/** Loads, normalizes, quarantines, and persists cron service store state. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
+import { normalizeCronJobInput } from "../normalize.js";
+import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { deleteCronJobScratch } from "../scratch-store.js";
+import { isInvalidCronSessionTargetIdError } from "../session-target.js";
+import {
+  getCronJobsStoreRevision,
+  loadCronJobsStoreWithConfigJobs,
+  saveCronJobsStoreWithRevision,
+  saveCronJobsStoreWithRevisionNative,
+  saveCronJobsStoreChangesWithRevision,
+  saveCronJobsStoreChangesWithRevisionNative,
+  type QuarantinedCronConfigJob,
+} from "../store.js";
+import {
+  CronRunReceiptConflictError,
+  CronRunReceiptRevisionError,
+} from "../store/run-receipt-store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
+import type { CronJob, CronStoreFile } from "../types.js";
+import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
+import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
+import { dispatchCronNotification } from "./notification-dispatch.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
+import { publishDurableNextRunChanges } from "./runtime-publication.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
-function hasLegacyDeliveryHints(payload: Record<string, unknown>) {
-  if (typeof payload.deliver === "boolean") {
-    return true;
+const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
+
+type CronPersistence = {
+  save: typeof saveCronJobsStoreWithRevision | typeof saveCronJobsStoreWithRevisionNative;
+  saveChanges:
+    | typeof saveCronJobsStoreChangesWithRevision
+    | typeof saveCronJobsStoreChangesWithRevisionNative;
+};
+
+type PersistOptions = {
+  stateOnly?: boolean;
+  preserveConcurrentAdds?: boolean;
+  suppressScheduledJobId?: string;
+  postPersistNotifications?: DeferredCronNotifications;
+  transactionHooks?: CronStoreTransactionHooks;
+};
+
+export type CronRollbackSnapshot = {
+  store: CronStoreFile | null;
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
+};
+
+function invalidateStaleNextRunOnScheduleChange(params: {
+  previousJobsById: ReadonlyMap<string, CronJob>;
+  hydrated: CronJob;
+}) {
+  const previousJob = params.previousJobsById.get(params.hydrated.id);
+  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
+    return;
   }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    return true;
-  }
-  if (typeof payload.to === "string" && payload.to.trim()) {
-    return true;
-  }
-  return false;
+  // Runtime nextRunAtMs and paced provenance belong to the old scheduling
+  // identity; clear them together so the current inputs recompute atomically.
+  params.hydrated.state ??= {};
+  params.hydrated.state.nextRunAtMs = undefined;
+  params.hydrated.state.startupCatchupAtMs = undefined;
+  params.hydrated.state.pacedNextRunAtMs = undefined;
+  params.hydrated.state.forcePreservedNextRunAtMs = cronSchedulingInputsEqual(
+    { ...previousJob, enabled: params.hydrated.enabled },
+    params.hydrated,
+  )
+    ? resolveForcePreservedOneShotAtMs(params.hydrated)
+    : undefined;
 }
 
-function buildDeliveryFromLegacyPayload(payload: Record<string, unknown>) {
-  const deliver = payload.deliver;
-  const mode = deliver === false ? "none" : "announce";
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const next: Record<string, unknown> = { mode };
-  if (channelRaw) {
-    next.channel = channelRaw;
+function warnInvalidPersistedCronJob(params: {
+  state: CronServiceState;
+  raw: Record<string, unknown>;
+  index: number;
+  reason: string;
+}) {
+  const jobId = typeof params.raw.id === "string" ? params.raw.id : undefined;
+  const dedupeKey = jobId ?? `index:${params.index}`;
+  if (params.state.warnedInvalidPersistedJobKeys.has(dedupeKey)) {
+    return;
   }
-  if (toRaw) {
-    next.to = toRaw;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
-  }
-  return next;
+  params.state.warnedInvalidPersistedJobKeys.add(dedupeKey);
+  params.state.deps.log.warn(
+    {
+      storePath: params.state.deps.storePath,
+      jobId,
+      jobIndex: params.index,
+      reason: params.reason,
+    },
+    "cron: quarantined invalid persisted job and skipped it from runtime",
+  );
 }
 
-function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
-  const deliver = payload.deliver;
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim().toLowerCase() : "";
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const next: Record<string, unknown> = {};
-  let hasPatch = false;
-
-  if (deliver === false) {
-    next.mode = "none";
-    hasPatch = true;
-  } else if (deliver === true || toRaw) {
-    next.mode = "announce";
-    hasPatch = true;
-  }
-  if (channelRaw) {
-    next.channel = channelRaw;
-    hasPatch = true;
-  }
-  if (toRaw) {
-    next.to = toRaw;
-    hasPatch = true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    next.bestEffort = payload.bestEffortDeliver;
-    hasPatch = true;
-  }
-
-  return hasPatch ? next : null;
+function isValidatedCronJob(
+  value: Record<string, unknown>,
+): value is CronJob & Record<string, unknown> {
+  return getInvalidPersistedCronJobReason(value) === null;
 }
 
-function mergeLegacyDeliveryInto(
-  delivery: Record<string, unknown>,
-  payload: Record<string, unknown>,
-) {
-  const patch = buildDeliveryPatchFromLegacyPayload(payload);
-  if (!patch) {
-    return { delivery, mutated: false };
-  }
-
-  const next = { ...delivery };
-  let mutated = false;
-
-  if ("mode" in patch && patch.mode !== next.mode) {
-    next.mode = patch.mode;
-    mutated = true;
-  }
-  if ("channel" in patch && patch.channel !== next.channel) {
-    next.channel = patch.channel;
-    mutated = true;
-  }
-  if ("to" in patch && patch.to !== next.to) {
-    next.to = patch.to;
-    mutated = true;
-  }
-  if ("bestEffort" in patch && patch.bestEffort !== next.bestEffort) {
-    next.bestEffort = patch.bestEffort;
-    mutated = true;
-  }
-
-  return { delivery: next, mutated };
-}
-
-function stripLegacyDeliveryFields(payload: Record<string, unknown>) {
-  if ("deliver" in payload) {
-    delete payload.deliver;
-  }
-  if ("channel" in payload) {
-    delete payload.channel;
-  }
-  if ("to" in payload) {
-    delete payload.to;
-  }
-  if ("bestEffortDeliver" in payload) {
-    delete payload.bestEffortDeliver;
-  }
-}
-
-function normalizePayloadKind(payload: Record<string, unknown>) {
-  const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
-  if (raw === "agentturn") {
-    payload.kind = "agentTurn";
-    return true;
-  }
-  if (raw === "systemevent") {
-    payload.kind = "systemEvent";
-    return true;
-  }
-  return false;
-}
-
-function inferPayloadIfMissing(raw: Record<string, unknown>) {
-  const message = typeof raw.message === "string" ? raw.message.trim() : "";
-  const text = typeof raw.text === "string" ? raw.text.trim() : "";
-  if (message) {
-    raw.payload = { kind: "agentTurn", message };
-    return true;
-  }
-  if (text) {
-    raw.payload = { kind: "systemEvent", text };
-    return true;
-  }
-  return false;
-}
-
-function copyTopLevelAgentTurnFields(
-  raw: Record<string, unknown>,
-  payload: Record<string, unknown>,
-) {
-  let mutated = false;
-
-  const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = payload[field];
-    if (typeof existing === "string" && existing.trim()) {
-      return;
-    }
-    const value = raw[field];
-    if (typeof value === "string" && value.trim()) {
-      payload[field] = value.trim();
-      mutated = true;
-    }
-  };
-  copyTrimmedString("model");
-  copyTrimmedString("thinking");
-
-  if (
-    typeof payload.timeoutSeconds !== "number" &&
-    typeof raw.timeoutSeconds === "number" &&
-    Number.isFinite(raw.timeoutSeconds)
-  ) {
-    payload.timeoutSeconds = Math.max(1, Math.floor(raw.timeoutSeconds));
-    mutated = true;
-  }
-
-  if (
-    typeof payload.allowUnsafeExternalContent !== "boolean" &&
-    typeof raw.allowUnsafeExternalContent === "boolean"
-  ) {
-    payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
-    mutated = true;
-  }
-
-  if (typeof payload.deliver !== "boolean" && typeof raw.deliver === "boolean") {
-    payload.deliver = raw.deliver;
-    mutated = true;
-  }
-  if (
-    typeof payload.channel !== "string" &&
-    typeof raw.channel === "string" &&
-    raw.channel.trim()
-  ) {
-    payload.channel = raw.channel.trim();
-    mutated = true;
-  }
-  if (typeof payload.to !== "string" && typeof raw.to === "string" && raw.to.trim()) {
-    payload.to = raw.to.trim();
-    mutated = true;
-  }
-  if (
-    typeof payload.bestEffortDeliver !== "boolean" &&
-    typeof raw.bestEffortDeliver === "boolean"
-  ) {
-    payload.bestEffortDeliver = raw.bestEffortDeliver;
-    mutated = true;
-  }
-  if (
-    typeof payload.provider !== "string" &&
-    typeof raw.provider === "string" &&
-    raw.provider.trim()
-  ) {
-    payload.provider = raw.provider.trim();
-    mutated = true;
-  }
-
-  return mutated;
-}
-
-function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
-  if ("model" in raw) {
-    delete raw.model;
-  }
-  if ("thinking" in raw) {
-    delete raw.thinking;
-  }
-  if ("timeoutSeconds" in raw) {
-    delete raw.timeoutSeconds;
-  }
-  if ("allowUnsafeExternalContent" in raw) {
-    delete raw.allowUnsafeExternalContent;
-  }
-  if ("message" in raw) {
-    delete raw.message;
-  }
-  if ("text" in raw) {
-    delete raw.text;
-  }
-  if ("deliver" in raw) {
-    delete raw.deliver;
-  }
-  if ("channel" in raw) {
-    delete raw.channel;
-  }
-  if ("to" in raw) {
-    delete raw.to;
-  }
-  if ("bestEffortDeliver" in raw) {
-    delete raw.bestEffortDeliver;
-  }
-  if ("provider" in raw) {
-    delete raw.provider;
-  }
-}
-
-async function getFileMtimeMs(path: string): Promise<number | null> {
-  try {
-    const stats = await fs.promises.stat(path);
-    return stats.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
+/** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: {
     forceReload?: boolean;
-    /** Skip recomputing nextRunAtMs after load so the caller can run due
-     *  jobs against the persisted values first (see onTimer). */
-    skipRecompute?: boolean;
+    /** A disabled writer commits only its changed rows, so quarantine cleanup
+     *  must not turn its fresh read back into a full-store replacement. */
+    deferQuarantinePersist?: boolean;
   },
 ) {
-  // Fast path: store is already in memory. Other callers (add, list, run, …)
-  // trust the in-memory copy to avoid a stat syscall on every operation.
+  // Keep scheduler-local pacing/catch-up mutations while the publication fact
+  // still matches; evicted partitions conservatively use the global sequence.
   if (state.store && !opts?.forceReload) {
-    return;
-  }
-  // Force reload always re-reads the file to avoid missing cross-service
-  // edits on filesystems with coarse mtime resolution.
-
-  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
-  let mutated = false;
-  for (const raw of jobs) {
-    const state = raw.state;
-    if (!state || typeof state !== "object" || Array.isArray(state)) {
-      raw.state = {};
-      mutated = true;
-    }
-
-    const nameRaw = raw.name;
-    if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
-      raw.name = inferLegacyName({
-        schedule: raw.schedule as never,
-        payload: raw.payload as never,
-      });
-      mutated = true;
-    } else {
-      raw.name = nameRaw.trim();
-    }
-
-    const desc = normalizeOptionalText(raw.description);
-    if (raw.description !== desc) {
-      raw.description = desc;
-      mutated = true;
-    }
-
-    if (typeof raw.enabled !== "boolean") {
-      raw.enabled = true;
-      mutated = true;
-    }
-
-    const payload = raw.payload;
+    const loadedRevision = loadedCronStoreRevisions.get(state);
     if (
-      (!payload || typeof payload !== "object" || Array.isArray(payload)) &&
-      inferPayloadIfMissing(raw)
+      loadedRevision === undefined ||
+      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
     ) {
-      mutated = true;
-    }
-
-    const payloadRecord =
-      raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
-        ? (raw.payload as Record<string, unknown>)
-        : null;
-
-    if (payloadRecord) {
-      if (normalizePayloadKind(payloadRecord)) {
-        mutated = true;
-      }
-      if (!payloadRecord.kind) {
-        if (typeof payloadRecord.message === "string" && payloadRecord.message.trim()) {
-          payloadRecord.kind = "agentTurn";
-          mutated = true;
-        } else if (typeof payloadRecord.text === "string" && payloadRecord.text.trim()) {
-          payloadRecord.kind = "systemEvent";
-          mutated = true;
-        }
-      }
-      if (payloadRecord.kind === "agentTurn") {
-        if (copyTopLevelAgentTurnFields(raw, payloadRecord)) {
-          mutated = true;
-        }
-      }
-    }
-
-    const hadLegacyTopLevelFields =
-      "model" in raw ||
-      "thinking" in raw ||
-      "timeoutSeconds" in raw ||
-      "allowUnsafeExternalContent" in raw ||
-      "message" in raw ||
-      "text" in raw ||
-      "deliver" in raw ||
-      "channel" in raw ||
-      "to" in raw ||
-      "bestEffortDeliver" in raw ||
-      "provider" in raw;
-    if (hadLegacyTopLevelFields) {
-      stripLegacyTopLevelFields(raw);
-      mutated = true;
-    }
-
-    if (payloadRecord) {
-      if (migrateLegacyCronPayload(payloadRecord)) {
-        mutated = true;
-      }
-    }
-
-    const schedule = raw.schedule;
-    if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
-      const sched = schedule as Record<string, unknown>;
-      const kind = typeof sched.kind === "string" ? sched.kind.trim().toLowerCase() : "";
-      if (!kind && ("at" in sched || "atMs" in sched)) {
-        sched.kind = "at";
-        mutated = true;
-      }
-      const atRaw = typeof sched.at === "string" ? sched.at.trim() : "";
-      const atMsRaw = sched.atMs;
-      const parsedAtMs =
-        typeof atMsRaw === "number"
-          ? atMsRaw
-          : typeof atMsRaw === "string"
-            ? parseAbsoluteTimeMs(atMsRaw)
-            : atRaw
-              ? parseAbsoluteTimeMs(atRaw)
-              : null;
-      if (parsedAtMs !== null) {
-        sched.at = new Date(parsedAtMs).toISOString();
-        if ("atMs" in sched) {
-          delete sched.atMs;
-        }
-        mutated = true;
-      }
-
-      const everyMsRaw = sched.everyMs;
-      const everyMs =
-        typeof everyMsRaw === "number" && Number.isFinite(everyMsRaw)
-          ? Math.floor(everyMsRaw)
-          : null;
-      if ((kind === "every" || sched.kind === "every") && everyMs !== null) {
-        const anchorRaw = sched.anchorMs;
-        const normalizedAnchor =
-          typeof anchorRaw === "number" && Number.isFinite(anchorRaw)
-            ? Math.max(0, Math.floor(anchorRaw))
-            : typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs)
-              ? Math.max(0, Math.floor(raw.createdAtMs))
-              : typeof raw.updatedAtMs === "number" && Number.isFinite(raw.updatedAtMs)
-                ? Math.max(0, Math.floor(raw.updatedAtMs))
-                : null;
-        if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
-          sched.anchorMs = normalizedAnchor;
-          mutated = true;
-        }
-      }
-    }
-
-    const delivery = raw.delivery;
-    if (delivery && typeof delivery === "object" && !Array.isArray(delivery)) {
-      const modeRaw = (delivery as { mode?: unknown }).mode;
-      if (typeof modeRaw === "string") {
-        const lowered = modeRaw.trim().toLowerCase();
-        if (lowered === "deliver") {
-          (delivery as { mode?: unknown }).mode = "announce";
-          mutated = true;
-        }
-      } else if (modeRaw === undefined || modeRaw === null) {
-        // Explicitly persist the default so existing jobs don't silently
-        // change behaviour when the runtime default shifts.
-        (delivery as { mode?: unknown }).mode = "announce";
-        mutated = true;
-      }
-    }
-
-    const isolation = raw.isolation;
-    if (isolation && typeof isolation === "object" && !Array.isArray(isolation)) {
-      delete raw.isolation;
-      mutated = true;
-    }
-
-    const payloadKind =
-      payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
-    const sessionTarget =
-      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
-    const isIsolatedAgentTurn =
-      sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
-    const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
-    const hasLegacyDelivery = payloadRecord ? hasLegacyDeliveryHints(payloadRecord) : false;
-
-    if (isIsolatedAgentTurn && payloadKind === "agentTurn") {
-      if (!hasDelivery) {
-        raw.delivery =
-          payloadRecord && hasLegacyDelivery
-            ? buildDeliveryFromLegacyPayload(payloadRecord)
-            : { mode: "announce" };
-        mutated = true;
-      }
-      if (payloadRecord && hasLegacyDelivery) {
-        if (hasDelivery) {
-          const merged = mergeLegacyDeliveryInto(
-            delivery as Record<string, unknown>,
-            payloadRecord,
-          );
-          if (merged.mutated) {
-            raw.delivery = merged.delivery;
-            mutated = true;
-          }
-        }
-        stripLegacyDeliveryFields(payloadRecord);
-        mutated = true;
-      }
+      return;
     }
   }
-  state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
-  state.storeLoadedAtMs = state.deps.nowMs();
-  state.storeFileMtimeMs = fileMtimeMs;
-
-  if (!opts?.skipRecompute) {
-    recomputeNextRuns(state);
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
   }
+  const loadedRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
+  const loadNowMs = state.deps.nowMs();
+  // Persisted cron rows are validated lazily, so treat them as raw records at the
+  // store boundary and only trust the CronJob shape after validation below.
+  const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
+  const jobs: CronJob[] = [];
+  const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  for (const [index, raw] of loadedJobs.entries()) {
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const sourceIndex = loaded.configJobIndexes[index] ?? index;
+    const runtimeEntry = loaded.configJobRuntimeEntries[index];
+    // Accept old `jobId` rows at the raw boundary only; the in-memory store
+    // uses canonical `id` before validation and scheduling.
+    normalizeCronJobIdentityFields(raw);
+    const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
+    let normalized: Record<string, unknown> | null;
+    try {
+      normalized = normalizeCronJobInput(raw);
+    } catch (error) {
+      if (!isInvalidCronSessionTargetIdError(error)) {
+        throw error;
+      }
+      normalized = null;
+      state.deps.log.warn(
+        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
+        "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
+      );
+    }
+    const hydratedRaw = normalized ?? raw;
+    let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
+    const hydratedSchedule = isRecord(hydratedRaw.schedule) ? hydratedRaw.schedule : {};
+    // The satisfiability probe below does not mutate this row, so its typed validation stays valid.
+    const hydratedIsValid = !invalidReason && isValidatedCronJob(hydratedRaw);
+    if (hydratedIsValid && hydratedRaw.enabled && hydratedSchedule.kind === "every") {
+      try {
+        assertTimeScheduleSatisfiable(
+          { ...hydratedRaw, state: {} },
+          loadNowMs,
+          computeJobNextRunAtMs,
+        );
+      } catch {
+        invalidReason = "unsatisfiable-schedule";
+      }
+    }
+    if (invalidReason) {
+      const quarantineEntry: QuarantinedCronConfigJob = {
+        sourceIndex,
+        reason: invalidReason,
+        job: rawConfigJob,
+      };
+      const runtimeState = runtimeEntry?.state ?? raw.state;
+      if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
+        // Preserve runtime state with the quarantined config so doctor can
+        // repair shape without losing last/next run information.
+        quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
+      }
+      const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
+      if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
+        quarantineEntry.updatedAtMs = updatedAtMs;
+      }
+      if (typeof runtimeEntry?.scheduleIdentity === "string") {
+        quarantineEntry.scheduleIdentity = runtimeEntry.scheduleIdentity;
+      }
+      quarantinedConfigJobs.push(quarantineEntry);
+      warnInvalidPersistedCronJob({ state, raw, index: sourceIndex, reason: invalidReason });
+      continue;
+    }
+    // Validated above, so the raw record is now a trusted CronJob.
+    if (!hydratedIsValid) {
+      continue;
+    }
+    const hydrated = hydratedRaw;
+    jobs.push(hydrated);
+    // Capture the value SQLite actually held before schedule-identity repair
+    // mutates the runtime view. A later save can then publish that transition.
+    durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
+    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
+  }
+  state.store = {
+    version: 1,
+    jobs,
+  };
+  state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
+  state.storeLoadedAtMs = loadNowMs;
+  // A writer or load repair during the await leaves this snapshot conservatively stale.
+  loadedCronStoreRevisions.set(state, loadedRevision);
 
-  if (mutated) {
-    await persist(state);
+  if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
+    // Config decoding and runtime validation reject rows in separate passes;
+    // restore their original durable order before writing operator-visible quarantine.
+    quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
+    state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
+    try {
+      if (await persist(state)) {
+        state.deps.log.warn(
+          {
+            storePath: state.deps.storePath,
+            quarantinedJobs: quarantinedConfigJobs.length,
+          },
+          "cron: sanitized active cron store after quarantining malformed persisted jobs",
+        );
+      }
+    } catch (error) {
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "cron: failed to sanitize malformed persisted jobs after quarantine; continuing with quarantined in-memory view",
+      );
+    }
   }
 }
 
+/** Loads authoritative passive state without discarding enabled-scheduler transients. */
+export async function ensureLoadedForOperation(state: CronServiceState): Promise<void> {
+  await ensureLoaded(state, {
+    forceReload: !state.deps.cronEnabled,
+    deferQuarantinePersist: !state.deps.cronEnabled,
+  });
+  if (!state.deps.cronEnabled) {
+    // A passive writer cannot sanitize the whole store without racing its scheduler owner.
+    // Leave malformed rows for an enabled owner or doctor instead of carrying a full rewrite.
+    state.pendingQuarantineConfigJobs = [];
+    state.lastQuarantineFailureWarnKey = null;
+  }
+}
+
+/** Emits the cron-disabled warning once per service state. */
 export function warnIfDisabled(state: CronServiceState, action: string) {
   if (state.deps.cronEnabled) {
     return;
@@ -498,11 +271,177 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState) {
-  if (!state.store) {
-    return;
+/** Persists cron rows and pending quarantine records in one SQLite transaction. */
+export function persist(state: CronServiceState, opts?: PersistOptions): Promise<boolean> {
+  return persistUsing(state, opts, saveCronJobsStoreWithRevision);
+}
+
+async function persistUsing(
+  state: CronServiceState,
+  opts: PersistOptions | undefined,
+  save: CronPersistence["save"],
+): Promise<boolean> {
+  const store = state.store;
+  if (!store) {
+    return false;
   }
-  await saveCronStore(state.deps.storePath, state.store);
-  // Update file mtime after save to prevent immediate reload
-  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  const quarantine =
+    state.pendingQuarantineConfigJobs.length > 0
+      ? { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() }
+      : undefined;
+  const stateOnly = !quarantine && opts?.stateOnly === true;
+  let revision: number;
+  try {
+    const committed = await save(state.deps.storePath, store, {
+      quarantine,
+      stateOnly,
+      transactionHooks: opts?.transactionHooks,
+    });
+    revision = committed.revision;
+  } catch (error) {
+    if (
+      !quarantine ||
+      error instanceof CronRunReceiptConflictError ||
+      error instanceof CronRunReceiptRevisionError
+    ) {
+      throw error;
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const warnKey = `${state.deps.storePath}\0${errorMessage}`;
+    if (state.lastQuarantineFailureWarnKey !== warnKey) {
+      state.lastQuarantineFailureWarnKey = warnKey;
+      state.deps.log.warn(
+        { storePath: state.deps.storePath, error: errorMessage },
+        "cron: failed to quarantine malformed persisted jobs; skipping active store sanitization",
+      );
+    }
+    return false;
+  }
+  loadedCronStoreRevisions.set(state, revision);
+  if (quarantine) {
+    state.pendingQuarantineConfigJobs = [];
+    state.lastQuarantineFailureWarnKey = null;
+  }
+  publishDurableNextRunChanges({
+    state,
+    storeJobs: store.jobs,
+    stateOnly,
+    suppressScheduledJobId: opts?.suppressScheduledJobId,
+  });
+  runPostPersistCronNotifications(state, opts?.postPersistNotifications);
+  return true;
+}
+
+/**
+ * Notifications run after the durable commit; one throwing notify (e.g. an
+ * auto-disable notice for a removed agent) must not drop its siblings or
+ * masquerade as a store-write failure — at startup that keeps the whole
+ * scheduler down.
+ */
+export function runPostPersistCronNotifications(
+  state: CronServiceState,
+  notifications: DeferredCronNotifications | undefined,
+) {
+  for (const notification of notifications ?? []) {
+    try {
+      dispatchCronNotification(state, notification);
+    } catch (err) {
+      state.deps.log.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "cron: post-persist notification failed",
+      );
+    }
+  }
+}
+
+/** Best-effort scratch pruning after the owning job deletions are durable. */
+export function pruneCronJobScratchAfterCommit(
+  state: CronServiceState,
+  committedJobIds: Iterable<string>,
+) {
+  for (const jobId of committedJobIds) {
+    try {
+      deleteCronJobScratch(state.deps.storePath, jobId);
+    } catch (error) {
+      state.deps.log.warn(
+        { jobId, err: String(error) },
+        "cron: post-commit scratch cleanup failed",
+      );
+    }
+  }
+}
+
+/** Captures the live cron state that must stay aligned with the durable store. */
+export function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
+  return {
+    store: state.store ? structuredClone(state.store) : null,
+    durableNextRunAtMsByJobId: new Map(state.durableNextRunAtMsByJobId),
+  };
+}
+
+// A failed durable write must not leave readers observing speculative job
+// topology, wake times, or catch-up ownership after the store lock releases.
+export function persistOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  opts: Omit<PersistOptions, "stateOnly"> = {},
+): Promise<void> {
+  return persistOrRestoreUsing(state, snapshot, opts, {
+    save: saveCronJobsStoreWithRevision,
+    saveChanges: saveCronJobsStoreChangesWithRevision,
+  });
+}
+
+/** Retain the current host turn from caller guard/capture through the native commit. */
+export function persistNativeOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  opts: Omit<PersistOptions, "stateOnly"> = {},
+): Promise<void> {
+  return persistOrRestoreUsing(state, snapshot, opts, {
+    save: saveCronJobsStoreWithRevisionNative,
+    saveChanges: saveCronJobsStoreChangesWithRevisionNative,
+  });
+}
+
+async function persistOrRestoreUsing(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  opts: Omit<PersistOptions, "stateOnly">,
+  persistence: CronPersistence,
+): Promise<void> {
+  try {
+    if (!state.deps.cronEnabled && snapshot.store && state.store) {
+      const committed = await persistence.saveChanges(
+        state.deps.storePath,
+        snapshot.store,
+        state.store,
+        {
+          ...(opts.preserveConcurrentAdds ? { preserveConcurrentAdds: true } : {}),
+          ...(opts.transactionHooks ? { transactionHooks: opts.transactionHooks } : {}),
+        },
+      );
+      state.store = committed.value;
+      state.storeLoadedAtMs = state.deps.nowMs();
+      loadedCronStoreRevisions.set(state, committed.revision);
+      publishDurableNextRunChanges({
+        state,
+        storeJobs: state.store.jobs,
+        stateOnly: false,
+        suppressScheduledJobId: opts.suppressScheduledJobId,
+      });
+      runPostPersistCronNotifications(state, opts.postPersistNotifications);
+      return;
+    }
+    // Notification failures are contained inside persist(), so a throw here
+    // always means the durable write itself failed and the snapshot must win.
+    const persisted = await persistUsing(state, opts, persistence.save);
+    if (!persisted) {
+      throw new Error("cron: durable store write did not complete");
+    }
+  } catch (err) {
+    state.store = snapshot.store;
+    state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+    throw err;
+  }
 }

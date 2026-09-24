@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 @MainActor
@@ -20,18 +20,28 @@ final class WorkActivityStore {
 
     private(set) var current: Activity?
     private(set) var iconState: IconState = .idle
-    private(set) var lastToolLabel: String?
     private(set) var lastToolUpdatedAt: Date?
 
     private var jobs: [String: Activity] = [:]
     private var tools: [String: Activity] = [:]
     private var currentSessionKey: String?
-    private var toolSeqBySession: [String: Int] = [:]
+    private var toolCleanupOwners: [String: UUID] = [:]
 
     private var mainSessionKeyStorage = "main"
     private let toolResultGrace: TimeInterval = 2.0
 
-    var mainSessionKey: String { self.mainSessionKeyStorage }
+    var mainSessionKey: String {
+        self.mainSessionKeyStorage
+    }
+
+    func reset() {
+        self.jobs.removeAll()
+        self.tools.removeAll()
+        self.toolCleanupOwners.removeAll()
+        self.currentSessionKey = nil
+        self.lastToolUpdatedAt = nil
+        self.refreshDerivedState()
+    }
 
     func handleJob(sessionKey: String, state: String) {
         let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
@@ -61,9 +71,9 @@ final class WorkActivityStore {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
-            self.lastToolLabel = label
             self.lastToolUpdatedAt = Date()
-            self.toolSeqBySession[sessionKey, default: 0] += 1
+            // Session keys can recur after reset; old grace tasks must never regain ownership.
+            self.toolCleanupOwners[sessionKey] = UUID()
             let activity = Activity(
                 sessionKey: sessionKey,
                 role: self.role(for: sessionKey),
@@ -75,13 +85,13 @@ final class WorkActivityStore {
         } else {
             // Delay removal slightly to avoid flicker on rapid result/start bursts.
             let key = sessionKey
-            let seq = self.toolSeqBySession[key, default: 0]
+            guard let owner = self.toolCleanupOwners[key] else { return }
             Task { [weak self] in
                 let nsDelay = UInt64((self?.toolResultGrace ?? 0) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nsDelay)
                 await MainActor.run {
                     guard let self else { return }
-                    guard self.toolSeqBySession[key, default: 0] == seq else { return }
+                    guard self.toolCleanupOwners[key] == owner else { return }
                     self.lastToolUpdatedAt = Date()
                     self.clearTool(sessionKey: key)
                 }
@@ -111,17 +121,15 @@ final class WorkActivityStore {
 
     private func setJobActive(_ activity: Activity) {
         self.jobs[activity.sessionKey] = activity
-        // Main session preempts immediately.
-        if activity.role == .main {
-            self.currentSessionKey = activity.sessionKey
-        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
-            self.currentSessionKey = activity.sessionKey
-        }
-        self.refreshDerivedState()
+        self.updateCurrentSession(with: activity)
     }
 
     private func setToolActive(_ activity: Activity) {
         self.tools[activity.sessionKey] = activity
+        self.updateCurrentSession(with: activity)
+    }
+
+    private func updateCurrentSession(with activity: Activity) {
         // Main session preempts immediately.
         if activity.role == .main {
             self.currentSessionKey = activity.sessionKey
@@ -155,6 +163,7 @@ final class WorkActivityStore {
     private func clearTool(sessionKey: String) {
         guard self.tools[sessionKey] != nil else { return }
         self.tools.removeValue(forKey: sessionKey)
+        self.toolCleanupOwners.removeValue(forKey: sessionKey)
 
         if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
             self.pickNextSession()

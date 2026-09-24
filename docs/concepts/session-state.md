@@ -1,0 +1,139 @@
+---
+summary: "Durable session state signal log: state versions, watchers, stale-state notices, and reconciliation"
+read_when:
+  - You want agents to notice when humans or other agents change a session behind their back
+  - You are debugging state-change notices, watch cursors, or session_status changesSince
+  - You want to understand how parent agents stay synchronized with child sessions
+title: "Session state awareness"
+sidebarTitle: "Session state awareness"
+---
+
+Several sessions often work on the same problem. Examples are a manager delegating to children, a human jumping directly into a worker session, and two agents coordinating over [`sessions_send`](/concepts/session-tool). Each session builds assumptions about the others. Those assumptions go stale the moment another actor intervenes. Session state awareness is the machinery that detects the intervention. It tells the affected session once. It then gives that session a cheap way to catch up before acting.
+
+Three pieces work together:
+
+1. A **durable signal log** records selected state changes per session.
+2. **Watchers** hold per-target cursors and receive one coalesced stale-state notice.
+3. **Reconciliation** pulls the exact delta via `session_status` with `changesSince`.
+
+## The signal log
+
+OpenClaw appends a typed event to the shared state database (`session_state_events`) when a watched session materially changes. Events carry metadata and a one-line summary — never message content.
+
+| Kind                   | Recorded when                                            | Notifies watchers |
+| ---------------------- | -------------------------------------------------------- | ----------------- |
+| `created`              | A new session has trusted creation attribution           | No (log only)     |
+| `human_direct_message` | A human sends a turn directly to a watched session       | Yes               |
+| `upstream_missing`     | An adopted session's upstream source disappears          | Yes               |
+| `goal_changed`         | The session's goal state is created, updated, or cleared | Yes               |
+| `child_spawned`        | A sub-agent or ACP child session is created              | No (seeds cursor) |
+| `run_completed`        | A child run ends successfully                            | No (log only)     |
+| `run_failed`           | A child run fails, times out, or is cancelled            | No (log only)     |
+| `compacted`            | The session's history is compacted                       | No (log only)     |
+| `adopted`              | A catalog session is adopted into OpenClaw               | No (log only)     |
+
+Each event names its actor (`human`, `agent`, or `system`). Cancelled and timed-out child runs are recorded as failures with the precise outcome (`cancelled`, `timeout`, or `error`) preserved in the event payload.
+
+A session's **state version** is simply the highest sequence number in its log, tracked in a durable per-session head that survives pruning. `sessions_list` rows include `stateVersion` when a session has logged changes. `session_status` always reports it.
+
+Log-only kinds exist for reconciliation history, not notification: ordinary child-run completion delivery stays owned by [sub-agent announcements](/tools/subagents), and the signal log never duplicates it.
+
+Session creation separately queues a one-time Home notice by default, controlled
+by `session.notifyOnCreate`. It does not register a watcher or wake Home. Unlike
+durable watcher notices, it uses only the bounded, in-memory system-event queue.
+See [new-session awareness](/concepts/main-session#what-flows-into-the-main-session)
+for visibility exclusions.
+
+## Watchers
+
+A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from three places:
+
+- **Implicit (spawn edges).** When a session spawns a sub-agent or ACP child, the parent's cursor is seeded automatically at the child's spawn version. Parents never subscribe manually.
+- **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`. Routing a room into main needs no watch, because it already shares the main conversation.
+- **Explicit (`sessions_send watch: true`).** Any coordinator can watch a non-spawned target. Pass `watch: true` on `sessions_send`. After the send dispatches successfully, the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
+
+Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
+
+A watch also records its watcher's physical store. Changing `session.store` does
+not transfer its queued notices to another conversation with the same key. Older
+watches with unknown store provenance retain history but need fresh registration
+before proactive notices resume. The next group turn registers its ambient watch
+against the current store.
+
+Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are removed with either session. A reset that has committed still clears its watches if a later cleanup step fails. There is no unwatch verb in v1.
+
+Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+OpenCode detection is deliberately conservative. OpenCode's v1 tables do not preserve message provenance, so reporting ambiguous rows would create false alarms. Per-message provenance exists only in its v2 schema. OpenCode therefore does not report image-only turns, `@file`-mention-only turns, slash commands routed to a subagent, or turns from ACP clients that annotate content with an audience (mapped by OpenCode to `synthetic` or `ignored`). It also suppresses text matching any of the preceding 50 user messages, to catch compaction replay. A human deliberately repeating the same text within that window can therefore be missed.
+
+If an adopted session's upstream source is deleted externally, three consecutive missing checks produce one `upstream_missing` signal for its watchers, and remove the upstream link. Three consecutive checks are about three monitor ticks. Continuing the catalog session again creates a fresh link.
+
+## Notices: one, not many
+
+When a notify-eligible event lands and a watcher's cursor is behind, the watcher receives one system notice on its next turn:
+
+```
+Session "agent:main:subagent:child" changed (other actor). Reconcile before acting: session_status sessionKey "agent:main:subagent:child" changesSince 12.
+```
+
+Main-session watchers are also woken immediately via a heartbeat wake. Nested sub-agent watchers get the notice on their next turn.
+
+The protocol is deliberately anti-spam:
+
+- **One pending notice per watcher/target pair.** The notice text is byte-stable while pending, and the system-event queue dedupes on it. Twenty rapid changes to the same target still produce a single line in the watcher's prompt.
+- **Frozen watermark.** The cursor freezes its notified position when a notice is queued. Further material events advance only the material watermark. They do not re-notify.
+- **Acknowledge on drain, reopen only for interleaved work.** When the watcher's turn consumes the notice, the cursor advances. If more material events arrived between queueing and draining, exactly one fresh notice is opened for the remainder.
+- **Self-suppression.** A watcher never gets notified about events it caused itself.
+- **Restart recovery.** Pending notices live in an in-memory queue. A startup sweep re-materializes them from durable cursors after a gateway restart.
+
+## Reconciling
+
+The notice tells the watcher exactly what to do. `session_status` with `changesSince: <version>` returns the typed events after that version (up to 200), without advancing any cursors:
+
+```json
+{
+  "stateVersion": 19,
+  "stateChanges": {
+    "events": [
+      {
+        "sequence": 14,
+        "kind": "human_direct_message",
+        "actorType": "human",
+        "summary": "human message via telegram"
+      },
+      { "sequence": 19, "kind": "goal_changed", "actorType": "human", "summary": "goal updated" }
+    ],
+    "historyGap": false
+  }
+}
+```
+
+`historyGap: true` means the requested version predates retained history — refresh the whole session state (`sessions_history`, `session_status`) instead of treating the response as an exact delta. The gap signal is exact: it comes from a per-session pruned watermark, not inferred from sequence arithmetic.
+
+## Storage and limits
+
+History lives in the shared state database, bounded to 30 days and 50,000 rows. Per-session heads stay monotonic after pruning. Recording is best-effort. A failed append is logged and never fails the originating turn. `stateVersion` is therefore a signal-log head, not a transactional change-data-capture version.
+
+Current limits:
+
+- Notice delivery assumes one gateway process owns the shared state database. Multiple gateways share the durable log and `changesSince`, but v1 does not push notices across processes.
+- Compaction events cover the embedded runtime's compaction owners. Native-harness-only compaction is not fully logged.
+- Cancelled-outcome payload detail is currently produced by ACP child runs. Native sub-agent cancellations surface as generic failures.
+- Upstream self-echo detection compares normalized user text. An external prompt matching one of the session's 10 most recent OpenClaw-side user messages is treated as self-echo.
+- A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1. Unclassified bytes are never skipped.
+- A single Pi JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1. Unclassified bytes are never skipped.
+- Legacy Pi sessions are adopted without an upstream link. Resume once to migrate the file to v3, then continue it from the catalog again to start monitoring.
+- OpenCode checks issue one batched database query per cadence. A session export runs only when that query shows its durable event sequence advanced.
+- Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
+- Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
+- Catalog sessions that have not been adopted remain outside the awareness layer in v1.
+- Sessions adopted before this feature carry no upstream link. Continue them from the catalog once to start upstream monitoring.
+- Upstream monitoring requires one owning agent per adopted session key. Adoption uses the resolved agent and returns an agent-qualified key. Distinct watched keys can monitor the same native thread. Links that reuse the exact same key under multiple agent IDs are skipped as ambiguous.
+
+## Related
+
+- [Session tools](/concepts/session-tool) — `sessions_send`, `session_status`, `sessions_list`
+- [Sub-agents](/tools/subagents) — spawn edges and completion announcements
+- [Heartbeat](/gateway/heartbeat) — how queued notices wake main sessions
+- [Session management](/concepts/session) — session keys, scopes, lifecycle
+- [Codex session catalog and supervision](/plugins/codex-supervision) — native session discovery and adoption

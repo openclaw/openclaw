@@ -1,92 +1,58 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   ChannelCapabilities,
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
-import { normalizeIMessageHandle } from "../imessage/targets.js";
 
-export const createTestRegistry = (channels: PluginRegistry["channels"] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  commands: [],
-  diagnostics: [],
+/** Registry entry shape used by channel tests without loading real plugins. */
+type TestChannelRegistration = {
+  pluginId: string;
+  plugin: unknown;
+  source: string;
+  origin?: "bundled" | "global" | "workspace" | "config";
+};
+
+export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
+  ...createEmptyPluginRegistry(),
+  channels: channels as unknown as PluginRegistry["channels"],
+  channelSetups: channels.map((entry) => ({
+    pluginId: entry.pluginId,
+    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    ...(entry.origin ? { origin: entry.origin } : {}),
+    source: entry.source,
+    enabled: true,
+  })),
 });
 
-export const createIMessageTestPlugin = (params?: {
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  id: "imessage",
-  meta: {
-    id: "imessage",
-    label: "iMessage",
-    selectionLabel: "iMessage (imsg)",
-    docsPath: "/channels/imessage",
-    blurb: "iMessage test stub.",
-    aliases: ["imsg"],
-  },
-  capabilities: { chatTypes: ["direct", "group"], media: true },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  status: {
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "imessage",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
-  },
-  outbound: params?.outbound ?? imessageOutbound,
-  messaging: {
-    targetResolver: {
-      looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return false;
-        }
-        if (/^(imessage:|sms:|auto:|chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
-          return true;
-        }
-        if (trimmed.includes("@")) {
-          return true;
-        }
-        return /^\+?\d{3,}$/.test(trimmed);
-      },
-      hint: "<handle|chat_id:ID>",
-    },
-    normalizeTarget: (raw) => normalizeIMessageHandle(raw),
-  },
-});
+/** Publish fixture channels after startup settles, before creating any fixture turns or handles. */
+export async function activateTestChannelRegistry(
+  fixture: Pick<PluginRegistry, "channels" | "channelSetups">,
+): Promise<void> {
+  const { captureActivePluginRegistrySnapshot, restoreActivePluginRegistrySnapshot } =
+    await import("../plugins/runtime.js");
+  const snapshot = captureActivePluginRegistrySnapshot();
+  const registry = expectDefined(snapshot.activeRegistry, "expected gateway root plugin registry");
+  registry.channels.push(...fixture.channels);
+  registry.channelSetups.push(...fixture.channelSetups);
+  // Reactivation creates a fresh lifecycle epoch. Keep the Gateway's registry object
+  // and host settings, but publish before any fixture turn or retained handle exists.
+  restoreActivePluginRegistrySnapshot(snapshot);
+}
 
-export const createOutboundTestPlugin = (params: {
+export const createChannelTestPluginBase = (params: {
   id: ChannelId;
-  outbound: ChannelOutboundAdapter;
   label?: string;
   docsPath?: string;
+  markdownCapable?: boolean;
   capabilities?: ChannelCapabilities;
-}): ChannelPlugin => ({
+  config?: Partial<ChannelPlugin["config"]>;
+}): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> => ({
   id: params.id,
   meta: {
     id: params.id,
@@ -94,11 +60,70 @@ export const createOutboundTestPlugin = (params: {
     selectionLabel: params.label ?? String(params.id),
     docsPath: params.docsPath ?? `/channels/${params.id}`,
     blurb: "test stub.",
+    ...(params.markdownCapable !== undefined ? { markdownCapable: params.markdownCapable } : {}),
   },
   capabilities: params.capabilities ?? { chatTypes: ["direct"] },
   config: {
-    listAccountIds: () => [],
+    listAccountIds: () => ["default"],
     resolveAccount: () => ({}),
+    ...params.config,
   },
+});
+
+export const createDirectOutboundTestAdapter = (params: {
+  channel: ChannelId;
+  messageId?: string;
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+  sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+  sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+});
+
+export const createOutboundTestPlugin = (params: {
+  id: ChannelId;
+  outbound: ChannelOutboundAdapter;
+  messaging?: ChannelMessagingAdapter;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: { listAccountIds: () => [] },
+  }),
   outbound: params.outbound,
+  ...(params.messaging ? { messaging: params.messaging } : {}),
+});
+
+type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
+  setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+};
+
+export const createBindingResolverTestPlugin = (params: {
+  id: ChannelId;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+  config?: Partial<ChannelPlugin["config"]>;
+  resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+}): BindingResolverTestPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: params.config,
+  }),
+  ...(params.resolveBindingAccountId
+    ? {
+        setup: {
+          resolveBindingAccountId: params.resolveBindingAccountId,
+        },
+      }
+    : {}),
 });

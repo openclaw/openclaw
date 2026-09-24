@@ -1,134 +1,46 @@
-import JSZip from "jszip";
-import fs from "node:fs/promises";
-import path from "node:path";
-import * as tar from "tar";
+// Exposes archive extraction helpers after applying fs-safe defaults.
+import "./fs-safe-defaults.js";
+import {
+  extractArchive as extractArchiveWithFsSafe,
+  type ExtractArchiveOptions,
+} from "@openclaw/fs-safe/archive";
 
-export type ArchiveKind = "tar" | "zip";
+// Archive extraction facade for size limits, staged writes, and traversal checks.
+export {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveFormatError,
+  ArchiveLimitError,
+  ArchiveSecurityError,
+  DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_MAX_EXTRACTED_BYTES,
+  DEFAULT_MAX_ENTRY_BYTES,
+  inspectTarArchive,
+  readArchiveEntry,
+  resolveArchiveKind,
+  resolvePackedRootDir,
+  type ArchiveLogger,
+  type ArchiveEntryKind,
+  type ArchiveExtractLimits,
+  type ExtractArchiveOptions,
+} from "@openclaw/fs-safe/archive";
 
-export type ArchiveLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
-
-const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
-
-export function resolveArchiveKind(filePath: string): ArchiveKind | null {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".zip")) {
-    return "zip";
-  }
-  if (TAR_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
-    return "tar";
-  }
-  return null;
-}
-
-export async function resolvePackedRootDir(extractDir: string): Promise<string> {
-  const direct = path.join(extractDir, "package");
-  try {
-    const stat = await fs.stat(direct);
-    if (stat.isDirectory()) {
-      return direct;
-    }
-  } catch {
-    // ignore
-  }
-
-  const entries = await fs.readdir(extractDir, { withFileTypes: true });
-  const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  if (dirs.length !== 1) {
-    throw new Error(`unexpected archive layout (dirs: ${dirs.join(", ")})`);
-  }
-  const onlyDir = dirs[0];
-  if (!onlyDir) {
-    throw new Error("unexpected archive layout (no package dir found)");
-  }
-  return path.join(extractDir, onlyDir);
-}
-
-export async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-}
-
-async function extractZip(params: { archivePath: string; destDir: string }): Promise<void> {
-  const buffer = await fs.readFile(params.archivePath);
-  const zip = await JSZip.loadAsync(buffer);
-  const entries = Object.values(zip.files);
-
-  for (const entry of entries) {
-    const entryPath = entry.name.replaceAll("\\", "/");
-    if (!entryPath || entryPath.endsWith("/")) {
-      const dirPath = path.resolve(params.destDir, entryPath);
-      if (!dirPath.startsWith(params.destDir)) {
-        throw new Error(`zip entry escapes destination: ${entry.name}`);
-      }
-      await fs.mkdir(dirPath, { recursive: true });
-      continue;
-    }
-
-    const outPath = path.resolve(params.destDir, entryPath);
-    if (!outPath.startsWith(params.destDir)) {
-      throw new Error(`zip entry escapes destination: ${entry.name}`);
-    }
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    const data = await entry.async("nodebuffer");
-    await fs.writeFile(outPath, data);
-  }
-}
-
-export async function extractArchive(params: {
-  archivePath: string;
-  destDir: string;
-  timeoutMs: number;
-  logger?: ArchiveLogger;
-}): Promise<void> {
-  const kind = resolveArchiveKind(params.archivePath);
-  if (!kind) {
-    throw new Error(`unsupported archive: ${params.archivePath}`);
-  }
-
-  const label = kind === "zip" ? "extract zip" : "extract tar";
-  if (kind === "tar") {
-    await withTimeout(
-      tar.x({ file: params.archivePath, cwd: params.destDir }),
-      params.timeoutMs,
-      label,
-    );
-    return;
-  }
-
-  await withTimeout(extractZip(params), params.timeoutMs, label);
-}
-
-export async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function readJsonFile<T>(filePath: string): Promise<T> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(raw) as T;
+/** Retain OpenClaw's durable publication default; disposable extraction opts out explicitly. */
+export async function extractArchive(params: ExtractArchiveOptions): Promise<void> {
+  // Read declared fields so inherited options and class getters survive this adapter.
+  return await extractArchiveWithFsSafe({
+    archivePath: params.archivePath,
+    destDir: params.destDir,
+    timeoutMs: params.timeoutMs,
+    durable: params.durable ?? true,
+    kind: params.kind,
+    stripComponents: params.stripComponents,
+    tarGzip: params.tarGzip,
+    limits: params.limits,
+    logger: params.logger,
+    entryModes: params.entryModes,
+    entryUmask: params.entryUmask,
+    entryFilter: params.entryFilter,
+    onFiltered: params.onFiltered,
+  });
 }

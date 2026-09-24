@@ -1,5 +1,12 @@
 {
   "id": "zalo",
+  "categories": ["channels"],
+  "doctorContract": {},
+  "name": "Zalo",
+  "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["zalo"],
   "configSchema": {
     "type": "object",

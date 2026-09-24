@@ -1,0 +1,115 @@
+---
+name: release-openclaw-maintainer
+description: "Prepare, publish, recover, or verify OpenClaw beta, stable, and extended-stable releases, including approved backports."
+---
+
+# OpenClaw Release Maintainer
+
+Use for a release operation, not ordinary development or advisory mutation.
+Read `docs/reference/RELEASING.md` for current policy. Load `$release-private`
+when available before resolving private credential locators or host topology;
+credential operations use `$one-password`.
+
+## Choose the operation
+
+Read only the references needed for the selected phase:
+
+- Regular beta/stable preparation or publication: [regular release](references/regular-release.md), which routes preparation and phase-specific proof. If the request does not specify stable/full, default to beta; beta authorization does not authorize later stable promotion.
+- Backport discovery: [candidate inventory](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
+- Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
+- Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
+- Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
+- Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
+- Stable postpublish synchronization: [main closeout](references/stable-main-closeout.md).
+- Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
+- Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
+
+## Shared release boundaries
+
+Every lane runs once; first failures are recorded and fixed at their owner, and
+a passing rerun alone does not establish a flake or a fix. Strict default: a
+stable publishes only from stable/full evidence with soak, blocking performance,
+and no failed non-proof lane. Operator fast path: `stable_soak_waiver` and
+`lane_waiver` (reason prefixed with the target version, input or repository
+variable) are the only way past that and are recorded everywhere the release
+is described. Required in every mode: artifact children, install smoke, both
+survivor lanes, every `update-first-hop-compat*` lane, pack/npm qualification,
+package integrity, target resolution, Linux Gateway cross-OS lanes, and
+aggregators of required inputs. Preserve identity, provenance, complete
+evidence, and existing publication approvals.
+
+The operating objectives are approximately 20 minutes to seal validation and
+publication within an hour, not measured guarantees. Source-only children start
+alongside artifact producers; candidate consumers start as soon as the candidate
+is ready. Independently sealed green children can be reused for the same exact
+target and inputs even when their parent failed, was cancelled, or remains active;
+verify their original trusted-main workflow SHA and current attempt. The sealed
+manifest supplies the SDK evidence digest, npm publication decisions, and
+approved soak-waiver defaults; it never acknowledges SDK API changes, so supply
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+sealed waiver applies only while the repository variable still holds it. Explicit
+publisher inputs are overrides; the candidate helper still validates its explicit
+SDK acknowledgement when needed.
+
+Explicit approval is required for version changes and irreversible publication.
+A request to cut, publish, or complete a named release carries through its
+validated publication and verification; do not ask again unless identity,
+channel, scope, or material risk changes. Ship authority for ordinary code is
+not release authority.
+
+An operator's explicit approval to do whatever is needed to prepare a named
+release is standing authority for the necessary preparation decisions and
+repairs. Carry it through candidate and tooling fixes, upgrade/migration design,
+reviewed test or security-inventory alignments, isolated proof, commits, pushes,
+and validation recovery. Record the decision, its evidence, and the selected
+support contract; do not ask again merely because an already-approved class of
+work reaches an implementation or verification step. Continue independent work
+while resolving a blocker. This authority does not permit hiding defects,
+lowering a gate to manufacture success, destructive changes to operator state,
+unrelated work, or publication. A prepare-only request still requires a separate
+publication instruction before releasing artifacts or a bridge version.
+
+Keep one compact state record using
+[the handoff template](references/release-handoff-template.md): effective goal,
+version/tag/branch, cut/Code/Tooling/Release SHAs, active parent run and attempt,
+successful child artifacts, approved changes, phase and next action. Latest
+operator steering replaces superseded scope. Completed evidence stays complete
+until a named change invalidates it.
+
+For regular releases, prepare complete notes before freezing **Code SHA** when
+possible. If those notes are final, **Code SHA and Release SHA are the same
+commit**: one successful fresh full qualification can supply both roles and
+their exact publication bytes. Do not create another commit or run solely to
+separate the labels. If notes change after qualification, a descendant whose
+complete delta includes `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its
+matching record, and root index may use `split-changelog-release-v1`
+to reuse product proof while qualifying new publication bytes. Any other
+source delta, rename, or deletion returns to the Code SHA loop. Historical
+root-only receipts retain `changelog-only-release-v1`.
+Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
+not justify changing the candidate.
+
+Once a candidate is cut, its base is the operator's decision. Never re-cut
+(re-base the candidate on newer `main`) unless Peter explicitly asks for it in
+that release. Without asking, cherry-pick already-merged `main` commits onto
+the release branch only to fix a confirmed release blocker: a required lane
+failing deterministically on the frozen candidate, or an update/install/
+publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
+opportunistic backports, feature reverts, or a new base taken to "pick up" a
+fix that cherry-picks cleanly enough with a small conflict resolution.
+
+Published versions and final tags are immutable. Reuse successful exact-source
+artifacts; do not rebuild or republish as an implicit retry. The active release
+is the work queue: no opportunistic moving-main fixes or backports. Classify
+failures, repair their owner, retry the affected surface, then reassess rather
+than repeating the full release.
+
+Required publication proofs and enforced environment approvals remain required.
+A passing sibling cannot replace missing required evidence. npm + ClawHub is the
+priority path. macOS, Windows, Linux, and Android native publication runs in
+parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+Windows/macOS Gateway variants, Windows/macOS Node, and native-app CI results
+are recorded as advisory during validation; a stable publishes with failed ones
+only under `lane_waiver`. Classify and repair their failures in parallel without
+re-cutting or rerunning the full npm validation. Platform publishers retain their own artifact
+and updater contracts; report pending platforms and proof gaps accurately.

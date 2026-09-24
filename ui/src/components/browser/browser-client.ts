@@ -1,0 +1,610 @@
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
+// Typed Control UI wrapper over the `browser.request` gateway method.
+//
+// The gateway method speaks an HTTP-shaped envelope ({method, path, body})
+// that is dispatched against the browser plugin's control routes, either
+// locally or via a browser-capable node. This module narrows the handful of
+// routes the browser panel needs and keeps route-path knowledge in one place.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
+import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { browserInspectScript } from "./browser-inspect-script.ts";
+import {
+  readBrowserTabTarget,
+  type BrowserRoute,
+  type BrowserTabTarget,
+} from "./browser-target.ts";
+
+registerBrowserEnglish();
+
+export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
+
+export type BrowserDashboardTarget = {
+  sessionKey: string;
+  agentId?: string;
+  name: string;
+  instanceId: string;
+  sessionScoped?: boolean;
+};
+
+export type BrowserDashboard = {
+  sessionKey: string;
+  name: string;
+  instanceId: string;
+  revision: number;
+  paused: boolean;
+  stopping: boolean;
+  url: string;
+  browserTab?: BrowserTabTarget;
+};
+
+export async function requestBrowserDashboard(
+  client: BrowserRequestClient,
+  params: BrowserDashboardTarget,
+  action: "open" | "resume" | "stop" | "inspect" = "open",
+): Promise<BrowserDashboard> {
+  const result = asRecord(
+    await client.request(
+      params.sessionScoped ? "browser.dashboard.request" : "browser.request",
+      {
+        ...(params.sessionScoped
+          ? {
+              sessionKey: params.sessionKey,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              dashboard: { name: params.name, instanceId: params.instanceId },
+            }
+          : { target: "host" }),
+        method: action === "stop" ? "DELETE" : action === "inspect" ? "GET" : "POST",
+        path: "/dashboard",
+        ...(action === "inspect"
+          ? { query: params.sessionScoped ? {} : params }
+          : {
+              body: {
+                ...(params.sessionScoped ? {} : params),
+                ...(action === "resume" ? { resume: true } : {}),
+              },
+            }),
+        timeoutMs: 120_000,
+      },
+      { timeoutMs: 150_000 },
+    ),
+  );
+  const browserTab = readBrowserTabTarget(result?.browserTab);
+  if (
+    typeof result?.sessionKey !== "string" ||
+    !result.sessionKey ||
+    result.name !== params.name ||
+    result.instanceId !== params.instanceId ||
+    typeof result.revision !== "number" ||
+    !Number.isSafeInteger(result.revision) ||
+    typeof result.paused !== "boolean" ||
+    typeof result.stopping !== "boolean" ||
+    (result.stopping && !result.paused) ||
+    typeof result.url !== "string" ||
+    (!result.paused && !browserTab && action !== "inspect")
+  ) {
+    throw new Error(t("browser.dashboardInvalidReply"));
+  }
+  return {
+    sessionKey: result.sessionKey,
+    name: params.name,
+    instanceId: params.instanceId,
+    revision: result.revision,
+    paused: result.paused,
+    stopping: result.stopping,
+    url: result.url,
+    ...(browserTab ? { browserTab } : {}),
+  };
+}
+
+const BROWSER_REQUEST_METHOD = "browser.request";
+const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
+
+export type BrowserPanelTab = {
+  kind: "remote" | "native";
+  /**
+   * Stable panel handle: the plugin's per-profile tab alias (`t1`, a label)
+   * when present, else the raw CDP target id. Raw target ids are volatile
+   * across form submits/target replacement; aliases migrate server-side, so
+   * the panel must address tabs by this id.
+   */
+  id: string;
+  targetId: string;
+  title: string;
+  url: string;
+  /** Page-declared icon supplied by the native Mac tab. */
+  favicon?: string;
+  urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
+};
+
+type BrowserTabsSnapshot = {
+  running: boolean;
+  tabs: BrowserPanelTab[];
+};
+
+type BrowserScreenshotCapture = {
+  path: string;
+  targetId: string;
+  url: string;
+};
+
+/** CSS-pixel geometry of the remote page, used to map panel coords to page coords. */
+export type BrowserPageMetrics = {
+  cssWidth: number;
+  cssHeight: number;
+  title: string;
+  url: string;
+};
+
+export type BrowserInspectedNode = {
+  tag: string;
+  id: string;
+  classes: string[];
+  role: string;
+  name: string;
+  /** Bounding rect in remote CSS viewport pixels. */
+  rect: { x: number; y: number; width: number; height: number };
+  focusable: boolean;
+};
+
+type BrowserRequestEnvelope = {
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  query?: Record<string, unknown>;
+  body?: unknown;
+  timeoutMs?: number;
+};
+
+function withoutBrowserTarget(value: unknown): Record<string, unknown> {
+  const result = { ...asRecord(value) };
+  for (const key of ["target", "targetId", "node", "profile"]) {
+    delete result[key];
+  }
+  return result;
+}
+
+/** Bind every browser operation to one route and one live panel scope. */
+export function bindBrowserRequestClient(
+  client: BrowserRequestClient,
+  route?: BrowserRoute,
+  current: () => boolean = () => true,
+  dashboard?: BrowserDashboardTarget,
+): BrowserRequestClient {
+  return {
+    async request<T>(
+      method: string,
+      params?: unknown,
+      options?: GatewayClientRequestOptions,
+    ): Promise<T> {
+      if (!current()) {
+        throw new DOMException("Browser request scope ended", "AbortError");
+      }
+      const envelope = asRecord(params);
+      if (dashboard?.sessionScoped) {
+        // Scoped routes bind their browser target on the server. Never forward a
+        // panel's cached profile or tab selection into that authority boundary.
+        const scopedParams = {
+          method: envelope?.method,
+          path: envelope?.path,
+          ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
+          ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
+          ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
+          sessionKey: dashboard.sessionKey,
+          ...(dashboard.agentId ? { agentId: dashboard.agentId } : {}),
+          dashboard: { name: dashboard.name, instanceId: dashboard.instanceId },
+        };
+        return options
+          ? await client.request<T>("browser.dashboard.request", scopedParams, options)
+          : await client.request<T>("browser.dashboard.request", scopedParams);
+      }
+      const routedParams =
+        route || dashboard
+          ? {
+              ...envelope,
+              ...(route
+                ? {
+                    target: route.target,
+                    ...(route.target === "node" ? { node: route.node } : {}),
+                    query: { ...asRecord(envelope?.query), profile: route.profile },
+                  }
+                : {}),
+              ...(dashboard ? { dashboard } : {}),
+            }
+          : params;
+      return options
+        ? await client.request<T>(method, routedParams, options)
+        : await client.request<T>(method, routedParams);
+    },
+  };
+}
+
+function browserRequest<T>(client: BrowserRequestClient, envelope: BrowserRequestEnvelope) {
+  return client.request<T>(BROWSER_REQUEST_METHOD, envelope);
+}
+
+function stringOrEmpty(value: unknown): string {
+  return readStringValue(value) ?? "";
+}
+
+function normalizeTab(value: unknown): BrowserPanelTab | null {
+  const record = asRecord(value);
+  const targetId = stringOrEmpty(record?.targetId);
+  if (!targetId) {
+    return null;
+  }
+  const tabId = stringOrEmpty(record?.tabId);
+  return {
+    kind: "remote",
+    id: tabId || targetId,
+    targetId,
+    title: stringOrEmpty(record?.title),
+    url: stringOrEmpty(record?.url),
+    ...(record?.urlUnavailableReason === "navigation_blocked" ||
+    record?.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: record.urlUnavailableReason }
+      : {}),
+  };
+}
+
+export async function listBrowserTabs(client: BrowserRequestClient): Promise<BrowserTabsSnapshot> {
+  const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
+  const tabs = Array.isArray(result?.tabs)
+    ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
+    : [];
+  return { running: result?.running === true, tabs };
+}
+
+export async function startBrowser(client: BrowserRequestClient): Promise<void> {
+  await browserRequest(client, { method: "POST", path: "/start", body: {} });
+}
+
+export async function openBrowserTab(
+  client: BrowserRequestClient,
+  url: string,
+): Promise<BrowserPanelTab | null> {
+  return normalizeTab(
+    await browserRequest(client, { method: "POST", path: "/tabs/open", body: { url } }),
+  );
+}
+
+export async function focusBrowserTab(client: BrowserRequestClient, targetId: string) {
+  await browserRequest(client, { method: "POST", path: "/tabs/focus", body: { targetId } });
+}
+
+export async function closeBrowserTab(client: BrowserRequestClient, targetId: string) {
+  await browserRequest(client, {
+    method: "DELETE",
+    path: `/tabs/${encodeURIComponent(targetId)}`,
+  });
+}
+
+/** The owning Browser saves its current document; only managed bytes reach the dashboard. */
+export async function downloadBrowserDocument(
+  client: BrowserRequestClient,
+  targetId: string,
+  expectedUrl: string,
+  signal: AbortSignal,
+): Promise<{ path: string; filename: string }> {
+  const result = asRecord(
+    await client.request(
+      BROWSER_REQUEST_METHOD,
+      {
+        method: "POST",
+        path: "/download",
+        body: { targetId, currentDocument: true, expectedUrl, timeoutMs: 120_000 },
+        timeoutMs: 150_000,
+      },
+      { signal, timeoutMs: 150_000 },
+    ),
+  );
+  const download = asRecord(result?.download);
+  const path = stringOrEmpty(download?.path);
+  const filename = stringOrEmpty(download?.suggestedFilename);
+  if (!path || !filename) {
+    throw new Error(t("browser.errors.downloadEmpty"));
+  }
+  return { path, filename };
+}
+
+export async function navigateBrowser(
+  client: BrowserRequestClient,
+  params: { url: string; targetId?: string },
+): Promise<{ targetId: string; url: string }> {
+  const result = asRecord(
+    await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
+  );
+  return {
+    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
+    url: stringOrEmpty(result?.url) || params.url,
+  };
+}
+
+export async function requestBrowserScreencast(
+  client: BrowserRequestClient,
+  params: { targetId: string; maxWidth: number; maxHeight: number },
+): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+  const result = asRecord(
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+  );
+  const token = stringOrEmpty(result?.token);
+  const wsPath = stringOrEmpty(result?.wsPath);
+  if (!token || !wsPath) {
+    throw new Error("browser screencast response is malformed");
+  }
+  return {
+    token,
+    wsPath,
+    targetId: stringOrEmpty(result?.targetId),
+    url: stringOrEmpty(result?.url),
+  };
+}
+
+export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
+  const record = asRecord(error);
+  const details =
+    error instanceof GatewayRequestError ? asRecord(error.details) : asRecord(record?.details);
+  return (
+    details?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(details?.body)?.code === "SCREENCAST_UNSUPPORTED" ||
+    asRecord(record?.body)?.code === "SCREENCAST_UNSUPPORTED"
+  );
+}
+
+export async function captureBrowserScreenshot(
+  client: BrowserRequestClient,
+  targetId: string,
+): Promise<BrowserScreenshotCapture> {
+  const result = asRecord(
+    await browserRequest(client, {
+      method: "POST",
+      path: "/screenshot",
+      body: { targetId, type: "png" },
+    }),
+  );
+  const path = stringOrEmpty(result?.path);
+  if (!path) {
+    throw new Error(t("browser.errors.screenshotPathMissing"));
+  }
+  return {
+    path,
+    targetId: stringOrEmpty(result?.targetId) || targetId,
+    url: stringOrEmpty(result?.url),
+  };
+}
+
+export async function clickBrowserCoords(
+  client: BrowserRequestClient,
+  params: { targetId: string; x: number; y: number; doubleClick?: boolean },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "clickCoords",
+      targetId: params.targetId,
+      x: Math.max(0, Math.round(params.x)),
+      y: Math.max(0, Math.round(params.y)),
+      ...(params.doubleClick ? { doubleClick: true } : {}),
+    },
+  });
+}
+
+export async function pressBrowserKey(
+  client: BrowserRequestClient,
+  params: { targetId: string; key: string },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: { kind: "press", targetId: params.targetId, key: params.key },
+  });
+}
+
+export async function insertBrowserText(
+  client: BrowserRequestClient,
+  params: { targetId: string; text: string },
+) {
+  try {
+    await browserRequest(client, {
+      method: "POST",
+      path: "/act",
+      body: { kind: "insertText", ...params },
+    });
+  } catch {
+    // Transport errors can echo request bodies containing pasted passwords.
+    throw new Error(t("browser.errors.pasteFailed"));
+  }
+}
+
+export async function resizeBrowserViewport(
+  client: BrowserRequestClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+  });
+}
+
+async function evaluateInBrowser<T>(
+  client: BrowserRequestClient,
+  params: { targetId: string; fn: string },
+): Promise<T | null> {
+  const result = asRecord(
+    await browserRequest(client, {
+      method: "POST",
+      path: "/act",
+      body: { kind: "evaluate", targetId: params.targetId, fn: params.fn },
+    }),
+  );
+  return (result?.result as T | undefined) ?? null;
+}
+
+export function isBrowserNavigationBlockedError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError && asRecord(error.details)?.reason === "navigation_blocked"
+  );
+}
+
+/** True when the failure is the config-gated `browser.evaluateEnabled=false` rejection. */
+export function isBrowserEvaluateDisabledError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const details = err instanceof GatewayRequestError ? asRecord(err.details) : null;
+  const code = details?.code;
+  const hasStructuredCode = code !== undefined || details?.unrecognizedCode === true;
+  return !hasStructuredCode
+    ? err.message.includes("evaluateEnabled=false")
+    : code === "ACT_EVALUATE_DISABLED";
+}
+
+export async function scrollBrowserBy(
+  client: BrowserRequestClient,
+  params: { targetId: string; deltaX: number; deltaY: number },
+) {
+  const dx = Math.round(params.deltaX);
+  const dy = Math.round(params.deltaY);
+  await evaluateInBrowser(client, {
+    targetId: params.targetId,
+    fn: `() => { window.scrollBy(${dx}, ${dy}); return true; }`,
+  });
+}
+
+export async function goBrowserHistory(
+  client: BrowserRequestClient,
+  params: { targetId: string; delta: -1 | 1 },
+) {
+  await evaluateInBrowser(client, {
+    targetId: params.targetId,
+    fn: `() => { history.go(${params.delta}); return true; }`,
+  });
+}
+
+export async function readBrowserPageMetrics(
+  client: BrowserRequestClient,
+  targetId: string,
+): Promise<BrowserPageMetrics | null> {
+  const result = asRecord(
+    await evaluateInBrowser(client, {
+      targetId,
+      fn: "() => ({ cssWidth: window.innerWidth, cssHeight: window.innerHeight, title: document.title, url: location.href })",
+    }),
+  );
+  const cssWidth = asFiniteNumber(result?.cssWidth);
+  const cssHeight = asFiniteNumber(result?.cssHeight);
+  if (!cssWidth || !cssHeight || cssWidth <= 0 || cssHeight <= 0) {
+    return null;
+  }
+  return {
+    cssWidth,
+    cssHeight,
+    title: stringOrEmpty(result?.title),
+    url: stringOrEmpty(result?.url),
+  };
+}
+
+export async function inspectBrowserElementAt(
+  client: BrowserRequestClient,
+  params: { targetId: string; x: number; y: number },
+): Promise<BrowserInspectedNode | null> {
+  const x = Math.max(0, Math.round(params.x));
+  const y = Math.max(0, Math.round(params.y));
+  const result = asRecord(
+    await evaluateInBrowser(client, {
+      targetId: params.targetId,
+      fn: `() => { ${browserInspectScript}\nreturn openclawInspectBrowserElement(${x}, ${y}); }`,
+    }),
+  );
+  return readBrowserInspectedNode(result);
+}
+
+export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
+  const result = asRecord(value);
+  if (!result) {
+    return null;
+  }
+  const rect = asRecord(result.rect);
+  return {
+    tag: stringOrEmpty(result.tag),
+    id: stringOrEmpty(result.id),
+    classes: Array.isArray(result.classes)
+      ? result.classes.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    role: stringOrEmpty(result.role),
+    name: stringOrEmpty(result.name),
+    rect: {
+      x: asFiniteNumber(rect?.x) ?? 0,
+      y: asFiniteNumber(rect?.y) ?? 0,
+      width: asFiniteNumber(rect?.width) ?? 0,
+      height: asFiniteNumber(rect?.height) ?? 0,
+    },
+    focusable: result.focusable === true,
+  };
+}
+
+/**
+ * Browser screenshots are written to the gateway's media store; the Control UI
+ * fetches the bytes over the authenticated assistant-media HTTP route (the
+ * same one chat history uses for local media previews).
+ */
+export async function fetchBrowserScreenshotDataUrl(params: {
+  resourceBasePath: string;
+  authToken: string | null;
+  path: string;
+}): Promise<string> {
+  const headers = new Headers({ Accept: "image/*" });
+  if (params.authToken) {
+    headers.set("Authorization", `Bearer ${params.authToken}`);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException(t("browser.errors.screenshotFetchTimedOut"), "TimeoutError"),
+      ),
+    BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS,
+  );
+  let blob: Blob;
+  try {
+    const res = await fetch(buildAssistantMediaUrl(params.path, params.resourceBasePath), {
+      method: "GET",
+      headers,
+      credentials: "same-origin",
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      // A response stream can take indefinitely to cancel; release it without
+      // delaying the stable HTTP error or defeating the request deadline.
+      void res.body?.cancel().catch(() => undefined);
+      throw new Error(t("browser.errors.screenshotFetchFailed", { status: String(res.status) }));
+    }
+    blob = await res.blob();
+  } finally {
+    clearTimeout(timeout);
+  }
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error(t("browser.errors.screenshotReadFailed")));
+      }
+    });
+    reader.addEventListener("error", () =>
+      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
+    );
+    reader.readAsDataURL(blob);
+  });
+}

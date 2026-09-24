@@ -1,0 +1,59 @@
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
+function getNativeWindowDragPoster() {
+  // Native desktop hosts install this handler before navigation; its absence
+  // (plain browsers, other hosts) keeps default mouse behavior.
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawWindowDrag;
+  return handler?.postMessage.bind(handler);
+}
+
+const INTERACTIVE_TARGET_SELECTOR =
+  "a, button, input, select, textarea, [role='button'], [role='tab'], [role='menu'], [role^='menuitem'], [contenteditable]";
+
+/**
+ * mousedown handler for chrome-like rows (split pane headers): asks the native
+ * desktop host to move the window, matching titlebar drag behavior. Presses on
+ * interactive children keep their normal click handling.
+ */
+export function beginNativeWindowDrag(event: MouseEvent): void {
+  // Synthetic events cannot force a drag: the host accepts only an actual
+  // left-button gesture.
+  if (event.button !== 0 || event.defaultPrevented) {
+    return;
+  }
+  for (const target of event.composedPath()) {
+    if (target instanceof Element && target.matches(INTERACTIVE_TARGET_SELECTOR)) {
+      return;
+    }
+  }
+  const post = getNativeWindowDragPoster();
+  if (!post) {
+    return;
+  }
+  try {
+    post({ type: "window-drag" });
+  } catch {
+    return;
+  }
+  // The native drag session owns the rest of the gesture; without this the
+  // page still starts a text selection underneath the moving window.
+  event.preventDefault();
+}
+
+/**
+ * mousedown handler for scroll containers whose top padding doubles as
+ * titlebar chrome (the chat thread's titlebar band): presses on the bare
+ * container background inside that padding start a native window drag.
+ * Content scrolled under the band hits its own elements, not the container,
+ * so selection and clicks there keep default behavior.
+ */
+export function beginNativeWindowDragFromTopInset(event: MouseEvent): void {
+  if (event.target !== event.currentTarget || !(event.currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  const inset = Number.parseFloat(getComputedStyle(event.currentTarget).paddingTop);
+  if (!Number.isFinite(inset) || event.offsetY > inset) {
+    return;
+  }
+  beginNativeWindowDrag(event);
+}

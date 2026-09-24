@@ -1,15 +1,21 @@
+// Searchable select list component adds search input to selectable TUI lists.
 import {
   type Component,
-  getEditorKeybindings,
+  type Focusable,
+  fuzzyFilter,
   Input,
   isKeyRelease,
   matchesKey,
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
-} from "@mariozechner/pi-tui";
-import { visibleWidth } from "../../terminal/ansi.js";
-import { findWordBoundaryIndex, fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -17,37 +23,52 @@ export interface SearchableSelectListTheme extends SelectListTheme {
   matchHighlight: (text: string) => string;
 }
 
+export interface SearchableSelectItem extends SelectItem {
+  searchText?: string;
+}
+
 /**
  * A select list with a search input at the top for fuzzy filtering.
  */
-export class SearchableSelectList implements Component {
-  private items: SelectItem[];
-  private filteredItems: SelectItem[];
+export class SearchableSelectList implements Component, Focusable {
+  private items: SearchableSelectItem[];
+  private preparedItems?: Array<{
+    item: SearchableSelectItem;
+    label: string;
+    description: string;
+    searchText: string;
+  }>;
+  private filteredItems: SearchableSelectItem[];
   private selectedIndex = 0;
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
-  private regexCache = new Map<string, RegExp>();
+  private highlightPatterns?: RegExp[];
 
-  onSelect?: (item: SelectItem) => void;
+  onSelect?: (item: SearchableSelectItem) => void;
   onCancel?: () => void;
-  onSelectionChange?: (item: SelectItem) => void;
 
-  constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
+  private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
+  private static readonly DESCRIPTION_MIN_WIDTH = 12;
+  private static readonly DESCRIPTION_SPACING_WIDTH = 2;
+  // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
+  private static readonly RIGHT_MARGIN_WIDTH = 2;
+
+  constructor(items: SearchableSelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
     this.items = items;
     this.filteredItems = items;
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.searchInput = new Input();
+    this.searchInput.onEscape = () => this.onCancel?.();
   }
 
-  private getCachedRegex(pattern: string): RegExp {
-    let regex = this.regexCache.get(pattern);
-    if (!regex) {
-      regex = new RegExp(this.escapeRegex(pattern), "gi");
-      this.regexCache.set(pattern, regex);
-    }
-    return regex;
+  get focused(): boolean {
+    return this.searchInput.focused;
+  }
+
+  set focused(value: boolean) {
+    this.searchInput.focused = value;
   }
 
   private updateFilter() {
@@ -61,54 +82,55 @@ export class SearchableSelectList implements Component {
 
     // Reset selection when filter changes
     this.selectedIndex = 0;
-    this.notifySelectionChange();
   }
 
   /**
    * Smart filtering that prioritizes:
    * 1. Exact substring match in label (highest priority)
-   * 2. Word-boundary prefix match in label
-   * 3. Exact substring in description
-   * 4. Fuzzy match (lowest priority)
+   * 2. Exact substring in description
+   * 3. Fuzzy match (lowest priority)
    */
-  private smartFilter(query: string): SelectItem[] {
-    const q = query.toLowerCase();
-    type ScoredItem = { item: SelectItem; tier: number; score: number };
+  private smartFilter(query: string): SearchableSelectItem[] {
+    const q = normalizeLowercaseStringOrEmpty(query);
+    type ScoredItem = { item: SearchableSelectItem; tier: number; score: number };
+    type FuzzyCandidate = { item: SearchableSelectItem; searchText: string };
     const scoredItems: ScoredItem[] = [];
-    const fuzzyCandidates: SelectItem[] = [];
+    const fuzzyCandidates: FuzzyCandidate[] = [];
 
-    for (const item of this.items) {
-      const label = item.label.toLowerCase();
-      const desc = (item.description ?? "").toLowerCase();
-
+    // Rows are fixed for the overlay lifetime; defer search projection until it is needed.
+    this.preparedItems ??= this.items.map((item) => {
+      const label = stripAnsi(this.getItemLabel(item));
+      const description = stripAnsi(item.description ?? "");
+      const searchText = stripAnsi(item.searchText ?? "");
+      return {
+        item,
+        label: normalizeLowercaseStringOrEmpty(label),
+        description: normalizeLowercaseStringOrEmpty(description),
+        searchText: normalizeLowercaseStringOrEmpty(
+          [label, description, searchText].filter((value) => value.length > 0).join(" "),
+        ),
+      };
+    });
+    for (const prepared of this.preparedItems) {
       // Tier 1: Exact substring in label
-      const labelIndex = label.indexOf(q);
+      const labelIndex = prepared.label.indexOf(q);
       if (labelIndex !== -1) {
-        scoredItems.push({ item, tier: 0, score: labelIndex });
+        scoredItems.push({ item: prepared.item, tier: 0, score: labelIndex });
         continue;
       }
-      // Tier 2: Word-boundary prefix in label
-      const wordBoundaryIndex = findWordBoundaryIndex(label, q);
-      if (wordBoundaryIndex !== null) {
-        scoredItems.push({ item, tier: 1, score: wordBoundaryIndex });
-        continue;
-      }
-      // Tier 3: Exact substring in description
-      const descIndex = desc.indexOf(q);
+      // Tier 2: Exact substring in description
+      const descIndex = prepared.description.indexOf(q);
       if (descIndex !== -1) {
-        scoredItems.push({ item, tier: 2, score: descIndex });
+        scoredItems.push({ item: prepared.item, tier: 1, score: descIndex });
         continue;
       }
-      // Tier 4: Fuzzy match (score 300+)
-      fuzzyCandidates.push(item);
+      // Tier 3: Fuzzy match
+      fuzzyCandidates.push(prepared);
     }
 
     scoredItems.sort(this.compareByScore);
-
-    const preparedCandidates = prepareSearchItems(fuzzyCandidates);
-    const fuzzyMatches = fuzzyFilterLower(preparedCandidates, q);
-
-    return [...scoredItems.map((s) => s.item), ...fuzzyMatches];
+    const fuzzyMatches = fuzzyFilter(fuzzyCandidates, q, (entry) => entry.searchText);
+    return [...scoredItems.map((s) => s.item), ...fuzzyMatches.map((entry) => entry.item)];
   }
 
   private escapeRegex(str: string): string {
@@ -116,8 +138,8 @@ export class SearchableSelectList implements Component {
   }
 
   private compareByScore = (
-    a: { item: SelectItem; tier: number; score: number },
-    b: { item: SelectItem; tier: number; score: number },
+    a: { item: SearchableSelectItem; tier: number; score: number },
+    b: { item: SearchableSelectItem; tier: number; score: number },
   ) => {
     if (a.tier !== b.tier) {
       return a.tier - b.tier;
@@ -128,31 +150,34 @@ export class SearchableSelectList implements Component {
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
 
-  private getItemLabel(item: SelectItem): string {
+  private getItemLabel(item: SearchableSelectItem): string {
     return item.label || item.value;
   }
 
-  private highlightMatch(text: string, query: string): string {
-    const tokens = query
-      .trim()
-      .split(/\s+/)
-      .map((token) => token.toLowerCase())
-      .filter((token) => token.length > 0);
-    if (tokens.length === 0) {
+  private highlightMatch(text: string, patterns: RegExp[]): string {
+    if (patterns.length === 0) {
       return text;
     }
 
-    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
-    let result = text;
-    for (const token of uniqueTokens) {
-      const regex = this.getCachedRegex(token);
-      result = result.replace(regex, (match) => this.theme.matchHighlight(match));
+    let parts = [...iterateAnsiSegments(text)];
+    for (const regex of patterns) {
+      const nextParts: typeof parts = [];
+      for (const part of parts) {
+        if (part.kind === "ansi") {
+          nextParts.push(part);
+          continue;
+        }
+        regex.lastIndex = 0;
+        const replaced = part.value.replace(regex, (match) => this.theme.matchHighlight(match));
+        if (replaced === part.value) {
+          nextParts.push(part);
+          continue;
+        }
+        nextParts.push(...iterateAnsiSegments(replaced));
+      }
+      parts = nextParts;
     }
-    return result;
-  }
-
-  setSelectedIndex(index: number) {
-    this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
+    return parts.map((part) => part.value).join("");
   }
 
   invalidate() {
@@ -161,23 +186,34 @@ export class SearchableSelectList implements Component {
 
   render(width: number): string[] {
     const lines: string[] = [];
+    const safeWidth = Math.max(0, width);
 
     // Search input line
     const promptText = "search: ";
     const prompt = this.theme.searchPrompt(promptText);
-    const inputWidth = Math.max(1, width - visibleWidth(prompt));
+    const inputWidth = Math.max(0, safeWidth - visibleWidth(prompt));
     const inputLines = this.searchInput.render(inputWidth);
     const inputText = inputLines[0] ?? "";
-    lines.push(`${prompt}${this.theme.searchInput(inputText)}`);
+    lines.push(truncateToWidth(`${prompt}${this.theme.searchInput(inputText)}`, safeWidth, ""));
     lines.push(""); // Spacer
 
     const query = this.searchInput.getValue().trim();
 
     // If no items match filter, show message
     if (this.filteredItems.length === 0) {
-      lines.push(this.theme.noMatch("  No matches"));
+      lines.push(truncateToWidth(this.theme.noMatch("  No matches"), safeWidth, ""));
       return lines;
     }
+
+    // One query owns these patterns; a render keeps its snapshot through theme callbacks.
+    const patterns = (this.highlightPatterns ??= uniqueStrings(
+      query
+        .split(/\s+/)
+        .map((token) => normalizeLowercaseStringOrEmpty(token))
+        .filter((token) => token.length > 0),
+    )
+      .toSorted((a, b) => b.length - a.length)
+      .map((token) => new RegExp(this.escapeRegex(token), "gi")));
 
     // Calculate visible range with scrolling
     const startIndex = Math.max(
@@ -196,51 +232,89 @@ export class SearchableSelectList implements Component {
         continue;
       }
       const isSelected = i === this.selectedIndex;
-      lines.push(this.renderItemLine(item, isSelected, width, query));
+      lines.push(
+        truncateToWidth(this.renderItemLine(item, isSelected, safeWidth, patterns), safeWidth, ""),
+      );
     }
 
     // Show scroll indicator if needed
     if (this.filteredItems.length > this.maxVisible) {
       const scrollInfo = `${this.selectedIndex + 1}/${this.filteredItems.length}`;
-      lines.push(this.theme.scrollInfo(`  ${scrollInfo}`));
+      lines.push(truncateToWidth(this.theme.scrollInfo(`  ${scrollInfo}`), safeWidth, ""));
     }
 
     return lines;
   }
 
   private renderItemLine(
-    item: SelectItem,
+    item: SearchableSelectItem,
     isSelected: boolean,
     width: number,
-    query: string,
+    patterns: RegExp[],
   ): string {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
-    const displayValue = this.getItemLabel(item);
+    const displayValue =
+      sanitizeRenderableLine(this.getItemLabel(item)) ||
+      sanitizeRenderableLine(item.value) ||
+      "(unnamed)";
 
-    if (item.description && width > 40) {
-      const maxValueWidth = Math.min(30, width - prefixWidth - 4);
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, query);
-      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
-      const spacing = " ".repeat(spacingWidth);
-      const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
-      const remainingWidth = width - descriptionStart - 2;
-      if (remainingWidth > 10) {
-        const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
+    const description = sanitizeRenderableLine(item.description ?? "");
+    if (description) {
+      const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
+      if (descriptionLayout) {
+        const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
+        const valueText = this.highlightMatch(truncatedValue, patterns);
+
+        const usedByValue = visibleWidth(valueText);
+        const remainingWidth = descriptionLayout.availableWidth - usedByValue;
+        const descriptionWidth = remainingWidth - descriptionLayout.spacingWidth;
+
+        if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
+          const spacing = " ".repeat(descriptionLayout.spacingWidth);
+          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
+          // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+          const highlightedDesc = this.highlightMatch(truncatedDesc, patterns);
+          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const line = `${prefix}${valueText}${spacing}${descText}`;
+          return isSelected ? this.theme.selectedText(line) : line;
+        }
       }
     }
 
     const maxWidth = width - prefixWidth - 2;
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
-    const valueText = this.highlightMatch(truncatedValue, query);
+    const valueText = this.highlightMatch(truncatedValue, patterns);
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
+  }
+
+  private getDescriptionLayout(
+    width: number,
+    prefixWidth: number,
+  ): { availableWidth: number; maxValueWidth: number; spacingWidth: number } | null {
+    if (width <= SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
+      return null;
+    }
+
+    const availableWidth = Math.max(
+      1,
+      width - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH,
+    );
+    const maxValueWidth =
+      availableWidth -
+      SearchableSelectList.DESCRIPTION_MIN_WIDTH -
+      SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
+
+    if (maxValueWidth < 1) {
+      return null;
+    }
+
+    return {
+      availableWidth,
+      maxValueWidth,
+      spacingWidth: SearchableSelectList.DESCRIPTION_SPACING_WIDTH,
+    };
   }
 
   handleInput(keyData: string): void {
@@ -248,26 +322,14 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    const allowVimNav = !this.searchInput.getValue().trim();
-
     // Navigation keys
-    if (
-      matchesKey(keyData, "up") ||
-      matchesKey(keyData, "ctrl+p") ||
-      (allowVimNav && keyData === "k")
-    ) {
+    if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.notifySelectionChange();
       return;
     }
 
-    if (
-      matchesKey(keyData, "down") ||
-      matchesKey(keyData, "ctrl+n") ||
-      (allowVimNav && keyData === "j")
-    ) {
+    if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
-      this.notifySelectionChange();
       return;
     }
 
@@ -279,32 +341,15 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    const kb = getEditorKeybindings();
-    if (kb.matches(keyData, "selectCancel")) {
-      if (this.onCancel) {
-        this.onCancel();
-      }
-      return;
-    }
-
     // Pass other keys to search input
     const prevValue = this.searchInput.getValue();
     this.searchInput.handleInput(keyData);
     const newValue = this.searchInput.getValue();
 
     if (prevValue !== newValue) {
+      // Only current-query patterns are reusable; retaining older edits grows without bound.
+      this.highlightPatterns = undefined;
       this.updateFilter();
     }
-  }
-
-  private notifySelectionChange() {
-    const item = this.filteredItems[this.selectedIndex];
-    if (item && this.onSelectionChange) {
-      this.onSelectionChange(item);
-    }
-  }
-
-  getSelectedItem(): SelectItem | null {
-    return this.filteredItems[this.selectedIndex] ?? null;
   }
 }

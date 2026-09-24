@@ -1,66 +1,18 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmConfig,
-  DmPolicy,
-  GroupPolicy,
-  GroupToolPolicyBySenderConfig,
-  GroupToolPolicyConfig,
-  MarkdownConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+// Irc type declarations define plugin contracts.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { IrcAccountConfigInput } from "./config-schema.js";
 
-export type IrcChannelConfig = {
-  requireMention?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  skills?: string[];
-  enabled?: boolean;
-  allowFrom?: Array<string | number>;
-  systemPrompt?: string;
-};
-
-export type IrcNickServConfig = {
-  enabled?: boolean;
-  service?: string;
-  password?: string;
-  passwordFile?: string;
-  register?: boolean;
-  registerEmail?: string;
-};
-
-export type IrcAccountConfig = {
-  name?: string;
-  enabled?: boolean;
-  host?: string;
-  port?: number;
-  tls?: boolean;
-  nick?: string;
-  username?: string;
-  realname?: string;
-  password?: string;
-  passwordFile?: string;
-  nickserv?: IrcNickServConfig;
-  dmPolicy?: DmPolicy;
-  allowFrom?: Array<string | number>;
-  groupPolicy?: GroupPolicy;
-  groupAllowFrom?: Array<string | number>;
+export type IrcChannelConfig = NonNullable<NonNullable<IrcAccountConfigInput["groups"]>[string]>;
+export type IrcNickServConfig = NonNullable<IrcAccountConfigInput["nickserv"]>;
+export type IrcAccountConfig = Omit<IrcAccountConfigInput, "groups"> & {
+  defaultTo?: string;
   groups?: Record<string, IrcChannelConfig>;
-  channels?: string[];
-  mentionPatterns?: string[];
-  markdown?: MarkdownConfig;
-  historyLimit?: number;
-  dmHistoryLimit?: number;
-  dms?: Record<string, DmConfig>;
-  textChunkLimit?: number;
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  responsePrefix?: string;
-  mediaMaxMb?: number;
 };
 
-export type IrcConfig = IrcAccountConfig & {
+type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
+  defaultAccount?: string;
 };
 
 export type CoreConfig = OpenClawConfig & {
@@ -83,12 +35,10 @@ export type IrcInboundMessage = {
   isGroup: boolean;
 };
 
-export type IrcProbe = {
-  ok: boolean;
+export type IrcProbe = BaseProbeResult<string> & {
   host: string;
   port: number;
   tls: boolean;
   nick: string;
   latencyMs?: number;
-  error?: string;
 };

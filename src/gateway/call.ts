@@ -1,312 +1,1278 @@
+// Gateway RPC call helper.
+// Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  loadConfig,
-  resolveConfigPath,
-  resolveGatewayPort,
-  resolveStateDir,
-} from "../config/config.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
-import { pickPrimaryLanIPv4 } from "./net.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.js";
+import {
+  readGatewayDispatchConfig,
+  readGatewayDispatchConfigWithShellEnvFallback,
+} from "../config/gateway-dispatch-config.js";
+import {
+  resolveConfigPath as resolveConfigPathFromPaths,
+  resolveGatewayPort as resolveGatewayPortFromPaths,
+  resolveStateDir as resolveStateDirFromPaths,
+} from "../config/paths.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
+import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { VERSION } from "../version.js";
+import { resolveGatewayAuth } from "./auth-resolve.js";
+import {
+  GatewayLocalBackendSharedAuthUnavailableError,
+  loadStoredOperatorDeviceAuthToken,
+  resolveGatewayCallDeviceAuth,
+  type GatewayCallDeviceAuthOptions,
+} from "./call-device-auth.js";
+import {
+  ensureExplicitGatewayAuth,
+  GatewayExplicitAuthRequiredError,
+  resolveGatewayClientBootstrap,
+  resolveGatewayUrlOverride,
+} from "./client-bootstrap.js";
+import {
+  GatewayClient,
+  isGatewayConnectAssemblyError,
+  prepareGatewayClientDeviceAuth,
+  type GatewayClientCloseInfo,
+  type GatewayClientOptions,
+  type GatewayClientRequestOptions,
+} from "./client.js";
+import {
+  buildGatewayConnectionDetailsWithResolvers,
+  projectGatewayConnectionDetailsForDiagnostics,
+  projectGatewayUrlForDiagnostics,
+  type GatewayConnectionDetails,
+} from "./connection-details.js";
+import {
+  isGatewaySecretRefUnavailableError,
+  resolveExplicitGatewayAuth,
+  trimToUndefined,
+  type ExplicitGatewayAuth,
+} from "./credentials.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "./edge-auth.js";
+import {
+  canSkipGatewayConfigLoad,
+  isExplicitGatewayConnection,
+} from "./explicit-connection-policy.js";
+import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
+import {
+  CLI_DEFAULT_OPERATOR_SCOPES,
+  ADMIN_SCOPE,
+  WRITE_SCOPE,
+  isGatewayMethodClassified,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+  type OperatorScope,
+} from "./method-scopes.js";
+import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js";
+import {
+  GatewayTransportError,
+  type GatewayTransportErrorKind,
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
+  isGatewayTransportError,
+} from "./transport-error.js";
+export type { GatewayConnectionDetails };
+export {
+  GatewayTransportError,
+  isGatewayTransportError,
+  type GatewayTransportErrorKind,
+} from "./transport-error.js";
 
-export type CallGatewayOptions = {
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  config?: OpenClawConfig;
-  method: string;
-  params?: unknown;
-  expectFinal?: boolean;
-  timeoutMs?: number;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  platform?: string;
-  mode?: GatewayClientMode;
-  instanceId?: string;
-  minProtocol?: number;
-  maxProtocol?: number;
-  /**
-   * Overrides the config path shown in connection error details.
-   * Does not affect config loading; callers still control auth via opts.token/password/env/config.
-   */
-  configPath?: string;
+export type GatewayRequestFunction = <T = Record<string, unknown>>(
+  method: string,
+  params?: unknown,
+  opts?: GatewayClientRequestOptions,
+) => Promise<T>;
+
+type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
+  GatewayCallDeviceAuthOptions & {
+    url?: string;
+    /** Require this resolved endpoint without overriding target selection or authentication. */
+    expectUrl?: string;
+    token?: string;
+    password?: string;
+    tlsFingerprint?: string;
+    preauthHandshakeTimeoutMs?: number;
+    config?: OpenClawConfig;
+    method: string;
+    params?: unknown;
+    expectFinal?: boolean;
+    timeoutMs?: number | null;
+    signal?: AbortSignal;
+    assertDispatchCurrent?: () => void;
+    onAccepted?: GatewayClientRequestOptions["onAccepted"];
+    onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
+    clientDisplayName?: string;
+    clientVersion?: string;
+    platform?: string;
+    requiredStoredDeviceAuthScopes?: OperatorScope[];
+    /** Keep caller-resolved token/password authoritative, including an empty result. */
+    skipImplicitAuth?: boolean;
+    onHelloOk?: GatewayClientOptions["onHelloOk"];
+    instanceId?: string;
+    minProtocol?: number;
+    maxProtocol?: number;
+    requiredCapabilities?: string[];
+    requiredMethods?: string[];
+    /**
+     * Overrides the config path shown in connection error details.
+     * Does not affect config loading; callers still control auth via opts.token/password/env/config.
+     */
+    configPath?: string;
+    /**
+     * Explicit local gateway port for command-line overrides such as `gateway health --port`.
+     * Bypasses OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_PORT for this call only.
+     */
+    localPortOverride?: number;
+    /** Keep a caller-supplied config target authoritative over OPENCLAW_GATEWAY_URL. */
+    ignoreEnvUrlOverride?: boolean;
+    /**
+     * Service-derived probe target (e.g. custom bind host or Tailnet address).
+     * Used as the connection URL without classifying it as a caller URL override,
+     * so the explicit-credential guard does not fire.
+     */
+    serviceTargetUrl?: string;
+  };
+
+export type CallGatewayCliOptions = CallGatewayOptions;
+
+export type CallGatewayOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
 };
 
-export type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  bindDetail?: string;
-  remoteFallbackNote?: string;
-  message: string;
-};
+export class GatewayCredentialsRequiredError extends Error {
+  readonly method: string;
+  readonly configPath: string;
 
-export type ExplicitGatewayAuth = {
-  token?: string;
-  password?: string;
-};
-
-export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
-  const token =
-    typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
-  const password =
-    typeof opts?.password === "string" && opts.password.trim().length > 0
-      ? opts.password.trim()
-      : undefined;
-  return { token, password };
+  constructor(params: { method: string; configPath: string }) {
+    super(
+      [
+        `gateway ${params.method} requires credentials before opening a websocket`,
+        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        `Config: ${params.configPath}`,
+      ].join("\n"),
+    );
+    this.name = "GatewayCredentialsRequiredError";
+    this.method = params.method;
+    this.configPath = params.configPath;
+  }
 }
 
-export function ensureExplicitGatewayAuth(params: {
-  urlOverride?: string;
-  auth: ExplicitGatewayAuth;
-  errorHint: string;
-  configPath?: string;
-}): void {
-  if (!params.urlOverride) {
-    return;
+export { GatewayExplicitAuthRequiredError } from "./client-bootstrap.js";
+export { GatewayLocalBackendSharedAuthUnavailableError } from "./call-device-auth.js";
+
+export class GatewayStoredDeviceAuthUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayStoredDeviceAuthUnavailableError";
   }
-  if (params.auth.token || params.auth.password) {
-    return;
+}
+
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport_error";
+    kind: GatewayTransportErrorKind;
+    message: string;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  };
+  gateway: {
+    url: string;
+    urlSource: string;
+    bindDetail?: string;
+    remoteFallbackNote?: string;
+  };
+};
+
+export type GatewayClientRequestErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_request_error";
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable: boolean;
+    retryAfterMs?: number;
+  };
+};
+
+export type GatewayAuthErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_credentials_required";
+    message: string;
+  };
+};
+
+export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
+  tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
+};
+
+function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+// Connection-establishment failures where "start the gateway" is the actionable
+// next step; protocol/auth failures keep their own richer messages.
+const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
+  "ECONNREFUSED",
+  // RST during connect/handshake: the port is not serving a working gateway.
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+function isGatewayUnreachableSocketError(error: Error): boolean {
+  const code = extractErrorCodeOrErrno(error);
+  return code !== undefined && GATEWAY_UNREACHABLE_SOCKET_CODES.has(code);
+}
+
+export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
+  if (!isGatewayTransportError(value)) {
+    return null;
   }
-  const message = [
-    "gateway url override requires explicit credentials",
-    params.errorHint,
-    params.configPath ? `Config: ${params.configPath}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  throw new Error(message);
+  const connectionDetails = projectGatewayConnectionDetailsForDiagnostics(value.connectionDetails);
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport_error",
+      kind: value.kind,
+      // The message embeds the remote-controlled close reason, which can echo a
+      // credential-bearing URL; redact both before they reach CLI JSON output.
+      message: redactSensitiveUrlLikeString(firstGatewayErrorLine(value.message)),
+      ...(value.code !== undefined ? { code: value.code } : {}),
+      ...(value.reason !== undefined ? { reason: redactSensitiveUrlLikeString(value.reason) } : {}),
+      ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+    },
+    gateway: {
+      url: connectionDetails.url,
+      urlSource: connectionDetails.urlSource,
+      ...(connectionDetails.bindDetail ? { bindDetail: connectionDetails.bindDetail } : {}),
+      ...(connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: connectionDetails.remoteFallbackNote }
+        : {}),
+    },
+  };
+}
+
+export function formatGatewayClientRequestErrorJson(
+  value: unknown,
+): GatewayClientRequestErrorJson | null {
+  if (!isGatewayClientRequestError(value)) {
+    return null;
+  }
+  const requestError = value;
+  return {
+    ok: false,
+    error: {
+      type: "gateway_request_error",
+      code: requestError.gatewayCode,
+      message: requestError.message,
+      ...(requestError.details !== undefined ? { details: requestError.details } : {}),
+      retryable: requestError.retryable,
+      ...(requestError.retryAfterMs !== undefined
+        ? { retryAfterMs: requestError.retryAfterMs }
+        : {}),
+    },
+  };
+}
+
+export function isGatewayClientRequestError(value: unknown): value is Error & {
+  gatewayCode: string;
+  details?: unknown;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  if (!(value instanceof Error) || value.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = value as Error & {
+    gatewayCode?: unknown;
+    retryable?: unknown;
+    retryAfterMs?: unknown;
+  };
+  if (
+    typeof requestError.gatewayCode !== "string" ||
+    requestError.gatewayCode.length === 0 ||
+    requestError.message.length === 0 ||
+    typeof requestError.retryable !== "boolean" ||
+    (requestError.retryAfterMs !== undefined &&
+      (typeof requestError.retryAfterMs !== "number" ||
+        !Number.isInteger(requestError.retryAfterMs) ||
+        requestError.retryAfterMs < 0))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Preserve machine-readable output for auth failures raised before transport startup. */
+export function formatGatewayAuthErrorJson(value: unknown): GatewayAuthErrorJson | null {
+  if (
+    !isGatewayCredentialsRequiredError(value) &&
+    !isGatewayExplicitAuthRequiredError(value) &&
+    !isGatewaySecretRefUnavailableError(value)
+  ) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_credentials_required",
+      message: value.message,
+    },
+  };
+}
+
+export function isGatewayCredentialsRequiredError(
+  value: unknown,
+): value is GatewayCredentialsRequiredError {
+  if (value instanceof GatewayCredentialsRequiredError) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayCredentialsRequiredError") {
+    return false;
+  }
+  const candidate = value as Partial<GatewayCredentialsRequiredError>;
+  return typeof candidate.method === "string" && typeof candidate.configPath === "string";
+}
+
+export function isGatewayExplicitAuthRequiredError(
+  value: unknown,
+): value is GatewayExplicitAuthRequiredError {
+  return value instanceof Error && value.name === "GatewayExplicitAuthRequiredError";
+}
+
+// Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
+// Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
+const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
+  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
+
+async function stopGatewayClient(client: GatewayClient): Promise<void> {
+  try {
+    await client.stopAndWait({ timeoutMs: 1_000 });
+  } catch {
+    client.stop();
+  }
+}
+
+function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
+  if (opts.clientDisplayName) {
+    return opts.clientDisplayName;
+  }
+  const clientName = opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const mode = opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  if (mode !== GATEWAY_CLIENT_MODES.BACKEND && clientName !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
+    return undefined;
+  }
+  const method = opts.method.trim();
+  return method ? `gateway:${method}` : "gateway:request";
+}
+
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
+  return await defaultGetRuntimeConfig();
+}
+
+/**
+ * Load config for a fully flag-addressed connection. Config only supplies
+ * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
+ * empty rather than blocking a connection the flags already describe.
+ */
+async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig> {
+  try {
+    return await loadGatewayConfig();
+  } catch {
+    return {};
+  }
+}
+
+function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
+  return readGatewayDispatchConfig();
+}
+
+function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
+  return resolveStateDirFromPaths(env);
+}
+
+function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
+  return resolveConfigPathFromPaths(env, resolveGatewayStateDir(env));
+}
+
+function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
+  return resolveGatewayPortFromPaths(config, env);
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    urlSource?: "cli" | "env";
+    ignoreEnvUrlOverride?: boolean;
+    localPortOverride?: number;
+    serviceTargetUrl?: string;
+  } = {},
 ): GatewayConnectionDetails {
-  const config = options.config ?? loadConfig();
-  const configPath =
-    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = resolveGatewayPort(config);
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const bindMode = config.gateway?.bind ?? "loopback";
-  const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
-  const preferLan = bindMode === "lan";
-  const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
-  const scheme = tlsEnabled ? "wss" : "ws";
-  const localUrl =
-    preferTailnet && tailnetIPv4
-      ? `${scheme}://${tailnetIPv4}:${localPort}`
-      : preferLan && lanIPv4
-        ? `${scheme}://${lanIPv4}:${localPort}`
-        : `${scheme}://127.0.0.1:${localPort}`;
-  const urlOverride =
-    typeof options.url === "string" && options.url.trim().length > 0
-      ? options.url.trim()
-      : undefined;
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const url = urlOverride || remoteUrl || localUrl;
-  const urlSource = urlOverride
-    ? "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : preferTailnet && tailnetIPv4
-          ? `local tailnet ${tailnetIPv4}`
-          : preferLan && lanIPv4
-            ? `local lan ${lanIPv4}`
-            : "local loopback";
-  const remoteFallbackNote = remoteMisconfigured
-    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
-    : undefined;
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
-  const message = [
-    `Gateway target: ${url}`,
-    `Source: ${urlSource}`,
-    `Config: ${configPath}`,
-    bindDetail,
-    remoteFallbackNote,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return buildGatewayConnectionDetailsWithResolvers(options, {
+    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
+    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
+    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+  });
+}
 
+function resolveGatewayCallAuth(config: OpenClawConfig) {
+  return resolveGatewayAuth({
+    authConfig: config.gateway?.auth,
+    env: process.env,
+    tailscaleMode: config.gateway?.tailscale?.mode,
+  });
+}
+
+async function ensureGatewayCallCanAuthenticate(params: {
+  opts: CallGatewayBaseOptions;
+  context: ResolvedGatewayCallContext;
+  token?: string;
+  password?: string;
+  deviceIdentity: DeviceIdentity | null;
+  deviceAuthScope?: string;
+  storedAuth?: DeviceAuthEntry | null;
+}): Promise<void> {
+  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
+  const authMode = resolvedAuth.mode;
+  if (authMode !== "token" && authMode !== "password") {
+    return;
+  }
+  if (params.token || params.password || params.opts.approvalRuntimeToken) {
+    return;
+  }
+  if (resolvedAuth.allowTailscale) {
+    return;
+  }
+  const storedAuth =
+    params.storedAuth === undefined
+      ? await loadStoredOperatorDeviceAuthToken(
+          params.deviceIdentity,
+          params.deviceAuthScope,
+          params.opts.sharedStateMode,
+        )
+      : params.storedAuth;
+  if (storedAuth?.token) {
+    return;
+  }
+  throw new GatewayCredentialsRequiredError({
+    method: params.opts.method,
+    configPath: params.context.configPath,
+  });
+}
+
+export type { ExplicitGatewayAuth } from "./credentials.js";
+
+export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
+
+type ResolvedGatewayCallContext = {
+  config: OpenClawConfig;
+  configPath: string;
+  isRemoteMode: boolean;
+  explicitAuth: ExplicitGatewayAuth;
+};
+
+export type GatewayTargetClassificationOptions = Pick<
+  CallGatewayBaseOptions,
+  "config" | "url" | "localPortOverride" | "ignoreEnvUrlOverride"
+>;
+
+function resolveGatewayCallTimeout(timeoutValue: unknown): {
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
+  safeTimerTimeoutMs: number;
+} {
+  const hasEnvHandshakeTimeout =
+    Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
+    Boolean(isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  const resolvedHandshakeTimeoutMs = hasEnvHandshakeTimeout
+    ? resolvePreauthHandshakeTimeoutMs()
+    : undefined;
+  const defaultTimeoutMs =
+    typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+      ? resolvedHandshakeTimeoutMs
+      : 10_000;
+  const explicitTimeoutMs =
+    typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : undefined;
+  const startupTimeoutMs = explicitTimeoutMs ?? defaultTimeoutMs;
+  const timeoutMs = timeoutValue === null ? null : (explicitTimeoutMs ?? defaultTimeoutMs);
+  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs ?? startupTimeoutMs);
+  return { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs };
+}
+
+async function resolveGatewayCallContext(
+  opts: CallGatewayBaseOptions,
+): Promise<ResolvedGatewayCallContext> {
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const urlOverride = resolveGatewayUrlOverride({
+    gatewayUrl: opts.url,
+    env: process.env,
+    ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
+    localPortOverride: opts.localPortOverride,
+  }).url;
+  const canSkipConfigLoad = canSkipGatewayConfigLoad({
+    config: opts.config,
+    urlOverride,
+    explicitAuth,
+  });
+  const explicitConnection = isExplicitGatewayConnection({
+    config: opts.config,
+    urlOverride,
+    explicitAuth,
+  });
+  const config =
+    opts.config ??
+    (canSkipConfigLoad
+      ? ({} as OpenClawConfig)
+      : explicitConnection
+        ? await loadGatewayConfigForExplicitConnection()
+        : await loadGatewayConfig());
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
+  const isRemoteMode = opts.localPortOverride === undefined && config.gateway?.mode === "remote";
   return {
-    url,
-    urlSource,
-    bindDetail,
-    remoteFallbackNote,
-    message,
+    config,
+    configPath,
+    isRemoteMode,
+    explicitAuth,
   };
 }
 
-export async function callGateway<T = Record<string, unknown>>(
-  opts: CallGatewayOptions,
-): Promise<T> {
-  const timeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 10_000;
-  const safeTimerTimeoutMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
-  const config = opts.config ?? loadConfig();
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const urlOverride =
-    typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  ensureExplicitGatewayAuth({
-    urlOverride,
-    auth: explicitAuth,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
-    configPath: opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env)),
+/** Whether the caller selected the configured local Gateway without a URL override. */
+export async function isImplicitLocalGatewayTarget(
+  opts: GatewayTargetClassificationOptions,
+): Promise<boolean> {
+  const urlOverride = resolveGatewayUrlOverride({
+    gatewayUrl: opts.url,
+    env: process.env,
+    ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
+    localPortOverride: opts.localPortOverride,
   });
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  if (isRemoteMode && !urlOverride && !remoteUrl) {
-    const configPath =
-      opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
+  if (urlOverride.url) {
+    return false;
+  }
+  const config = opts.config ?? (await loadGatewayConfig());
+  return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote";
+}
+
+function ensureRemoteModeUrlConfigured(params: {
+  context: ResolvedGatewayCallContext;
+  urlOverrideSource?: "cli" | "env";
+}): void {
+  if (
+    !params.context.isRemoteMode ||
+    params.urlOverrideSource ||
+    trimToUndefined(params.context.config.gateway?.remote?.url)
+  ) {
+    return;
+  }
+  throw new Error(
+    [
+      "gateway remote mode misconfigured: gateway.remote.url missing",
+      `Config: ${params.context.configPath}`,
+      "Fix: set gateway.remote.url, or set gateway.mode=local.",
+    ].join("\n"),
+  );
+}
+
+export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
+
+/** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
+function createGatewayUnreachableTransportError(params: {
+  cause: Error;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  const code = extractErrorCodeOrErrno(params.cause);
+  return new GatewayTransportError({
+    kind: "closed",
+    reason: firstGatewayErrorLine(params.cause.message),
+    connectionDetails: params.connectionDetails,
+    message: [
+      `Gateway not reachable at ${projectGatewayUrlForDiagnostics(params.connectionDetails.url)}${code ? ` (${code})` : ""}.`,
+      "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      params.connectionDetails.message,
+    ].join("\n"),
+  });
+}
+
+function createGatewayRequestAbortError(method: string): Error {
+  return createAbortError(`gateway request aborted for ${method}`);
+}
+
+function ensureGatewaySupportsRequiredMethods(params: {
+  requiredMethods: string[] | undefined;
+  methods: string[] | undefined;
+  attemptedMethod: string;
+}): void {
+  const requiredMethods = Array.isArray(params.requiredMethods)
+    ? params.requiredMethods.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : [];
+  if (requiredMethods.length === 0) {
+    return;
+  }
+  const supportedMethods = new Set(
+    (Array.isArray(params.methods) ? params.methods : [])
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+  for (const method of requiredMethods) {
+    if (supportedMethods.has(method)) {
+      continue;
+    }
     throw new Error(
       [
-        "gateway remote mode misconfigured: gateway.remote.url missing",
-        `Config: ${configPath}`,
-        "Fix: set gateway.remote.url, or set gateway.mode=local.",
-      ].join("\n"),
+        `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
+        "Update or restart the active gateway and try again.",
+      ].join(" "),
     );
   }
-  const authToken = config.gateway?.auth?.token;
-  const authPassword = config.gateway?.auth?.password;
-  const connectionDetails = buildGatewayConnectionDetails({
-    config,
-    url: urlOverride,
-    ...(opts.configPath ? { configPath: opts.configPath } : {}),
-  });
-  const url = connectionDetails.url;
-  const useLocalTls =
-    config.gateway?.tls?.enabled === true && !urlOverride && !remoteUrl && url.startsWith("wss://");
-  const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(config.gateway?.tls) : undefined;
-  const remoteTlsFingerprint =
-    isRemoteMode && !urlOverride && remoteUrl && typeof remote?.tlsFingerprint === "string"
-      ? remote.tlsFingerprint.trim()
-      : undefined;
-  const overrideTlsFingerprint =
-    typeof opts.tlsFingerprint === "string" ? opts.tlsFingerprint.trim() : undefined;
-  const tlsFingerprint =
-    overrideTlsFingerprint ||
-    remoteTlsFingerprint ||
-    (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
-  const token =
-    explicitAuth.token ||
-    (!urlOverride
-      ? isRemoteMode
-        ? typeof remote?.token === "string" && remote.token.trim().length > 0
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim().length > 0
-            ? authToken.trim()
-            : undefined)
-      : undefined);
-  const password =
-    explicitAuth.password ||
-    (!urlOverride
-      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-        process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-        (isRemoteMode
-          ? typeof remote?.password === "string" && remote.password.trim().length > 0
-            ? remote.password.trim()
-            : undefined
-          : typeof authPassword === "string" && authPassword.trim().length > 0
-            ? authPassword.trim()
-            : undefined)
-      : undefined);
+}
 
-  const formatCloseError = (code: number, reason: string) => {
-    const reasonText = reason?.trim() || "no close reason";
-    const hint =
-      code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-    const suffix = hint ? ` ${hint}` : "";
-    return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
-  };
-  const formatTimeoutError = () =>
-    `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+function ensureGatewaySupportsRequiredCapabilities(params: {
+  requiredCapabilities: string[] | undefined;
+  capabilities: string[] | undefined;
+  attemptedMethod: string;
+}): void {
+  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  if (required.length === 0) {
+    return;
+  }
+  const supported = new Set(
+    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  for (const capability of required) {
+    if (!supported.has(capability)) {
+      throw new Error(
+        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
+      );
+    }
+  }
+}
+
+function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
+  return err.message.includes(
+    "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+  );
+}
+
+function isAllowlistedGatewayConnectRequestError(err: Error): boolean {
+  if (err.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  return (
+    readConnectErrorDetailCode((err as Error & { details?: unknown }).details) ===
+    ConnectErrorDetailCodes.AUTH_RATE_LIMITED
+  );
+}
+
+async function executeGatewayRequestWithScopes<T>(params: {
+  opts: CallGatewayBaseOptions;
+  scopes: OperatorScope[] | undefined;
+  url: string;
+  token?: string;
+  password?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
+  tlsFingerprint?: string;
+  timeoutMs: number | null;
+  startupTimeoutMs: number;
+  safeTimerTimeoutMs: number;
+  connectionDetails: GatewayConnectionDetails;
+  deviceIdentity: DeviceIdentity | null;
+  deviceAuthScope?: string;
+  storedAuth?: DeviceAuthEntry;
+  surfaceGatewayClientRequestErrors: boolean;
+}): Promise<T> {
+  const {
+    opts,
+    scopes,
+    url,
+    token,
+    password,
+    edgeAuthHeaders,
+    tlsFingerprint,
+    timeoutMs,
+    startupTimeoutMs,
+    safeTimerTimeoutMs,
+    deviceIdentity,
+    deviceAuthScope,
+    storedAuth,
+    surfaceGatewayClientRequestErrors,
+  } = params;
   return await new Promise<T>((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(createGatewayRequestAbortError(opts.method));
+      return;
+    }
     let settled = false;
     let ignoreClose = false;
+    let timer: NodeJS.Timeout | undefined;
+    const startAbort = new AbortController();
+    let primaryRequestStarted = false;
+    let suppressedPreHelloCleanCloses = 0;
+    const cleanup = () => {
+      startAbort.abort();
+      if (abortHandler) {
+        opts.signal?.removeEventListener("abort", abortHandler);
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+    const stopClientThenSettle = (
+      activeClient: GatewayClient | undefined,
+      err?: Error,
+      value?: T,
+    ) => {
+      const complete = () => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      };
+      if (!activeClient) {
+        complete();
+        return;
+      }
+      void stopGatewayClient(activeClient).finally(complete);
+    };
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
+      cleanup();
+      stopClientThenSettle(client, err, value);
     };
+    const abortHandler: (() => void) | undefined = () => {
+      if (settled) {
+        return;
+      }
+      ignoreClose = true;
+      settled = true;
+      cleanup();
+      const err = createGatewayRequestAbortError(opts.method);
+      const activeClient = client;
+      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, err);
+      if (!activeClient || !opts.onSignalAbort || !primaryRequestStarted) {
+        stopAfterAbortHook();
+        return;
+      }
+      const request: GatewayRequestFunction = activeClient.request.bind(activeClient);
+      void Promise.resolve()
+        .then(() => opts.onSignalAbort?.(request))
+        .catch(() => {})
+        .finally(stopAfterAbortHook);
+    };
+    opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client = new GatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url,
       token,
       password,
+      edgeAuthHeaders,
       tlsFingerprint,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
-      clientVersion: opts.clientVersion ?? "dev",
+      clientDisplayName: resolveGatewayClientDisplayName(opts),
+      clientVersion: opts.clientVersion ?? VERSION,
+      caps: opts.caps,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
+      ...(opts.agentRuntimeIdentityToken
+        ? { agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken }
+        : {}),
       role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
-      deviceIdentity: loadOrCreateDeviceIdentity(),
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      ...(Array.isArray(scopes) ? { scopes } : {}),
+      deviceIdentity,
+      ...(deviceAuthScope ? { deviceAuthScope } : {}),
+      ...(storedAuth ? { preparedDeviceAuth: storedAuth } : {}),
+      ...(opts.sharedStateMode ? { sharedStateMode: opts.sharedStateMode } : {}),
+      minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async () => {
-        try {
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-          client.stop();
-        } catch (err) {
-          ignoreClose = true;
-          client.stop();
-          stop(err as Error);
+      onHelloOk: (hello) => {
+        if (timeoutMs === null && timer) {
+          clearTimeout(timer);
+          timer = undefined;
         }
+        try {
+          opts.onHelloOk?.(hello);
+        } catch {}
+        // An observer may cancel after inspecting hello, before any RPC is sent.
+        if (settled) {
+          return;
+        }
+        void (async () => {
+          try {
+            ensureGatewaySupportsRequiredMethods({
+              requiredMethods: opts.requiredMethods,
+              methods: hello.features?.methods,
+              attemptedMethod: opts.method,
+            });
+            ensureGatewaySupportsRequiredCapabilities({
+              requiredCapabilities: opts.requiredCapabilities,
+              capabilities: hello.features?.capabilities,
+              attemptedMethod: opts.method,
+            });
+            const activeClient = client;
+            if (!activeClient) {
+              throw new Error("gateway client not initialized");
+            }
+            // This check must stay synchronous with request -> ws.send. Moving
+            // an await into that chain requires moving enforcement to the send owner.
+            opts.assertDispatchCurrent?.();
+            primaryRequestStarted = true;
+            const result = await activeClient.request<T>(opts.method, opts.params, {
+              expectFinal: opts.expectFinal,
+              timeoutMs: opts.timeoutMs,
+              signal: opts.signal,
+              onAccepted: opts.onAccepted,
+            });
+            ignoreClose = true;
+            stop(undefined, result);
+          } catch (err) {
+            ignoreClose = true;
+            stop(err as Error);
+          }
+        })();
       },
-      onClose: (code, reason) => {
+      onClose: (code, reason, info?: GatewayClientCloseInfo) => {
         if (settled || ignoreClose) {
           return;
         }
+        if (info?.connectError) {
+          ignoreClose = true;
+          // Raw socket failures (ECONNREFUSED and friends) otherwise reach the
+          // operator as a bare Node error with no next step.
+          stop(
+            isGatewayUnreachableSocketError(info.connectError)
+              ? createGatewayUnreachableTransportError({
+                  cause: info.connectError,
+                  connectionDetails: params.connectionDetails,
+                })
+              : info.connectError,
+          );
+          return;
+        }
+        if (
+          !primaryRequestStarted &&
+          info?.transientPreHelloCleanClose === true &&
+          suppressedPreHelloCleanCloses < 1
+        ) {
+          suppressedPreHelloCleanCloses += 1;
+          return;
+        }
         ignoreClose = true;
-        client.stop();
-        stop(new Error(formatCloseError(code, reason)));
+        stop(
+          createGatewayCloseTransportError({
+            code,
+            reason,
+            connectionDetails: params.connectionDetails,
+            requestDispatched: primaryRequestStarted,
+          }),
+        );
+      },
+      onConnectError: (err) => {
+        const gatewayClientRequestError = err.name === "GatewayClientRequestError";
+        const isAgentRuntimeIdentityConnectError =
+          Boolean(opts.agentRuntimeIdentityToken) &&
+          isRequiredAgentRuntimeIdentityConnectError(err);
+        const shouldSurface =
+          isGatewayConnectAssemblyError(err) ||
+          isAgentRuntimeIdentityConnectError ||
+          isAllowlistedGatewayConnectRequestError(err) ||
+          (surfaceGatewayClientRequestErrors && gatewayClientRequestError);
+        if (settled || !shouldSurface) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err);
       },
     });
 
-    const timer = setTimeout(() => {
+    const wrapperTimeoutMs = timeoutMs ?? startupTimeoutMs;
+    timer = setTimeout(() => {
       ignoreClose = true;
-      client.stop();
-      stop(new Error(formatTimeoutError()));
+      stop(
+        createGatewayTimeoutTransportError({
+          timeoutMs: wrapperTimeoutMs,
+          connectionDetails: params.connectionDetails,
+          requestDispatched: primaryRequestStarted,
+        }),
+      );
     }, safeTimerTimeoutMs);
 
-    client.start();
+    void startGatewayClientWhenEventLoopReady(client, {
+      timeoutMs: safeTimerTimeoutMs,
+      signal: startAbort.signal,
+    })
+      .then((readiness) => {
+        if (settled || readiness.ready || readiness.aborted) {
+          return;
+        }
+        ignoreClose = true;
+        stop(
+          createGatewayTimeoutTransportError({
+            timeoutMs: startupTimeoutMs,
+            connectionDetails: params.connectionDetails,
+            requestDispatched: false,
+          }),
+        );
+      })
+      .catch((err: unknown) => {
+        if (settled) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err instanceof Error ? err : new Error(String(err)));
+      });
+  });
+}
+
+async function callGatewayWithScopes<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+  scopes: OperatorScope[] | undefined,
+  localCliAbort = false,
+): Promise<T> {
+  const context = await resolveGatewayCallContext(opts);
+  const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
+    opts.timeoutMs,
+  );
+  const urlOverrideSource = resolveGatewayUrlOverride({
+    gatewayUrl: opts.url,
+    env: process.env,
+    ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
+    localPortOverride: opts.localPortOverride,
+  }).source;
+  if (opts.requireLocalBackendSharedAuth && (urlOverrideSource || context.isRemoteMode)) {
+    throw new GatewayLocalBackendSharedAuthUnavailableError(
+      "local backend shared auth is limited to the configured local gateway",
+    );
+  }
+  const requestedStoredDeviceAuth = opts.useStoredDeviceAuth === true;
+  const hasExplicitAuth = Boolean(context.explicitAuth.token || context.explicitAuth.password);
+  const useStoredDeviceAuth = requestedStoredDeviceAuth && !hasExplicitAuth;
+  const bootstrap = await resolveGatewayClientBootstrap({
+    config: context.config,
+    gatewayUrl: opts.url,
+    explicitAuth: context.explicitAuth,
+    env: process.env,
+    configPath: context.configPath,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
+    localPortOverride: opts.localPortOverride,
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    skipImplicitAuth: useStoredDeviceAuth || opts.skipImplicitAuth === true,
+    ...(useStoredDeviceAuth
+      ? {}
+      : {
+          overrideAuthErrorHint:
+            "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+        }),
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
+  });
+  ensureRemoteModeUrlConfigured({
+    context,
+    urlOverrideSource: bootstrap.urlOverrideSource,
+  });
+  const connectionDetails = bootstrap.connectionDetails;
+  const url = bootstrap.url;
+  if (opts.expectUrl !== undefined && url !== opts.expectUrl) {
+    throw new Error("Gateway destination changed. Refresh the selected Gateway before retrying.");
+  }
+  const deviceAuthScope = bootstrap.deviceAuthScope;
+  const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
+  const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+    opts,
+    url,
+    authMode: resolveGatewayCallAuth(context.config).mode,
+    isImplicitLocalTarget: !urlOverrideSource && !context.isRemoteMode,
+    token,
+    password,
+  });
+  // Authentication metadata must not change the CLI-selected scopes or dispatch checks.
+  const connectionOpts = { ...opts, ...clientOptions };
+  let storedAuth: DeviceAuthEntry | null | undefined = connectionOpts.preparedDeviceAuth;
+  if (useStoredDeviceAuth) {
+    storedAuth ??= await loadStoredOperatorDeviceAuthToken(
+      deviceIdentity,
+      deviceAuthScope,
+      connectionOpts.sharedStateMode,
+    );
+    if (!storedAuth?.token && deviceAuthScope) {
+      throw new GatewayStoredDeviceAuthUnavailableError(
+        [
+          "No stored device auth for this gateway origin.",
+          `Run \`openclaw tui --url ${deviceAuthScope}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+        ].join("\n"),
+      );
+    }
+  }
+  const tlsFingerprint = bootstrap.tlsFingerprint;
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: context.config, targetUrl: url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: context.config,
+    value: edgeAuthConfig,
+    targetUrl: url,
+    env: process.env,
+  });
+  if (useStoredDeviceAuth) {
+    if (!storedAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: connectionOpts.method,
+        configPath: context.configPath,
+      });
+    }
+    if (
+      Array.isArray(connectionOpts.requiredStoredDeviceAuthScopes) &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: connectionOpts.requiredStoredDeviceAuthScopes,
+        allowedScopes: storedAuth.scopes,
+      })
+    ) {
+      throw new GatewayStoredDeviceAuthUnavailableError(
+        "stored device auth does not grant the required operator scopes",
+      );
+    }
+  }
+  await ensureGatewayCallCanAuthenticate({
+    opts: connectionOpts,
+    context,
+    token,
+    password,
+    deviceIdentity,
+    deviceAuthScope,
+    storedAuth,
+  });
+  try {
+    await prepareGatewayClientDeviceAuth(
+      {
+        url,
+        token,
+        password,
+        edgeAuthHeaders,
+        tlsFingerprint,
+        deviceIdentity,
+        deviceAuthScope,
+        sharedStateMode: connectionOpts.sharedStateMode,
+        preparedDeviceAuth: storedAuth ?? undefined,
+        approvalRuntimeToken: connectionOpts.approvalRuntimeToken,
+        agentRuntimeIdentityToken: connectionOpts.agentRuntimeIdentityToken,
+      },
+      connectionOpts.signal,
+    );
+  } catch (error) {
+    if (connectionOpts.signal?.aborted) {
+      throw createGatewayRequestAbortError(connectionOpts.method);
+    }
+    throw error;
+  }
+  // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
+  // Request admin authority for cancellation; the Gateway still validates it.
+  const effectiveScopes: OperatorScope[] | undefined =
+    requestedStoredDeviceAuth && hasExplicitAuth && connectionOpts.requiredStoredDeviceAuthScopes
+      ? connectionOpts.requiredStoredDeviceAuthScopes
+      : useStoredDeviceAuth
+        ? undefined
+        : localCliAbort && omitDeviceIdentity && !deviceIdentity
+          ? [ADMIN_SCOPE]
+          : scopes;
+  return await executeGatewayRequestWithScopes<T>({
+    opts: connectionOpts,
+    scopes: effectiveScopes,
+    url,
+    token,
+    password,
+    edgeAuthHeaders,
+    tlsFingerprint,
+    timeoutMs,
+    startupTimeoutMs,
+    safeTimerTimeoutMs,
+    connectionDetails,
+    deviceIdentity,
+    deviceAuthScope,
+    ...(storedAuth ? { storedAuth } : {}),
+    surfaceGatewayClientRequestErrors:
+      useStoredDeviceAuth ||
+      connectionOpts.requireLocalBackendSharedAuth === true ||
+      Boolean(connectionOpts.agentRuntimeIdentityToken),
+  });
+}
+
+export async function buildGatewayProbeConnectionDetails(
+  opts: Pick<
+    CallGatewayBaseOptions,
+    | "config"
+    | "configPath"
+    | "ignoreEnvUrlOverride"
+    | "localPortOverride"
+    | "password"
+    | "serviceTargetUrl"
+    | "tlsFingerprint"
+    | "token"
+    | "url"
+  > = {},
+): Promise<GatewayProbeConnectionDetails> {
+  const callOpts = {
+    ...opts,
+    method: "status",
+  } satisfies CallGatewayBaseOptions;
+  const context = await resolveGatewayCallContext(callOpts);
+  const bootstrap = await resolveGatewayClientBootstrap({
+    config: context.config,
+    gatewayUrl: opts.url,
+    explicitAuth: context.explicitAuth,
+    env: process.env,
+    configPath: context.configPath,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
+    localPortOverride: opts.localPortOverride,
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    skipImplicitAuth: true,
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
+  });
+  ensureRemoteModeUrlConfigured({
+    context,
+    urlOverrideSource: bootstrap.urlOverrideSource,
+  });
+  return {
+    ...bootstrap.connectionDetails,
+    ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
+  };
+}
+
+function shouldEscalateSessionCreateCwdScope(params: {
+  opts: CallGatewayBaseOptions;
+  scopes: readonly OperatorScope[];
+  error: unknown;
+}): boolean {
+  if (
+    params.opts.method !== "sessions.create" ||
+    !isRecord(params.opts.params) ||
+    !normalizeOptionalString(params.opts.params.cwd) ||
+    params.scopes.length !== 1 ||
+    params.scopes[0] !== WRITE_SCOPE
+  ) {
+    return false;
+  }
+  const errorRecord = isRecord(params.error) ? params.error : undefined;
+  const missingScope = readMissingScopeErrorDetails(errorRecord?.details);
+  return (
+    missingScope?.missingScope === ADMIN_SCOPE && missingScope.requiredScopes.includes(ADMIN_SCOPE)
+  );
+}
+
+async function callGatewayWithScopeEscalation<T>(
+  opts: CallGatewayBaseOptions,
+  scopes: OperatorScope[],
+): Promise<T> {
+  try {
+    return await callGatewayWithScopes<T>(opts, scopes);
+  } catch (error) {
+    // sessions.create checks filesystem-backed cwd containment before mutation.
+    // Retry only that structured, pre-mutation escalation on an admin connection.
+    if (!shouldEscalateSessionCreateCwdScope({ opts, scopes, error })) {
+      throw error;
+    }
+    return await callGatewayWithScopes<T>(opts, [ADMIN_SCOPE]);
+  }
+}
+
+export async function callGatewayCli<T = Record<string, unknown>>(
+  opts: CallGatewayCliOptions,
+): Promise<T> {
+  assertGatewayCliMessageContext(opts.method, opts.params);
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(opts, opts.scopes);
+  }
+  const scopes = isGatewayMethodClassified(opts.method)
+    ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
+    : CLI_DEFAULT_OPERATOR_SCOPES;
+  if (opts.method === "chat.abort" || opts.method === "sessions.abort") {
+    return await callGatewayWithScopes(opts, scopes, true);
+  }
+  return await callGatewayWithScopeEscalation(opts, scopes);
+}
+
+export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
+  opts: CallGatewayBaseOptions,
+): Promise<T> {
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
+  return await callGatewayWithScopeEscalation(opts, scopes);
+}
+
+export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
+  const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+  const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
+    return await callGatewayCli(opts);
+  }
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(
+      {
+        ...opts,
+        mode: callerMode,
+        clientName: callerName,
+      },
+      opts.scopes,
+    );
+  }
+  return await callGatewayLeastPrivilege({
+    ...opts,
+    mode: callerMode,
+    clientName: callerName,
   });
 }
 
 export function randomIdempotencyKey() {
   return randomUUID();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,16 +3,25 @@ import Foundation
 import OpenClawKit
 
 final class CalendarService: CalendarServicing {
+    private let eventAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        eventAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .event)
+        })
+    {
+        self.eventAuthorizationStatus = eventAuthorizationStatus
+    }
+
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard EventKitAuthorization.allowsRead(status: status) else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
         }
 
+        let store = EKEventStore()
         let (start, end) = Self.resolveRange(
             startISO: params.startISO,
             endISO: params.endISO)
@@ -37,15 +46,14 @@ final class CalendarService: CalendarServicing {
     }
 
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = await Self.ensureWriteAuthorization(store: store, status: status)
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard EventKitAuthorization.allowsWrite(status: status) else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
         }
 
+        let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             throw NSError(domain: "Calendar", code: 3, userInfo: [
@@ -93,38 +101,6 @@ final class CalendarService: CalendarServicing {
             calendarTitle: event.calendar.title)
 
         return OpenClawCalendarAddPayload(event: payload)
-    }
-
-    private static func ensureAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        case .fullAccess:
-            return true
-        case .writeOnly:
-            return false
-        @unknown default:
-            return false
-        }
-    }
-
-    private static func ensureWriteAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized, .fullAccess, .writeOnly:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        @unknown default:
-            return false
-        }
     }
 
     private static func resolveCalendar(

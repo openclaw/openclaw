@@ -1,22 +1,106 @@
 ---
-summary: "Reaction semantics shared across channels"
+summary: "Reaction tool semantics across all supported channels"
 read_when:
   - Working on reactions in any channel
+  - Understanding how emoji reactions differ across platforms
 title: "Reactions"
 ---
 
-# Reaction tooling
+The agent adds and removes emoji reactions with the `message` tool's `react`
+action. Behavior varies by channel.
 
-Shared reaction semantics across channels:
+## How it works
+
+```json
+{
+  "action": "react",
+  "messageId": "msg-123",
+  "emoji": "thumbsup"
+}
+```
 
 - `emoji` is required when adding a reaction.
-- `emoji=""` removes the bot's reaction(s) when supported.
-- `remove: true` removes the specified emoji when supported (requires `emoji`).
+- Set `emoji` to an empty string (`""`) to remove the bot's reaction(s) on
+  channels that support it.
+- Set `remove: true` to remove one specific emoji (requires non-empty
+  `emoji`).
+- `clearAll: true` is a Feishu/Lark-only flag that removes every reaction the
+  bot placed on the message. It is paired with an empty `emoji`.
+- `emoji-list` is a separate `message` tool action, not a `react` parameter. It
+  reports the emoji a channel will accept. What it returns and which
+  per-channel action toggle enables it both vary by channel. See the channel
+  pages under [Channels](/channels).
+- On channels with status reactions, `trackToolCalls: true` on a reaction lets
+  the runtime reuse that reacted message for the same turn's status lifecycle.
+  Discord keeps the chosen reaction stable during work and signals actual
+  failures, rather than cycling through tool-specific emoji.
 
-Channel notes:
+## Channel behavior
 
-- **Discord/Slack**: empty `emoji` removes all of the bot's reactions on the message; `remove: true` removes just that emoji.
-- **Google Chat**: empty `emoji` removes the app's reactions on the message; `remove: true` removes just that emoji.
-- **Telegram**: empty `emoji` removes the bot's reactions; `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
-- **WhatsApp**: empty `emoji` removes the bot reaction; `remove: true` maps to empty emoji (still requires `emoji`).
-- **Signal**: inbound reaction notifications emit system events when `channels.signal.reactionNotifications` is enabled.
+<AccordionGroup>
+  <Accordion title="Discord and Slack">
+    - Empty `emoji` removes all of the bot's reactions on the message.
+    - `remove: true` removes just the specified emoji.
+
+  </Accordion>
+
+  <Accordion title="Nextcloud Talk">
+    - Adding reactions only: `emoji` is required and must be non-empty.
+    - Reaction removal is not wired to a delete call yet. `remove: true` is rejected with an explicit error instead of silently no-oping.
+    - Requires the Talk bot registered with the `reaction` feature (see [Nextcloud Talk channel docs](/channels/nextcloud-talk)).
+
+  </Accordion>
+
+  <Accordion title="Telegram">
+    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers. On Telegram, `channels.telegram.actions.reactions` gates both `react` and `emoji-list`, and `emoji-list` returns the reactions allowed in the current chat.
+    - Empty `emoji` removes the bot's reactions.
+    - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
+
+  </Accordion>
+
+  <Accordion title="WhatsApp">
+    - Empty `emoji` removes the bot reaction.
+    - `remove: true` maps to empty emoji internally (still requires `emoji` in the tool call).
+    - WhatsApp has one bot reaction slot per message. Sending a new reaction replaces it rather than stacking multiple emoji.
+
+  </Accordion>
+
+  <Accordion title="Zalo Personal (zalouser)">
+    - Requires non-empty `emoji` for both add and remove.
+    - `remove: true` removes that specific emoji reaction.
+
+  </Accordion>
+
+  <Accordion title="Feishu/Lark">
+    - Uses the same `react` action as other channels (add/remove/list via message reaction IDs), not a separate tool.
+    - Adding requires non-empty `emoji` (mapped to a Feishu `emoji_type`, e.g. `SMILE`, `THUMBSUP`, `HEART`).
+    - `remove: true` requires non-empty `emoji` and removes the bot's own reaction matching that emoji type.
+    - Empty `emoji` with `clearAll: true` removes all of the bot's reactions on the message.
+
+  </Accordion>
+
+  <Accordion title="Signal">
+    - `channels.signal.reactionNotifications` controls inbound reaction notifications. `"off"` disables them. `"own"` (default) emits events when users react to bot messages. `"all"` emits events for all reactions. `"allowlist"` emits events only for senders in `channels.signal.reactionAllowlist`.
+
+  </Accordion>
+
+  <Accordion title="iMessage">
+    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`). `emoji` must map to one of these kinds to add a reaction.
+    - `remove: true` without a recognized tapback kind removes all tapback kinds. With a recognized kind it removes just that one.
+
+  </Accordion>
+</AccordionGroup>
+
+## Reaction level
+
+Per-channel `reactionLevel` throttles how often the agent sends its own
+reactions. Values: `off`, `ack`, `minimal`, or `extensive`.
+
+- [Telegram reaction level](/channels/telegram#feature-reference) - `channels.telegram.reactionLevel` (default `minimal`)
+- [WhatsApp reaction level](/channels/whatsapp#reaction-level) - `channels.whatsapp.reactionLevel` (default `minimal`)
+- [Signal reactions](/channels/signal#reactions-message-tool) - `channels.signal.reactionLevel` (default `minimal`)
+
+## Related
+
+- [Agent Send](/tools/agent-send) - the `message` tool that includes `react`
+- [Channels](/channels) - channel-specific configuration

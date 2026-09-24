@@ -4,10 +4,8 @@ read_when:
   - Learning how to configure OpenClaw
   - Looking for configuration examples
   - Setting up OpenClaw for the first time
-title: "Configuration Examples"
+title: "Configuration examples"
 ---
-
-# Configuration Examples
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
@@ -17,7 +15,7 @@ Examples below are aligned with the current config schema. For the exhaustive re
 
 ```json5
 {
-  agent: { workspace: "~/.openclaw/workspace" },
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -28,19 +26,32 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
 ```json5
 {
-  identity: {
-    name: "Clawd",
-    theme: "helpful assistant",
-    emoji: "🦞",
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: { primary: "anthropic/claude-sonnet-4-6" },
+    },
+    entries: {
+      main: {
+        identity: {
+          name: "Clawd",
+          theme: "helpful assistant",
+          emoji: "🦞",
+        },
+      },
+    },
   },
   channels: {
     whatsapp: {
       allowFrom: ["+15555550123"],
       groups: { "*": { requireMention: true } },
+    },
+  },
+  messages: {
+    visibleReplies: "automatic",
+    groupChat: {
+      visibleReplies: "message_tool", // opt-in; visible output requires message(action=send)
+      unmentionedInbound: "room_event",
     },
   },
 }
@@ -54,8 +65,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 {
   // Environment + shell
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
     shellEnv: {
@@ -64,31 +75,21 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth stores)
   auth: {
     profiles: {
-      "anthropic:me@example.com": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
-      "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+      "openai:personal": { provider: "openai", mode: "oauth" },
     },
     order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
-      openai: ["openai:default"],
-      "openai-codex": ["openai-codex:default"],
+      anthropic: ["anthropic:default", "anthropic:work"],
+      openai: ["openai:personal", "openai:default"],
     },
   },
 
-  // Identity
-  identity: {
-    name: "Samantha",
-    theme: "helpful sloth",
-    emoji: "🦥",
-  },
+  // Identity is per agent — set it on agents.entries.<id>.identity below.
 
   // Logging
   logging: {
@@ -96,57 +97,31 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
     consoleStyle: "pretty",
-    redactSensitive: "tools",
   },
 
   // Message formatting
   messages: {
-    messagePrefix: "[openclaw]",
+    visibleReplies: "automatic",
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
-  },
-
-  // Routing + queue
-  routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
       historyLimit: 50,
+      visibleReplies: "message_tool", // opt in for shared rooms with tool-reliable models
+      unmentionedInbound: "room_event",
     },
     queue: {
-      mode: "collect",
-      debounceMs: 1000,
+      mode: "followup",
       cap: 20,
       drop: "summarize",
       byChannel: {
-        whatsapp: "collect",
-        telegram: "collect",
+        whatsapp: "followup",
+        telegram: "followup",
         discord: "collect",
         slack: "collect",
-        signal: "collect",
-        imessage: "collect",
-        webchat: "collect",
-      },
-    },
-  },
-
-  // Tooling
-  tools: {
-    media: {
-      audio: {
-        enabled: true,
-        maxBytes: 20971520,
-        models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          // Optional CLI fallback (Whisper binary):
-          // { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
-        ],
-        timeoutSeconds: 120,
-      },
-      video: {
-        enabled: true,
-        maxBytes: 52428800,
-        models: [{ provider: "google", model: "gemini-3-flash-preview" }],
+        signal: "followup",
+        imessage: "followup",
+        webchat: "followup",
       },
     },
   },
@@ -154,6 +129,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Session behavior
   session: {
     scope: "per-sender",
+    dmScope: "per-channel-peer", // recommended for multi-user inboxes
     reset: {
       mode: "daily",
       atHour: 4,
@@ -163,14 +139,15 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       discord: { mode: "idle", idleMinutes: 10080 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/default/sessions/sessions.json",
+    store: "~/.openclaw/agents/main/sessions/sessions.json",
     maintenance: {
       mode: "warn",
       pruneAfter: "30d",
       maxEntries: 500,
-      rotateBytes: "10mb",
+      resetArchiveRetention: "30d", // duration or false
+      maxDiskBytes: "500mb", // optional
+      highWaterBytes: "400mb", // optional (defaults to 80% of maxDiskBytes)
     },
-    typingIntervalSeconds: 5,
     sendPolicy: {
       default: "allow",
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
@@ -199,14 +176,15 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     discord: {
       enabled: true,
       token: "YOUR_DISCORD_BOT_TOKEN",
-      dm: { enabled: true, allowFrom: ["steipete"] },
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789012345678"],
       guilds: {
         "123456789012345678": {
           slug: "friends-of-openclaw",
           requireMention: false,
           channels: {
-            general: { allow: true },
-            help: { allow: true, requireMention: true },
+            general: { enabled: true },
+            help: { enabled: true, requireMention: true },
           },
         },
       },
@@ -217,9 +195,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       botToken: "xoxb-REPLACE_ME",
       appToken: "xapp-REPLACE_ME",
       channels: {
-        "#general": { allow: true, requireMention: true },
+        "#general": { enabled: true, requireMention: true },
       },
-      dm: { enabled: true, allowFrom: ["U123"] },
+      dmPolicy: "allowlist",
+      allowFrom: ["U123"],
       slashCommand: {
         enabled: true,
         name: "openclaw",
@@ -235,19 +214,22 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       workspace: "~/.openclaw/workspace",
       userTimezone: "America/Chicago",
       model: {
-        primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
       },
       imageModel: {
-        primary: "openrouter/anthropic/claude-sonnet-4-5",
+        primary: "openrouter/anthropic/claude-sonnet-4-6",
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
+      skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
       verboseDefault: "off",
+      toolProgressDetail: "explain",
+      reasoningDefault: "off",
       elevatedDefault: "on",
       blockStreamingDefault: "off",
       blockStreamingBreak: "text_end",
@@ -268,23 +250,15 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       maxConcurrent: 3,
       heartbeat: {
         every: "30m",
-        model: "anthropic/claude-sonnet-4-5",
-        target: "last",
+        model: "anthropic/claude-sonnet-4-6",
+        target: "whatsapp",
+        directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
         prompt: "HEARTBEAT",
-        ackMaxChars: 300,
-      },
-      memorySearch: {
-        provider: "gemini",
-        model: "gemini-embedding-001",
-        remote: {
-          apiKey: "${GEMINI_API_KEY}",
-        },
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
       },
       sandbox: {
         mode: "non-main",
-        perSession: true,
+        scope: "session", // preferred over legacy perSession: true
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
@@ -299,14 +273,55 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         },
       },
     },
+    entries: {
+      main: {
+        default: true,
+        identity: {
+          name: "Samantha",
+          theme: "helpful sloth",
+          emoji: "🦥",
+        },
+        // inherits defaults.skills -> github, weather
+        groupChat: {
+          mentionPatterns: ["@openclaw", "openclaw"],
+        },
+        thinkingDefault: "high", // per-agent thinking override
+        reasoningDefault: "on", // per-agent reasoning visibility
+        fastModeDefault: false, // per-agent fast mode
+      },
+      quick: {
+        skills: [], // no skills for this agent
+        fastModeDefault: true, // this agent always runs fast
+        thinkingDefault: "off",
+      },
+    },
+  },
+
+  memory: {
+    search: {
+      provider: "gemini",
+      model: "gemini-embedding-001",
+      remote: {
+        apiKey: "${GEMINI_API_KEY}",
+      },
+      extraPaths: ["../team-docs", "/srv/shared-notes"],
+    },
   },
 
   tools: {
+    media: {
+      models: [
+        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["video"] },
+      ],
+      audio: { enabled: true, maxBytes: 20971520, timeoutSeconds: 120 },
+      video: { enabled: true, maxBytes: 52428800 },
+    },
     allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
     deny: ["browser", "canvas"],
     exec: {
       backgroundMs: 10000,
-      timeoutSec: 1800,
+      timeoutSeconds: 1800,
       cleanupMs: 1800000,
     },
     elevated: {
@@ -314,7 +329,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       allowFrom: {
         whatsapp: ["+15555550123"],
         telegram: ["123456789"],
-        discord: ["steipete"],
+        discord: ["123456789012345678"],
         slack: ["U123"],
         signal: ["+15555550123"],
         imessage: ["user@example.com"],
@@ -330,14 +345,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       "custom-proxy": {
         baseUrl: "http://localhost:4000/v1",
         apiKey: "LITELLM_KEY",
-        api: "openai-responses",
+        api: "openai-completions",
         authHeader: true,
         headers: { "X-Proxy-Region": "us-west" },
         models: [
           {
             id: "llama-3.1-8b",
             name: "Llama 3.1 8B",
-            api: "openai-responses",
+            api: "openai-completions",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -352,8 +367,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Cron jobs
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/cron.json",
-    maxConcurrentRuns: 2,
     sessionRetention: "24h",
   },
 
@@ -363,7 +376,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     path: "/hooks",
     token: "shared-secret",
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.openclaw/hooks/transforms",
     mappings: [
       {
         id: "gmail-hook",
@@ -371,6 +384,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         action: "agent",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
@@ -380,7 +395,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         thinking: "low",
         timeoutSeconds: 300,
         transform: {
-          module: "./transforms/gmail.js",
+          module: "gmail.js",
           export: "transformGmail",
         },
       },
@@ -411,22 +426,24 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       token: "gateway-token",
       allowTailscale: true,
     },
-    tailscale: { mode: "serve", resetOnExit: false },
-    remote: { url: "ws://gateway.tailnet:18789", token: "remote-token" },
-    reload: { mode: "hybrid", debounceMs: 300 },
+    tailscale: { mode: "serve" },
+    remote: { url: "ws://gateway-host.ts.net:18789", token: "remote-token" },
+    reload: { mode: "hybrid" },
   },
 
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/agent-scripts/skills"],
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm",
+      nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         enabled: true,
         apiKey: "GEMINI_KEY_HERE",
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
@@ -437,15 +454,58 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 }
 ```
 
+### Symlinked sibling skill repo
+
+Use this when a built-in skill root contains a symlink into a sibling repo, for
+example `~/.agents/skills/manager -> ~/path/to/skills`.
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
+    },
+  },
+}
+```
+
+- `extraDirs` scans the sibling repo as an explicit skill root.
+- `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
+  real target root without allowing arbitrary symlink escapes.
+- Skill Workshop does not use these configured symlink targets. It writes only
+  inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
+
 ## Common patterns
+
+### Shared skill baseline with one override
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      skills: ["github", "weather"],
+    },
+    entries: {
+      main: { default: true },
+      docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
+    },
+  },
+}
+```
+
+- `agents.defaults.skills` is the shared baseline.
+- `agents.entries.*.skills` replaces that baseline for one agent.
+- Use `skills: []` when an agent should see no skills.
 
 ### Multi-platform setup
 
 ```json5
 {
-  agent: { workspace: "~/.openclaw/workspace" },
+  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   channels: {
-    whatsapp: { allowFrom: ["+15555550123"] },
+    whatsapp: { allowFrom: ["+15555550123"], responsePrefix: "[openclaw]" },
     telegram: {
       enabled: true,
       botToken: "YOUR_TOKEN",
@@ -454,15 +514,37 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     discord: {
       enabled: true,
       token: "YOUR_TOKEN",
-      dm: { allowFrom: ["yourname"] },
+      allowFrom: ["123456789012345678"],
     },
   },
 }
 ```
 
+### Trusted node network auto-approval
+
+Keep device pairing manual unless you control the network path. For a dedicated
+lab or tailnet subnet, you can opt in to first-time node device auto-approval
+with exact CIDRs or IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+    },
+  },
+}
+```
+
+This remains off when unset. It only applies to fresh `role: node` pairing with
+no requested scopes. Operator/browser clients and role, scope, metadata, or
+public-key upgrades still require manual approval.
+
 ### Secure DM mode (shared inbox / multi-user DMs)
 
-If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don’t share one context by default:
+If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don't share one context by default:
 
 ```json5
 {
@@ -480,60 +562,28 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
     discord: {
       enabled: true,
       token: "YOUR_DISCORD_BOT_TOKEN",
-      dm: { enabled: true, allowFrom: ["alice", "bob"] },
+      allowFrom: ["123456789012345678", "987654321098765432"],
     },
   },
 }
 ```
 
-### OAuth with API key failover
+For Discord/Google Chat/IRC/Mattermost/Microsoft Teams/Slack, sender authorization is ID-first by default.
+Only enable direct mutable name/email/nick matching with each channel's `dangerouslyAllowNameMatching: true` if you explicitly accept that risk.
+
+### Anthropic API key + MiniMax fallback
 
 ```json5
 {
   auth: {
     profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
       "anthropic:api": {
         provider: "anthropic",
         mode: "api_key",
       },
     },
     order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: ["anthropic/claude-opus-4-6"],
-    },
-  },
-}
-```
-
-### Anthropic subscription + API key, MiniMax fallback
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "user@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
+      anthropic: ["anthropic:api"],
     },
   },
   models: {
@@ -545,11 +595,13 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
       },
     },
   },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["minimax/MiniMax-M2.1"],
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: {
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["minimax/MiniMax-M2.7"],
+      },
     },
   },
 }
@@ -559,21 +611,27 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 
 ```json5
 {
-  identity: {
-    name: "WorkBot",
-    theme: "professional assistant",
-  },
-  agent: {
-    workspace: "~/work-openclaw",
-    elevated: { enabled: false },
+  agents: {
+    defaults: {
+      workspace: "~/work-openclaw",
+      elevatedDefault: "off",
+    },
+    entries: {
+      main: {
+        identity: {
+          name: "WorkBot",
+          theme: "professional assistant",
+        },
+      },
+    },
   },
   channels: {
     slack: {
       enabled: true,
       botToken: "xoxb-...",
       channels: {
-        "#engineering": { allow: true, requireMention: true },
-        "#general": { allow: true, requireMention: true },
+        "#engineering": { enabled: true, requireMention: true },
+        "#general": { enabled: true, requireMention: true },
       },
     },
   },
@@ -584,9 +642,11 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 
 ```json5
 {
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: { primary: "lmstudio/minimax-m2.1-gs32" },
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      model: { primary: "lmstudio/my-local-model" },
+    },
   },
   models: {
     mode: "merge",
@@ -597,8 +657,8 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
         api: "openai-responses",
         models: [
           {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1 GS32",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -616,5 +676,10 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
-- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
-- See [Providers](/channels/whatsapp) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
+- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `plugins`, `talk`, `signal`, `imessage`.
+- See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration](/gateway/configuration)

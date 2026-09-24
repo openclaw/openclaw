@@ -1,31 +1,33 @@
+// Covers local tailnet address detection and primary selection.
 import os from "node:os";
-import { describe, expect, it, vi } from "vitest";
-import { listTailnetAddresses } from "./tailnet.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
+import { isTailnetIPv4, pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "./tailnet.js";
 
-describe("tailnet address detection", () => {
-  it("detects tailscale IPv4 and IPv6 addresses", () => {
-    vi.spyOn(os, "networkInterfaces").mockReturnValue({
-      lo0: [
-        { address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" },
-      ] as unknown as os.NetworkInterfaceInfo[],
-      utun9: [
-        {
-          address: "100.123.224.76",
-          family: "IPv4",
-          internal: false,
-          netmask: "",
-        },
-        {
-          address: "fd7a:115c:a1e0::8801:e04c",
-          family: "IPv6",
-          internal: false,
-          netmask: "",
-        },
-      ] as unknown as os.NetworkInterfaceInfo[],
-    });
+describe("tailnet helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-    const out = listTailnetAddresses();
-    expect(out.ipv4).toEqual(["100.123.224.76"]);
-    expect(out.ipv6).toEqual(["fd7a:115c:a1e0::8801:e04c"]);
+  it("detects tailscale ipv4 ranges", () => {
+    expect(isTailnetIPv4("100.64.0.1")).toBe(true);
+    expect(isTailnetIPv4("100.127.255.254")).toBe(true);
+    expect(isTailnetIPv4("100.63.255.255")).toBe(false);
+    expect(isTailnetIPv4("192.168.1.10")).toBe(false);
+  });
+
+  it("picks the first available tailnet addresses", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        utun1: [
+          { address: "100.99.1.1", family: "IPv4" },
+          { address: "100.99.1.2", family: "IPv4" },
+          { address: "fd7a:115c:a1e0::9", family: "IPv6" },
+        ],
+      }),
+    );
+
+    expect(pickPrimaryTailnetIPv4()).toBe("100.99.1.1");
+    expect(pickPrimaryTailnetIPv6()).toBe("fd7a:115c:a1e0::9");
   });
 });

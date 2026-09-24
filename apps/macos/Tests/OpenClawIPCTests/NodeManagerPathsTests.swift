@@ -2,44 +2,80 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct NodeManagerPathsTests {
-    private func makeTempDir() throws -> URL {
-        let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+struct NodeManagerPathsTests {
+    @Test func `fnm node bins prefer the newest supported installed version`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let v24Node = home
+            .appendingPathComponent(".local/share/fnm/node-versions/v24.16.0/installation/bin/node")
+        let v26Node = home
+            .appendingPathComponent(".local/share/fnm/node-versions/v26.1.0/installation/bin/node")
+        try makeExecutableForTests(at: v24Node)
+        try makeExecutableForTests(at: v26Node)
+
+        let paths = CommandResolver.preferredPaths(home: home, current: [], projectRoot: home)
+        let newestIndex = try #require(paths.firstIndex(of: v26Node.deletingLastPathComponent().path))
+        let olderIndex = try #require(paths.firstIndex(of: v24Node.deletingLastPathComponent().path))
+
+        #expect(newestIndex < olderIndex)
     }
 
-    private func makeExec(at path: URL) throws {
-        try FileManager().createDirectory(
-            at: path.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        FileManager().createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
-        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+    @Test(arguments: [
+        (".local/share/fnm/node-versions", "installation/bin"),
+        (".nvm/versions/node", "bin"),
+    ])
+    func `unsupported newer manager runtimes cannot hide a supported installed Node`(
+        managerRoot: String,
+        binarySuffix: String) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let versions = ["v26.0.0", "v24.16.0", "v25.9.0", "v22.23.2"]
+
+        for version in versions {
+            let node = home
+                .appendingPathComponent(managerRoot)
+                .appendingPathComponent(version)
+                .appendingPathComponent(binarySuffix)
+                .appendingPathComponent("node")
+            try makeExecutableForTests(at: node)
+            try "#!/bin/sh\necho \(version)\n".write(to: node, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        }
+
+        let unsupported = home
+            .appendingPathComponent(managerRoot)
+            .appendingPathComponent("v26.0.0")
+            .appendingPathComponent(binarySuffix)
+        let expectedNode = home
+            .appendingPathComponent(managerRoot)
+            .appendingPathComponent("v24.16.0")
+            .appendingPathComponent(binarySuffix)
+            .appendingPathComponent("node")
+        let searchPaths = CommandResolver.preferredPaths(
+            home: home,
+            current: [unsupported.path],
+            projectRoot: home)
+
+        let result = await RuntimeLocator.resolve(searchPaths: searchPaths)
+
+        guard case let .success(runtime) = result else {
+            Issue.record("A newer unsupported manager runtime hid an installed supported Node: \(result)")
+            return
+        }
+        #expect(runtime.path == expectedNode.path)
+        #expect(runtime.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
     }
 
-    @Test func fnmNodeBinsPreferNewestInstalledVersion() throws {
-        let home = try self.makeTempDir()
-
-        let v20Bin = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v20.19.5/installation/bin/node")
-        let v25Bin = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v25.1.0/installation/bin/node")
-        try self.makeExec(at: v20Bin)
-        try self.makeExec(at: v25Bin)
-
-        let bins = CommandResolver._testNodeManagerBinPaths(home: home)
-        #expect(bins.first == v25Bin.deletingLastPathComponent().path)
-        #expect(bins.contains(v20Bin.deletingLastPathComponent().path))
-    }
-
-    @Test func ignoresEntriesWithoutNodeExecutable() throws {
-        let home = try self.makeTempDir()
+    @Test func `ignores entries without node executable`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
         let missingNodeBin = home
             .appendingPathComponent(".local/share/fnm/node-versions/v99.0.0/installation/bin")
         try FileManager().createDirectory(at: missingNodeBin, withIntermediateDirectories: true)
 
-        let bins = CommandResolver._testNodeManagerBinPaths(home: home)
-        #expect(!bins.contains(missingNodeBin.path))
+        let paths = CommandResolver.preferredPaths(home: home, current: [], projectRoot: home)
+        #expect(!paths.contains(missingNodeBin.path))
     }
 }

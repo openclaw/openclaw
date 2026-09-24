@@ -1,22 +1,4 @@
-import { vi } from "vitest";
-
-const stubTool = (name: string) => ({
-  name,
-  description: `${name} stub`,
-  parameters: { type: "object", properties: {} },
-  execute: vi.fn(),
-});
-
-vi.mock("../tools/image-tool.js", () => ({
-  createImageTool: () => stubTool("image"),
-}));
-
-vi.mock("../tools/web-tools.js", () => ({
-  createWebSearchTool: () => null,
-  createWebFetchTool: () => null,
-}));
-
-vi.mock("../../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-  getPluginToolMeta: () => undefined,
-}));
+/**
+ * Fast coding-tool helper side-effect import for tests that use shared tool stubs.
+ */
+import "./fast-tool-stubs.js";

@@ -1,0 +1,168 @@
+// Line type declarations define plugin contracts.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
+import type { z } from "zod";
+import type {
+  LineAccountConfigSchema,
+  LineConfigSchema,
+  LineGroupConfigSchema,
+} from "./config-schema.js";
+
+export type LineTokenSource = "config" | "env" | "file" | "none";
+export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
+export type LineCredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof import("openclaw/plugin-sdk/secret-file-runtime").tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
+
+export type LineConfig = z.input<typeof LineConfigSchema>;
+export type LineAccountConfig = z.input<typeof LineAccountConfigSchema>;
+export type LineGroupConfig = z.input<typeof LineGroupConfigSchema>;
+
+export interface ResolvedLineAccount {
+  accountId: string;
+  name?: string;
+  enabled: boolean;
+  channelAccessToken: string;
+  channelSecret: string;
+  tokenSource: LineTokenSource;
+  signingSecretSource?: LineTokenSource;
+  tokenStatus?: LineCredentialStatus;
+  signingSecretStatus?: LineCredentialStatus;
+  credentialDiagnostics?: LineCredentialUnavailableDiagnostic[];
+  config: LineConfig & LineAccountConfig;
+}
+
+export interface LineSendResult {
+  messageId: string;
+  chatId: string;
+  receipt: MessageReceipt;
+}
+
+/** Console-side webhook state, which decides whether LINE delivers anything at all. */
+export type LineProbeWebhookState = { status: "active" | "disabled" | "unset" };
+
+/**
+ * LINE's own view of an account's monthly message allowance.
+ *
+ * The plan decides whether a limit exists at all, so the two cases stay separate
+ * shapes instead of encoding "unlimited" as a sentinel number that every caller
+ * would have to remember to special-case.
+ */
+export type LineMessageQuota =
+  | { kind: "unlimited" }
+  | { kind: "limited"; limit: number; used: number };
+
+export type LineProbeResult = BaseProbeResult<string> & {
+  elapsedMs?: number;
+  bot?: {
+    displayName?: string;
+    userId?: string;
+    basicId?: string;
+    pictureUrl?: string;
+  };
+  /** Absent when LINE did not answer, which stays "unknown" rather than "fine". */
+  webhook?: LineProbeWebhookState;
+  quota?: LineMessageQuota;
+};
+
+type LineFlexMessagePayload = {
+  altText: string;
+  contents: unknown;
+};
+
+export type LineRichCard =
+  | {
+      type: "media_player";
+      title: string;
+      artist?: string;
+      source?: string;
+      imageUrl?: string;
+      status?: "playing" | "paused";
+    }
+  | {
+      type: "event";
+      title: string;
+      date: string;
+      time?: string;
+      location?: string;
+      description?: string;
+    }
+  | {
+      type: "agenda";
+      title: string;
+      events: Array<{ title: string; time?: string; location?: string }>;
+    }
+  | {
+      type: "device";
+      name: string;
+      deviceType?: string;
+      status?: string;
+      controls?: Array<{ label: string; action: string }>;
+    }
+  | { type: "appletv_remote"; name?: string; status?: string };
+
+export type LineQuickReplyItem = {
+  label: string;
+  action: { type: "command"; command: string } | { type: "callback"; value: string };
+};
+
+export type LineTemplateMessagePayload =
+  | {
+      type: "confirm";
+      text: string;
+      confirmLabel: string;
+      confirmData: string;
+      cancelLabel: string;
+      cancelData: string;
+      altText?: string;
+    }
+  | {
+      type: "buttons";
+      title?: string;
+      text: string;
+      actions: Array<{
+        type: "message" | "uri" | "postback";
+        label: string;
+        data?: string;
+        uri?: string;
+      }>;
+      thumbnailImageUrl?: string;
+      altText?: string;
+    }
+  | {
+      type: "carousel";
+      columns: Array<{
+        title?: string;
+        text: string;
+        thumbnailImageUrl?: string;
+        actions: Array<{
+          type: "message" | "uri" | "postback";
+          label: string;
+          data?: string;
+          uri?: string;
+        }>;
+      }>;
+      altText?: string;
+    };
+
+export type LineChannelData = {
+  quickReplies?: string[];
+  quickReplyItems?: LineQuickReplyItem[];
+  mediaKind?: LineOutboundMediaKind;
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
+  location?: {
+    title: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+  };
+  card?: LineRichCard;
+  flexMessage?: LineFlexMessagePayload;
+  templateMessage?: LineTemplateMessagePayload;
+};
+
+export type LineOutboundMediaKind = Extract<MediaKind, "image" | "video" | "audio">;

@@ -1,0 +1,172 @@
+// Openai provider module implements model/runtime integration.
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  expectAugmentedCodexCatalog,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
+  expectCodexMissingAuthHint,
+  importProviderRuntimeCatalogModule,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
+
+type ResolvePluginProviders = (params?: { onlyPluginIds?: string[] }) => ProviderPlugin[];
+type ResolveOwningPluginIdsForProvider = (params: { provider: string }) => string[] | undefined;
+type ResolveCatalogHookProviderPluginIds = (params: unknown) => string[];
+
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
+  vi.fn<ResolveOwningPluginIdsForProvider>(() => undefined),
+);
+const resolveCatalogHookProviderPluginIdsMock = vi.hoisted(() =>
+  vi.fn<ResolveCatalogHookProviderPluginIds>((_params) => [] as string[]),
+);
+
+vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/provider-catalog-runtime")
+  >("openclaw/plugin-sdk/provider-catalog-runtime");
+  const resolveCatalogHookProviders = (params: unknown) =>
+    resolvePluginProvidersMock({
+      onlyPluginIds: resolveCatalogHookProviderPluginIdsMock(params),
+    });
+  return {
+    ...actual,
+    augmentModelCatalogWithProviderPlugins: async (params: {
+      context: Parameters<NonNullable<ProviderPlugin["augmentModelCatalog"]>>[0];
+    }) => {
+      const supplemental = [];
+      for (const provider of resolveCatalogHookProviders(params)) {
+        const entries = await provider.augmentModelCatalog?.(params.context);
+        if (entries?.length) {
+          supplemental.push(...entries);
+        }
+      }
+      return supplemental;
+    },
+    resolveOwningPluginIdsForProvider: (params: unknown) =>
+      resolveOwningPluginIdsForProviderMock(params as never),
+    resolveCatalogHookProviderPluginIds: (params: unknown) =>
+      resolveCatalogHookProviderPluginIdsMock(params as never),
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+  };
+});
+
+export function describeOpenAIProviderCatalogContract() {
+  const contractDepsPromise = (async () => {
+    vi.resetModules();
+    const openaiPlugin = await import("../index.js");
+    const openaiProviders = (
+      await registerProviderPlugin({
+        plugin: openaiPlugin.default,
+        id: "openai",
+        name: "OpenAI",
+      })
+    ).providers;
+    const openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
+    const { augmentModelCatalogWithProviderPlugins } = await importProviderRuntimeCatalogModule();
+    return {
+      augmentModelCatalogWithProviderPlugins,
+      openaiProviders,
+      openaiProvider,
+    };
+  })();
+
+  describe(
+    "openai provider catalog contract",
+    { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS },
+    () => {
+      beforeEach(async () => {
+        const { openaiProviders } = await contractDepsPromise;
+
+        resolvePluginProvidersMock.mockReset();
+        resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
+          const onlyPluginIds = params?.onlyPluginIds;
+          if (!onlyPluginIds || onlyPluginIds.length === 0) {
+            return openaiProviders;
+          }
+          return onlyPluginIds.includes("openai") ? openaiProviders : [];
+        });
+
+        resolveOwningPluginIdsForProviderMock.mockReset();
+        resolveOwningPluginIdsForProviderMock.mockImplementation((params) => {
+          switch (params.provider) {
+            case "azure-openai-responses":
+            case "openai":
+              return ["openai"];
+            default:
+              return undefined;
+          }
+        });
+
+        resolveCatalogHookProviderPluginIdsMock.mockReset();
+        resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
+      });
+
+      it("keeps codex-only missing-auth hints wired through the provider runtime", async () => {
+        const { openaiProvider } = await contractDepsPromise;
+        expectCodexMissingAuthHint(
+          (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
+          "openai/gpt-6-astra",
+        );
+      });
+
+      it("keeps bundled model augmentation wired through the provider runtime", async () => {
+        const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
+        await expectAugmentedCodexCatalog(
+          augmentModelCatalogWithProviderPlugins,
+          expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
+        );
+      });
+
+      it("stops catalog template searches after the preferred rows match", async () => {
+        const { openaiProvider } = await contractDepsPromise;
+        const preferredIds = ["gpt-5.4-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"];
+        const cost = { input: 2, output: 8, cacheRead: 1, cacheWrite: 0 };
+        let providerReads = 0;
+        const entries = Array.from({ length: 1_000 }, (_, index) => ({
+          get provider() {
+            providerReads += 1;
+            return "openai";
+          },
+          id: preferredIds[index] ?? `unrelated-${index}`,
+          name: `Catalog row ${index}`,
+          api: "openai-responses" as const,
+          baseUrl: "https://api.example/v1",
+          cost,
+        }));
+        const before = structuredClone(entries);
+        providerReads = 0;
+
+        const result = await openaiProvider.augmentModelCatalog?.({ env: {}, entries });
+        const observedReads = providerReads;
+        expect(result).toEqual(
+          ["gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].map(
+            (id, index) =>
+              Object.assign(
+                {
+                  provider: "openai",
+                  id,
+                  name: id,
+                  api: "openai-responses",
+                  baseUrl: "https://api.example/v1",
+                  cost,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  contextWindow: index < 3 ? 1_050_000 : 400_000,
+                },
+                index === 0 ? { contextTokens: 272_000 } : {},
+              ),
+          ),
+        );
+        expect(entries).toEqual(before);
+        expect(observedReads).toBeLessThan(32);
+      });
+    },
+  );
+}

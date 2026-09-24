@@ -1,9 +1,19 @@
+// CI artifacts use the same SDK declaration partitions as full/package builds.
 import fs from "node:fs";
-import path from "node:path";
+import { listCacheFiles } from "./lib/build-artifact-cache.mts";
+import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.mts";
+import { writeTsdownDeclarations } from "./lib/tsdown-declaration-writer.mts";
+import { TSDOWN_DECLARATION_EXTENSIONS } from "./tsdown-build.mts";
 
-// `tsc` emits the entry d.ts at `dist/plugin-sdk/plugin-sdk/index.d.ts` because
-// the source lives at `src/plugin-sdk/index.ts` and `rootDir` is `src/`.
-// Keep a stable `dist/plugin-sdk/index.d.ts` alongside `index.js` for TS users.
-const out = path.join(process.cwd(), "dist/plugin-sdk/index.d.ts");
-fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, 'export * from "./plugin-sdk/index";\n', "utf8");
+await writeTsdownDeclarations(
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+  "tsdown-plugin-sdk",
+  (root) =>
+    // This subset owns flat SDK entries, never other groups' shared root chunks.
+    listCacheFiles(
+      root,
+      [{ path: "dist/plugin-sdk", extensions: TSDOWN_DECLARATION_EXTENSIONS, recursive: false }],
+      fs,
+    ),
+  "scripts/write-plugin-sdk-entry-dts.ts",
+);

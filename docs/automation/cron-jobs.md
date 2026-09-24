@@ -1,478 +1,164 @@
 ---
-summary: "Cron jobs + wakeups for the Gateway scheduler"
+doc-schema-version: 1
+summary: "Automations: scheduled jobs, webhooks, and Gmail PubSub triggers for the Gateway scheduler"
 read_when:
   - Scheduling background jobs or wakeups
-  - Wiring automation that should run with or alongside heartbeats
-  - Deciding between heartbeat and cron for scheduled tasks
-title: "Cron Jobs"
+  - Wiring external triggers (webhooks, Gmail) into OpenClaw
+  - Deciding between heartbeat and automations for scheduled work
+title: "Automations"
+sidebarTitle: "Automations"
 ---
 
-# Cron jobs (Gateway scheduler)
-
-> **Cron vs Heartbeat?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
-
-Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
-the right time, and can optionally deliver output back to a chat.
-
-If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
-cron is the mechanism.
-
-Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
-
-## TL;DR
-
-- Cron runs **inside the Gateway** (not inside the model).
-- Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
-- Two execution styles:
-  - **Main session**: enqueue a system event, then run on the next heartbeat.
-  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
-- Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
-
-## Quick start (actionable)
-
-Create a one-shot reminder, verify it exists, and run it immediately:
-
-```bash
-openclaw cron add \
-  --name "Reminder" \
-  --at "2026-02-01T16:00:00Z" \
-  --session main \
-  --system-event "Reminder: check the cron docs draft" \
-  --wake now \
-  --delete-after-run
-
-openclaw cron list
-openclaw cron run <job-id>
-openclaw cron runs --id <job-id>
-```
-
-Schedule a recurring isolated job with delivery:
-
-```bash
-openclaw cron add \
-  --name "Morning brief" \
-  --cron "0 7 * * *" \
-  --tz "America/Los_Angeles" \
-  --session isolated \
-  --message "Summarize overnight updates." \
-  --announce \
-  --channel slack \
-  --to "channel:C1234567890"
-```
-
-## Tool-call equivalents (Gateway cron tool)
-
-For the canonical JSON shapes and examples, see [JSON schema for tool calls](/automation/cron-jobs#json-schema-for-tool-calls).
-
-## Where cron jobs are stored
-
-Cron jobs are persisted on the Gateway host at `~/.openclaw/cron/jobs.json` by default.
-The Gateway loads the file into memory and writes it back on changes, so manual edits
-are only safe when the Gateway is stopped. Prefer `openclaw cron add/edit` or the cron
-tool call API for changes.
-
-## Beginner-friendly overview
-
-Think of a cron job as: **when** to run + **what** to do.
-
-1. **Choose a schedule**
-   - One-shot reminder → `schedule.kind = "at"` (CLI: `--at`)
-   - Repeating job → `schedule.kind = "every"` or `schedule.kind = "cron"`
-   - If your ISO timestamp omits a timezone, it is treated as **UTC**.
-
-2. **Choose where it runs**
-   - `sessionTarget: "main"` → run during the next heartbeat with main context.
-   - `sessionTarget: "isolated"` → run a dedicated agent turn in `cron:<jobId>`.
-
-3. **Choose the payload**
-   - Main session → `payload.kind = "systemEvent"`
-   - Isolated session → `payload.kind = "agentTurn"`
-
-Optional: one-shot jobs (`schedule.kind = "at"`) delete after success by default. Set
-`deleteAfterRun: false` to keep them (they will disable after success).
-
-## Concepts
-
-### Jobs
-
-A cron job is a stored record with:
-
-- a **schedule** (when it should run),
-- a **payload** (what it should do),
-- optional **delivery mode** (announce or none).
-- optional **agent binding** (`agentId`): run the job under a specific agent; if
-  missing or unknown, the gateway falls back to the default agent.
-
-Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
-In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
-One-shot jobs auto-delete after success by default; set `deleteAfterRun: false` to keep them.
-
-### Schedules
-
-Cron supports three schedule kinds:
-
-- `at`: one-shot timestamp via `schedule.at` (ISO 8601).
-- `every`: fixed interval (ms).
-- `cron`: 5-field cron expression with optional IANA timezone.
-
-Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
-local timezone is used.
-
-### Main vs isolated execution
-
-#### Main session jobs (system events)
-
-Main jobs enqueue a system event and optionally wake the heartbeat runner.
-They must use `payload.kind = "systemEvent"`.
-
-- `wakeMode: "now"` (default): event triggers an immediate heartbeat run.
-- `wakeMode: "next-heartbeat"`: event waits for the next scheduled heartbeat.
-
-This is the best fit when you want the normal heartbeat prompt + main-session context.
-See [Heartbeat](/gateway/heartbeat).
-
-#### Isolated jobs (dedicated cron sessions)
-
-Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
-
-Key behaviors:
-
-- Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
-- Each run starts a **fresh session id** (no prior conversation carry-over).
-- Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
-- `delivery.mode` (isolated-only) chooses what happens:
-  - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
-  - `none`: internal only (no delivery, no main-session summary).
-- `wakeMode` controls when the main-session summary posts:
-  - `now`: immediate heartbeat.
-  - `next-heartbeat`: waits for the next scheduled heartbeat.
-
-Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
-your main chat history.
-
-### Payload shapes (what runs)
-
-Two payload kinds are supported:
-
-- `systemEvent`: main-session only, routed through the heartbeat prompt.
-- `agentTurn`: isolated-session only, runs a dedicated agent turn.
-
-Common `agentTurn` fields:
-
-- `message`: required text prompt.
-- `model` / `thinking`: optional overrides (see below).
-- `timeoutSeconds`: optional timeout override.
-
-Delivery config (isolated jobs only):
-
-- `delivery.mode`: `none` | `announce`.
-- `delivery.channel`: `last` or a specific channel.
-- `delivery.to`: channel-specific target (phone/chat/channel id).
-- `delivery.bestEffort`: avoid failing the job if announce delivery fails.
-
-Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
-to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
-
-If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
-
-#### Announce delivery flow
-
-When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
-The main agent is not spun up to craft or forward the message.
-
-Behavior details:
-
-- Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
-  channel formatting.
-- Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
-- If the isolated run already sent a message to the same target via the message tool, delivery is
-  skipped to avoid duplicates.
-- Missing or invalid delivery targets fail the job unless `delivery.bestEffort = true`.
-- A short summary is posted to the main session only when `delivery.mode = "announce"`.
-- The main-session summary respects `wakeMode`: `now` triggers an immediate heartbeat and
-  `next-heartbeat` waits for the next scheduled heartbeat.
-
-### Model and thinking overrides
-
-Isolated jobs (`agentTurn`) can override the model and thinking level:
-
-- `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
-- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models only)
-
-Note: You can set `model` on main-session jobs too, but it changes the shared main
-session model. We recommend model overrides only for isolated jobs to avoid
-unexpected context shifts.
-
-Resolution priority:
-
-1. Job payload override (highest)
-2. Hook-specific defaults (e.g., `hooks.gmail.model`)
-3. Agent config default
-
-### Delivery (channel + target)
-
-Isolated jobs can deliver output to a channel via the top-level `delivery` config:
-
-- `delivery.mode`: `announce` (deliver a summary) or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
-- `delivery.to`: channel-specific recipient target.
-
-Delivery config is only valid for isolated jobs (`sessionTarget: "isolated"`).
-
-If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the main session’s
-“last route” (the last place the agent replied).
-
-Target format reminders:
-
-- Slack/Discord/Mattermost (plugin) targets should use explicit prefixes (e.g. `channel:<id>`, `user:<id>`) to avoid ambiguity.
-- Telegram topics should use the `:topic:` form (see below).
-
-#### Telegram delivery targets (topics / forum threads)
-
-Telegram supports forum topics via `message_thread_id`. For cron delivery, you can encode
-the topic/thread into the `to` field:
-
-- `-1001234567890` (chat id only)
-- `-1001234567890:topic:123` (preferred: explicit topic marker)
-- `-1001234567890:123` (shorthand: numeric suffix)
-
-Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
-
-- `telegram:group:-1001234567890:topic:123`
-
-## JSON schema for tool calls
-
-Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
-CLI flags accept human durations like `20m`, but tool calls should use an ISO 8601 string
-for `schedule.at` and milliseconds for `schedule.everyMs`.
-
-### cron.add params
-
-One-shot, main session job (system event):
-
-```json
-{
-  "name": "Reminder",
-  "schedule": { "kind": "at", "at": "2026-02-01T16:00:00Z" },
-  "sessionTarget": "main",
-  "wakeMode": "now",
-  "payload": { "kind": "systemEvent", "text": "Reminder text" },
-  "deleteAfterRun": true
-}
-```
-
-Recurring, isolated job with delivery:
-
-```json
-{
-  "name": "Morning brief",
-  "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
-  "sessionTarget": "isolated",
-  "wakeMode": "next-heartbeat",
-  "payload": {
-    "kind": "agentTurn",
-    "message": "Summarize overnight updates."
-  },
-  "delivery": {
-    "mode": "announce",
-    "channel": "slack",
-    "to": "channel:C1234567890",
-    "bestEffort": true
-  }
-}
-```
-
-Notes:
-
-- `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
-- `everyMs` is milliseconds.
-- `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
-- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
-  `delivery`.
-- `wakeMode` defaults to `"now"` when omitted.
-
-### cron.update params
-
-```json
-{
-  "jobId": "job-123",
-  "patch": {
-    "enabled": false,
-    "schedule": { "kind": "every", "everyMs": 3600000 }
-  }
-}
-```
-
-Notes:
-
-- `jobId` is canonical; `id` is accepted for compatibility.
-- Use `agentId: null` in the patch to clear an agent binding.
-
-### cron.run and cron.remove params
-
-```json
-{ "jobId": "job-123", "mode": "force" }
-```
-
-```json
-{ "jobId": "job-123" }
-```
-
-## Storage & history
-
-- Job store: `~/.openclaw/cron/jobs.json` (Gateway-managed JSON).
-- Run history: `~/.openclaw/cron/runs/<jobId>.jsonl` (JSONL, auto-pruned).
-- Override store path: `cron.store` in config.
-
-## Configuration
-
-```json5
-{
-  cron: {
-    enabled: true, // default true
-    store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 1, // default 1
-  },
-}
-```
-
-Disable cron entirely:
-
-- `cron.enabled: false` (config)
-- `OPENCLAW_SKIP_CRON=1` (env)
-
-## CLI quickstart
-
-One-shot reminder (UTC ISO, auto-delete after success):
-
-```bash
-openclaw cron add \
-  --name "Send reminder" \
-  --at "2026-01-12T18:00:00Z" \
-  --session main \
-  --system-event "Reminder: submit expense report." \
-  --wake now \
-  --delete-after-run
-```
-
-One-shot reminder (main session, wake immediately):
-
-```bash
-openclaw cron add \
-  --name "Calendar check" \
-  --at "20m" \
-  --session main \
-  --system-event "Next heartbeat: check calendar." \
-  --wake now
-```
-
-Recurring isolated job (announce to WhatsApp):
-
-```bash
-openclaw cron add \
-  --name "Morning status" \
-  --cron "0 7 * * *" \
-  --tz "America/Los_Angeles" \
-  --session isolated \
-  --message "Summarize inbox + calendar for today." \
-  --announce \
-  --channel whatsapp \
-  --to "+15551234567"
-```
-
-Recurring isolated job (deliver to a Telegram topic):
-
-```bash
-openclaw cron add \
-  --name "Nightly summary (topic)" \
-  --cron "0 22 * * *" \
-  --tz "America/Los_Angeles" \
-  --session isolated \
-  --message "Summarize today; send to the nightly topic." \
-  --announce \
-  --channel telegram \
-  --to "-1001234567890:topic:123"
-```
-
-Isolated job with model and thinking override:
-
-```bash
-openclaw cron add \
-  --name "Deep analysis" \
-  --cron "0 6 * * 1" \
-  --tz "America/Los_Angeles" \
-  --session isolated \
-  --message "Weekly deep analysis of project progress." \
-  --model "opus" \
-  --thinking high \
-  --announce \
-  --channel whatsapp \
-  --to "+15551234567"
-```
-
-Agent selection (multi-agent setups):
-
-```bash
-# Pin a job to agent "ops" (falls back to default if that agent is missing)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
-
-# Switch or clear the agent on an existing job
-openclaw cron edit <jobId> --agent ops
-openclaw cron edit <jobId> --clear-agent
-```
-
-Manual run (force is the default, use `--due` to only run when due):
-
-```bash
-openclaw cron run <jobId>
-openclaw cron run <jobId> --due
-```
-
-Edit an existing job (patch fields):
-
-```bash
-openclaw cron edit <jobId> \
-  --message "Updated prompt" \
-  --model "opus" \
-  --thinking low
-```
-
-Run history:
-
-```bash
-openclaw cron runs --id <jobId> --limit 50
-```
-
-Immediate system event without creating a job:
-
-```bash
-openclaw system event --mode now --text "Next heartbeat: check battery."
-```
-
-## Gateway API surface
-
-- `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
-- `cron.run` (force or due), `cron.runs`
-  For immediate system events without a job, use [`openclaw system event`](/cli/system).
-
-## Troubleshooting
-
-### “Nothing runs”
-
-- Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
-- Check the Gateway is running continuously (cron runs inside the Gateway process).
-- For `cron` schedules: confirm timezone (`--tz`) vs the host timezone.
-
-### A recurring job keeps delaying after failures
-
-- OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
-  30s, 1m, 5m, 15m, then 60m between retries.
-- Backoff resets automatically after the next successful run.
-- One-shot (`at`) jobs disable after a terminal run (`ok`, `error`, or `skipped`) and do not retry.
-
-### Telegram delivers to the wrong place
-
-- For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
-- If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
-  cron delivery accepts them and still parses topic IDs correctly.
+Automations are OpenClaw's built-in scheduler. The scheduler persists jobs, wakes the agent at the right time, and can deliver output to a chat channel, a webhook, or nowhere.
+
+Manage automations with the `openclaw automations` CLI; `openclaw cron` remains an alias for the same commands.
+
+## Quick start
+
+<Steps>
+  <Step title="Add a one-shot reminder">
+    ```bash
+    openclaw automations create "2027-02-01T16:00:00Z" \
+      --name "Reminder" \
+      --session main \
+      --system-event "Reminder: check the automations docs draft" \
+      --wake now \
+      --delete-after-run
+    ```
+  </Step>
+  <Step title="Check your jobs">
+    ```bash
+    openclaw automations list
+    openclaw automations get <job-id>
+    openclaw automations show <job-id>
+    ```
+  </Step>
+  <Step title="See run history">
+    ```bash
+    openclaw automations runs <job-id>
+    ```
+  </Step>
+</Steps>
+
+## Where each section moved
+
+This page is an index. Each section below moved to a child page, and every anchor from the single-page version still resolves here.
+
+### Runtime model and promotion
+
+[How automations work](/automation/cron-jobs/how-it-works) — Runtime model, run lifecycle, and job promotion.
+
+- <a id="how-automations-work"></a>[How automations work](/automation/cron-jobs/how-it-works#how-automations-work)
+- <a id="isolated-run-hardening"></a>[Isolated run hardening](/automation/cron-jobs/how-it-works#isolated-run-hardening)
+- <a id="task-reconciliation"></a>[Task reconciliation](/automation/cron-jobs/how-it-works#task-reconciliation)
+- <a id="promoting-a-repeated-job-into-an-automation"></a>[Promoting a repeated job into an automation](/automation/cron-jobs/how-it-works#promoting-a-repeated-job-into-an-automation)
+
+### Schedule and trigger sections
+
+[Automation schedules](/automation/cron-jobs/schedules) — Schedule kinds, cron rules, pacing, and condition watchers.
+
+- <a id="schedule-types"></a>[Schedule types](/automation/cron-jobs/schedules#schedule-types)
+- <a id="heartbeat-task-migration"></a>[Heartbeat task migration](/automation/cron-jobs/schedules#heartbeat-task-migration)
+- <a id="stream-sources"></a>[Stream sources](/automation/cron-jobs/schedules#stream-sources)
+- <a id="dynamic-cadence-pacing"></a><a id="dynamic-cadence-(pacing)"></a>[Dynamic cadence (pacing)](/automation/cron-jobs/schedules#dynamic-cadence-pacing)
+- <a id="%2Floop-chat-shortcut"></a><a id="/loop-chat-shortcut"></a>[`/loop` chat shortcut](/automation/cron-jobs/schedules#%2Floop-chat-shortcut)
+- <a id="day-of-month-and-day-of-week-use-or-logic"></a>[Day-of-month and day-of-week use OR logic](/automation/cron-jobs/schedules#day-of-month-and-day-of-week-use-or-logic)
+- <a id="event-triggers-condition-watchers"></a><a id="event-triggers-(condition-watchers)"></a>[Event triggers (condition watchers)](/automation/cron-jobs/schedules#event-triggers-condition-watchers)
+
+### Payload and execution sections
+
+[Automation payloads](/automation/cron-jobs/payloads) — Payload kinds, agent-turn flags, and session execution styles.
+
+- <a id="payloads"></a>[Payloads](/automation/cron-jobs/payloads#payloads)
+- <a id="agent-turn-options"></a>[Agent-turn options](/automation/cron-jobs/payloads#agent-turn-options)
+- <a id="param-message"></a>[`--message`](/automation/cron-jobs/payloads#param-message)
+- <a id="param-model"></a>[`--model`](/automation/cron-jobs/payloads#param-model)
+- <a id="param-fallbacks"></a>[`--fallbacks`](/automation/cron-jobs/payloads#param-fallbacks)
+- <a id="param-clear-fallbacks"></a>[`--clear-fallbacks`](/automation/cron-jobs/payloads#param-clear-fallbacks)
+- <a id="param-clear-model"></a>[`--clear-model`](/automation/cron-jobs/payloads#param-clear-model)
+- <a id="param-thinking"></a>[`--thinking`](/automation/cron-jobs/payloads#param-thinking)
+- <a id="param-clear-thinking"></a>[`--clear-thinking`](/automation/cron-jobs/payloads#param-clear-thinking)
+- <a id="param-light-context"></a>[`--light-context`](/automation/cron-jobs/payloads#param-light-context)
+- <a id="param-tools"></a>[`--tools`](/automation/cron-jobs/payloads#param-tools)
+- <a id="command-payloads"></a>[Command payloads](/automation/cron-jobs/payloads#command-payloads)
+- <a id="script-payloads"></a>[Script payloads](/automation/cron-jobs/payloads#script-payloads)
+- <a id="execution-styles"></a>[Execution styles](/automation/cron-jobs/payloads#execution-styles)
+- <a id="codex-apps-in-scheduled-automations"></a>[Codex apps in scheduled automations](/automation/cron-jobs/payloads#codex-apps-in-scheduled-automations)
+- <a id="main-session-vs-current-vs-isolated-vs-custom"></a>[Main session vs current vs isolated vs custom](/automation/cron-jobs/payloads#main-session-vs-current-vs-isolated-vs-custom)
+- <a id="what-fresh-session-means-for-isolated-jobs"></a>[What 'fresh session' means for isolated jobs](/automation/cron-jobs/payloads#what-fresh-session-means-for-isolated-jobs)
+- <a id="unattended-run-contract"></a>[Unattended run contract](/automation/cron-jobs/payloads#unattended-run-contract)
+- <a id="subagent-and-discord-delivery"></a>[Subagent and Discord delivery](/automation/cron-jobs/payloads#subagent-and-discord-delivery)
+
+### Delivery sections
+
+[Automation delivery](/automation/cron-jobs/delivery) — Delivery modes, failure notifications, and output language.
+
+- <a id="delivery-and-output"></a>[Delivery and output](/automation/cron-jobs/delivery#delivery-and-output)
+- <a id="failure-notifications"></a>[Failure notifications](/automation/cron-jobs/delivery#failure-notifications)
+- <a id="output-language"></a>[Output language](/automation/cron-jobs/delivery#output-language)
+
+### Management and configuration sections
+
+[Manage automations](/automation/cron-jobs/managing-jobs) — CLI examples, management commands, run history, and config keys.
+
+- <a id="cli-examples"></a>[CLI examples](/automation/cron-jobs/managing-jobs#cli-examples)
+- <a id="one-shot-reminder"></a>[One-shot reminder](/automation/cron-jobs/managing-jobs#one-shot-reminder)
+- <a id="recurring-isolated-job"></a>[Recurring isolated job](/automation/cron-jobs/managing-jobs#recurring-isolated-job)
+- <a id="model-and-thinking-override"></a>[Model and thinking override](/automation/cron-jobs/managing-jobs#model-and-thinking-override)
+- <a id="webhook-output"></a>[Webhook output](/automation/cron-jobs/managing-jobs#webhook-output)
+- <a id="command-output"></a>[Command output](/automation/cron-jobs/managing-jobs#command-output)
+- <a id="managing-jobs"></a>[Managing jobs](/automation/cron-jobs/managing-jobs#managing-jobs)
+- <a id="conversational-management"></a>[Conversational management](/automation/cron-jobs/managing-jobs#conversational-management)
+- <a id="cli-management"></a>[CLI management](/automation/cron-jobs/managing-jobs#cli-management)
+- <a id="configuration"></a>[Configuration](/automation/cron-jobs/managing-jobs#configuration)
+- <a id="retry-behavior"></a>[Retry behavior](/automation/cron-jobs/managing-jobs#retry-behavior)
+- <a id="maintenance"></a>[Maintenance](/automation/cron-jobs/managing-jobs#maintenance)
+- <a id="legacy-store-migration"></a>[Legacy store migration](/automation/cron-jobs/managing-jobs#legacy-store-migration)
+
+### Inbound webhook sections
+
+[Inbound webhooks](/automation/cron-jobs/webhooks) — Gateway HTTP hooks for external callers.
+
+- <a id="webhooks"></a>[Webhooks](/automation/cron-jobs/webhooks#webhooks)
+- <a id="enable-and-test-an-agent-hook"></a>[Enable and test an agent hook](/automation/cron-jobs/webhooks#enable-and-test-an-agent-hook)
+- <a id="authentication"></a>[Authentication](/automation/cron-jobs/webhooks#authentication)
+- <a id="post-hooks-wake"></a>[POST /hooks/wake](/automation/cron-jobs/webhooks#post-hooks-wake)
+- <a id="post-hooks-agent"></a>[POST /hooks/agent](/automation/cron-jobs/webhooks#post-hooks-agent)
+- <a id="mapped"></a>[Mapped hooks (`POST /hooks/<name>`)](/automation/cron-jobs/webhooks#mapped)
+- <a id="verify-and-troubleshoot-hook-requests"></a>[Verify and troubleshoot hook requests](/automation/cron-jobs/webhooks#verify-and-troubleshoot-hook-requests)
+
+### Gmail sections
+
+[Gmail PubSub triggers](/automation/cron-jobs/gmail) — Gmail inbox triggers through Google Pub/Sub.
+
+- <a id="gmail-pubsub-integration"></a>[Gmail PubSub integration](/automation/cron-jobs/gmail#gmail-pubsub-integration)
+- <a id="configure-a-restricted-gmail-reader-recommended"></a><a id="configure-a-restricted-gmail-reader-(recommended)"></a>[Configure a restricted Gmail reader (recommended)](/automation/cron-jobs/gmail#configure-a-restricted-gmail-reader-recommended)
+- <a id="authenticate-the-reader-model"></a>[Authenticate the reader model](/automation/cron-jobs/gmail#authenticate-the-reader-model)
+- <a id="connect-gmail-transport"></a>[Connect Gmail transport](/automation/cron-jobs/gmail#connect-gmail-transport)
+- <a id="verify-the-reader-boundary"></a>[Verify the reader boundary](/automation/cron-jobs/gmail#verify-the-reader-boundary)
+- <a id="gateway-auto-start"></a>[Gateway auto-start](/automation/cron-jobs/gmail#gateway-auto-start)
+- <a id="manual-one-time-setup"></a>[Manual one-time setup](/automation/cron-jobs/gmail#manual-one-time-setup)
+- <a id="select-the-gcp-project"></a>[Select the GCP project](/automation/cron-jobs/gmail#select-the-gcp-project)
+- <a id="create-topic-and-grant-gmail-push-access"></a>[Create topic and grant Gmail push access](/automation/cron-jobs/gmail#create-topic-and-grant-gmail-push-access)
+- <a id="start-the-watch"></a>[Start the watch](/automation/cron-jobs/gmail#start-the-watch)
+- <a id="gmail-model-override"></a>[Gmail model override](/automation/cron-jobs/gmail#gmail-model-override)
+
+### Troubleshooting sections
+
+[Automation troubleshooting](/automation/cron-jobs/troubleshooting) — Command ladder and common automation failure shapes.
+
+- <a id="troubleshooting"></a>[Troubleshooting](/automation/cron-jobs/troubleshooting#troubleshooting)
+- <a id="command-ladder"></a>[Command ladder](/automation/cron-jobs/troubleshooting#command-ladder)
+- <a id="automations-not-firing"></a>[Automations not firing](/automation/cron-jobs/troubleshooting#automations-not-firing)
+- <a id="job-fired-but-no-delivery"></a>[Job fired but no delivery](/automation/cron-jobs/troubleshooting#job-fired-but-no-delivery)
+- <a id="automations-or-heartbeat-appear-to-prevent-new-style-rollover"></a>[Automations or heartbeat appear to prevent /new-style rollover](/automation/cron-jobs/troubleshooting#automations-or-heartbeat-appear-to-prevent-new-style-rollover)
+- <a id="timezone-gotchas"></a>[Timezone gotchas](/automation/cron-jobs/troubleshooting#timezone-gotchas)
+
+## Related
+
+- [Automation](/automation) — all automation mechanisms at a glance
+- [Background Tasks](/automation/tasks) — task ledger for automation runs
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
+- [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
+- [Timezone](/concepts/timezone) — timezone configuration

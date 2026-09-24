@@ -1,42 +1,64 @@
-import type { IrcClient } from "./client.js";
-import type { CoreConfig } from "./types.js";
+// Irc plugin module implements send behavior.
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { convertMarkdownTables, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIrcAccount } from "./accounts.js";
+import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
+import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
 import { makeIrcMessageId } from "./protocol.js";
 import { getIrcRuntime } from "./runtime.js";
+import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
+  cfg: CoreConfig;
   accountId?: string;
   replyTo?: string;
-  target?: string;
   client?: IrcClient;
+  abortSignal?: AbortSignal;
+  onPlatformSendDispatch?: () => Promise<void>;
+};
+
+type SendIrcMessage = {
+  text: string;
+  replyTo?: string;
 };
 
 export type SendIrcResult = {
   messageId: string;
   target: string;
+  receipt: MessageReceipt;
 };
 
-function resolveTarget(to: string, opts?: SendIrcOptions): string {
-  const fromArg = normalizeIrcMessagingTarget(to);
-  if (fromArg) {
-    return fromArg;
+function recordIrcOutboundActivity(accountId: string): void {
+  try {
+    getIrcRuntime().channel.activity.record({
+      channel: "irc",
+      accountId,
+      direction: "outbound",
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "IRC runtime not initialized") {
+      throw error;
+    }
   }
-  const fromOpt = normalizeIrcMessagingTarget(opts?.target ?? "");
-  if (fromOpt) {
-    return fromOpt;
-  }
-  throw new Error(`Invalid IRC target: ${to}`);
 }
 
-export async function sendMessageIrc(
+export async function sendIrcMessages(
   to: string,
   text: string,
-  opts: SendIrcOptions = {},
-): Promise<SendIrcResult> {
-  const runtime = getIrcRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  opts: SendIrcOptions,
+  planMessages: (preparedText: string) => readonly SendIrcMessage[] = (preparedText) => [
+    { text: preparedText, replyTo: opts.replyTo },
+  ],
+  onDeliveryResult?: (result: SendIrcResult) => Promise<void> | void,
+): Promise<SendIrcResult[]> {
+  const cfg = requireRuntimeConfig(opts.cfg, "IRC send") as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -48,52 +70,89 @@ export async function sendMessageIrc(
     );
   }
 
-  const target = resolveTarget(to, opts);
-  const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+  const target = normalizeIrcMessagingTarget(to);
+  if (!target) {
+    throw new Error(`Invalid IRC target: ${to}`);
+  }
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "irc",
     accountId: account.accountId,
   });
-  const prepared = runtime.channel.text.convertMarkdownTables(text.trim(), tableMode);
-  const payload = opts.replyTo ? `${prepared}\n\n[reply:${opts.replyTo}]` : prepared;
-
-  if (!payload.trim()) {
+  if (!text) {
+    return [];
+  }
+  // Render the complete source before splitting: fragment parsing loses code,
+  // link, and table context and can turn a closing fence into an empty message.
+  const prepared = stripMarkdown(convertMarkdownTables(text.trim(), tableMode));
+  if (!prepared.trim()) {
     throw new Error("Message must be non-empty for IRC sends");
   }
+  const messages = planMessages(prepared);
+  opts.abortSignal?.throwIfAborted();
 
-  const client = opts.client;
-  if (client?.isReady()) {
-    client.sendPrivmsg(target, payload);
-  } else {
-    const transient = await connectIrcClient({
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      username: account.username,
-      realname: account.realname,
-      password: account.password,
-      nickserv: {
-        enabled: account.config.nickserv?.enabled,
-        service: account.config.nickserv?.service,
-        password: account.config.nickserv?.password,
-        register: account.config.nickserv?.register,
-        registerEmail: account.config.nickserv?.registerEmail,
-      },
-      connectTimeoutMs: 12000,
-    });
-    transient.sendPrivmsg(target, payload);
-    transient.quit("sent");
+  let transient: IrcClient | undefined;
+  const client = opts.client?.isReady()
+    ? opts.client
+    : (transient = await connectIrcClient(
+        buildIrcConnectOptions(account, {
+          connectTimeoutMs: 12000,
+          abortSignal: opts.abortSignal,
+        }),
+      ));
+
+  const results: SendIrcResult[] = [];
+  try {
+    opts.abortSignal?.throwIfAborted();
+    if (transient && (target.startsWith("#") || target.startsWith("&"))) {
+      client.join(target);
+    }
+    for (const message of messages) {
+      opts.abortSignal?.throwIfAborted();
+      if (!client.isReady()) {
+        throw new Error("IRC connection closed before send");
+      }
+      await opts.onPlatformSendDispatch?.();
+      opts.abortSignal?.throwIfAborted();
+      if (!client.isReady()) {
+        throw new Error("IRC connection closed before send");
+      }
+      client.sendPrivmsg(target, message.text, message.replyTo);
+      recordIrcOutboundActivity(account.accountId);
+
+      const messageId = makeIrcMessageId();
+      const result = {
+        messageId,
+        target,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [
+            {
+              channel: "irc",
+              messageId,
+              conversationId: target,
+            },
+          ],
+          kind: "text",
+          ...(message.replyTo ? { replyToId: message.replyTo } : {}),
+        }),
+      };
+      results.push(result);
+      await onDeliveryResult?.(result);
+    }
+    return results;
+  } finally {
+    transient?.quit("sent");
   }
+}
 
-  runtime.channel.activity.record({
-    channel: "irc",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  return {
-    messageId: makeIrcMessageId(),
-    target,
-  };
+export async function sendMessageIrc(
+  to: string,
+  text: string,
+  opts: SendIrcOptions,
+): Promise<SendIrcResult> {
+  const result = (await sendIrcMessages(to, text, opts))[0];
+  if (!result) {
+    throw new Error("Message must be non-empty for IRC sends");
+  }
+  return result;
 }

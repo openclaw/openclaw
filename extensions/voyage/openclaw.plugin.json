@@ -1,0 +1,24 @@
+{
+  "id": "voyage",
+  "categories": ["memory"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "contracts": {
+    "embeddingProviders": ["voyage"]
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "voyage",
+        "envVars": ["VOYAGE_API_KEY"]
+      }
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

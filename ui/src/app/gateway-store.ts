@@ -1,0 +1,646 @@
+import {
+  gatewayCredentialScope,
+  isRetryableGatewayStartupUnavailableError,
+  readControlUiBuildMismatchId,
+} from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ModelCatalogTarget } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "../../../packages/gateway-protocol/src/restart-unavailable.js";
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+// Control UI module owns the application gateway store: the reactive
+// snapshot around GatewayBrowserClient consumed by the app shell.
+import type { EventLogEntry } from "../api/event-log.ts";
+import {
+  GatewayBrowserClient,
+  resolveGatewayErrorDetailCode,
+  type GatewayBrowserClientOptions,
+  type GatewayEventListener,
+  type GatewayHelloOk,
+} from "../api/gateway.ts";
+import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
+import { configuredUiDevGateway, isConfiguredUiDevGateway } from "../dev-gateway.ts";
+import { t } from "../i18n/index.ts";
+import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
+import { readConnectionAuthReason } from "../lib/connection-hints.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { readSessionDefaults } from "../lib/sessions/session-key.ts";
+import { generateUUID } from "../lib/uuid.ts";
+import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
+import type {
+  ApplicationGateway,
+  ApplicationGatewayConnectOptions,
+  ApplicationGatewayConnection,
+  ApplicationGatewaySnapshot,
+} from "./context.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
+import {
+  createGatewayControlUiReloadOptions,
+  isSameOriginGateway,
+} from "./gateway-control-ui-reload.ts";
+import {
+  createGatewayEventLog,
+  createGatewayMetadataObserver,
+  createGatewayEventObserver,
+  notifyGatewayObservers,
+} from "./gateway-observers.ts";
+import { readSuspensionPhase } from "./gateway-readiness.ts";
+import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
+import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
+import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  patchSettings,
+  persistSessionToken,
+  resolveGatewayCredentialsForUrlEdit,
+} from "./settings.ts";
+import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { readPresenceEntries, resolveSelfPresenceUser, sameSelfUser } from "./user-profile.ts";
+
+type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
+const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
+
+export function createApplicationGateway(
+  initialSettings: ReturnType<typeof loadSettings>,
+  initialPassword = "",
+  initialBootstrapToken = "",
+  createClient: GatewayClientFactory = defaultClientFactory,
+  options: {
+    persistDefaultConnectionSettings?: boolean;
+    resourceBasePath?: string;
+    bootstrapProfile?: ControlUiBootstrapProfileHint;
+    getModelCatalogTarget?: (gatewayUrl: string) => ModelCatalogTarget | undefined;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
+  } = {},
+): ApplicationGateway {
+  let settings = initialSettings;
+  let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
+  let connection: ApplicationGatewayConnection = {
+    gatewayUrl: settings.gatewayUrl,
+    token: settings.token,
+    bootstrapToken: initialBootstrapToken,
+    ...(options.bootstrapProfile ? { bootstrapProfile: options.bootstrapProfile } : {}),
+    password: initialPassword,
+  };
+  let connectionRevision = 0;
+  let snapshot: ApplicationGatewaySnapshot = {
+    client: null,
+    phase: "stopped",
+    offlineStable: false,
+    hello: null,
+    pluginCapabilities: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: settings.sessionKey,
+    lastError: null,
+    lastErrorCode: null,
+    lastErrorAuthReason: null,
+    selfUser: null,
+  };
+  let client: GatewayBrowserClient | null = null;
+  const canvasSurface = createGatewayCanvasSurfaceLease(
+    () => client,
+    (canvasPluginSurfaceUrl) => setSnapshot({ canvasPluginSurfaceUrl }),
+  );
+  // Session lineage belongs to the selected Gateway: once its hello succeeds,
+  // transport drops render as "reconnecting" (shell + banner) instead of
+  // kicking the operator back to the login gate.
+  let everConnected = false;
+  let stopped = true;
+  // Snapshot observers can synchronously stop or replace their publishing client.
+  const isCurrentClient = (expected: GatewayBrowserClient | null) =>
+    !stopped && client === expected;
+  const availability = createAvailabilityIndicators({
+    isStopped: () => stopped,
+    getSnapshot: () => snapshot,
+    applySnapshot: (patch) => setSnapshot(patch),
+  });
+  const { clearOfflineIndicatorTimer, setUnavailableDeadline, scheduleOfflineIndicator } =
+    availability;
+  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
+  const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
+  const eventLog = createGatewayEventLog();
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
+    // Retirement remains valid after a reentrant stop or same-account client replacement.
+    notifyGatewayObservers(
+      eventLogListeners,
+      events,
+      "event",
+      (current) => current === eventLog.entries,
+    );
+  };
+  const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
+    const previous = snapshot;
+    snapshot = { ...previous, ...patch };
+    if (snapshot.phase === "connected") {
+      clearOfflineIndicatorTimer();
+      snapshot.offlineStable = false;
+    } else {
+      // A disconnected transport cannot vouch for admission; the next hello replaces it.
+      snapshot.suspensionPhase = availability.hasSuspensionDeadline()
+        ? snapshot.suspensionPhase
+        : undefined;
+      snapshot.pluginCapabilities = null;
+      scheduleOfflineIndicator();
+    }
+    if (metadataObserver.synchronize(previous, snapshot)) {
+      notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
+    }
+  };
+  const updateSettings = (patch: Partial<typeof settings>, selectGateway = false) => {
+    if (!persistConnectionSettings && !selectGateway) {
+      settings = { ...settings, ...patch };
+      return;
+    }
+    persistConnectionSettings = true;
+    settings = patchSettings(patch, { selectGateway });
+  };
+  const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
+    const eventClient = client;
+    if (
+      (event.event === "plugins.changed" || event.event === "plugins.controlUi.changed") &&
+      eventClient
+    ) {
+      // Capability updates keep hello identity; reconnects replace it.
+      const eventHello = snapshot.hello;
+      const readCurrent = () =>
+        isCurrentClient(eventClient) &&
+        snapshot.hello === eventHello &&
+        snapshot.phase === "connected"
+          ? snapshot
+          : null;
+      void import("./plugin-capabilities.runtime.ts")
+        .then(({ refreshPluginCapabilities }) =>
+          refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
+            canvasSurface.start(eventClient, canvasSurface.generation, url),
+          ),
+        )
+        .catch((error: unknown) => {
+          if (readCurrent()) {
+            setSnapshot({ lastError: formatUiError(error) });
+          }
+        });
+    } else if (event.event === "gateway.suspension") {
+      const suspensionPhase = readSuspensionPhase(event.payload);
+      if (suspensionPhase) {
+        setSnapshot({ suspensionPhase });
+      }
+    } else if (event.event === "shutdown") {
+      // Only a restart-bearing shutdown arms the amber state; an ordinary stop
+      // (restartExpectedMs absent) flows through the normal offline pill so the
+      // retry action stays reachable. Hostile values fall to the timer clamp.
+      const expected = asOptionalRecord(event.payload)?.restartExpectedMs;
+      if (typeof expected === "number") {
+        setUnavailableDeadline("restartPending", expected);
+        setSnapshot({ restartPending: true });
+      }
+    } else if (event.event === "presence") {
+      const entries = readPresenceEntries(event.payload);
+      if (entries) {
+        const selfUser = resolveSelfPresenceUser(entries, client?.instanceId);
+        // A live connection owns its authenticated identity until onClose. Older
+        // gateways can omit still-connected clients after presence TTL pruning.
+        if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
+          setSnapshot({ selfUser });
+        }
+      }
+    }
+    // Snapshot observers can replace their client before this event reaches the log.
+    if (!isCurrentClient(eventClient)) {
+      return;
+    }
+    const entries = eventLog.record(event);
+    const ownsEventLog = (current: readonly EventLogEntry[]) =>
+      current === eventLog.entries && isCurrentClient(eventClient);
+    notifyGatewayObservers(eventLogListeners, entries, "event", ownsEventLog);
+  };
+
+  const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    const requestedGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
+    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(requestedGatewayUrl)) {
+      gateway.stop();
+      setSnapshot({
+        phase: "offline",
+        lastError:
+          "This development server targets a different Gateway. Restart ui:dev with OPENCLAW_UI_DEV_GATEWAY_URL set to that Gateway, or reconnect to the configured Gateway.",
+      });
+      return;
+    }
+    setUnavailableDeadline("suspensionPhase");
+    stopped = false;
+    const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
+    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
+    const logicalGatewayChanged =
+      gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
+    const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
+      connection.gatewayUrl,
+      nextGatewayUrl,
+      connection,
+    );
+    const nextConnection = {
+      ...connection,
+      ...connectionOverrides,
+      ...(logicalGatewayChanged && connectionOverrides.token === undefined
+        ? { token: scopedCredentials.token }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.password === undefined
+        ? { password: scopedCredentials.password }
+        : {}),
+      ...(logicalGatewayChanged && connectionOverrides.bootstrapToken === undefined
+        ? { bootstrapToken: "", bootstrapProfile: undefined }
+        : {}),
+      ...(connectionOverrides.bootstrapToken !== undefined &&
+      connectionOverrides.bootstrapProfile === undefined
+        ? { bootstrapProfile: undefined }
+        : {}),
+    };
+    const credentialsChanged =
+      nextConnection.gatewayUrl !== connection.gatewayUrl ||
+      nextConnection.token !== connection.token ||
+      nextConnection.password !== connection.password ||
+      nextConnection.bootstrapToken !== connection.bootstrapToken ||
+      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
+    if (credentialsChanged) {
+      connectionRevision += 1;
+      clearWarmBootState();
+    }
+    // Only a gateway URL that differs from the current connection counts as an
+    // explicit selection. The login gate always resubmits its prefilled URL, so
+    // treating any override as a selection would let an ephemeral approval
+    // document persist the serving gateway and clobber a saved remote choice.
+    const gatewayUrlChanged =
+      connectionOverrides.gatewayUrl !== undefined &&
+      connectionOverrides.gatewayUrl !== connection.gatewayUrl;
+    const targetSelection = gatewayUrlChanged
+      ? loadGatewaySessionSelection(nextConnection.gatewayUrl)
+      : null;
+    const hasRequestedSessionKey = requestedSessionKey !== undefined;
+    const nextSessionKey = hasRequestedSessionKey
+      ? requestedSessionKey.trim()
+      : (targetSelection?.sessionKey ?? snapshot.sessionKey);
+    // A different Gateway has no established session to keep mounted on failure.
+    // Accepted tradeoff: a restart pill armed for the previous gateway may
+    // linger across a mid-restart gateway switch until the next hello or the
+    // restart deadline clears it; no special-case reset for that rare edge.
+    if (gatewayUrlChanged) {
+      everConnected = false;
+    }
+    connection = nextConnection;
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
+    updateSettings(
+      {
+        gatewayUrl: nextConnection.gatewayUrl,
+        token: nextConnection.token,
+        ...(hasRequestedSessionKey
+          ? {
+              sessionKey: nextSessionKey,
+              lastActiveSessionKey: nextSessionKey,
+            }
+          : (targetSelection ?? {})),
+        ...(targetSelection ? { selectedAgentId: targetSelection.selectedAgentId } : {}),
+      },
+      persistConnectionSettings || gatewayUrlChanged,
+    );
+    canvasSurface.stop();
+    client?.stop();
+
+    const nextClient = createClient({
+      url: nextConnection.gatewayUrl,
+      token: nextConnection.token.trim() ? nextConnection.token : undefined,
+      bootstrapToken: nextConnection.bootstrapToken.trim()
+        ? nextConnection.bootstrapToken
+        : undefined,
+      bootstrapProfile: nextConnection.bootstrapProfile,
+      password: nextConnection.password.trim() ? nextConnection.password : undefined,
+      clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
+      clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
+      clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
+      platform: options.clientOptions?.platform,
+      deviceFamily: options.clientOptions?.deviceFamily,
+      mode: options.clientOptions?.mode ?? "webchat",
+      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      scopes: options.clientOptions?.scopes,
+      get modelCatalog() {
+        return client === nextClient
+          ? metadataObserver.captureTarget(
+              options.getModelCatalogTarget?.(nextConnection.gatewayUrl),
+            )
+          : undefined;
+      },
+      onHello: (hello: GatewayHelloOk) => {
+        if (client !== nextClient) {
+          return;
+        }
+        // The submitted secret is unclassified until this Gateway reports its mode.
+        // Clear an old token too when the origin now uses password or proxy auth.
+        persistSessionToken(
+          nextConnection.gatewayUrl,
+          asOptionalRecord(hello.snapshot)?.authMode === "token" ? nextConnection.token : "",
+        );
+        setUnavailableDeadline("suspensionPhase");
+        // A successful hello retires bootstrap; the client has processed any issued device grant.
+        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        const retiredAuthLog = eventLog.bindRecoveryScope(hello.auth?.recoveryScope);
+        if (retiredAuthLog) {
+          publishEventLogRetirement(retiredAuthLog);
+          if (!isCurrentClient(nextClient)) {
+            return;
+          }
+        }
+        const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
+        const controlUiBuildFresh = !(
+          isSameOriginGateway(nextConnection.gatewayUrl) &&
+          (exactBuildIdentityAvailable || everConnected) &&
+          controlUiBuildDiffersFrom({
+            version: hello.server?.version,
+            buildId: hello.server?.buildId,
+            controlUiBuildSource: hello.server?.controlUiBuildSource,
+          })
+        );
+        if (!controlUiBuildFresh) {
+          // Keep every connected-only drain fenced. The stale document may
+          // render the shell and refresh action, but it must not mutate state.
+          setSnapshot({
+            client: nextClient,
+            phase: "reconnecting",
+            hello,
+            canvasPluginSurfaceUrl: null,
+            selfUser: null,
+            lastError: null,
+            lastErrorCode: null,
+            lastErrorAuthReason: null,
+          });
+          const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
+          if (targetBuildId) {
+            void scheduleStaleChunkReload({
+              buildId: targetBuildId,
+              ...createGatewayControlUiReloadOptions(
+                gateway,
+                () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+              ),
+            });
+          }
+          return;
+        }
+        updateAvatarContext(hello);
+        if (persistConnectionSettings) {
+          settings = loadSettings();
+        }
+        const sessionDefaults = readSessionDefaults({ hello });
+        const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);
+        const lastActiveSessionKey = resolveSessionKey(settings.lastActiveSessionKey, hello);
+        if (
+          sessionKey !== settings.sessionKey ||
+          lastActiveSessionKey !== settings.lastActiveSessionKey
+        ) {
+          updateSettings({
+            sessionKey,
+            lastActiveSessionKey,
+          });
+        }
+        everConnected = true;
+        const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
+        const canvasLeaseGeneration = canvasSurface.begin(nextClient);
+        setUnavailableDeadline("restartPending");
+        setSnapshot({
+          client: nextClient,
+          phase: "connected",
+          restartPending: false,
+          suspensionPhase: readSuspensionPhase(asOptionalRecord(hello.snapshot)?.suspension),
+          hello,
+          pluginCapabilities: readHelloPluginCapabilities(hello),
+          canvasPluginSurfaceUrl,
+          // Trim guards a whitespace-only defaultId from becoming a truthy selection.
+          assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
+          sessionKey,
+          lastError: null,
+          lastErrorCode: null,
+          lastErrorAuthReason: null,
+          selfUser: resolveSelfPresenceUser(
+            readPresenceEntries(hello.snapshot) ?? [],
+            nextClient.instanceId,
+          ),
+        });
+        canvasSurface.start(nextClient, canvasLeaseGeneration, canvasPluginSurfaceUrl ?? undefined);
+      },
+      onRecoveryScopeChange: () => {
+        if (client !== nextClient || snapshot.phase !== "connected") {
+          return;
+        }
+        retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
+        setSnapshot({});
+      },
+      onClose: ({ code, reason, error, willRetry }) => {
+        if (client !== nextClient) {
+          return;
+        }
+        canvasSurface.stop();
+        const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
+        if (mismatchedBuildId) {
+          void scheduleStaleChunkReload({
+            buildId: mismatchedBuildId,
+            ...createGatewayControlUiReloadOptions(
+              gateway,
+              () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+            ),
+          });
+        }
+        const startupPending =
+          mismatchedBuildId === null &&
+          !everConnected &&
+          willRetry &&
+          isRetryableGatewayStartupUnavailableError(error);
+        if (startupPending && snapshot.phase === "starting") {
+          return;
+        }
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        // Fresh drain evidence re-arms the deadline: the server still says
+        // "restarting", so the amber state stays honest for another window.
+        const restartPending = isGatewayRestartUnavailableError(error);
+        if (restartPending) {
+          setUnavailableDeadline("restartPending", 0);
+        }
+        const suspensionPhase = isGatewaySuspendUnavailableError(error)
+          ? (readSuspensionPhase(error?.details) ?? "prepared")
+          : undefined;
+        // Display-only evidence; admission is still re-derived from the next hello.
+        setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        const closeReason = formatUiExternalText(reason);
+        setSnapshot({
+          client: nextClient,
+          phase:
+            mismatchedBuildId !== null
+              ? "reload-required"
+              : startupPending
+                ? "starting"
+                : everConnected
+                  ? willRetry
+                    ? "reconnecting"
+                    : "offline"
+                  : willRetry
+                    ? "connecting"
+                    : "stopped",
+          hello: null,
+          canvasPluginSurfaceUrl: null,
+          selfUser: null,
+          restartPending: restartPending || snapshot.restartPending === true,
+          suspensionPhase,
+          lastError: startupPending
+            ? null
+            : error?.message
+              ? formatUiError(error.message)
+              : closeReason
+                ? `disconnected (${code}): ${closeReason}`
+                : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
+                    code: String(code),
+                  }),
+          lastErrorCode: startupPending ? null : lastErrorCode,
+          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
+        });
+      },
+      onGap: ({ expected, received }) => {
+        if (!isCurrentClient(nextClient)) {
+          return;
+        }
+        setSnapshot({
+          lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
+          lastErrorCode: null,
+          lastErrorAuthReason: null,
+        });
+        if (isCurrentClient(nextClient)) {
+          connect();
+        }
+      },
+      onEvent: createGatewayEventObserver({
+        isAttached: () => client === nextClient,
+        isCurrent: () => isCurrentClient(nextClient),
+        project: (event) => metadataObserver.receive(event, snapshot),
+        record: recordGatewayEvent,
+        listeners: eventListeners,
+      }),
+    });
+    client = nextClient;
+    setSnapshot({
+      client: nextClient,
+      // Keep the shell mounted while a fresh client attempts event-gap
+      // recovery or a manual retry when a session already existed.
+      phase: everConnected ? "reconnecting" : "connecting",
+      hello: null,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: null,
+      selfUser: null,
+      sessionKey: nextSessionKey,
+      lastError: null,
+      lastErrorCode: null,
+      lastErrorAuthReason: null,
+    });
+    if (retiredEventLog) {
+      publishEventLogRetirement(retiredEventLog);
+    }
+    if (isCurrentClient(nextClient)) {
+      nextClient.start();
+    }
+  };
+
+  const gateway: ApplicationGateway = {
+    get snapshot() {
+      return snapshot;
+    },
+    get connection() {
+      return connection;
+    },
+    get connectionRevision() {
+      return connectionRevision;
+    },
+    get eventLog() {
+      return eventLog.entries;
+    },
+    get eventLogRevision() {
+      return eventLog.revision;
+    },
+    connect,
+    setSessionKey: (sessionKey) => {
+      const nextSessionKey = sessionKey.trim();
+      if (!nextSessionKey || nextSessionKey === snapshot.sessionKey) {
+        return;
+      }
+      updateSettings({
+        sessionKey: nextSessionKey,
+        lastActiveSessionKey: nextSessionKey,
+      });
+      setSnapshot({ sessionKey: nextSessionKey });
+    },
+    start: () => connect(),
+    stop: () => {
+      stopped = true;
+      clearOfflineIndicatorTimer();
+      setUnavailableDeadline("restartPending");
+      setUnavailableDeadline("suspensionPhase");
+      canvasSurface.stop();
+      client?.stop();
+      client = null;
+      everConnected = false;
+      setSnapshot({
+        client: null,
+        phase: "stopped",
+        offlineStable: false,
+        restartPending: false,
+        hello: null,
+        canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
+        selfUser: null,
+        lastError: null,
+        lastErrorCode: null,
+        lastErrorAuthReason: null,
+      });
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEventLog: (listener) => {
+      eventLogListeners.add(listener);
+      return () => eventLogListeners.delete(listener);
+    },
+    subscribeEvents: (listener) => {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+    updateSelfUser: (patch) => {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      setSnapshot({ selfUser: { ...snapshot.selfUser, ...patch } });
+    },
+    ...createDeviceCredentialMethods({
+      gatewayUrl: () => connection.gatewayUrl,
+      connect,
+      isStopped: () => stopped,
+    }),
+  };
+  return gateway;
+}

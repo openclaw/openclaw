@@ -1,53 +1,47 @@
-import type { ErrorObject } from "ajv";
+// Node method helpers centralize JSON parsing and node-invoke error mapping.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+} from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import type { RespondFn } from "./types.js";
-import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
-import { formatForLog } from "../ws-log.js";
+export { parseGatewayPayload } from "../server-json.js";
 
-type ValidatorFn = ((value: unknown) => boolean) & {
-  errors?: ErrorObject[] | null;
-};
+/** Narrows successful node invoke results or responds with the node error details. */
+export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
+  respond: RespondFn,
+  res: T,
+): res is T & { ok: true } {
+  return respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res);
+}
 
-export function respondInvalidParams(params: {
-  respond: RespondFn;
-  method: string;
-  validator: ValidatorFn;
-}) {
-  params.respond(
+export function respondUnavailableOnNodeInvokeErrorWithProvenance<
+  T extends { ok: boolean; error?: unknown },
+>(
+  respond: RespondFn,
+  res: T,
+  provenance?: { nodeCommandDispatched: boolean },
+): res is T & { ok: true } {
+  if (res.ok) {
+    return true;
+  }
+  const nodeError =
+    res.error && typeof res.error === "object"
+      ? (res.error as { code?: unknown; message?: unknown })
+      : null;
+  const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
+  const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
+  const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  const details = {
+    nodeError: res.error ?? null,
+    ...(provenance ? { nodeCommandDispatched: provenance.nodeCommandDispatched } : {}),
+  };
+  respond(
     false,
     undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${params.method} params: ${formatValidationErrors(params.validator.errors)}`,
-    ),
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details,
+    }),
   );
-}
-
-export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {
-  try {
-    await fn();
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-  }
-}
-
-export function uniqueSortedStrings(values: unknown[]) {
-  return [...new Set(values.filter((v) => typeof v === "string"))]
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .toSorted();
-}
-
-export function safeParseJson(value: string | null | undefined): unknown {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return { payloadJSON: value };
-  }
+  return false;
 }

@@ -1,50 +1,58 @@
 ---
-summary: "How to run tests locally (vitest) and when to use force/coverage modes"
+summary: "Index of the OpenClaw testing reference, one page per reader job"
 read_when:
   - Running or fixing tests
 title: "Tests"
 ---
 
-# Tests
-
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
+- Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
-- `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
-- `pnpm test:coverage`: Runs Vitest with V8 coverage. Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
-- `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing).
-- `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
+This page is an index. The testing reference is documented on six pages, one
+per reader job. Open the page that matches your task.
 
-## Model latency bench (local keys)
+| Page                                                           | Read it when                                                                       |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Run tests locally](/reference/test/local)                     | The routine local order, the core command table, and the local PR gate.            |
+| [Control UI, TUI, and E2E lanes](/reference/test/lanes)        | Control UI, TUI, extension, Gateway, and live lane commands and fixture rules.     |
+| [Docker test suites](/reference/test/docker)                   | The weighted Docker scheduler, its knobs, and the notable Docker lanes.            |
+| [Test performance and benchmarks](/reference/test/performance) | Import profiling, CPU and heap profiles, shard timings, and the benchmark scripts. |
+| [Test runner internals](/reference/test/runner-internals)      | Shared build locks, isolated test state and homes, and JSON report merging.        |
+| [Remote test proof](/reference/test/remote-proof)              | When agents use Crabbox or Testbox, and the wrapper, lease, and trust rules.       |
 
-Script: [`scripts/bench-model.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-model.ts)
+## Where each section moved
 
-Usage:
+Every section heading from the previous single-page version keeps its anchor
+here, so an existing link such as `/reference/test#core-commands` still
+resolves. Each entry points at the page that now holds the content.
 
-- `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
-- Optional env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
-- Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
+- <a id="agent-default" />[Agent default](/reference/test/remote-proof#agent-default)
+- <a id="crabbox-repository-setup" />[Crabbox repository setup](/reference/test/remote-proof#crabbox-repository-setup)
+- <a id="routine-local-order" />[Routine local order](/reference/test/local#routine-local-order)
+- <a id="core-commands" />[Core commands](/reference/test/local#core-commands)
+- <a id="source-tests-and-subprocess-builds" />[Source tests and subprocess builds](/reference/test/local#source-tests-and-subprocess-builds)
+- <a id="shared-test-state-and-process-helpers" />[Shared test state and process helpers](/reference/test/runner-internals#shared-test-state-and-process-helpers)
+- <a id="control-ui%2C-tui%2C-and-extension-lanes" /><a id="control-ui-tui-and-extension-lanes" />[Control UI, TUI, and extension lanes](/reference/test/lanes#control-ui-tui-and-extension-lanes)
+- <a id="real-gateway-control-ui-fixture-lifetimes" />[Real-Gateway Control UI fixture lifetimes](/reference/test/lanes#real-gateway-control-ui-fixture-lifetimes)
+- <a id="retained-mocked-control-ui-proof" /><a id="retained-control-ui-proof" />[Retained Control UI proof](/reference/test/lanes#retained-control-ui-proof)
+- <a id="screenshots-during-chromium-recordings" />[Screenshots during Chromium recordings](/reference/test/lanes#screenshots-during-chromium-recordings)
+- <a id="gateway-and-e2e" />[Gateway and E2E](/reference/test/lanes#gateway-and-e2e)
+- <a id="full-docker-suite-(pnpm-test%3Adocker%3Aall)" /><a id="full-docker-suite-pnpm-testdockerall" />[Full Docker suite](/reference/test/docker#full-docker-suite-pnpm-testdockerall)
+- <a id="notable-docker-lanes" />[Notable Docker lanes](/reference/test/docker#notable-docker-lanes)
+- <a id="sandbox-compatibility-lanes" />[Sandbox compatibility lanes](/reference/test/docker#sandbox-compatibility-lanes)
+- <a id="local-pr-gate" />[Local PR gate](/reference/test/local#local-pr-gate)
+- <a id="json-reports-across-native-processes" />[JSON reports across native processes](/reference/test/runner-internals#json-reports-across-native-processes)
+- <a id="test-performance-tooling" />[Test performance tooling](/reference/test/performance#test-performance-tooling)
+- <a id="benchmarks" />[Benchmarks](/reference/test/performance#benchmarks)
+- <a id="model-latency-scripts-bench-model-ts" />[Model latency benchmark](/reference/test/performance#model-latency-scripts-bench-model-ts)
+- <a id="cli-startup-scripts-bench-cli-startup-ts" />[CLI startup benchmark](/reference/test/performance#cli-startup-scripts-bench-cli-startup-ts)
+- <a id="gateway-startup-scripts-bench-gateway-startup-ts" />[Gateway startup benchmark](/reference/test/performance#gateway-startup-scripts-bench-gateway-startup-ts)
+- <a id="gateway-restart-scripts-bench-gateway-restart-ts" />[Gateway restart benchmark](/reference/test/performance#gateway-restart-scripts-bench-gateway-restart-ts)
+- <a id="onboarding-e2e-(docker)" /><a id="onboarding-e2e-docker" />[Onboarding E2E (Docker)](/reference/test/docker#onboarding-e2e-docker)
+- <a id="qr-import-smoke-(docker)" /><a id="qr-import-smoke-docker" />[QR import smoke (Docker)](/reference/test/docker#qr-import-smoke-docker)
 
-Last run (2025-12-31, 20 runs):
+## Related
 
-- minimax median 1279ms (min 1114, max 2431)
-- opus median 2454ms (min 1224, max 3170)
-
-## Onboarding E2E (Docker)
-
-Docker is optional; this is only needed for containerized onboarding smoke tests.
-
-Full cold-start flow in a clean Linux container:
-
-```bash
-scripts/e2e/onboard-docker.sh
-```
-
-This script drives the interactive wizard via a pseudo-tty, verifies config/workspace/session files, then starts the gateway and runs `openclaw health`.
-
-## QR import smoke (Docker)
-
-Ensures `qrcode-terminal` loads under Node 22+ in Docker:
-
-```bash
-pnpm test:docker:qr
-```
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)
+- [Testing updates and plugins](/help/testing-updates-plugins)

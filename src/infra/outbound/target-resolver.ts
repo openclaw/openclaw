@@ -1,50 +1,64 @@
+// Target resolver combines plugin id heuristics, cached directory searches,
+// live fallback lookups, and normalized fallback targets.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelId,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
-import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
+// Message CLI actions use scoped registries without activating the process-root registry.
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
+import {
+  ambiguousTargetError,
+  missingTargetError,
+  reservedTargetLiteralError,
+  unknownTargetError,
+} from "./target-errors.js";
+import { maybeResolveIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
+  looksLikeTargetId,
+  maybeResolvePluginMessagingTarget,
   normalizeChannelTargetInput,
   normalizeTargetForProvider,
+  resolveNormalizedTargetInput,
+  resolveReservedTargetLiteral,
 } from "./target-normalization.js";
 
-export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
+/** Directory-backed destination kind used by outbound target resolution. */
+type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
-export type ResolveAmbiguousMode = "error" | "best" | "first";
-
+/** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
   to: string;
   kind: TargetResolveKind;
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin" | "directory" | "normalized";
 };
 
-export type ResolveMessagingTargetResult =
+/** Result of resolving a user-supplied outbound target. */
+type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
-export async function resolveChannelTarget(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  input: string;
-  accountId?: string | null;
-  preferredKind?: TargetResolveKind;
-  runtime?: RuntimeEnv;
-}): Promise<ResolveMessagingTargetResult> {
-  return resolveMessagingTarget(params);
-}
+export { maybeResolveIdLikeTarget } from "./target-id-resolution.js";
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
-  if (!params?.channel) {
+/** Clears cached directory entries for all channels or one channel/account scope. */
+export function resetDirectoryCache(params?: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}) {
+  if (!params) {
     directoryCache.clear();
     return;
   }
@@ -58,27 +72,36 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
       return true;
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
-  });
+  }, params.cfg);
 }
 
-function normalizeQuery(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function stripTargetPrefixes(value: string): string {
-  return value
-    .replace(/^(channel|user):/i, "")
+function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
+  const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
+    .map((prefix) => prefix?.trim().toLowerCase() ?? "")
+    .filter(Boolean);
+  let target = value.trim();
+  while (target) {
+    const lowered = target.toLowerCase();
+    const prefix = providerPrefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
+    if (!prefix) {
+      break;
+    }
+    target = target.slice(prefix.length + 1).trim();
+  }
+  return target
+    .replace(/^(channel|group|user):/i, "")
     .replace(/^[@#]/, "")
     .trim();
 }
 
+/** Formats a resolved target for user-facing summaries. */
 export function formatTargetDisplay(params: {
   channel: ChannelId;
   target: string;
   display?: string;
   kind?: ChannelDirectoryEntryKind;
 }): string {
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = getRuntimeVisibleChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
@@ -88,7 +111,7 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = trimmedTarget.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmedTarget);
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -115,47 +138,44 @@ export function formatTargetDisplay(params: {
   }
 
   const channelPrefix = `${params.channel}:`;
-  const withoutProvider = trimmedTarget.toLowerCase().startsWith(channelPrefix)
+  const withoutProvider = lowered.startsWith(channelPrefix)
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
-  const withoutPrefix = withoutProvider.replace(/^telegram:/i, "");
-  if (/^channel:/i.test(withoutPrefix)) {
-    return `#${withoutPrefix.replace(/^channel:/i, "")}`;
+  if (/^channel:/i.test(withoutProvider)) {
+    return `#${withoutProvider.replace(/^channel:/i, "")}`;
   }
-  if (/^user:/i.test(withoutPrefix)) {
-    return `@${withoutPrefix.replace(/^user:/i, "")}`;
+  if (/^user:/i.test(withoutProvider)) {
+    return `@${withoutProvider.replace(/^user:/i, "")}`;
   }
-  return withoutPrefix;
-}
-
-function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
-  if (channel !== "slack") {
-    return normalized;
-  }
-  const trimmed = raw.trim();
-  if (/^channel:/i.test(trimmed) || /^user:/i.test(trimmed)) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("#")) {
-    return `channel:${trimmed.slice(1).trim()}`;
-  }
-  if (trimmed.startsWith("@")) {
-    return `user:${trimmed.slice(1).trim()}`;
-  }
-  return trimmed;
+  return withoutProvider;
 }
 
 function detectTargetKind(
   channel: ChannelId,
   raw: string,
   preferred?: TargetResolveKind,
+  plugin?: ChannelPlugin,
 ): TargetResolveKind {
   if (preferred) {
     return preferred;
   }
   const trimmed = raw.trim();
   if (!trimmed) {
+    return "group";
+  }
+  const inferredChatType = (
+    plugin ?? getRuntimeVisibleChannelPlugin(channel)
+  )?.messaging?.inferTargetChatType?.({
+    to: raw,
+  });
+  if (inferredChatType === "direct") {
+    return "user";
+  }
+  if (inferredChatType === "channel") {
+    return "channel";
+  }
+  if (inferredChatType === "group") {
     return "group";
   }
 
@@ -166,16 +186,20 @@ function detectTargetKind(
     return "group";
   }
 
-  // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
+  const chatTypes = plugin?.capabilities?.chatTypes ?? [];
+  if (chatTypes.length > 0 && chatTypes.every((chatType) => chatType === "direct")) {
     return "user";
   }
 
   return "group";
 }
 
-function normalizeDirectoryEntryId(channel: ChannelId, entry: ChannelDirectoryEntry): string {
-  const normalized = normalizeTargetForProvider(channel, entry.id);
+function normalizeDirectoryEntryId(
+  channel: ChannelId,
+  entry: ChannelDirectoryEntry,
+  plugin?: ChannelPlugin,
+): string {
+  const normalized = normalizeTargetForProvider(channel, entry.id, plugin);
   return normalized ?? entry.id.trim();
 }
 
@@ -183,25 +207,45 @@ function matchesDirectoryEntry(params: {
   channel: ChannelId;
   entry: ChannelDirectoryEntry;
   query: string;
+  plugin?: ChannelPlugin;
+  exactOnly?: boolean;
 }): boolean {
-  const query = normalizeQuery(params.query);
+  const query = normalizeLowercaseStringOrEmpty(params.query);
   if (!query) {
     return false;
   }
-  const id = stripTargetPrefixes(normalizeDirectoryEntryId(params.channel, params.entry));
-  const name = params.entry.name ? stripTargetPrefixes(params.entry.name) : "";
-  const handle = params.entry.handle ? stripTargetPrefixes(params.entry.handle) : "";
-  const candidates = [id, name, handle].map((value) => normalizeQuery(value)).filter(Boolean);
-  return candidates.some((value) => value === query || value.includes(query));
+  const id = stripTargetPrefixes(
+    normalizeDirectoryEntryId(params.channel, params.entry, params.plugin),
+    params.channel,
+    params.plugin,
+  );
+  const name = params.entry.name
+    ? stripTargetPrefixes(params.entry.name, params.channel, params.plugin)
+    : "";
+  const handle = params.entry.handle
+    ? stripTargetPrefixes(params.entry.handle, params.channel, params.plugin)
+    : "";
+  const candidates = [id, name, handle].map(normalizeLowercaseStringOrEmpty).filter(Boolean);
+  return candidates.some((value) =>
+    params.exactOnly ? value === query : value === query || value.includes(query),
+  );
 }
 
 function resolveMatch(params: {
   channel: ChannelId;
   entries: ChannelDirectoryEntry[];
   query: string;
+  plugin?: ChannelPlugin;
+  exactOnly?: boolean;
 }) {
   const matches = params.entries.filter((entry) =>
-    matchesDirectoryEntry({ channel: params.channel, entry, query: params.query }),
+    matchesDirectoryEntry({
+      channel: params.channel,
+      entry,
+      query: params.query,
+      plugin: params.plugin,
+      exactOnly: params.exactOnly,
+    }),
   );
   if (matches.length === 0) {
     return { kind: "none" as const };
@@ -220,31 +264,27 @@ async function listDirectoryEntries(params: {
   runtime?: RuntimeEnv;
   query?: string;
   source: "cache" | "live";
+  plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
   const directory = plugin?.directory;
   if (!directory) {
     return [];
   }
   const runtime = params.runtime ?? defaultRuntime;
   const useLive = params.source === "live";
-  if (params.kind === "user") {
-    const fn = useLive ? (directory.listPeersLive ?? directory.listPeers) : directory.listPeers;
-    if (!fn) {
-      return [];
-    }
-    return await fn({
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-      query: params.query ?? undefined,
-      limit: undefined,
-      runtime,
-    });
-  }
-  const fn = useLive ? (directory.listGroupsLive ?? directory.listGroups) : directory.listGroups;
+  const fn =
+    params.kind === "user"
+      ? useLive
+        ? (directory.listPeersLive ?? directory.listPeers)
+        : directory.listPeers
+      : useLive
+        ? (directory.listGroupsLive ?? directory.listGroups)
+        : directory.listGroups;
   if (!fn) {
     return [];
   }
+  captureChannelReadAuthority()?.();
   return await fn({
     cfg: params.cfg,
     accountId: params.accountId ?? undefined,
@@ -262,46 +302,42 @@ async function getDirectoryEntries(params: {
   query?: string;
   runtime?: RuntimeEnv;
   preferLiveOnMiss?: boolean;
+  plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const signature = buildTargetResolverSignature(params.channel);
+  const signature = buildTargetResolverSignature(params.channel, params.plugin);
+  const cacheQuery = normalizeLowercaseStringOrEmpty(params.query ?? "");
   const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
     source: "cache",
     signature,
+    query: cacheQuery,
   });
   const cached = directoryCache.get(cacheKey, params.cfg);
   if (cached) {
     return cached;
   }
   const entries = await listDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: params.kind,
-    query: params.query,
-    runtime: params.runtime,
+    ...params,
     source: "cache",
   });
   if (entries.length > 0 || !params.preferLiveOnMiss) {
     directoryCache.set(cacheKey, entries, params.cfg);
     return entries;
   }
+  // Empty cached directory results may be stale; live lookup gets one chance
+  // before both live and cache keys are updated.
   const liveKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
     source: "live",
     signature,
+    query: cacheQuery,
   });
   const liveEntries = await listDirectoryEntries({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: params.kind,
-    query: params.query,
-    runtime: params.runtime,
+    ...params,
     source: "live",
   });
   directoryCache.set(liveKey, liveEntries, params.cfg);
@@ -309,87 +345,81 @@ async function getDirectoryEntries(params: {
   return liveEntries;
 }
 
-function pickAmbiguousMatch(
-  entries: ChannelDirectoryEntry[],
-  mode: ResolveAmbiguousMode,
-): ChannelDirectoryEntry | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  if (mode === "first") {
-    return entries[0] ?? null;
-  }
-  const ranked = entries.map((entry) => ({
-    entry,
-    rank: typeof entry.rank === "number" ? entry.rank : 0,
-  }));
-  const bestRank = Math.max(...ranked.map((item) => item.rank));
-  const best = ranked.find((item) => item.rank === bestRank)?.entry;
-  return best ?? entries[0] ?? null;
+function buildNormalizedResolveResult(params: {
+  normalized: string;
+  kind: TargetResolveKind;
+}): ResolveMessagingTargetResult {
+  return {
+    ok: true,
+    target: {
+      to: params.normalized,
+      kind: params.kind,
+      display: stripTargetPrefixes(params.normalized),
+      source: "normalized",
+      resolutionSource: "normalized",
+    },
+  };
 }
 
-export async function resolveMessagingTarget(params: {
+/** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
+export async function resolveChannelTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
+  unknownTargetMode?: "error" | "normalized";
+  plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    return { ok: false, error: new Error("Target is required") };
-  }
-  const plugin = getChannelPlugin(params.channel);
-  const providerLabel = plugin?.meta?.label ?? params.channel;
-  const hint = plugin?.messaging?.targetResolver?.hint;
-  const kind = detectTargetKind(params.channel, raw, params.preferredKind);
-  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
-  const looksLikeTargetId = (): boolean => {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      return false;
-    }
-    const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
-    if (lookup) {
-      return lookup(trimmed, normalized);
-    }
-    if (/^(channel|group|user):/i.test(trimmed)) {
-      return true;
-    }
-    if (/^[@#]/.test(trimmed)) {
-      return true;
-    }
-    if (/^\+?\d{6,}$/.test(trimmed)) {
-      // BlueBubbles/iMessage phone numbers should usually resolve via the directory to a DM chat,
-      // otherwise the provider may pick an existing group containing that handle.
-      if (params.channel === "bluebubbles" || params.channel === "imessage") {
-        return false;
-      }
-      return true;
-    }
-    if (trimmed.includes("@thread")) {
-      return true;
-    }
-    if (/^(conversation|user):/i.test(trimmed)) {
-      return true;
-    }
-    return false;
-  };
-  if (looksLikeTargetId()) {
-    const directTarget = preserveTargetCase(params.channel, raw, normalized);
+    const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
     return {
-      ok: true,
-      target: {
-        to: directTarget,
-        kind,
-        display: stripTargetPrefixes(raw),
-        source: "normalized",
-      },
+      ok: false,
+      error: missingTargetError(
+        plugin?.meta?.label ?? params.channel,
+        plugin?.messaging?.targetResolver?.hint,
+      ),
     };
   }
-  const query = stripTargetPrefixes(raw);
+  const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
+  const providerLabel = plugin?.meta?.label ?? params.channel;
+  const hint = plugin?.messaging?.targetResolver?.hint;
+  const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
+  const normalizedInput = resolveNormalizedTargetInput(params.channel, raw, plugin);
+  const normalized = normalizedInput?.normalized ?? raw;
+  const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
+  if (
+    normalizedInput &&
+    !reservedLiteral &&
+    looksLikeTargetId({
+      channel: params.channel,
+      raw: normalizedInput.raw,
+      normalized,
+      plugin,
+    })
+  ) {
+    const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
+      cfg: params.cfg,
+      channel: params.channel,
+      input: raw,
+      accountId: params.accountId,
+      preferredKind: params.preferredKind,
+      plugin,
+    });
+    if (resolvedIdLikeTarget) {
+      return {
+        ok: true,
+        target: resolvedIdLikeTarget,
+      };
+    }
+    return buildNormalizedResolveResult({
+      normalized,
+      kind,
+    });
+  }
+  const query = stripTargetPrefixes(raw, params.channel, plugin);
   const entries = await getDirectoryEntries({
     cfg: params.cfg,
     channel: params.channel,
@@ -398,58 +428,63 @@ export async function resolveMessagingTarget(params: {
     query,
     runtime: params.runtime,
     preferLiveOnMiss: true,
+    plugin,
   });
-  const match = resolveMatch({ channel: params.channel, entries, query });
+  const match = resolveMatch({
+    channel: params.channel,
+    entries,
+    query,
+    plugin,
+    exactOnly: Boolean(reservedLiteral),
+  });
   if (match.kind === "single") {
     const entry = match.entry;
+    if (!entry) {
+      throw new Error("Single directory match is missing its entry");
+    }
     return {
       ok: true,
       target: {
-        to: normalizeDirectoryEntryId(params.channel, entry),
+        to: normalizeDirectoryEntryId(params.channel, entry, plugin),
         kind,
-        display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
+        display:
+          entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id, params.channel, plugin),
         source: "directory",
+        resolutionSource: "directory",
       },
     };
   }
   if (match.kind === "ambiguous") {
-    const mode = params.resolveAmbiguous ?? "error";
-    if (mode !== "error") {
-      const best = pickAmbiguousMatch(match.entries, mode);
-      if (best) {
-        return {
-          ok: true,
-          target: {
-            to: normalizeDirectoryEntryId(params.channel, best),
-            kind,
-            display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
-            source: "directory",
-          },
-        };
-      }
-    }
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),
       candidates: match.entries,
     };
   }
-  // For iMessage-style channels, allow sending directly to the normalized handle
-  // even if the directory doesn't contain an entry yet.
-  if (
-    (params.channel === "bluebubbles" || params.channel === "imessage") &&
-    /^\+?\d{6,}$/.test(query)
-  ) {
-    const directTarget = preserveTargetCase(params.channel, raw, normalized);
+  // Directory misses are the fail-closed boundary for reserved literals.
+  if (reservedLiteral) {
+    return { ok: false, error: reservedTargetLiteralError(providerLabel, reservedLiteral, hint) };
+  }
+  const resolvedFallbackTarget = await maybeResolvePluginMessagingTarget({
+    cfg: params.cfg,
+    channel: params.channel,
+    input: raw,
+    accountId: params.accountId,
+    preferredKind: params.preferredKind,
+    plugin,
+  });
+  if (resolvedFallbackTarget) {
     return {
       ok: true,
-      target: {
-        to: directTarget,
-        kind,
-        display: stripTargetPrefixes(raw),
-        source: "normalized",
-      },
+      target: resolvedFallbackTarget,
     };
+  }
+
+  if (params.unknownTargetMode === "normalized") {
+    return buildNormalizedResolveResult({
+      normalized,
+      kind,
+    });
   }
 
   return {
@@ -458,6 +493,7 @@ export async function resolveMessagingTarget(params: {
   };
 }
 
+/** Looks up a display label for a resolved target id from cached/live directory entries. */
 export async function lookupDirectoryDisplay(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

@@ -1,49 +1,100 @@
-import type { RuntimeEnv } from "../runtime.js";
-import { lookupContextTokens } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+/**
+ * Session listing command.
+ *
+ * It loads one or more agent session stores, enriches rows with model/runtime
+ * metadata, and emits JSON or terminal tables.
+ */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import {
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "../agents/model-selection.js";
+import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
+import { normalizeChatType } from "../channels/chat-type.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../config/sessions.js";
+import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { isRich, theme } from "../terminal/theme.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
+import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
+import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.read.js";
+import { formatTokenCount } from "../utils/token-format.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
+import {
+  resolveSessionDisplayModelRef,
+  resolveSessionDisplayDefaults,
+} from "./sessions-display-model.js";
+import {
+  formatSessionAgeCell,
+  formatSessionFlagsCell,
+  formatSessionKeyCell,
+  formatSessionModelCell,
+  toSessionDisplayRow,
+} from "./sessions-table.js";
 
-type SessionRow = {
-  key: string;
-  kind: "direct" | "group" | "global" | "unknown";
-  updatedAt: number | null;
-  ageMs: number | null;
-  sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
-  groupActivation?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  model?: string;
-  contextTokens?: number;
-};
+type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
 
-const KIND_PAD = 6;
-const KEY_PAD = 26;
-const AGE_PAD = 9;
-const MODEL_PAD = 14;
-const TOKENS_PAD = 20;
+const DEFAULT_SESSIONS_LIMIT = 100;
+const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-
-const truncateKey = (key: string) => {
-  if (key.length <= KEY_PAD) {
-    return key;
+/** True ACP sessions use the child runtime's model, not the configured fallback. */
+function applyAcpModelOverlayIfNeeded(
+  modelRef: { provider: string; model: string },
+  sessionKey: string,
+  acpRuntime: boolean,
+): { provider: string; model: string } {
+  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
+    return modelRef;
   }
-  const head = Math.max(4, KEY_PAD - 10);
-  return `${key.slice(0, head)}...${key.slice(-6)}`;
-};
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
+  return { provider: "acpx", model: `${agentId}-acp` };
+}
+
+function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
+  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
+}
+
+function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
+  if (value === undefined) {
+    return DEFAULT_SESSIONS_LIMIT;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.toLowerCase() === "all") {
+      return undefined;
+    }
+    if (!/^\d+$/.test(trimmed)) {
+      return null;
+    }
+    return parseStrictPositiveInteger(trimmed) ?? null;
+  }
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) {
@@ -61,168 +112,332 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
-const formatTokensCell = (total: number, contextTokens: number | null, rich: boolean) => {
-  if (!total) {
-    return "-".padEnd(TOKENS_PAD);
+// Matches `openclaw status` semantics: show the recorded total whenever one
+// exists, and withhold only the percentage when freshness provenance is missing.
+const formatTokensCell = (
+  total: number | undefined,
+  freshTotal: number | undefined,
+  contextTokens: number | null,
+  rich: boolean,
+) => {
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
+  if (total === undefined) {
+    const label = `unknown/${ctxLabel} (?%)`;
+    return rich ? theme.muted(label) : label;
   }
-  const totalLabel = formatKTokens(total);
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
-  const padded = label.padEnd(TOKENS_PAD);
-  return colorByPct(padded, pct, rich);
+  const pct =
+    contextTokens && freshTotal !== undefined
+      ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+      : null;
+  const label = `${formatTokenCount(total)}/${ctxLabel} (${pct ?? "?"}%)`;
+  return colorByPct(label, pct, rich);
 };
 
-const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
-  const label = kind.padEnd(KIND_PAD);
+const formatKindCell = (kind: SessionKind, rich: boolean) => {
   if (!rich) {
-    return label;
+    return kind;
   }
   if (kind === "group") {
-    return theme.accentBright(label);
+    return theme.accentBright(kind);
   }
   if (kind === "global") {
-    return theme.warn(label);
+    return theme.warn(kind);
   }
   if (kind === "direct") {
-    return theme.accent(label);
+    return theme.accent(kind);
   }
-  return theme.muted(label);
+  return theme.muted(kind);
 };
 
-const formatAgeCell = (updatedAt: number | null | undefined, rich: boolean) => {
-  const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
-  const padded = ageLabel.padEnd(AGE_PAD);
-  return rich ? theme.muted(padded) : padded;
-};
-
-const formatModelCell = (model: string | null | undefined, rich: boolean) => {
-  const label = (model ?? "unknown").padEnd(MODEL_PAD);
-  return rich ? theme.info(label) : label;
-};
-
-const formatFlagsCell = (row: SessionRow, rich: boolean) => {
-  const flags = [
-    row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
-    row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
-    row.reasoningLevel ? `reasoning:${row.reasoningLevel}` : null,
-    row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
-    row.responseUsage ? `usage:${row.responseUsage}` : null,
-    row.groupActivation ? `activation:${row.groupActivation}` : null,
-    row.systemSent ? "system" : null,
-    row.abortedLastRun ? "aborted" : null,
-    row.sessionId ? `id:${row.sessionId}` : null,
-  ].filter(Boolean);
-  const label = flags.join(" ");
-  return label.length === 0 ? "" : rich ? theme.muted(label) : label;
-};
-
-function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
+function resolveSessionRuntimeLabel(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
+  modelProvider: string;
+  classifyCliProvider: CliProviderClassifier;
+}): string {
+  const id = normalizeOptionalLowercaseString(params.agentRuntime.id);
+  const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
+  return resolveAgentRuntimeLabel({
+    config: params.cfg,
+    sessionEntry: params.entry,
+    resolvedHarness,
+    fallbackProvider: params.modelProvider,
+    classifyCliProvider: params.classifyCliProvider,
+  });
 }
 
-function toRows(store: Record<string, SessionEntry>): SessionRow[] {
-  return Object.entries(store)
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      return {
-        key,
-        kind: classifyKey(key, entry),
-        updatedAt,
-        ageMs: updatedAt ? Date.now() - updatedAt : null,
-        sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        responseUsage: entry?.responseUsage,
-        groupActivation: entry?.groupActivation,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: entry?.totalTokens,
-        model: entry?.model,
-        contextTokens: entry?.contextTokens,
-      } satisfies SessionRow;
-    })
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: string }): string {
+  return resolveSqliteTargetFromSessionStorePath(target.storePath, {
+    agentId: target.agentId,
+  }).path;
 }
 
+function stripChannelRecipientPrefix(
+  value: string | undefined,
+  channel: string | undefined,
+): string | undefined {
+  const raw = normalizeOptionalString(value);
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
+  if (!raw || !normalizedChannel) {
+    return raw;
+  }
+  const prefix = `${normalizedChannel}:`;
+  if (!raw.toLowerCase().startsWith(prefix)) {
+    return raw;
+  }
+  const stripped = raw.slice(prefix.length);
+  const topicMarkerIndex = stripped.toLowerCase().indexOf(":topic:");
+  // Topic suffixes are routing detail, not the peer id used by runtime-policy
+  // session-key display.
+  return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
+}
+
+function resolveDisplayRuntimePolicySessionKey(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  key: string;
+  entry: SessionEntry;
+}): string | undefined {
+  const { cfg, entry, key } = params;
+  const origin = sessionDeliveryOrigin(entry);
+  const deliveryContext = deliveryContextFromSession(entry);
+  const chatType = normalizeChatType(origin?.chatType ?? entry.chatType);
+  if (chatType !== "direct") {
+    return undefined;
+  }
+
+  const channel = normalizeOptionalString(
+    origin?.provider ?? deliveryContext?.channel ?? origin?.surface,
+  );
+  const to = normalizeOptionalString(origin?.to ?? deliveryContext?.to);
+  const from = normalizeOptionalString(origin?.from);
+  const nativeDirectUserId = normalizeOptionalString(origin?.nativeDirectUserId);
+  const peerId =
+    nativeDirectUserId ??
+    stripChannelRecipientPrefix(to, channel) ??
+    stripChannelRecipientPrefix(from, channel);
+
+  // Direct-message runtime policy can route by native user id, stripped
+  // recipient, or sender; expose the derived key when it differs from the row.
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: params.agentId,
+    cfg,
+    sessionKey: key,
+    ctx: {
+      SessionKey: key,
+      AgentId: params.agentId,
+      Provider: channel,
+      Surface: normalizeOptionalString(origin?.surface),
+      AccountId: normalizeOptionalString(origin?.accountId ?? deliveryContext?.accountId),
+      ChatType: chatType,
+      NativeDirectUserId: nativeDirectUserId,
+      SenderId: peerId,
+      OriginatingTo: to,
+      From: from,
+      To: to,
+    },
+  });
+
+  return runtimePolicySessionKey && runtimePolicySessionKey !== key
+    ? runtimePolicySessionKey
+    : undefined;
+}
+
+/** Lists sessions across selected stores with optional JSON output. */
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string },
+  opts: {
+    json?: boolean;
+    store?: string;
+    active?: string;
+    agent?: string;
+    allAgents?: boolean;
+    limit?: string | number;
+  },
   runtime: RuntimeEnv,
 ) {
-  const cfg = loadConfig();
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const aggregateAgents = opts.allAgents === true;
+  const cfg = getRuntimeConfig();
+  const displayDefaults = resolveSessionDisplayDefaults(cfg);
+  const { lookupContextTokens, resolveModelContextTokenProjection } =
+    await contextLookupRuntimeLoader.load();
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model) ??
-    DEFAULT_CONTEXT_TOKENS;
-  const configModel = resolved.model ?? DEFAULT_MODEL;
-  const storePath = resolveStorePath(opts.store ?? cfg.session?.store);
-  const store = loadSessionStore(storePath);
+    lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
-    const parsed = Number.parseInt(String(opts.active), 10);
-    if (Number.isNaN(parsed) || parsed <= 0) {
-      runtime.error("--active must be a positive integer (minutes)");
-      runtime.exit(1);
-      return;
+    const parsed = parseStrictPositiveInteger(opts.active);
+    if (parsed === undefined) {
+      const message = "--active must be a positive number of minutes, for example --active 30.";
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
     activeMinutes = parsed;
   }
 
-  const rows = toRows(store).filter((row) => {
-    if (activeMinutes === undefined) {
-      return true;
-    }
-    if (!row.updatedAt) {
-      return false;
-    }
-    return Date.now() - row.updatedAt <= activeMinutes * 60_000;
+  const limit = parseSessionsLimit(opts.limit);
+  if (limit === null) {
+    const message = '--limit must be a positive integer or "all", for example --limit 25.';
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  }
+
+  const classifyCliProvider = prepareCliProviderClassifier(cfg);
+  const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
+  const allEntries = targets.flatMap((target) => {
+    return listSessionEntriesReadOnly({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      projection: "list",
+    })
+      .filter(
+        ({ entry }) =>
+          activeSince === undefined ||
+          (typeof entry.updatedAt === "number" && entry.updatedAt >= activeSince),
+      )
+      .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
+  const totalCount = allEntries.length;
+  const sessionEntries = sortAndLimitBy(allEntries, limit, compareSessionRowsByUpdatedAt).map(
+    ({ agentId: storeAgentId, entry, sessionKey }) => {
+      const row = toSessionDisplayRow(sessionKey, entry);
+      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: row.key,
+      });
+      return { acpSessionKey, agentId, entry, row };
+    },
+  );
+  const acpSessionMetaByEntry = readAcpSessionMetaBatch({
+    cfg,
+    entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
+      sessionKey: acpSessionKey,
+      agentId,
+      entry,
+    })),
+  });
+  const rows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
+    const acpMeta = acpSessionMetaByEntry.get(entry);
+    const acpRuntime = acpMeta != null;
+    // ACP rows need stored-key metadata before model/runtime resolution so
+    // bridge sessions and true ACP runtime sessions display differently.
+    const modelRef = applyAcpModelOverlayIfNeeded(
+      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
+      acpSessionKey,
+      acpRuntime,
+    );
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
+      cfg,
+      agentId,
+      sessionEntry: entry,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      sessionKey: acpSessionKey,
+      acpRuntime,
+      acpBackend: acpMeta?.backend,
+    });
+    const hasPersistedContextTokens =
+      typeof entry.contextTokens === "number" && entry.contextTokens > 0;
+    // CLI-backed rows can store a canonical display provider that does not own
+    // the runtime's context policy, so retain their model-only offline fallback.
+    const usesCliContextFallback =
+      !hasPersistedContextTokens && classifyCliProvider(agentRuntime.id);
+    const modelContext = usesCliContextFallback
+      ? {
+          contextTokens: lookupContextTokens(modelRef.model, { allowAsyncLoad: false }),
+          authoredContextTokens: resolveAuthoredModelContextTokens({
+            cfg,
+            provider: modelRef.provider,
+            model: modelRef.model,
+          }),
+        }
+      : resolveModelContextTokenProjection({
+          cfg,
+          provider: modelRef.provider,
+          model: modelRef.model,
+          allowAsyncLoad: false,
+        });
+    const contextTokens = resolveProjectedSessionContextTokens({
+      entry,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      agentHarnessId: agentRuntime.id,
+      resolvedContextTokens: modelContext.contextTokens,
+      authoredContextTokens: modelContext.authoredContextTokens,
+    });
+    return Object.assign(row, {
+      agentId,
+      acpRuntime,
+      agentRuntime,
+      contextTokens,
+      displayModelRef: modelRef,
+      kind: classifySessionKind(row.key, entry),
+      runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+        agentId,
+        cfg,
+        key: row.key,
+        entry,
+      }),
+      runtimeLabel: opts.json
+        ? ""
+        : resolveSessionRuntimeLabel({
+            cfg,
+            entry,
+            agentRuntime,
+            modelProvider: modelRef.provider,
+            classifyCliProvider,
+          }),
+    });
+  });
+  const hasMore = rows.length < totalCount;
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          path: storePath,
-          count: rows.length,
-          activeMinutes: activeMinutes ?? null,
-          sessions: rows.map((r) => ({
-            ...r,
-            contextTokens:
-              r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
-            model: r.model ?? configModel ?? null,
-          })),
-        },
-        null,
-        2,
-      ),
-    );
+    const multi = targets.length > 1;
+    const aggregate = aggregateAgents || multi;
+    writeRuntimeJson(runtime, {
+      path: aggregate || !targets[0] ? null : resolveSessionStoreDisplayPath(targets[0]),
+      stores: aggregate
+        ? targets.map((target) => ({
+            agentId: target.agentId,
+            path: resolveSessionStoreDisplayPath(target),
+          }))
+        : undefined,
+      allAgents: aggregateAgents ? true : undefined,
+      count: rows.length,
+      totalCount,
+      limitApplied: limit ?? null,
+      hasMore,
+      activeMinutes: activeMinutes ?? null,
+      sessions: rows.map(({ displayModelRef: modelRef, runtimeLabel, ...row }) => {
+        void runtimeLabel;
+        return Object.assign(row, {
+          totalTokens: resolveSessionTotalTokens(row) ?? null,
+          totalTokensFresh: resolveFreshSessionTotalTokens(row) !== undefined,
+          contextTokens: row.contextTokens ?? configContextTokens ?? null,
+          modelProvider: modelRef.provider,
+          model: modelRef.model,
+        });
+      }),
+    });
     return;
   }
 
-  runtime.log(info(`Session store: ${storePath}`));
-  runtime.log(info(`Sessions listed: ${rows.length}`));
+  const primaryTarget = targets[0];
+  if (primaryTarget && targets.length === 1 && !aggregateAgents) {
+    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
+  } else {
+    runtime.log(
+      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+    );
+  }
+  runtime.log(
+    info(
+      hasMore && limit !== undefined
+        ? `Sessions listed: ${rows.length} of ${totalCount} (limit ${limit})`
+        : `Sessions listed: ${rows.length}`,
+    ),
+  );
   if (activeMinutes) {
     runtime.log(info(`Filtered to last ${activeMinutes} minute(s)`));
   }
@@ -232,36 +447,37 @@ export async function sessionsCommand(
   }
 
   const rich = isRich();
-  const header = [
-    "Kind".padEnd(KIND_PAD),
-    "Key".padEnd(KEY_PAD),
-    "Age".padEnd(AGE_PAD),
-    "Model".padEnd(MODEL_PAD),
-    "Tokens (ctx %)".padEnd(TOKENS_PAD),
-    "Flags",
-  ].join(" ");
-
-  runtime.log(rich ? theme.heading(header) : header);
-
-  for (const row of rows) {
-    const model = row.model ?? configModel;
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
-    const input = row.inputTokens ?? 0;
-    const output = row.outputTokens ?? 0;
-    const total = row.totalTokens ?? input + output;
-
-    const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);
-    const keyCell = rich ? theme.accent(keyLabel) : keyLabel;
-
-    const line = [
-      formatKindCell(row.kind, rich),
-      keyCell,
-      formatAgeCell(row.updatedAt, rich),
-      formatModelCell(model, rich),
-      formatTokensCell(total, contextTokens ?? null, rich),
-      formatFlagsCell(row, rich),
-    ].join(" ");
-
-    runtime.log(line.trimEnd());
-  }
+  const showAgentColumn = aggregateAgents || targets.length > 1;
+  runtime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        ...(showAgentColumn ? [{ key: "agent", header: "Agent" }] : []),
+        { key: "kind", header: "Kind" },
+        { key: "key", header: "Key" },
+        { key: "age", header: "Age" },
+        { key: "model", header: "Model" },
+        { key: "runtime", header: "Runtime" },
+        { key: "tokens", header: "Tokens (ctx %)" },
+        { key: "flags", header: "Flags", flex: true },
+      ].map((column) =>
+        Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
+      ),
+      rows: rows.map((row) => ({
+        agent: colorize(rich, theme.accentBright, sanitizeTerminalText(row.agentId)),
+        kind: formatKindCell(row.kind, rich),
+        key: formatSessionKeyCell(row.key, rich),
+        age: formatSessionAgeCell(row.updatedAt, rich),
+        model: formatSessionModelCell(row.displayModelRef.model, rich),
+        runtime: colorize(rich, theme.info, sanitizeTerminalText(row.runtimeLabel)),
+        tokens: formatTokensCell(
+          resolveSessionTotalTokens(row),
+          resolveFreshSessionTotalTokens(row),
+          row.contextTokens ?? configContextTokens,
+          rich,
+        ),
+        flags: formatSessionFlagsCell(row, rich),
+      })),
+    }).trimEnd(),
+  );
 }

@@ -1,28 +1,26 @@
+// Zalouser plugin module implements probe behavior.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ZcaUserInfo } from "./types.js";
-import { runZca, parseJsonOutput } from "./zca.js";
+import { getZaloUserInfo } from "./zalo-js.js";
 
-export interface ZalouserProbeResult {
-  ok: boolean;
+export type ZalouserProbeResult = BaseProbeResult<string> & {
   user?: ZcaUserInfo;
-  error?: string;
-}
+  elapsedMs?: number;
+};
 
 export async function probeZalouser(
   profile: string,
   timeoutMs?: number,
 ): Promise<ZalouserProbeResult> {
-  const result = await runZca(["me", "info", "-j"], {
-    profile,
-    timeout: timeoutMs,
-  });
-
-  if (!result.ok) {
-    return { ok: false, error: result.stderr || "Failed to probe" };
-  }
-
-  const user = parseJsonOutput<ZcaUserInfo>(result.stdout);
-  if (!user) {
-    return { ok: false, error: "Failed to parse user info" };
-  }
-  return { ok: true, user };
+  return await runChannelProbe(
+    timeoutMs ? resolveTimerTimeoutMs(timeoutMs, 1000, 1000) : undefined,
+    async () => {
+      const user = await getZaloUserInfo(profile);
+      return user ? { ok: true, user } : { ok: false, error: "Not authenticated" };
+    },
+    (error) => ({ ok: false, error: formatErrorMessage(error) }),
+  );
 }

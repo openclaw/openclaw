@@ -1,28 +1,25 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isToolCallContentType } from "../chat/tool-content.js";
+
 type ToolResultCounts = {
   total: number;
   errors: number;
 };
 
-const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
 const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
 
-const normalizeType = (value: unknown): string => {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim().toLowerCase();
-};
-
+/** Preserves call occurrences; a top-level legacy name can mirror the first matching block. */
 export const extractToolCallNames = (message: Record<string, unknown>): string[] => {
-  const names = new Set<string>();
-  const toolNameRaw = message.toolName ?? message.tool_name;
-  if (typeof toolNameRaw === "string" && toolNameRaw.trim()) {
-    names.add(toolNameRaw.trim());
-  }
+  const toolName = normalizeOptionalString(message.toolName ?? message.tool_name);
+  const names = toolName ? [toolName] : [];
+  let unmatchedTopLevelName = toolName;
 
   const content = message.content;
   if (!Array.isArray(content)) {
-    return Array.from(names);
+    return names;
   }
 
   for (const entry of content) {
@@ -30,22 +27,21 @@ export const extractToolCallNames = (message: Record<string, unknown>): string[]
       continue;
     }
     const block = entry as Record<string, unknown>;
-    const type = normalizeType(block.type);
-    if (!TOOL_CALL_TYPES.has(type)) {
+    if (!isToolCallContentType(normalizeOptionalString(block.type))) {
       continue;
     }
-    const name = block.name;
-    if (typeof name === "string" && name.trim()) {
-      names.add(name.trim());
+    const name = normalizeOptionalString(block.name);
+    if (name && name === unmatchedTopLevelName) {
+      unmatchedTopLevelName = undefined;
+    } else if (name) {
+      names.push(name);
     }
   }
 
-  return Array.from(names);
+  return names;
 };
 
-export const hasToolCall = (message: Record<string, unknown>): boolean =>
-  extractToolCallNames(message).length > 0;
-
+/** Counts recognized tool-result blocks and the subset explicitly marked as errors. */
 export const countToolResults = (message: Record<string, unknown>): ToolResultCounts => {
   const content = message.content;
   if (!Array.isArray(content)) {
@@ -59,7 +55,7 @@ export const countToolResults = (message: Record<string, unknown>): ToolResultCo
       continue;
     }
     const block = entry as Record<string, unknown>;
-    const type = normalizeType(block.type);
+    const type = normalizeLowercaseStringOrEmpty(block.type);
     if (!TOOL_RESULT_TYPES.has(type)) {
       continue;
     }
