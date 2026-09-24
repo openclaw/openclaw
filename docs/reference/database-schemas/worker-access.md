@@ -289,7 +289,8 @@ and reader owners for completion. It still awaits task completion and failure
 settlement before disposing its engine or releasing its process owner; its progress
 timer ends before terminal persistence. Cold worker startup belongs to admission;
 normal idle retirement and memory-pressure eviction remain in effect. Detached
-worker opening evaluates live admission guards in their captured caller context.
+worker opening evaluates live admission guards in their captured caller context,
+then releases that capture after native opening settles.
 Worktree run admission writes, task creation and progress, and the remaining native
 cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.

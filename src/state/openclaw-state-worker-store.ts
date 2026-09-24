@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -42,6 +41,7 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import {
+  captureOpenClawStateWorkerOpeningGuard,
   runWithCapturedWorkerContext,
   runWithOpenClawStateWorkerStore,
 } from "./openclaw-state-worker-operation.js";
@@ -60,7 +60,7 @@ function createSharedStateWorkerOwner() {
     source: ReturnType<typeof captureRuntimeWorkerSource>;
     context: OpenClawStateWorkerContext;
     opening: Promise<Store | undefined>;
-    openingAdmission: { assertCurrent?: () => void; refusal?: { error: unknown } };
+    openingAdmission: ReturnType<typeof captureOpenClawStateWorkerOpeningGuard>["admission"];
     existingOnly: boolean;
     store?: Store;
     actor?: object;
@@ -458,42 +458,36 @@ function createSharedStateWorkerOwner() {
         }
       }
       if (!entry) {
-        const openingAdmission: Entry["openingAdmission"] = { assertCurrent };
-        // The actor detaches its lifetime; live caller guards still need their captured scope.
-        const assertOpeningAdmission = AsyncLocalStorage.bind(() => {
-          admission.assertCurrent();
-          try {
-            assertCurrent?.();
-          } catch (error) {
-            openingAdmission.refusal = { error };
-            throw error;
-          }
-        });
+        const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
         const admitted: Entry = {
           source,
           context,
-          openingAdmission,
+          openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
           operationGeneration: 0,
-          opening: runInDetachedAsyncContext(() =>
-            openSharedStateSqliteWorkerStore<StoreOperations>(
-              {
-                ...source,
-                databasePath: admission.databasePath,
-                existingOnly,
-              },
-              context,
-              assertOpeningAdmission,
-              {
-                maintenanceScope: context.maintenanceScope,
-                preparation,
-                retainCleanup: (cleanup) => {
-                  admitted.cleanup = cleanup;
+          opening: runInDetachedAsyncContext(async () => {
+            try {
+              return await openSharedStateSqliteWorkerStore<StoreOperations>(
+                {
+                  ...source,
+                  databasePath: admission.databasePath,
+                  existingOnly,
                 },
-              },
-            ),
-          ),
+                context,
+                openingGuard.assertCurrent,
+                {
+                  maintenanceScope: context.maintenanceScope,
+                  preparation,
+                  retainCleanup: (cleanup) => {
+                    admitted.cleanup = cleanup;
+                  },
+                },
+              );
+            } finally {
+              openingGuard.releaseContext();
+            }
+          }),
         };
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {
