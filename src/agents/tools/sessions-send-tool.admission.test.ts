@@ -7,6 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
 } from "../../gateway/device-revocation.js";
+import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -374,6 +375,15 @@ describe("sessions_send dispatch admission", () => {
           params: expect.objectContaining({ ...originalRoute, message: "Task complete" }),
         }),
       ]);
+      const sendParams = requests.find((request) => request.method === "send")?.params;
+      expect(readInProcessSessionDeliveryGeneration(sendParams)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      });
+      expect(sendParams).toHaveProperty("idempotencyKey", `sessions-send:${runId}`);
+      expect(sendParams).not.toHaveProperty("sessionGeneration");
     } finally {
       gateway.mockRestore();
     }

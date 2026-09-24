@@ -1,7 +1,7 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import { outboundDeliveryQueueName } from "./delivery-queue-namespaces.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 /** Restore the exact pre-attempt row while its original owner still holds custody. */
@@ -11,10 +11,11 @@ export function restoreDeliveryAttemptBeforeDispatchInDatabase(
   reservedAttemptCount: number,
   claimedAttemptId?: string,
 ): void {
+  const queueName = outboundDeliveryQueueName(entry);
   const restored = transitionOwnedDeliveryQueueEntryInDatabase(
     database,
     {
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      queueName,
       id: entry.id,
       platformSendAttemptId: claimedAttemptId ?? null,
     },
@@ -36,7 +37,7 @@ export function restoreDeliveryAttemptBeforeDispatchInDatabase(
       };
       upsertDeliveryQueueEntryInDatabase(
         {
-          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          queueName,
           entry: restoredEntry,
         },
         database,

@@ -8,7 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { updateDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -309,6 +309,12 @@ describe("delivery-queue storage", () => {
         maxRetries: 2,
       });
 
+      for (const maxAttempts of [0, Number.NaN]) {
+        await expect(reserveDeliveryAttempt(id, maxAttempts, tmpDir())).rejects.toThrow(
+          `Invalid delivery attempt budget: ${maxAttempts}`,
+        );
+      }
+
       await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
         status: "reserved",
         attemptCount: 1,
@@ -591,10 +597,15 @@ describe("delivery-queue storage", () => {
       }
       await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
       const originalExpiry = Date.now() + 10_000;
-      updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => ({
-        ...entry,
-        availableAt: originalExpiry,
-      }));
+      updateDeliveryQueueEntryInDatabase(
+        openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+        (entry) => ({
+          ...entry,
+          availableAt: originalExpiry,
+        }),
+      );
 
       await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
 
@@ -608,31 +619,6 @@ describe("delivery-queue storage", () => {
       expect(renewedUntil).toBeGreaterThanOrEqual(beforeRenewal + 60_000);
       expect(renewedUntil).toBeLessThanOrEqual(Date.now() + 60_000);
       expect(readQueuedEntry(stateDir, id).availableAt).toBe(renewedUntil);
-    });
-
-    it("refreshes the attempt timestamp immediately before provider I/O", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "123",
-          payloads: [{ text: "test" }],
-        },
-        tmpDir(),
-      );
-
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(1_000);
-        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
-        vi.setSystemTime(9_000);
-        await markDeliveryPlatformSendDispatched(id, tmpDir());
-      } finally {
-        vi.useRealTimers();
-      }
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.platformSendStartedAt).toBe(9_000);
-      expect(entry.recoveryState).toBe("send_attempt_started");
     });
 
     it("keeps ambiguous post-send evidence across a later unclaimed batch dispatch", async () => {

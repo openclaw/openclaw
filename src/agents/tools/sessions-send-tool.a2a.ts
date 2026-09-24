@@ -4,6 +4,8 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
+import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
@@ -60,6 +62,7 @@ async function deliverAnnounceReply(params: {
   message: string;
   runContextId: string;
   targetAgentId: string;
+  sessionGeneration?: SessionDeliveryGeneration;
 }) {
   // Gateway sends need the selected owner for text routing and media roots;
   // carry the admitted target instead of relying on an implicit default.
@@ -70,17 +73,22 @@ async function deliverAnnounceReply(params: {
   try {
     await params.callGateway({
       method: "send",
-      params: {
-        to: params.announceTarget.to,
-        message,
-        ...(mediaUrls?.length ? { mediaUrls } : {}),
-        agentId: params.targetAgentId,
-        ...(audioAsVoice ? { asVoice: true } : {}),
-        channel: params.announceTarget.channel,
-        accountId: params.announceTarget.accountId,
-        threadId: params.announceTarget.threadId,
-        idempotencyKey: crypto.randomUUID(),
-      },
+      params: bindInProcessSessionDeliveryGeneration(
+        {
+          to: params.announceTarget.to,
+          message,
+          ...(mediaUrls?.length ? { mediaUrls } : {}),
+          agentId: params.targetAgentId,
+          ...(audioAsVoice ? { asVoice: true } : {}),
+          channel: params.announceTarget.channel,
+          accountId: params.announceTarget.accountId,
+          threadId: params.announceTarget.threadId,
+          idempotencyKey: params.sessionGeneration
+            ? `sessions-send:${params.runContextId}`
+            : crypto.randomUUID(),
+        },
+        params.sessionGeneration,
+      ),
       timeoutMs: 10_000,
     });
   } catch (err) {
@@ -105,14 +113,16 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
+  requesterDeliveryGeneration?: SessionDeliveryGeneration;
   requesterOrigin?: DeliveryContext;
   requesterChannel?: string;
   sourceReplyDelivered?: true;
   roundOneReply?: string;
   waitRunId?: string;
+  replyRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
 }) {
-  const runContextId = params.waitRunId ?? "unknown";
+  const runContextId = params.replyRunId ?? params.waitRunId ?? crypto.randomUUID();
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   try {
     let primaryReply = params.roundOneReply;
@@ -240,9 +250,9 @@ export async function runSessionsSendA2AFlow(params: {
       callGateway: gatewayCall,
       agentId: params.targetAgentId,
     });
-    // A captured address selects the destination; it must not restore an
-    // announcement that the current resolver suppresses, such as a deleted opaque session.
-    const announceTarget = resolvedTarget ? (sourceTarget ?? resolvedTarget) : null;
+    // Captured routes survive metadata changes; the delivery owner checks the
+    // original session generation immediately before dispatch.
+    const announceTarget = sourceTarget ?? resolvedTarget;
     const targetChannel = announceTarget?.channel ?? "unknown";
     if (
       oneWayInternalRequesterSessionKey &&
@@ -256,12 +266,22 @@ export async function runSessionsSendA2AFlow(params: {
         !params.requesterChannel ||
         params.requesterChannel === announceTarget.channel);
     if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
+      if (!params.requesterDeliveryGeneration) {
+        log.warn(
+          "sessions_send reply skipped because its original session generation is unavailable",
+          {
+            runId: runContextId,
+          },
+        );
+        return;
+      }
       await deliverAnnounceReply({
         announceTarget,
         callGateway: gatewayCall,
         message: latestReply,
         runContextId,
         targetAgentId: params.targetAgentId,
+        sessionGeneration: params.requesterDeliveryGeneration,
       });
       return;
     }
