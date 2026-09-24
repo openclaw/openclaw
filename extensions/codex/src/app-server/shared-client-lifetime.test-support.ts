@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import type {
   AgentHarnessTaskRecord,
   AgentHarnessTaskRuntime,
@@ -35,6 +36,7 @@ export function registerSharedClientLifetimeTests(
     async (kind) => {
       vi.useFakeTimers();
       const harness = createClientHarness({ autoEmitExit: false });
+      const stdinClosed = once(harness.process.stdin, "close");
       let finishStart!: (client: CodexAppServerClient) => void;
       const starting = new Promise<CodexAppServerClient>((resolve) => {
         finishStart = resolve;
@@ -56,7 +58,7 @@ export function registerSharedClientLifetimeTests(
       try {
         expect(settled).toBe(false);
         finishStart(harness.client);
-        await vi.advanceTimersByTimeAsync(0);
+        await stdinClosed;
         expect(harness.stdinDestroyed).toBe(true);
         expect(settled).toBe(false);
       } finally {
@@ -90,6 +92,7 @@ export function registerSharedClientLifetimeTests(
 
       for (let attempt = 0; attempt < 3; attempt++) {
         const harness = createClientHarness({ autoEmitExit: false });
+        const stdinClosed = once(harness.process.stdin, "close");
         startSpy.mockImplementationOnce(async () => {
           live.add(harness);
           harness.process.once("exit", () => live.delete(harness));
@@ -108,16 +111,23 @@ export function registerSharedClientLifetimeTests(
         });
         await vi.advanceTimersByTimeAsync(0);
         if (mode === "validation") {
+          const closeStarted = new Promise<void>((resolve) => {
+            harness.client.addCloseHandler(() => resolve());
+          });
           const initialize = JSON.parse(harness.writes[0]!);
           harness.send({
             id: initialize.id,
             result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
           });
+          // Catalog identity resolves through real I/O before auth can reject startup.
+          await closeStarted;
         } else if (mode === "abort") {
           controller.abort();
         }
         await vi.advanceTimersByTimeAsync(mode === "timeout" ? 50 : 0);
         try {
+          // Catalog identity can await real filesystem I/O outside the fake clock.
+          await stdinClosed;
           expect(harness.stdinDestroyed).toBe(true);
           expect(settled).toBe(false);
         } finally {

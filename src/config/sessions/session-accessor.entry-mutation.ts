@@ -182,34 +182,15 @@ function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof Sessio
   return [...new Set(entries.flatMap((entry) => Object.keys(entry) as Array<keyof SessionEntry>))];
 }
 
-function sessionEntryFieldEqual(
-  left: SessionEntry[keyof SessionEntry],
-  right: SessionEntry[keyof SessionEntry],
+function sessionEntryFieldUnchanged(
+  left: SessionEntry,
+  right: SessionEntry,
+  key: keyof SessionEntry,
 ): boolean {
-  return Object.is(left, right) || isDeepStrictEqual(left, right);
-}
-
-function sessionEntryFieldUnset(
-  hasValue: boolean,
-  value: SessionEntry[keyof SessionEntry],
-): boolean {
-  return !hasValue || value === undefined;
-}
-
-function sessionEntryFieldUnchanged(params: {
-  leftHasValue: boolean;
-  leftValue: SessionEntry[keyof SessionEntry];
-  rightHasValue: boolean;
-  rightValue: SessionEntry[keyof SessionEntry];
-}): boolean {
-  const { leftHasValue, leftValue, rightHasValue, rightValue } = params;
-  if (
-    sessionEntryFieldUnset(leftHasValue, leftValue) &&
-    sessionEntryFieldUnset(rightHasValue, rightValue)
-  ) {
-    return true;
-  }
-  return leftHasValue === rightHasValue && sessionEntryFieldEqual(leftValue, rightValue);
+  return isDeepStrictEqual(
+    Object.hasOwn(left, key) ? left[key] : undefined,
+    Object.hasOwn(right, key) ? right[key] : undefined,
+  );
 }
 
 // Background activity can mutate non-identity fields after the initialization
@@ -231,27 +212,11 @@ export function mergeConcurrentReplySessionMetadata(params: {
     Record<keyof SessionEntry, SessionEntry[keyof SessionEntry]>
   >;
   for (const key of collectSessionEntryKeys(currentEntry, preparedEntry, snapshotEntry)) {
-    const currentHasValue = Object.hasOwn(currentEntry, key);
-    const snapshotHasValue = Object.hasOwn(snapshotEntry, key);
-    const preparedHasValue = Object.hasOwn(preparedEntry, key);
-    const currentValue = currentEntry[key];
-    const snapshotValue = snapshotEntry[key];
-    const preparedValue = preparedEntry[key];
-    const currentChanged = !sessionEntryFieldUnchanged({
-      leftHasValue: currentHasValue,
-      leftValue: currentValue,
-      rightHasValue: snapshotHasValue,
-      rightValue: snapshotValue,
-    });
-    const preparedKeptSnapshot = sessionEntryFieldUnchanged({
-      leftHasValue: preparedHasValue,
-      leftValue: preparedValue,
-      rightHasValue: snapshotHasValue,
-      rightValue: snapshotValue,
-    });
+    const currentChanged = !sessionEntryFieldUnchanged(currentEntry, snapshotEntry, key);
+    const preparedKeptSnapshot = sessionEntryFieldUnchanged(preparedEntry, snapshotEntry, key);
     if (currentChanged && preparedKeptSnapshot) {
-      if (currentHasValue) {
-        mergedFields[key] = currentValue;
+      if (Object.hasOwn(currentEntry, key)) {
+        mergedFields[key] = currentEntry[key];
       } else {
         delete mergedFields[key];
       }

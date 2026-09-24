@@ -278,7 +278,8 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
     echo "Error: SKIP_NOTARIZE=1 is only allowed for explicit ad-hoc smoke builds." >&2
     exit 1
   fi
-  if ! /usr/bin/codesign --display --verbose=4 "$APP" 2>&1 | grep -Fxq 'Signature=adhoc'; then
+  # Drain codesign output so a match cannot cause SIGPIPE under pipefail.
+  if ! /usr/bin/codesign --display --verbose=4 "$APP" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; then
     echo "Error: skipping notarization requires an ad-hoc signed smoke app." >&2
     exit 1
   fi

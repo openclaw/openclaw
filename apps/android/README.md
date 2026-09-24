@@ -40,8 +40,10 @@ refits the image rather than restoring offsets from the old viewport.
 In the app's own conversation, agent main sessions, and dashboard conversations,
 completed commentary and tool activity fold into a **Worked** or **Worked for…**
 row. Tap the row to expand or collapse the details. Prompts, final answers,
-and attachments remain visible. Failures without a later answer stay visible;
-earlier tool failures remain available in expanded work. Active work stays expanded,
+and attachments remain visible. The summary keeps counts of failed, blocked, and
+unknown tool outcomes visible even when work is collapsed; these describe individual
+tools, not the overall answer. Failures without a later answer stay visible;
+earlier tool failure details remain available in expanded work. Active work stays expanded,
 including a run continued by a steering message. Channel conversations retain
 their full transcript.
 

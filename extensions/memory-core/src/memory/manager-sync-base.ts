@@ -54,7 +54,6 @@ export type MemorySyncProgressState = {
 export type MemoryIndexWorkItem = {
   entry: MemoryIndexEntry;
   source: MemorySource;
-  afterIndex?: () => void;
 };
 
 export type MemorySourceSyncPlan = {
@@ -299,29 +298,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       });
     }
     await this.indexFiles(items);
-    for (const item of items) {
-      item.afterIndex?.();
-    }
     this.advanceSyncProgress(progress, items.length);
   }
 
-  protected async executeSourceSyncPlans(
-    plans: MemorySourceSyncPlan[],
-    progress?: MemorySyncProgressState,
-  ): Promise<void> {
-    const indexItems = plans.flatMap((plan) => plan.indexItems);
-    const sources = new Set(indexItems.map((item) => item.source));
-    await this.indexQueuedFiles(
-      indexItems,
-      progress,
-      sources.size > 1 ? "Indexing memory sources (batch)..." : undefined,
-    );
-    for (const plan of plans) {
-      await plan.finalize();
-    }
-  }
-
-  protected async executeSourceWideSync(params: {
+  protected async executeSourceSync(params: {
     shouldSyncMemory: boolean;
     shouldSyncSessions: boolean;
     needsFullReindex: boolean;
@@ -329,11 +309,12 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
+    const deferIndex = this.shouldDeferSourceWideBatch();
     const memoryPlan = params.shouldSyncMemory
       ? await this.syncMemoryFiles({
           needsFullReindex: params.needsFullReindex,
           progress: params.progress,
-          deferIndex: true,
+          ...(deferIndex ? { deferIndex: true } : {}),
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
@@ -341,13 +322,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
-        deferIndex: true,
-        prefixIndexItems: memoryPlan.indexItems,
+        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan.indexItems } : {}),
       });
-      await memoryPlan.finalize();
-      return;
+    } else if (deferIndex) {
+      await this.indexQueuedFiles(memoryPlan.indexItems, params.progress);
     }
-    await this.executeSourceSyncPlans([memoryPlan], params.progress);
+    if (deferIndex) {
+      await memoryPlan.finalize();
+    }
+    if (params.shouldSyncSessions) {
+      this.clearSessionRetryState();
+    } else {
+      this.refreshSessionDirtyFlag();
+    }
   }
 
   protected hasIndexedChunks(): boolean {

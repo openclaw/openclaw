@@ -323,12 +323,12 @@ the published driver must update and replace the running managed Gateway.
 Schema refusal or rollback fails the gate. Operator state, plugin convergence,
 cron ownership, agent turns, no-op updates, and backup rollback assertions remain.
 
-Main prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
+Main, including hourly `validation_tier=main` dispatches, prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
 `scripts/package-openclaw-for-docker.mjs --skip-build`. This retains all runtime
 JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
 the canonical packer still runs its complete tarball integrity check. The
 scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
-rebuilding it. Manual and release CI retain the declaration-complete full
+rebuilding it. Full-tier manual and release CI retain the declaration-complete full
 package build.
 
 Ordinary canonical manual CI retains the survivor and adds

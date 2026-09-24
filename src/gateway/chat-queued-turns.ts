@@ -24,6 +24,22 @@ export type QueuedChatTurnEntry = {
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
 
+export function isQueuedChatTurnForSession(
+  turns: QueuedChatTurnMap | undefined,
+  runId: string,
+  scope: Pick<QueuedChatTurnEntry, "sessionId" | "sessionKey" | "agentId">,
+): boolean {
+  const queued = turns?.get(runId);
+  return Boolean(
+    queued &&
+    queued.sessionId === scope.sessionId &&
+    queued.sessionKey === scope.sessionKey &&
+    queued.agentId === scope.agentId &&
+    queued.abortable !== false &&
+    !queued.controller.signal.aborted,
+  );
+}
+
 type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;

@@ -191,8 +191,10 @@ Native lifecycle notifications update affected threads, and successful catalog
 archives immediately hide their rows. Turn starts and completions coalesce
 single-thread metadata refreshes, so a running turn advances recency before it
 finishes. When an observing client closes, queued reads against that client stop;
-an interrupted read records that metadata recovery is deferred to the current
-catalog owner. Observations do not keep retired clients alive. A startup scan and
+an interrupted read logs that its metadata refresh is deferred for automatic
+recovery by the current catalog owner, retaining the original cause. Genuine read,
+reconciliation, and storage failures still log background update warnings.
+Observations do not keep retired clients alive. A startup scan and
 the 15-minute stat-only safety scan discover external rollout changes; no
 recursive filesystem watcher retains a directory inventory. The scan streams
 directory entries and retains at most 20,000 file fingerprints while separately

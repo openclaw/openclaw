@@ -552,14 +552,33 @@ describe("CommandPalette search", () => {
     expect(palette.textContent).not.toContain("Searching sessions");
   });
 
-  it.each(["click", "keyboard"])(
-    "opens the selected catalog agent's encoded route by %s",
-    async (method) => {
-      const { gateway } = createGateway(true);
-      const context = createContext(
-        gateway,
-        vi.fn(async () => null),
-      );
+  it.each([
+    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true],
+    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true],
+    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true],
+    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true],
+    ["Workboard", "click", "plugins", "", "workboard", false],
+    ["Plugins", "click", "plugins", "", "", false],
+  ])(
+    "opens the selected %s destination by %s",
+    async (label, method, route, pathname, pluginId, installed) => {
+      const plugin = {
+        id: pluginId,
+        name: "Workboard",
+        installed,
+        enabled: false,
+        state: installed ? "disabled" : "not-installed",
+      };
+      const { gateway } = createGateway(true, {
+        methods: ["plugins.list"],
+        request: async (rpc) => {
+          if (rpc !== "plugins.list") {
+            throw new Error(`Unexpected method: ${rpc}`);
+          }
+          return { plugins: pluginId ? [plugin] : [] };
+        },
+      });
+      const context = createContext(gateway, async () => null);
       const { palette } = await mountPalette({
         ...context,
         basePath: "/openclaw",
@@ -573,11 +592,11 @@ describe("CommandPalette search", () => {
           }),
         },
       });
-      await enterQuery(palette, "Reviewer");
+      await enterQuery(palette, label);
       await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const item = palette.querySelector<HTMLElement>('[role="option"]');
-      expect(item?.textContent).toContain("Reviewer");
+      expect(item?.textContent).toContain(label);
       if (method === "click") {
         item?.click();
       } else {
@@ -585,9 +604,13 @@ describe("CommandPalette search", () => {
           .querySelector<HTMLTextAreaElement>(".cmd-palette__input")
           ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       }
-      expect(palette.onNavigate).toHaveBeenCalledWith("agents", {
-        pathname: "/openclaw/settings/agents/reviewer%2Eteam",
-      });
+      if (pathname) {
+        expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith(route, {
+          pathname: `/openclaw${pathname}`,
+        });
+      } else {
+        expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith(route);
+      }
       expect(palette.isOpen).toBe(false);
     },
   );

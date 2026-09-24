@@ -1689,7 +1689,9 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          sparse-checkout: extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
+          sparse-checkout: |
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts
           sparse-checkout-cone-mode: false
           submodules: false
 
@@ -1700,6 +1702,9 @@ jobs:
           set -euo pipefail
           trusted_checkout=.release-qa-tooling-trusted
           trap 'rm -rf -- "$trusted_checkout"' EXIT
+          install -m 0644 \
+            "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts" \
+            extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts
           install -m 0644 \
             "$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \
             extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts

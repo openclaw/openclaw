@@ -16,6 +16,8 @@ import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archi
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
+  TranscriptArchivePagePlan,
+  TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchiveReadPlan,
@@ -273,6 +275,24 @@ export async function runSqliteTranscriptArchiveReadWorker(
   }
   const result = await scoped;
   if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
+  }
+  return result.results;
+}
+
+export async function runSqliteTranscriptArchivePageWorker(
+  plans: readonly TranscriptArchivePagePlan[],
+): Promise<Array<TranscriptArchivePageResult | undefined>> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-page", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
+  }
+  const result = await scoped;
+  if (result.type !== "page-read") {
     throw new Error("SQLite archive Worker returned another operation's result");
   }
   return result.results;

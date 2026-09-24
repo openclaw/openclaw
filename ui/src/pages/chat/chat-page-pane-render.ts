@@ -88,10 +88,12 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
             : undefined;
           const resolvedKey =
             resolveSessionKey(sessionKey, options.context?.gateway?.snapshot?.hello) || sessionKey;
-          const title = resolveSessionDisplayName(
-            resolvedKey,
-            sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
+          const presentationRow = sessions.find((row) =>
+            areUiSessionKeysEquivalent(row.key, resolvedKey),
           );
+          const presentationTitle = presentationRow
+            ? resolveSessionDisplayName(resolvedKey, presentationRow)
+            : undefined;
           if (options.context && readDeletedSessionStartup(options.context, sessionKey)) {
             return keyed(
               sessionKey,
@@ -135,7 +137,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               )}
               .dashboardExpanded=${routeData ? routeData.dashboardExpanded === true : noChange}
               .routeFace=${routeData ? (routeData.face ?? "chat") : noChange}
-              .paneTitle=${title}
+              .presentationTitle=${presentationTitle}
               .narrow=${options.narrow}
               .mergedChrome=${options.mergedChrome && active}
               .navDrawerOpen=${options.navDrawerOpen && active}

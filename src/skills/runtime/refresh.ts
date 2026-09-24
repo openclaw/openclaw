@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import chokidar from "chokidar";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getFileWatchCapacityCode } from "../../infra/fs-watch-errors.js";
@@ -45,6 +44,7 @@ import {
   type SkillsWatchTargetCacheEntry,
   type WatchTarget,
 } from "./refresh-watch-targets.js";
+import { createSkillsContentWatchFactory } from "./refresh-watch-transport.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsWatchChange = "skills" | "supporting";
@@ -67,7 +67,7 @@ type SkillsPathWatchState = {
 const log = createSubsystemLogger("gateway/skills");
 // Gateway startup imports this owner before serving turns. Shared watcher handles,
 // including later rebuilds, must inherit that lifetime rather than the triggering turn.
-const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
+const watchContent = createSkillsContentWatchFactory(AsyncLocalStorage.snapshot());
 const SKILLS_WATCH_DEBOUNCE_MS = 250;
 // One watcher per unique watched directory. Agent workspaces that include the
 // same shared skill root (the global skills dir, the home skills dir, or a
@@ -249,7 +249,7 @@ function createSkillsPathWatcher(
       }
       state.closed = true;
       clearTimeout(state.timer);
-      content?.close();
+      void content?.close();
       for (const release of releaseAncestors) {
         release();
       }
@@ -452,18 +452,7 @@ function createSkillsPathWatcher(
   };
   if (target.path === target.watchRoot) {
     content = createSkillsContentWatcher({
-      watch: () =>
-        runInSkillsWatcherContext(() =>
-          chokidar.watch(target.path, {
-            ignoreInitial: true,
-            followSymlinks: false,
-            usePolling,
-            // Identity metadata sits one level below the deepest admitted skill.
-            depth: target.depth + 1,
-            awaitWriteFinish: { stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS, pollInterval: 100 },
-            ignored: pathFilter.ignored,
-          }),
-        ),
+      watch: () => watchContent(target, usePolling, pathFilter.ignored, SKILLS_WATCH_DEBOUNCE_MS),
       isCurrent,
       isStructuralRaw: pathFilter.isStructuralRaw,
       ready: (rescan) => {
@@ -488,6 +477,14 @@ function createSkillsPathWatcher(
           ready();
         },
         changed: onChange,
+        reconcile: () => {
+          if (!isCurrent() || reconcileRoot(target.path)) {
+            return;
+          }
+          content?.structureChanged();
+          content?.rescan();
+          schedule(target.path);
+        },
         raw: onRaw,
         error: (error) => {
           pendingAncestors.delete(root);
