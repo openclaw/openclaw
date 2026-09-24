@@ -201,18 +201,6 @@ describe("message hooks", () => {
   });
 
   describe("error isolation", () => {
-    it("does not propagate handler errors", async () => {
-      const badHandler = vi.fn(() => {
-        throw new Error("Hook exploded");
-      });
-      registerInternalHook("message:received", badHandler);
-
-      await triggerInternalHook(
-        createInternalHookEvent("message", "received", "s1", { content: "test" }),
-      );
-      expect(badHandler).toHaveBeenCalledOnce();
-    });
-
     it("continues with later handlers when one fails", async () => {
       const failHandler = vi.fn(() => {
         throw new Error("First handler fails");

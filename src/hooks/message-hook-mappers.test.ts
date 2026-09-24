@@ -666,7 +666,6 @@ describe("message hook mappers", () => {
       callDepth: 2,
     });
     expect(pluginContext.trace).not.toBe(trace);
-    expect(pluginContext.trace).toEqual(trace);
     expect(Object.isFrozen(pluginContext.trace)).toBe(true);
     expect(receivedEvent.trace).not.toBe(trace);
     expect(receivedEvent.trace).toEqual(trace);

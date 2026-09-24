@@ -117,9 +117,13 @@ describe("loader", () => {
   });
 
   describe("prepareInternalHooks", () => {
-    const expectNoCommandHookRegistration = async (cfg: OpenClawConfig) => {
-      const count = await commitPreparedHooks(cfg, tmpDir);
-      expect(count).toBe(0);
+    const expectRejectedCommandHook = async (hookName: string) => {
+      await expect(
+        commitPreparedHooks(
+          { hooks: { internal: { enabled: true, entries: { [hookName]: { enabled: true } } } } },
+          tmpDir,
+        ),
+      ).rejects.toThrow(`Hook "${hookName}" has no readable handler`);
       expect(getRegisteredEventKeys()).not.toContain("command:new");
     };
 
@@ -886,7 +890,7 @@ describe("loader", () => {
         return;
       }
 
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
+      await expectRejectedCommandHook("symlink-hook");
     });
 
     it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
@@ -920,7 +924,7 @@ describe("loader", () => {
         throw err;
       }
 
-      await expectNoCommandHookRegistration(createEnabledHooksConfig());
+      await expectRejectedCommandHook("hardlink-hook");
     });
 
     it("keeps managed hooks active when a workspace hook reuses the same name", async () => {

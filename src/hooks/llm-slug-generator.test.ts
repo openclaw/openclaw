@@ -220,7 +220,7 @@ describe("generateSlugViaLLM", () => {
 
     const prompt = requireFirstRunOptions().prompt as string;
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-    expect(prompt).toContain(prefix);
+    expect(prompt).toContain(`Conversation summary:\n${prefix}\n\nReply with ONLY the slug`);
     expect(prompt).not.toMatch(loneSurrogate);
   });
 });

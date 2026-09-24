@@ -336,9 +336,9 @@ describe("startGmailWatcher", () => {
   });
 
   it("keeps a stalled periodic renewal single-flight", async () => {
+    const renewal = deferredCommandResult();
     vi.useFakeTimers();
     try {
-      const renewal = deferredCommandResult();
       mocks.runCommandWithTimeout
         .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
         .mockImplementation(async () => await renewal.promise);
@@ -354,6 +354,8 @@ describe("startGmailWatcher", () => {
 
       expect(callsWhileStalled).toBe(2);
     } finally {
+      // The mock ignores abort; release it before afterEach joins the watcher.
+      renewal.resolve({ code: 0, stdout: "", stderr: "" });
       vi.useRealTimers();
     }
   });

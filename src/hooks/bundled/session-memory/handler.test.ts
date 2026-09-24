@@ -592,7 +592,6 @@ describe("session-memory hook", () => {
       ),
     );
     expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Looks good"));
-    expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");

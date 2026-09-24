@@ -220,10 +220,12 @@ describe("plugin hook lifecycle contracts", () => {
     const broker = new EmbeddedPluginApprovalBroker();
     setEmbeddedPluginApprovalBroker(broker);
 
+    const controller = new AbortController();
     const resultPromise = runBeforeToolCallHook({
       toolName: "exec",
       params: { command: "pwd" },
       toolCallId: "call-1",
+      signal: controller.signal,
       ctx: {
         agentId: "main",
         sessionId: "session-1",
@@ -231,40 +233,48 @@ describe("plugin hook lifecycle contracts", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(broker.listPending()).toHaveLength(1);
-    });
-    const pending = broker.listPending()[0];
-    if (!pending) {
-      throw new Error("expected a pending plugin approval request");
-    }
-    expect(pending.request).toMatchObject({
-      pluginId,
-      title: "Approve QA exec",
-      toolCallId: "call-1",
-      toolName: "exec",
-    });
-    expect(broker.resolve(pending.id, "allow-once")).toBe(true);
+    const resultSettled = Promise.allSettled([resultPromise]);
+    try {
+      await vi.waitFor(() => {
+        expect(broker.listPending()).toHaveLength(1);
+      });
+      const pending = broker.listPending()[0];
+      if (!pending) {
+        throw new Error("expected a pending plugin approval request");
+      }
+      expect(pending.request).toMatchObject({
+        pluginId,
+        title: "Approve QA exec",
+        toolCallId: "call-1",
+        toolName: "exec",
+      });
+      expect(broker.resolve(pending.id, "allow-once")).toBe(true);
 
-    await expect(resultPromise).resolves.toEqual({
-      approvalResolution: "allow-once",
-      blocked: false,
-      params: { command: "pwd", policyChecked: true },
-    });
-    expect(recordedEvents()).toEqual([
-      expect.objectContaining({
-        hookName: "before_tool_call",
-        event: expect.objectContaining({
-          params: { command: "pwd" },
-          toolCallId: "call-1",
-          toolName: "exec",
+      await expect(resultPromise).resolves.toEqual({
+        approvalResolution: "allow-once",
+        blocked: false,
+        params: { command: "pwd", policyChecked: true },
+      });
+      expect(recordedEvents()).toEqual([
+        expect.objectContaining({
+          hookName: "before_tool_call",
+          event: expect.objectContaining({
+            params: { command: "pwd" },
+            toolCallId: "call-1",
+            toolName: "exec",
+          }),
+          context: expect.objectContaining({
+            agentId: "main",
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+          }),
         }),
-        context: expect.objectContaining({
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
-      }),
-    ]);
+      ]);
+    } finally {
+      // Abort also fences a request that reaches the broker during cleanup.
+      controller.abort();
+      broker.stop();
+      await resultSettled;
+    }
   });
 });

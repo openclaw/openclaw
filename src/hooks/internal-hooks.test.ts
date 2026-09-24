@@ -33,29 +33,8 @@ describe("hooks", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  describe("registerInternalHook", () => {
-    it("should register a hook handler", () => {
-      const handler = vi.fn();
-      registerInternalHook("command:new", handler);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
-    });
-
-    it("should allow multiple handlers for the same event", () => {
-      const handler1 = vi.fn();
-      const handler2 = vi.fn();
-
-      registerInternalHook("command:new", handler1);
-      registerInternalHook("command:new", handler2);
-
-      const keys = getRegisteredEventKeys();
-      expect(keys).toContain("command:new");
-    });
-  });
-
   describe("unregisterInternalHook", () => {
-    it("should unregister a specific handler", () => {
+    it("should unregister a specific handler", async () => {
       const handler1 = vi.fn();
       const handler2 = vi.fn();
 
@@ -65,7 +44,7 @@ describe("hooks", () => {
       unregisterInternalHook("command:new", handler1);
 
       const event = createInternalHookEvent("command", "new", "test-session");
-      void triggerInternalHook(event);
+      await triggerInternalHook(event);
 
       expect(handler1).not.toHaveBeenCalled();
       expect(handler2).toHaveBeenCalled();

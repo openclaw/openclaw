@@ -23,7 +23,7 @@ describe("fireAndForgetHook", () => {
     await Promise.resolve();
 
     const message = requireFirstLog(logger);
-    expect(Buffer.from(message).toString()).toBe(message);
+    expect(message).toBe(`hook: ${"a".repeat(499)}`);
   });
 
   it("logs rejection errors as sanitized single-line messages", async () => {
@@ -34,10 +34,7 @@ describe("fireAndForgetHook", () => {
       logger,
     );
     await Promise.resolve();
-    expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret ***");
-    const message = requireFirstLog(logger);
-    expect(message).not.toContain("\n");
-    expect(message).not.toContain("sk-test1234567890");
+    expect(logger).toHaveBeenCalledExactlyOnceWith("hook failed: boom forged secret ***");
   });
 
   it("does not log for resolved tasks", async () => {

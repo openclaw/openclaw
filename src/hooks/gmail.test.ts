@@ -94,10 +94,6 @@ describe("gmail hook config", () => {
     expect(serveArgs[serveArgs.indexOf("--exclude-labels") + 1]).toBe("SPAM,TRASH,DRAFT,SENT");
 
     const args = buildGogWatchServeLogArgs(result.value);
-    expect(args).not.toContain("push-token");
-    expect(args).not.toContain("hook-token");
-    expect(args).not.toContain("--token");
-    expect(args).not.toContain("--hook-token");
     // --token, --hook-url, and --hook-token are stripped from the log args.
     expect(args).toEqual([
       "gmail",
