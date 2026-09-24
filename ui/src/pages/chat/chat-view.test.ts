@@ -41,6 +41,7 @@ import {
   createAttachmentSidebarHarness,
   getAttachmentMenuOption,
   renderAttachmentHarness,
+  renderSettledPastedTextAttachment,
   requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
@@ -1363,6 +1364,41 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
+  it.each([
+    {
+      type: "attachment",
+      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
+    },
+    {
+      type: "attachment",
+      attachment: { kind: "audio", label: "voice-note.ogg", url: "/media/voice-note.ogg" },
+    },
+    {
+      type: "attachment_error",
+      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
+    },
+  ])("names a queued $attachment.kind attachment without message text", (content) => {
+    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "attachment-input",
+          runId: "attachment-run",
+          acceptedAt: 1,
+          state: "queued",
+          queued: true,
+          message: { role: "user", content: [content] },
+        },
+      ],
+    });
+    const container = renderChatView({ historyState });
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      content.attachment.label,
+    );
+    expect(container.querySelector(".chat-group.user")).toBeNull();
+  });
+
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -4996,7 +5032,7 @@ describe("chat attachment picker", () => {
     const onAttachmentsChange = vi.fn();
     const onDraftChange = vi.fn();
     const sidebar = createAttachmentSidebarHarness();
-    const remounted = renderChatView({
+    const remounted = await renderSettledPastedTextAttachment({
       onOpenSidebar: sidebar.open,
       attachments,
       getAttachments: () => attachments,
@@ -5005,12 +5041,9 @@ describe("chat attachment picker", () => {
       onAttachmentsChange,
       onDraftChange,
     });
-    document.body.append(remounted);
-    await waitForFast(() => {
-      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
-        "First words from a remounted p…",
-      );
-    });
+    expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
+      "First words from a remounted p…",
+    );
     expect(attachments[0]?.origin).toBe("paste");
     requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
       new MouseEvent("click", { bubbles: true }),

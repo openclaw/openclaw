@@ -78,9 +78,9 @@ it.runIf(process.platform !== "win32")(
       writeFileSync(
         path.join(checkoutRoot, "dist/entry.js"),
         `import fs from "node:fs";
-if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
 fs.writeFileSync(${JSON.stringify(childArgsPath)}, JSON.stringify(process.execArgv));
 fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
+if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
 setInterval(() => {
   if (fs.existsSync(${JSON.stringify(releasePath)})) process.exit(0);
 }, 20);
@@ -239,7 +239,14 @@ it.runIf(process.platform !== "win32").each(["runner", "watch"] as const)(
     );
     await runQaGatewayFixture(
       async () => {
-        const worker = await waitForPidFile(path.join(root, "worker.pid"), 5_000);
+        const worker = await Promise.race([
+          waitForPidFile(path.join(root, "worker.pid"), 5_000),
+          command.then((result) => {
+            throw new Error(
+              `Native ${mode} exited before its worker started: ${formatShimResult(result)}`,
+            );
+          }),
+        ]);
         expect(isProcessAlive(worker)).toBe(true);
         writeFileSync(path.join(root, "terminate"), "terminate");
         const result = await command;

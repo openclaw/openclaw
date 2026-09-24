@@ -4,12 +4,32 @@ import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-erro
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root } = settlement;
+
+it.each([false, true])(
+  "settles failed repair before restoration (data at risk=%s)",
+  async (unsafe) => {
+    const maintenance = await begin();
+    const failure = unsafe
+      ? new DoctorStateMigrationRefusalError([])
+      : new Error("diagnostic failed");
+    try {
+      await maintenance!.finish(undefined, undefined, failure);
+      expect(boundary.restart).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.health).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.close).toHaveBeenCalledOnce();
+      expect(boundary.resume).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+    } finally {
+      await maintenance?.release();
+    }
+  },
+);
 
 it.each([false, true])(
   "checks same-installation policy before restoring Doctor's Gateway (repair activated=%s)",

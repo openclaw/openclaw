@@ -310,18 +310,19 @@ export class PowerShellCompletionRunner {
           );
         }),
       ]);
+      // Cleanup must preserve the failure that already rejected queued completions.
+      if (this.failure) {
+        throw this.failure;
+      }
       if (outcome.code !== 0 || outcome.signal !== null) {
         throw new Error(
           `PowerShell completion runner exited with code ${String(outcome.code)} signal ${String(outcome.signal)}`,
         );
       }
-      if (this.failure) {
-        throw this.failure;
-      }
     } catch (error) {
       this.child.kill("SIGTERM");
       setTimeout(() => this.child?.kill("SIGKILL"), 1_000).unref();
-      throw error;
+      throw this.failure ?? error;
     } finally {
       if (closeTimer) {
         clearTimeout(closeTimer);

@@ -136,6 +136,8 @@ const repositoryScriptEntries = [
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs!",
+  // The first-hop shell executes the packaged admission entry probe by path.
+  "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
@@ -500,6 +502,8 @@ const rootBundledPluginRuntimeDependencies = [
   "@trycua/cua-driver",
   // Root bundles the browser plugin's patched MCP server for npm installations.
   "chrome-devtools-mcp",
+  // Browser and Teams import Express; bundled Browser chunks resolve it from root.
+  "express",
   "grammy",
   "linkedom",
   "minimatch",

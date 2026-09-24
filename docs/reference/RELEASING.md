@@ -777,8 +777,8 @@ release, rebuilds binaries, republishes assets or changes registry selectors.
 ### Previous updater compatibility
 
 Before freezing the release, refresh `scripts/lib/update-compat-inventory.json`
-from every release in the supported upgrade window. The current window includes
-2026.9.1, 2026.9.2, and 2026.9.3. Download each npm tarball and verify it against
+from every release in the supported upgrade window, currently 2026.9.1 through
+2026.9.6. Download each npm tarball and verify it against
 its published `dist.integrity` before extracting it. Pass each verified artifact
 to the recorder with a repeatable `--release` argument:
 
@@ -786,7 +786,10 @@ to the recorder with a repeatable `--release` argument:
 pnpm update:compat:gen \
   --release '<unpacked-2026.9.1-directory>=<verified-npm-dist.integrity>' \
   --release '<unpacked-2026.9.2-directory>=<verified-npm-dist.integrity>' \
-  --release '<unpacked-2026.9.3-directory>=<verified-npm-dist.integrity>'
+  --release '<unpacked-2026.9.3-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.4-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.5-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.6-directory>=<verified-npm-dist.integrity>'
 ```
 
 The recorder writes releases in version order and replaces the recorded set.
@@ -795,8 +798,8 @@ the inventory must not accumulate indefinitely. A release with no post-swap
 imports still has an entry with an empty chunk list, so coverage is explicit.
 Conflicting origins for the same chunk export across releases fail generation.
 
-The recorder corrects one verified historical bundler annotation: the 2026.9.1,
-2026.9.2, and 2026.9.3 registry-lifecycle chunks grouped the retirement function
+The recorder corrects one verified historical bundler annotation: the 2026.9.1
+through 2026.9.4 registry-lifecycle chunks grouped the retirement function
 under the cache module's source region. The correction requires the exact release
 version, build identity, commit, npm integrity, chunk and export. It changes only
 recorded source provenance; missing or ambiguous current exports still fail the
@@ -959,8 +962,11 @@ design approval and package-manager integration proof before implementation.
 - `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on the candidate update tarball, so installer e2e catches accidental pack bloat before the release publish path.
 - If the release work touched CI planning, extension timing manifests, or extension test matrices, regenerate and review the planner-owned `plugin-prerelease-extension-shard` matrix outputs from `.github/workflows/plugin-prerelease.yml` before approval so release notes do not describe a stale CI layout.
 - Stable macOS release readiness also includes the updater surfaces: the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`; `appcast.xml` on `main` must point at the new stable zip after publish (the macOS publish workflow commits it automatically, or opens an appcast PR when direct push is blocked); the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor for that release version.
-- Signed macOS packaging retains `dist/macos-notarization-recovery/` before waiting for Apple. It contains the exact signed app archive, symbols, submission IDs, available DMG, and source-bound SHA-256 inventory. Keep the complete checkpoint if notarization fails; do not rebuild or replace its files. Successful packaging marks it complete for artifact retention; the next ordinary package invocation verifies and retires that completed checkpoint automatically.
-- Resume with `scripts/package-mac-dist.sh --resume-notarization` from the same source commit and version, with the original signing/notary credentials available. Recovery verifies the checkpoint, restores the signed app, and waits on existing Apple submissions. It creates a DMG only if that packaging step had not completed. Apple rejection, changed bytes, wrong source/version, or invalid signatures remain failures.
+- `scripts/package-mac-dist.sh --checkpoint-only` builds and signs the macOS app, audits its async frames, creates and signs the DMG, and exits successfully before contacting Apple. The sealed `dist/macos-notarization-recovery/` checkpoint contains the signed app archive, DMG, symbols, version/build/source identity, and SHA-256 inventory for the selected artifacts. Set `SIGN_IDENTITY` for Developer ID DMG signing. The release workflow adds its existing release-tag/producer envelope and Sparkle tools before uploading the checkpoint.
+- Resume with `scripts/package-mac-dist.sh --resume-notarization` from the same source commit and version. Recovery verifies and re-audits the retained app and DMG, then notarizes, staples, and packages them without rebuilding or requiring signing credentials. Existing Apple submissions are reused. Apple rejection, changed bytes, wrong source/version, missing artifacts, or invalid signatures remain failures. Older source-bound checkpoints that lack a DMG must use their original source script and signing credentials.
+- Smoke packaging can set `SKIP_NOTARIZE=1` with explicit ad-hoc signing (`ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY=-`), including checkpoint/resume. The app must actually be ad-hoc signed; release-signed apps cannot skip notarization. Smoke outputs are unstapled and unsuitable for publication. Variant naming and signed appcast generation remain workflow-owned; the workflow skips appcasts for smoke builds and beta releases.
+- Keep the complete checkpoint if notarization fails; do not rebuild or replace its files. Successful packaging marks it complete for artifact retention; the next ordinary package invocation verifies and retires that completed checkpoint automatically.
+- Checkpointed notarization retries transport failures and non-terminal responses for up to 30 minutes on the same Apple submission. Uploads include the artifact SHA-256 in their name to distinguish parallel architecture builds. A lost submit response is reconciled against recent matching Apple history before retrying (at most five submit attempts). If waiting exhausts its budget, the error includes the submission ID, checkpoint path, and macOS workflow resume command. Apple `Invalid`/`Rejected` verdicts fail immediately with the notary log.
 
 ## Release test boxes
 

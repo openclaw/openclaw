@@ -56,6 +56,11 @@ With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.
 
+Ordinary reads return bytes from an admitted file handle without freezing the file
+against in-place writes. Writers should use atomic replacement when readers need
+complete old-or-new contents. Migration and publication owners separately verify
+their recorded content and ownership before removing or replacing files.
+
 ## What native acceleration adds
 
 The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations, replacement-disabled rename, and descriptor-bound ACL inspection for secure credential reads.

@@ -504,9 +504,11 @@ describe("CI changed Node test plan", () => {
         const selectedEntry = selectedGroup
           ? { kind: "group" as const, name: selectedGroup.shard_name, plan: selectedGroup }
           : { kind: "target" as const, name: target, target };
-        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual(
-          buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
-        );
+        expect(buildChildEnv(selectedEntry, selectedJob.env ?? {}, envScratch, 0)).toEqual({
+          ...buildChildEnv(ownerEntry, ownerJob.env ?? {}, envScratch, 0),
+          // Repacking changes the label, but every execution policy stays fixed.
+          ...(selectedGroup ? { OPENCLAW_VITEST_SHARD_NAME: selectedGroup.shard_name } : {}),
+        });
         expect(selectedJob.runner).toBe(ownerJob.runner);
         expect(selectedJob.requiresDist).toBe(ownerJob.requiresDist);
         expect(selectedJob.planConcurrency).toBe(ownerJob.planConcurrency);

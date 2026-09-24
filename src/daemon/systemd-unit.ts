@@ -132,9 +132,6 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   const entries = Object.entries(env).filter(
     ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
-  if (entries.length === 0) {
-    return [];
-  }
   return entries.map(([key, value]) => {
     const rawValue = value ?? "";
     assertNoSystemdLineBreaks(key, "Systemd environment variable names");
@@ -142,15 +139,6 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
     const assignment = `${key}=${rawValue.trim()}`.replaceAll("%", "%%");
     return `Environment=${systemdEscapeArg(assignment)}`;
   });
-}
-
-function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
-  if (!environmentFiles) {
-    return [];
-  }
-  return normalizeStringEntries(environmentFiles).map(
-    (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,
-  );
 }
 
 export function renderSystemdEnvironmentFile(entry: string): string {
@@ -191,7 +179,6 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${workingDirPath.replaceAll("%", "%%")}`
     : null;
   const envLines = renderEnvLines(environment);
-  const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
     "[Unit]",
     descriptionLine,
@@ -201,7 +188,9 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     ...renderFixedPolicy("Service"),
     workingDirLine,
-    ...environmentFileLines,
+    ...normalizeStringEntries(environmentFiles).map(
+      (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,
+    ),
     ...envLines,
     "",
     "[Install]",
