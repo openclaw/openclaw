@@ -25,6 +25,38 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("preserves pre-June session sandbox isolation until the bridge release migrates it", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            entries: {
+              ops: {
+                sandbox: { mode: "all", perSession: true },
+              },
+            },
+          },
+          session: { typingMode: "thinking" },
+          gatway: { port: 12345 },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const original = await fs.readFile(configPath, "utf8");
+        expect((await readConfigFileSnapshot()).valid).toBe(false);
+        await expect
+          .soft(async () => {
+            const ctx = await prepareDoctorContext(configPath);
+            await runInitialConfigWriteHealth(ctx);
+          })
+          .rejects.toThrow(
+            /agents\.entries\.ops\.sandbox\.perSession[\s\S]*2026\.9\.5[\s\S]*openclaw doctor --fix[\s\S]*latest/,
+          );
+        expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect.soft((await readConfigFileSnapshot()).valid).toBe(false);
+      });
+    });
+  });
+
   it("persists legacy channel command owners once and reports each rewritten entry", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {

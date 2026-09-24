@@ -202,7 +202,9 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     Doctor no longer repairs the pre-June agent `embeddedHarness`, `embeddedPi`,
     `sandbox.perSession`, `agents.defaults.llm`, and top-level `heartbeat` keys.
     Configs containing these keys must be repaired before current validation can
-    succeed. For an older installation, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+    succeed. Doctor preserves the config and stops with recovery guidance instead
+    of stripping these settings or replacing them with a backup. For an older installation,
+    [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
     and run its Doctor migrations before installing the latest version.
 
     Active migrations:

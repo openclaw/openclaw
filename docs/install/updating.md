@@ -25,6 +25,8 @@ imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
 `plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
 and includes the old runtime aliases.
 Current releases leave those retired database files untouched.
+If you already installed the latest version, Doctor stops before rewriting config
+that still contains these retired agent keys and directs you through the same bridge.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
