@@ -56,6 +56,13 @@ async function invokeSignedWebhook(params: {
   return response;
 }
 
+function createSpool(
+  queue: ChannelIngressQueue<SpoolPayload>,
+  deliver: Parameters<typeof createLineWebhookSpool>[0]["deliver"],
+) {
+  return createLineWebhookSpool({ accountId: "default", runtime: runtime(), queue, deliver });
+}
+
 describe("LINE webhook spool", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -113,12 +120,7 @@ describe("LINE webhook spool", () => {
         }
       });
       const listPending = vi.spyOn(queue, "listPending");
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       const firstBatch = Array.from({ length: 8 }, (_, index) =>
         createEvent({
           webhookEventId: `event-concurrency-${index}`,
@@ -171,12 +173,7 @@ describe("LINE webhook spool", () => {
       const firstDeliver = vi.fn(async () => {
         await deliveryGate;
       });
-      const first = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: firstDeliver,
-      });
+      const first = createSpool(queue, firstDeliver);
       const event = createEvent({ webhookEventId: "event-stop-active" });
 
       first.start();
@@ -202,12 +199,7 @@ describe("LINE webhook spool", () => {
       const restartedDeliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const restarted = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: restartedDeliver,
-      });
+      const restarted = createSpool(queue, restartedDeliver);
       restarted.start();
       try {
         await waitForVerdict(queue, "message:message-event-stop-active", "completed");
@@ -276,12 +268,7 @@ describe("LINE webhook spool", () => {
       const restartedDeliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const restarted = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: restartedDeliver,
-      });
+      const restarted = createSpool(queue, restartedDeliver);
       restarted.start();
       try {
         await waitForVerdict(queue, "message:message-event-stop-timeout", "completed");
@@ -371,12 +358,7 @@ describe("LINE webhook spool", () => {
         deferredLifecycle = control.turnAdoptionLifecycle;
         control.turnAdoptionLifecycle.onDeferred();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       const event = createEvent({ webhookEventId: "event-stop-deferred" });
 
       spool.start();
@@ -421,12 +403,7 @@ describe("LINE webhook spool", () => {
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const restarted = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const restarted = createSpool(queue, deliver);
       restarted.start();
       try {
         await waitForVerdict(queue, "message:message-event-restart", "completed");
@@ -437,49 +414,13 @@ describe("LINE webhook spool", () => {
     });
   });
 
-  it("keeps a completion tombstone and rejects a repeated delivery", async () => {
-    await withQueue(async (queue) => {
-      const enqueue = vi.spyOn(queue, "enqueue");
-      const event = createEvent({ webhookEventId: "event-duplicate" });
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      spool.start();
-      try {
-        await spool.accept(callback(event));
-        await waitForVerdict(queue, "message:message-event-duplicate", "completed");
-
-        await spool.accept(callback(event));
-        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
-          kind: "completed",
-          duplicate: true,
-        });
-
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await spool.accept(
@@ -549,12 +490,7 @@ describe("LINE webhook spool", () => {
         { laneKey: "user:user-1" },
       );
       const deliver = vi.fn(async () => {});
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, "message:malformed", "failed");
@@ -583,12 +519,7 @@ describe("LINE webhook spool", () => {
         }
         await control.turnAdoptionLifecycle.onAdopted();
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await spool.accept(callback(event));
@@ -618,12 +549,7 @@ describe("LINE webhook spool", () => {
       const deliver = vi.fn(async () => {
         throw new Error("persistent transient failure");
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await waitForVerdict(queue, eventId, "failed");
@@ -645,12 +571,7 @@ describe("LINE webhook spool", () => {
       const deliver = vi.fn(async () => {
         throw Object.assign(new Error("invalid channel access token"), { status: 401 });
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await spool.accept(callback(event));
@@ -674,12 +595,7 @@ describe("LINE webhook spool", () => {
       const deliver = vi.fn(async () => {
         throw new LineWebhookTerminalDeliveryError("reply token consumed");
       });
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
+      const spool = createSpool(queue, deliver);
       spool.start();
       try {
         await spool.accept(callback(event));
