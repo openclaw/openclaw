@@ -25,6 +25,7 @@ import {
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { finalizeToolActivity } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -198,6 +199,7 @@ export function handleAgentEnd(
   }
 
   const emitLifecycleTerminal = () => {
+    finalizeToolActivity(ctx);
     const terminalStopReason =
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??

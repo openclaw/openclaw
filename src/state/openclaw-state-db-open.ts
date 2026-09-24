@@ -142,7 +142,7 @@ export function openUnpublishedStateDatabase(params: {
               acquireStateDatabaseCoordinator({
                 databasePath: params.pathname,
                 runtimeDirectory,
-                busyTimeoutMs: 0,
+                busyTimeoutMs: 350,
               }),
               "shared-state WAL maintenance",
               operation,

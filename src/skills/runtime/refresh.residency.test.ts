@@ -9,12 +9,15 @@ import {
   useSkillsWatcherFixture,
 } from "./refresh.watcher.test-support.js";
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],

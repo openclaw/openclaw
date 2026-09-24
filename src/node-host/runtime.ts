@@ -17,7 +17,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import type { NodeHostClient } from "./client.js";
+import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
@@ -410,14 +410,10 @@ export async function prepareNodeHostRuntime(params?: {
       return {
         async invoke(frame) {
           if (updatePause.isPaused) {
-            await client
-              .request("node.invoke.result", {
-                id: frame.id,
-                nodeId: frame.nodeId,
-                ok: false,
-                error: { code: "UNAVAILABLE", message: "node host is updating; retry shortly" },
-              })
-              .catch(() => {});
+            await createNodeInvokeResponder(client, frame).error(
+              "UNAVAILABLE",
+              "node host is updating; retry shortly",
+            );
             return;
           }
           // Admission precedes the first await; disconnects and duplicate IDs do
@@ -449,14 +445,10 @@ export async function prepareNodeHostRuntime(params?: {
             // Enforce the declaration locally too: a paired Gateway cannot widen
             // an operator-restricted surface by sending a hidden command directly.
             if (commandAllowlist && !currentManifest.commands.includes(frame.command)) {
-              await client
-                .request("node.invoke.result", {
-                  id: frame.id,
-                  nodeId: frame.nodeId,
-                  ok: false,
-                  error: { code: "UNAVAILABLE", message: "command not advertised by this node" },
-                })
-                .catch(() => {});
+              await createNodeInvokeResponder(client, frame).error(
+                "UNAVAILABLE",
+                "command not advertised by this node",
+              );
               return;
             }
             const claudeSkills =

@@ -5,7 +5,7 @@ import type {
   ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeAllowFrom } from "./bot-access.js";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   resolveExactLineGroupConfigKey,
   resolveLineGroupConfigEntry,
@@ -27,7 +27,7 @@ type LineGroupCoverage = {
 const GROUP_DEFAULTS_KEY = "*";
 
 function classifyAllowFrom(values?: unknown): { covered: boolean; referenced: boolean } {
-  const entries = Array.isArray(values) ? normalizeAllowFrom(values).entries : [];
+  const entries = Array.isArray(values) ? values.map(normalizeLineAllowEntry).filter(Boolean) : [];
   return {
     covered: entries.some((entry) => parseAccessGroupAllowFromEntry(entry) === null),
     referenced: entries.some((entry) => parseAccessGroupAllowFromEntry(entry) !== null),

@@ -324,6 +324,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
+    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
     onQueueRetry:
       props.connected && props.canSend && !props.submitDisabledReason
         ? props.onQueueRetry

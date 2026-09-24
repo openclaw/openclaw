@@ -611,6 +611,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       topologyDirty: () => topologyDirty,
       topology,
       lookup,
+      stores: () => stores,
       owner: (): SessionRowReadView & { isCurrent: typeof isCurrent } => projection,
     });
   const projection = {

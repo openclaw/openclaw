@@ -318,8 +318,14 @@ input validation, and JSON serialization remain on the calling thread.
 Callback-based `update` and `deleteIf` retain the native synchronous transaction;
 do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
 state errors use their existing codec; other native causes retain bounded causal
-messages and error codes. Arbitrary custom properties and original stacks do not
-cross the worker boundary.
+messages, error codes, and numeric `errno` values. Structured file logs include
+the process ID, thread ID, and OpenClaw version that constructed the plugin-state
+error in `owner`, plus nested cause details. Failures before command dispatch
+are wrapped on the caller thread. Native cause codes appear as `errorCode` in these
+records; the in-memory error keeps its original `code`. Existing log redaction
+still applies. Arbitrary custom properties and original stacks do not cross the
+worker boundary. `PLUGIN_STATE_OPEN_FAILED` can describe a rejected admission
+before SQLite opens; inspect the cause and owner before diagnosing a file error.
 
 Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire

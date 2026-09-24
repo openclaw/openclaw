@@ -77,6 +77,7 @@ export default {
     ...tooling.test, dir: ${JSON.stringify(root)}, include: ["progress-*.test.ts"], maxWorkers: 1,
     // Pure Vitest fixtures need no OpenClaw environment setup or shared-state runner.
     setupFiles: [], runner: undefined,
+    reporters: ["verbose", ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-resource-reporter.mts"))}],
     sequence: { ...tooling.test.sequence, sequencer: OrderedFixtures },
   },
 };
@@ -96,6 +97,7 @@ export default {
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: String(silenceMs),
         OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "400",
+        OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: path.join(root, "diagnostics"),
       });
 
       // Register and uninstall without awaiting so each watchdog captures its
@@ -171,6 +173,26 @@ export default {
         expect(casePassed(4)).toBe(!stall);
         expect(isProcessAlive(watched.child.pid!)).toBe(false);
         expect(isProcessAlive(workerPid!)).toBe(false);
+        const reports = fs.readdirSync(path.join(root, "diagnostics"));
+        expect(reports).toHaveLength(1);
+        const diagnostic = JSON.parse(
+          fs.readFileSync(
+            path.join(root, "diagnostics", reports[0]!, "failure.public.json"),
+            "utf8",
+          ),
+        );
+        expect(diagnostic.kind).toBe("vitest-progress");
+        if (stall) {
+          expect(diagnostic.active).toEqual([
+            expect.objectContaining({
+              file: "progress-4.test.ts",
+              project: "tooling",
+              pool: "threads",
+            }),
+          ]);
+        } else {
+          expect(diagnostic).toMatchObject({ reason: "passed", active: [] });
+        }
       } finally {
         watched.teardown();
         forceKillVitestProcessGroup(watched.child);

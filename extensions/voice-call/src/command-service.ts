@@ -79,7 +79,6 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
     const request = await resolveCallMessage(callId, message);
     return {
       rt: request.rt,
-      callId: request.callId,
       run: async () => {
         const result = await request.rt.manager.continueCall(request.callId, request.message);
         requireSuccess(result, "continue failed");

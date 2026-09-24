@@ -30,6 +30,7 @@ export const en: TranslationMap & {
       >;
     pullRequests: TranslationMap;
   };
+  configForm: TranslationMap & { sections: TranslationMap };
   configPage: TranslationMap;
   profilePage: TranslationMap & {
     personalInstructions: TranslationMap;
@@ -75,6 +76,7 @@ export const en: TranslationMap & {
   filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
+  labsPage: TranslationMap;
   modelSetup: TranslationMap;
   newSession: TranslationMap &
     Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
@@ -1502,128 +1504,7 @@ export const en: TranslationMap & {
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
     noSettingsMatch: 'No settings match "{query}"',
     noSettingsInSection: "No settings in this section",
-    sections: {
-      env: {
-        label: "Environment Variables",
-        description: "Environment variables passed to the gateway process",
-      },
-      update: {
-        label: "Updates",
-        description: "Auto-update settings and release channel",
-      },
-      agents: {
-        label: "Agents",
-        description: "Agent configurations, models, and identities",
-      },
-      auth: {
-        label: "Authentication",
-        description: "API keys and authentication profiles",
-      },
-      channels: {
-        label: "Channels",
-        description: "Messaging channels (Telegram, Discord, Slack, etc.)",
-      },
-      messages: {
-        label: "Messages",
-        description: "Message handling and routing settings",
-      },
-      commands: {
-        label: "Commands",
-        description: "Custom slash commands",
-      },
-      hooks: {
-        label: "Hooks",
-        description: "Webhooks and event hooks",
-      },
-      skills: {
-        label: "Skills",
-        description: "Skill packs and capabilities",
-      },
-      tools: {
-        label: "Tools",
-        description: "Tool configurations (browser, search, etc.)",
-      },
-      gateway: {
-        label: "Gateway",
-        description: "Gateway server settings (port, auth, binding)",
-      },
-      wizard: {
-        label: "Setup",
-        description: "Discovery preferences for setup and read-only setup history.",
-      },
-      meta: {
-        label: "Metadata",
-        description: "Gateway metadata and version information",
-      },
-      logging: {
-        label: "Logging",
-        description: "Log levels and output configuration",
-      },
-      browser: {
-        label: "Browser",
-        description: "Browser automation settings",
-      },
-      ui: {
-        label: "UI",
-        description: "User interface preferences",
-      },
-      models: {
-        label: "Models",
-        description: "AI model configurations and providers",
-      },
-      bindings: {
-        label: "Bindings",
-        description: "Key bindings and shortcuts",
-      },
-      broadcast: {
-        label: "Broadcast",
-        description: "Broadcast and notification settings",
-      },
-      tts: {
-        label: "Voice",
-        description: "Text-to-speech output, voices, and personas",
-      },
-      session: {
-        label: "Session",
-        description: "Session management and persistence",
-      },
-      cron: {
-        label: "Automations",
-        description: "Scheduled tasks and automation",
-      },
-      discovery: {
-        label: "Discovery",
-        description: "Service discovery and networking",
-      },
-      talk: {
-        label: "Talk",
-        description: "Voice and speech settings",
-      },
-      plugins: {
-        label: "Plugins",
-        description: "Plugin management and extensions",
-      },
-      diagnostics: {
-        label: "Diagnostics",
-        description: "Instrumentation, OpenTelemetry, and cache-trace settings",
-      },
-      cli: {
-        label: "CLI",
-        description: "CLI banner and startup behavior",
-      },
-      secrets: {
-        label: "Secrets",
-        description: "Secret provider configuration",
-      },
-      acp: {
-        label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
-      },
-      mcp: {
-        label: "MCP",
-        description: "Model Context Protocol server definitions",
-      },
-    },
+    sections: {},
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
   // keys now serve Models, Privacy & Security, Appearance, and Profile.
@@ -2504,25 +2385,8 @@ export const en: TranslationMap & {
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
     saveFailed: "The feature setting could not be saved.",
-    decisionAssistance: {
-      title: "Decision assistance",
-      description:
-        "Enable experimental features powered by Decision models. Requires a Decision model, set globally or per agent. No features use this setting yet.",
-      optedIn: "Preference saved.",
-      loading: "Loading setting…",
-      unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
-      refresh: "Refresh configuration",
-    },
-    codeMode: {
-      title: "Code Mode",
-      description:
-        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
-      executor: "Code Mode executor",
-      executorDescription:
-        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
-      executorNode: "Node.js (default)",
-      executorQuickjs: "QuickJS (isolated)",
-    },
+    decisionAssistance: {},
+    codeMode: {},
 
     swarm: {
       title: "Swarm",
@@ -2539,28 +2403,12 @@ export const en: TranslationMap & {
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
       otherGroups: "{count} more active groups",
     },
-    toolSearch: {
-      title: "Tool Search for all models",
-      description:
-        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
-    },
+    toolSearch: {},
 
-    customPluginUi: {
-      title: "Custom plugin UI",
-      description:
-        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
-    },
+    customPluginUi: {},
 
-    hostDesktop: {
-      title: "Host Desktop",
-      description:
-        "Watch and control this Gateway machine from the Desktop panel through its existing VNC or Screen Sharing server.",
-    },
-    workerDesktop: {
-      title: "Cloud Worker Desktop",
-      description:
-        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
-    },
+    hostDesktop: {},
+    workerDesktop: {},
   },
   aboutPage: {
     productName: "OpenClaw",
@@ -3661,7 +3509,6 @@ export const en: TranslationMap & {
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
-      description: "Earlier messages were summarized to make room in the context window.",
     },
     sessionReset: {
       label: "Session reset",
@@ -3706,6 +3553,10 @@ export const en: TranslationMap & {
         label: "System · restart recovery",
         summary:
           "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+        interrupted:
+          "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
+        cancelled:
+          "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
       },
       gatewayRestarted: {
         label: "System · gateway restarted",

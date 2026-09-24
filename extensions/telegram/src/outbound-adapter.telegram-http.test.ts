@@ -19,12 +19,15 @@ import {
   type OpenClawTestState,
 } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { telegramPlugin } from "./channel.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
   clearTelegramRuntimeForTest,
+  resetTelegramAccountThrottlersForTest,
   resetTelegramTopicNameCacheForTest,
 } from "./runtime.test-support.js";
 import {
@@ -41,7 +44,16 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   let photoPath: string;
   beforeEach(() => {
     ({ bot, mediaDir, photoPath } = fixture);
+    resetTelegramAccountThrottlersForTest();
+    const { botToken } = cfg.channels.telegram;
+    // Conformance keeps real scheduling without Telegram's wall-clock pacing.
+    for (const token of [botToken, "654321:host-media", "654321:topic-owner"]) {
+      getOrCreateAccountThrottler(token, () =>
+        apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+      );
+    }
   });
+  afterEach(resetTelegramAccountThrottlersForTest);
 
   it.each([
     { name: "rich", richMessages: true, html: false },

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   globSync,
   mkdirSync,
@@ -23,7 +24,11 @@ import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import {
+  buildChildEnv,
+  resolveShardPlans,
+  runShardPlans,
+} from "../../scripts/ci-run-node-test-shard.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createUiRealGatewayTestShards,
@@ -54,6 +59,7 @@ import {
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
   evaluateWorkflowExpression,
+  evaluateWorkflowRunner,
   quoteShell,
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
@@ -1099,7 +1105,7 @@ AFTER_CD
 
     const bugJob = staleWorkflow.jobs["stale-bug-verification"];
     expect(bugJob.permissions).toEqual({ issues: "write" });
-    expect(bugJob["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(bugJob["runs-on"])).toBe("ubuntu-24.04");
     const bugScript = String(
       (bugJob.steps as WorkflowStep[]).find(
         (step) => step.name === "Mark inactive bugs for ClawSweeper verification",
@@ -1406,7 +1412,7 @@ AFTER_CD
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
     for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
-      expect(workflow.jobs[jobName]["runs-on"], jobName).toBe("xcode-27");
+      expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"]), jobName).toBe("xcode-27");
     }
     expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
@@ -2750,7 +2756,8 @@ AFTER_CD
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+          "${{ needs.preflight.outputs.frozen_target == 'true' && 'base' || 'legacy-operator-state' }}",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
@@ -2760,9 +2767,15 @@ AFTER_CD
     const prepare = job.steps.find(
       (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
     ) as WorkflowStep;
-    expect(prepare.if).toBe(
-      "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')",
-    );
+    for (const eventName of ["push", "pull_request"] as const) {
+      expect(
+        evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(eventName === "push");
+    }
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepare.run).not.toContain("--skip-check");
@@ -3310,7 +3323,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       "CodeQL Mermaid artifact download",
     );
 
-    expect(codeqlPrepare["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(codeqlPrepare["runs-on"])).toBe("ubuntu-24.04");
     expect(codeqlPrepare["timeout-minutes"]).toBe(10);
     expect(codeqlPrepare.permissions).toEqual({ contents: "read" });
     expect(codeqlPrepare.outputs["artifact-id"]).toBe("${{ steps.upload.outputs.artifact-id }}");
@@ -3352,7 +3365,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       codeqlPrepareSteps.indexOf(codeqlUpload),
     );
     expect(codeqlJob.needs).toBe("prepare-mermaid");
-    expect(codeqlJob["runs-on"]).toBe("macos-26-intel");
+    expect(evaluateWorkflowRunner(codeqlJob["runs-on"])).toBe("macos-26-intel");
     expect(codeqlJob["timeout-minutes"]).toBe(90);
     const codeqlCheckout = expectDefined(
       codeqlJob.steps.find((step: WorkflowStep) => step.name === "Checkout"),
@@ -3398,7 +3411,9 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       for (const jobName of jobNames) {
         const job = workflow.jobs[jobName];
-        expect(job["runs-on"], `${workflowPath}: ${jobName}`).toBe("xcode-27");
+        expect(evaluateWorkflowRunner(job["runs-on"]), `${workflowPath}: ${jobName}`).toBe(
+          "xcode-27",
+        );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
             ["Select Xcode 27", "Verify Xcode"].includes(step.name ?? ""),
@@ -3713,7 +3728,7 @@ setImmediate(() => {
 
   it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
     const workflow = readCiWorkflow();
-    expect(workflow.jobs["ci-gate"]["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(workflow.jobs["ci-gate"]["runs-on"])).toBe("ubuntu-24.04");
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -3999,7 +4014,11 @@ setImmediate(() => {
       "docker-seed-e2e": "ubuntu-24.04",
     } as const;
     const configurableJobs = Object.entries(jobs)
-      .filter(([, job]) => String(job["runs-on"]).startsWith("${{"))
+      .filter(
+        ([, job]) =>
+          String(job["runs-on"]).includes("OPENCLAW_CI_RUNNER_BACKEND") ||
+          String(job["runs-on"]).includes("matrix.runner"),
+      )
       .map(([jobName]) => jobName)
       .toSorted();
     const canonicalPullRequest = {
@@ -4010,10 +4029,14 @@ setImmediate(() => {
       runAttempt: 1,
     } as const;
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
-    expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
-    expect(jobs["check-lint-hosted-extension-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(jobs["check-lint-hosted-core-shard"]?.["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
+    expect(evaluateWorkflowRunner(jobs["check-lint-hosted-extension-shard"]?.["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
     // check-docs stays hosted in every mode: its ClawHub clone is unauthenticated by design.
-    expect(jobs["check-docs"]?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(jobs["check-docs"]?.["runs-on"])).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
       const expression = jobs[jobName]?.["runs-on"];
       for (const [label, overrides, expectedRunner] of [
@@ -6397,7 +6420,7 @@ server.listen(0, "127.0.0.1", () => {
         );
       }
     }
-    expect(seed["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(seed["runs-on"])).toBe("ubuntu-24.04");
     const steps = seed.steps as WorkflowStep[];
     const install = expectDefined(
       steps.find((entry) => entry.run),
@@ -7559,8 +7582,7 @@ server.listen(0, "127.0.0.1", () => {
       with: {
         ref: "${{ github.workflow_sha }}",
         path: ".ci-harness",
-        "sparse-checkout":
-          "/.github/actions/\n/scripts/lib/pnpm-lockfile-documents.mjs\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
+        "sparse-checkout": expect.stringContaining("/.github/actions/\n"),
         "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },
@@ -8760,6 +8782,70 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it.each([false, true])("loads the Node shard planner from its owner (frozen=%s)", (frozen) => {
+    const workflow = readCiWorkflow();
+    const step = workflow.jobs.preflight.steps.find(
+      (entry: WorkflowStep) => entry.name === "Build CI manifest",
+    );
+    const selection = expectDefined(
+      step.run.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
+      "Node planner selection",
+    );
+    const root = tempDirs.make("ci-planner-owner-");
+    writeFileSync(path.join(root, "candidate.txt"), "candidate-source");
+    for (const [directory, owner] of [
+      ["scripts/lib", "candidate"],
+      [".ci-harness/scripts/lib", "workflow"],
+    ] as const) {
+      mkdirSync(path.join(root, directory), { recursive: true });
+      writeFileSync(
+        path.join(root, directory, "ci-node-test-plan.mts"),
+        `import { readFileSync } from "node:fs";
+         export const createNodeTestShardBundles = () =>
+           [${JSON.stringify(owner)}, readFileSync("candidate.txt", "utf8")];`,
+      );
+    }
+    const run = spawnSync(testNodeExecPath, ["--input-type=module"], {
+      cwd: root,
+      input: `import { existsSync } from "node:fs";
+        const frozenTarget = ${frozen};
+        const compatibilityTarget = true;
+        ${selection}
+        console.log(JSON.stringify(createNodeTestPlan()));`,
+      encoding: "utf8",
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual([frozen ? "workflow" : "candidate", "candidate-source"]);
+    if (frozen) {
+      const checkout = workflow.jobs.preflight.steps.find(
+        (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+      );
+      expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+      expect(checkout.with["sparse-checkout"]).toContain("/scripts/");
+      expect(checkout.with["sparse-checkout"]).toContain("/test/vitest/");
+      expect(checkout.with["sparse-checkout"]).toContain("/config/ci-test-timings.json");
+    }
+  });
+
+  it("imports the real frozen planner from the declared sparse checkout", () => {
+    const checkout = readCiWorkflow().jobs.preflight.steps.find(
+      (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+    );
+    const root = tempDirs.make("ci-planner-sparse-");
+    for (const entry of String(checkout.with["sparse-checkout"]).trim().split("\n")) {
+      const relative = entry.replace(/^\//u, "");
+      const destination = path.join(root, ".ci-harness", relative);
+      mkdirSync(path.dirname(destination), { recursive: true });
+      cpSync(relative, destination, { recursive: true });
+    }
+    const run = spawnSync(testNodeExecPath, ["--input-type=module"], {
+      cwd: root,
+      input: 'await import("./.ci-harness/scripts/lib/ci-node-test-plan.mts");',
+      encoding: "utf8",
+    });
+    expect(run.status, run.stderr).toBe(0);
+  });
+
   it("keeps the preflight manifest import closure dependency-free", () => {
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
@@ -8874,7 +8960,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ).toBe(expected);
       }
     }
-    expect(hostedCoreLint["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(hostedCoreLint["runs-on"])).toBe("ubuntu-24.04");
     expect(hostedCoreLint.strategy["fail-fast"]).toBe(false);
     expect(hostedCoreLint.strategy["max-parallel"]).toBe(5);
     const coreLintStep = hostedCoreLint.steps.find(
@@ -9299,7 +9385,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-compatible",
-      runtimes: ["node", "bun"],
+      runtimes: ["bun", "node"],
       shards: [1, 2, 3],
     },
     {
@@ -10195,6 +10281,67 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it.each([
+    {
+      fullNames: [
+        "native host registration launches with the exact custom installation context when Chrome has no selectors",
+      ],
+      expected: 0,
+    },
+    {
+      fullNames: [
+        "does not inspect or migrate configuration before rejecting a malformed native request",
+        "rejects an unauthorized bootstrap caller before config, keys or database creation",
+        "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+        'preserves invalid-config diagnostics for ordinary extension command "status"',
+        'preserves invalid-config diagnostics for ordinary extension command "setup"',
+        'preserves invalid-config diagnostics for ordinary extension command "pair"',
+        "launches launcher with the exact custom installation context when Chrome has no selectors",
+        "launches cli with the exact custom installation context when Chrome has no selectors",
+      ].map((name) => `native host registration ${name}`),
+      expected: 0,
+    },
+    { fullNames: ["historical native-host proof"], expected: 1 },
+  ])(
+    "validates a complete known frozen native-host test inventory: $fullNames",
+    ({ fullNames, expected }) => {
+      const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+      );
+      const root = tempDirs.make("openclaw-frozen-browser-proof-report-");
+      const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+      const report = {
+        success: true,
+        numFailedTestSuites: 0,
+        numPendingTestSuites: 0,
+        numTotalTests: fullNames.length,
+        numPassedTests: fullNames.length,
+        numFailedTests: 0,
+        numPendingTests: 0,
+        numTodoTests: 0,
+        testResults: [
+          {
+            name: path.join(root, file),
+            status: "passed",
+            assertionResults: fullNames.map((fullName) => ({ fullName, status: "passed" })),
+          },
+        ],
+      };
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `import fs from "node:fs";
+       const args = process.argv.slice(2);
+       fs.writeFileSync(args[args.indexOf("--outputFile.json") + 1], ${JSON.stringify(JSON.stringify(report))});`,
+      );
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: { ...process.env, ...step.env, FROZEN_TARGET: "true", RUNNER_TEMP: root },
+      });
+      expect(result.status, result.stderr).toBe(expected);
+    },
+  );
+
   it("restores dist in PR CI and saves it only from the trusted warmer", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -10319,6 +10466,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     // Startup memory, artifact writers, and TUI retain explicit barriers;
     // hosted runners also serialize the remaining verifiers inside run_verifier.
     expect(run.match(/wait_checks$/gmu)).toHaveLength(8);
+  });
+
+  it.each([
+    { mode: "private-qa", outcome: "success", expected: "1" },
+    { mode: "runtime", outcome: "success", expected: "" },
+    { mode: "private-qa", outcome: "failure", expected: "" },
+    { mode: "private-qa", outcome: "skipped", expected: "" },
+    { mode: undefined, outcome: "skipped", expected: "" },
+  ] as const)("hands prepared E2E runtime to children only after $mode $outcome", (scenario) => {
+    const steps = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps;
+    const build = steps.find((step: WorkflowStep) => step.name === "Build Node test runtime");
+    const run = steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
+    const prebuilt = evaluateWorkflowExpression(run.env.OPENCLAW_E2E_USE_PREBUILT_DIST, {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      matrix: { pretest_build_mode: scenario.mode },
+      steps: { [build.id]: { outputs: {}, outcome: scenario.outcome } },
+    });
+    const target = "test/example.e2e.test.ts";
+    const env = {
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([target]),
+      OPENCLAW_E2E_USE_PREBUILT_DIST: prebuilt,
+    };
+    const plans = resolveShardPlans(env);
+    expect(plans).toHaveLength(1);
+    const childEnv = buildChildEnv(
+      expectDefined(plans[0], "changed target plan"),
+      env,
+      tempDirs.make("openclaw-ci-prebuilt-env-"),
+      0,
+    );
+    expect(childEnv.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe(scenario.expected);
+    expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(run));
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
@@ -10786,7 +10967,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const job = workflow.jobs.publish;
     expect(workflow.permissions).toEqual({});
     expect(workflow.on).toHaveProperty("workflow_dispatch");
-    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
     expect(job.environment).toBe("qa-live-shared");
     expect(job["timeout-minutes"]).toBe(270);
     expect(job.permissions).toEqual({
@@ -11984,7 +12165,7 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
 
   const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
-  expect(prLinux.jobs.build["runs-on"]).toBe("ubuntu-22.04");
+  expect(evaluateWorkflowRunner(prLinux.jobs.build["runs-on"])).toBe("ubuntu-22.04");
   expect(prLinux.jobs.build.strategy).toBeUndefined();
   expect(prLinux.on.workflow_dispatch?.inputs).toBeUndefined();
   const abiScannerTest = expectDefined(
@@ -12048,7 +12229,7 @@ it("pins simple release admission owners before selected checkout and preserves 
       ({ name }) => name === "Build Linux companion bundles",
     )?.env,
   ).not.toHaveProperty("LDAI_RUNTIME_FILE");
-  expect(linux.jobs.build_linux["runs-on"]).toBe("ubuntu-22.04");
+  expect(evaluateWorkflowRunner(linux.jobs.build_linux["runs-on"])).toBe("ubuntu-22.04");
   expect(linux.jobs.build_linux.strategy).toBeUndefined();
   const finalizerSource = readFileSync("apps/linux/scripts/finalize-appimage.sh", "utf8");
   const postBuildVerifications =
