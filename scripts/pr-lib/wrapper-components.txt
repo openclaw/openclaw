@@ -901,6 +901,7 @@ src/plugin-sdk/file-lock.ts
 src/plugin-sdk/keyed-async-queue.ts
 src/plugin-sdk/message-tool-delivery-hints.ts
 src/plugin-state/plugin-blob-store.types.ts
+src/plugin-state/plugin-state-worker-contract.ts
 src/plugins/activation-planner.ts
 src/plugins/activation-source-config.ts
 src/plugins/bundle-manifest.ts
