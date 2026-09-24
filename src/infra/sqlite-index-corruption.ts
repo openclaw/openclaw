@@ -9,6 +9,7 @@ export function repairSqliteIndexCorruption(
   pathname: string,
   options: { backup: () => void; assertCurrent: () => void },
 ): string[] {
+  let repaired: string[] = [];
   return runSqliteImmediateTransactionSync(
     database,
     () => {
@@ -57,7 +58,7 @@ export function repairSqliteIndexCorruption(
       }
 
       options.backup();
-      const repaired = [...names].toSorted();
+      repaired = [...names].toSorted();
       for (const name of repaired) {
         database.exec(`REINDEX main.${quoteSqliteIdentifier(name)}`);
       }
@@ -68,7 +69,9 @@ export function repairSqliteIndexCorruption(
     },
     {
       withCommit: (commit) => {
-        options.assertCurrent();
+        if (repaired.length > 0) {
+          options.assertCurrent();
+        }
         commit();
       },
     },
