@@ -892,6 +892,33 @@ describe("Google speech provider", () => {
     expect(prepared?.text).toBe("Hello.");
   });
 
+  it("keeps transcript text that itself contains the section marker", async () => {
+    const provider = buildGoogleSpeechProvider();
+    const transcript = "Before the marker. ### TRANSCRIPT After the marker.";
+    const prepared = await provider.prepareSynthesis?.({
+      text: [
+        "Synthesize speech from the TRANSCRIPT section only. Use the other sections only",
+        "as performance direction. Do not read section titles, notes, labels, or",
+        "configuration aloud.",
+        "",
+        "# AUDIO PROFILE: Alfred",
+        "",
+        "### DIRECTOR'S NOTES",
+        "Provider notes:",
+        "Keep a close-mic feel.",
+        "",
+        "### TRANSCRIPT",
+        transcript,
+      ].join("\n"),
+      cfg: {},
+      providerConfig: { model: "gemini-3.8-flash-tts" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(prepared?.text).toBe(transcript);
+  });
+
   it("fails closed for unsupported Gemini 3.8 TTS model ids", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();

@@ -386,12 +386,14 @@ function extractOpenClawGoogleAudioProfileTranscript(text: string): string | und
   if (!isOpenClawGoogleAudioProfilePrompt(text)) {
     return undefined;
   }
-  const marker = "### TRANSCRIPT";
-  const index = text.lastIndexOf(marker);
-  if (index < 0) {
+  // The wrapper emits the delimiter as its own line after a blank line and the transcript is
+  // always the last section, so the first structural delimiter wins. A later "### TRANSCRIPT"
+  // inside the spoken text is content, not structure.
+  const match = /\n\n### TRANSCRIPT(?:\n|$)/u.exec(text);
+  if (!match) {
     return undefined;
   }
-  return text.slice(index + marker.length).trim() || undefined;
+  return text.slice(match.index + match[0].length).trim() || undefined;
 }
 
 function prepareGoogleInteractionsSynthesis(params: {
