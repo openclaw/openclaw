@@ -469,6 +469,12 @@ serveOwnedWorkerTasks(
                   deferProfileDisplay: true,
                   resolveCronJobName: () => undefined,
                 };
+                if (request.request.kind === "transcript-binding") {
+                  return {
+                    kind: "transcript-binding",
+                    binding: options.readers.readTranscriptBinding(request.request.params.run),
+                  };
+                }
                 if (request.request.kind === "message-by-id") {
                   const { target, messageId, options: lookupOptions } = request.request.params;
                   return {

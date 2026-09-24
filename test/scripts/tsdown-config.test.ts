@@ -1042,6 +1042,37 @@ console.log("relocated Bash parser works without native grammar package");
     },
   );
 
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
+
   it("isolates runtime output from bounded declaration-only graphs", () => {
     const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
     const unifiedRuntimeConfig = configs.find(
