@@ -167,6 +167,12 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+npm failure records keep the first five sanitized error lines in order. Lines over
+200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
+marker within that budget. A failed package baseline scan records
+`baseline-scan-failed` with the scan's original cause, including when its identity
+fallback also fails. A timeout with a successful fallback remains a warning.
+
 When a managed-service handoff cannot start or transfer ownership, the Gateway
 records the refusal on the failed `requested` step. Status includes the recorded
 diagnostic after the reason code; chat and failure reports use the same facts.

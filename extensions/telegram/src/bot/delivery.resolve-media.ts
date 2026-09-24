@@ -89,19 +89,7 @@ function isRetryableGetFileError(err: unknown): boolean {
   );
 }
 
-interface MediaMetadata {
-  fileRef?:
-    | NonNullable<TelegramContext["message"]["photo"]>[number]
-    | TelegramContext["message"]["video"]
-    | TelegramContext["message"]["video_note"]
-    | TelegramContext["message"]["document"]
-    | TelegramContext["message"]["audio"]
-    | TelegramContext["message"]["voice"];
-  fileName?: string;
-  mimeType?: string;
-}
-
-function resolveMediaMetadata(msg: TelegramMediaContext["message"]): MediaMetadata {
+function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
   return {
     fileRef:
       msg.photo?.[msg.photo.length - 1] ??
@@ -414,11 +402,11 @@ async function resolveStickerMedia(params: {
 
   // Check sticker cache for existing description
   const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
+  const fileId = sticker.file_id ?? cached?.fileId;
+  const emoji = sticker.emoji ?? cached?.emoji;
+  const setName = sticker.set_name ?? cached?.setName;
   if (cached) {
     logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
-    const fileId = sticker.file_id ?? cached.fileId;
-    const emoji = sticker.emoji ?? cached.emoji;
-    const setName = sticker.set_name ?? cached.setName;
     if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
       // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
       await cacheSticker({
@@ -428,25 +416,8 @@ async function resolveStickerMedia(params: {
         setName,
       });
     }
-    return {
-      id: saved.id,
-      path: saved.path,
-      size: saved.size,
-      contentType: saved.contentType,
-      kind: "sticker",
-      fileUniqueId: sticker.file_unique_id,
-      savedAt: Date.now(),
-      stickerMetadata: {
-        emoji,
-        setName,
-        fileId,
-        fileUniqueId: sticker.file_unique_id,
-        cachedDescription: cached.description,
-      },
-    };
   }
 
-  // Cache miss - return metadata for vision processing
   return {
     id: saved.id,
     path: saved.path,
@@ -456,10 +427,11 @@ async function resolveStickerMedia(params: {
     fileUniqueId: sticker.file_unique_id,
     savedAt: Date.now(),
     stickerMetadata: {
-      emoji: sticker.emoji ?? undefined,
-      setName: sticker.set_name ?? undefined,
-      fileId: sticker.file_id,
+      emoji,
+      setName,
+      fileId,
       fileUniqueId: sticker.file_unique_id,
+      ...(cached ? { cachedDescription: cached.description } : {}),
     },
   };
 }

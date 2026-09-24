@@ -231,6 +231,7 @@ async function sampleWindowsSnapshot(stdout: string, commandLineNeedles?: string
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -2390,16 +2391,37 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
   });
 
-  it("fails when the sampled RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ rssMiB: 2049 })).toThrow(
-      "gateway RSS exceeded 2048 MiB: 2049 MiB",
-    );
-  });
-
-  it("fails when aggregate RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ aggregateRssMiB: 2049, rssMiB: 1024 })).toThrow(
-      "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
-    );
+  it.each([false, true])("enforces RSS locally and warns in Actions (%s)", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions ? "true" : "");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [assertCeiling, sample, message] of [
+      [assertResourceCeiling, { rssMiB: 2049 }, "gateway RSS exceeded 2048 MiB: 2049 MiB"],
+      [
+        assertResourceCeiling,
+        { aggregateRssMiB: 2049, rssMiB: 1024 },
+        "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
+      ],
+      [
+        assertCommandResourceCeiling,
+        { aggregateRssMiB: 8193, rssMiB: 1024 },
+        "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+      ],
+    ] as const) {
+      if (actions) {
+        expect(() => assertCeiling(sample)).not.toThrow();
+        expect(report).toHaveBeenCalledWith(expect.stringContaining(`::${message}`));
+      } else {
+        expect(() => assertCeiling(sample)).toThrow(message);
+      }
+    }
+    if (actions) {
+      expect(report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts,line=1,col=0",
+        ),
+      );
+    }
   });
 
   it("summarizes peak RSS across repeated process samples", () => {
@@ -2418,23 +2440,15 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
-  it("fails when process sampling does not capture RSS", () => {
+  it.each(["", "true"])("rejects missing and invalid RSS in Actions mode %s", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
-  });
-
-  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
       "gateway RSS sample was invalid: 0 MiB",
     );
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
       "command aggregate RSS sample was invalid: 0 MiB",
-    );
-  });
-
-  it("fails missing command samples and command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
-    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
-      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
     );
   });
 });

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   collectModuleExportNames,
   collectRepositoryCollisions,
@@ -10,7 +10,15 @@ import {
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string, fileName = "source.ts") {
+  return [content, fileName, parser.parseSourceFile(fileName, content)] as const;
+}
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-export-name-collisions.mts", import.meta.url),
@@ -55,7 +63,8 @@ describe("export name collision guard", () => {
   });
 
   it("ignores types, pure re-exports, imports exported locally, and renamed exports", () => {
-    const result = collectModuleExportNames(`
+    const result = collectModuleExportNames(
+      ...parseFixture(`
       import { importedValue } from "./other.js";
       interface LocalShape {}
       type LocalType = string;
@@ -65,7 +74,8 @@ describe("export name collision guard", () => {
       export * from "./barrel.js";
       export interface ExportedShape {}
       export type ExportedType = string;
-    `);
+    `),
+    );
     expect([...result.definitions]).toEqual([]);
     expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
   });
@@ -226,9 +236,9 @@ describe("export name collision guard", () => {
       `,
     ];
     for (const content of forwarders) {
-      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual(
-        [],
-      );
+      expect([
+        ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
+      ]).toEqual([]);
     }
   });
 
@@ -247,9 +257,9 @@ describe("export name collision guard", () => {
       const bind = createLazyRuntimeMethodBinder(loadRuntime);
       export const runThing = bind(${selector});
     `;
-    expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
-      "runThing",
-    ]);
+    expect([
+      ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
+    ]).toEqual(["runThing"]);
   });
 
   it.each(["./unrelated.js", "./shared/lazy-runtime.fake.js"])(
@@ -260,9 +270,9 @@ describe("export name collision guard", () => {
         const bind = createLazyRuntimeMethodBinder(loadRuntime);
         export const runThing = bind(runtime => runtime.runThing);
       `;
-      expect([...collectModuleExportNames(content, "src/runtime-facade.ts").definitions]).toEqual([
-        "runThing",
-      ]);
+      expect([
+        ...collectModuleExportNames(...parseFixture(content, "src/runtime-facade.ts")).definitions,
+      ]).toEqual(["runThing"]);
     },
   );
 
@@ -293,20 +303,24 @@ describe("export name collision guard", () => {
       body: "return ready ? resolveThingImpl(...args) : fallback;",
     },
   ])("keeps $name wrappers as real definitions", ({ params = "...args: unknown[]", body }) => {
-    const result = collectModuleExportNames(`
+    const result = collectModuleExportNames(
+      ...parseFixture(`
       import { resolveThing as resolveThingImpl } from "./thing.js";
       export function resolveThing(${params}) {
         ${body}
       }
-    `);
+    `),
+    );
     expect([...result.definitions]).toEqual(["resolveThing"]);
   });
 
   it("keeps const arrows that add arguments as real definitions", () => {
-    const result = collectModuleExportNames(`
+    const result = collectModuleExportNames(
+      ...parseFixture(`
       import { resolveThing as resolveThingImpl } from "./thing.js";
       export const resolveThing = (...args: unknown[]) => resolveThingImpl(...args, fallback);
-    `);
+    `),
+    );
     expect([...result.definitions]).toEqual(["resolveThing"]);
   });
 

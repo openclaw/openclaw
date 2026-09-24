@@ -604,9 +604,13 @@ it.each(["generation", "session", "creator restamp", "profile", "source", "reuse
             value: [true, { status: "answered", answers }, undefined],
           });
         } else {
+          const error =
+            change === "profile"
+              ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
+              : { details: { reason: "QUESTION_NOT_FOUND" } };
           expect(outcome).toMatchObject({
             status: "fulfilled",
-            value: [false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }],
+            value: [false, undefined, error],
           });
         }
         expect(manager.get(id)?.status).toBe(change === "reused id" ? "pending" : "answered");
@@ -628,10 +632,7 @@ it("prepares question session data in the worker across RPCs and real narrow, br
       { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
       "sql-broad",
     );
-    const admin = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.admin"] } },
-      "sql-admin",
-    );
+    const admin = questionPeer(adminRequestClient, "sql-admin");
     const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
     const fallback = vi.fn((client, sessionKeys, agentId, event, payload) =>
       canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),

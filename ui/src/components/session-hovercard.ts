@@ -15,6 +15,7 @@ import {
   renderPersonName,
   type PersonActivityRouting,
 } from "./person-activity-link.ts";
+import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { renderSessionColorDot } from "./session-color.ts";
 import {
   renderSessionHovercardContext,
@@ -282,6 +283,11 @@ function renderSessionAttribution({
   }
   const { creator, primaryIdentity, primaryLabel, participants, otherCount } = attribution;
   const primaryParticipant = creator ? undefined : participants[0];
+  const avatarPerson =
+    creator ??
+    (primaryParticipant
+      ? { ...primaryParticipant, id: primaryParticipant.identity.id }
+      : undefined);
   const primaryActivity =
     primaryIdentity?.type === "profile"
       ? personActivityLink(primaryIdentity.id, personActivity, primaryLabel)
@@ -295,8 +301,8 @@ function renderSessionAttribution({
   if (creator && row.channelAvatarUrl) {
     ensureChannelAvatarElement();
   }
-  const primaryAvatar = creator
-    ? row.channelAvatarUrl
+  const primaryAvatar =
+    creator && row.channelAvatarUrl
       ? html`<openclaw-channel-avatar
           class="session-hovercard__creator-avatar"
           .routeUrl=${row.channelAvatarUrl}
@@ -305,34 +311,21 @@ function renderSessionAttribution({
           .fallback=${avatarFallback}
           aria-hidden="true"
         ></openclaw-channel-avatar>`
-      : html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: creator.id,
-            name: creator.label,
-            avatarUrl: creator.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${creator.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-    : primaryParticipant
-      ? html`<openclaw-viewer-avatar
-          class="session-hovercard__creator-avatar"
-          .user=${{
-            id: primaryParticipant.identity.id,
-            name: primaryParticipant.label,
-            avatarUrl: primaryParticipant.avatarUrl,
-            watchedSessions: [],
-          }}
-          .markAsViewer=${false}
-          .identity=${primaryParticipant.identity}
-          variant="session"
-          aria-hidden="true"
-        ></openclaw-viewer-avatar>`
-      : nothing;
+      : avatarPerson
+        ? html`<openclaw-viewer-avatar
+            class="session-hovercard__creator-avatar"
+            .user=${{
+              id: avatarPerson.id,
+              name: avatarPerson.label,
+              avatarUrl: avatarPerson.avatarUrl,
+              watchedSessions: [],
+            }}
+            .markAsViewer=${false}
+            .identity=${avatarPerson.identity}
+            variant="session"
+            aria-hidden="true"
+          ></openclaw-viewer-avatar>`
+        : nothing;
   const remainingParticipants = creator ? participants : participants.slice(1);
   const attributionLabel = [
     primaryLabel,
@@ -596,6 +589,16 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
       lastMessagePreview
         ? html`<section class="session-hovercard__section session-hovercard__section--optional">
             <div class="session-hovercard__excerpt">${lastMessagePreview}</div>
+          </section>`
+        : nothing
+    }
+    ${
+      input.row?.attention?.kind === "error"
+        ? html`<section class="session-hovercard__section session-hovercard__error">
+            <span class="session-hovercard__error-icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <span>${sessionAttentionSubtitle(input.row.attention)}</span>
           </section>`
         : nothing
     }

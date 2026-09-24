@@ -6,12 +6,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
-import ts from "typescript";
+import { transformSync } from "esbuild";
 
 export async function createDiskSwap(sourceRoot, base) {
-  const require = createRequire(
-    path.join(process.env.RESTART_DEPENDENCY_ROOT ?? sourceRoot, "package.json"),
-  );
+  const require = createRequire(path.join(sourceRoot, "package.json"));
   const expected = JSON.parse(await fs.readFile(path.join(sourceRoot, "package.json"), "utf8"))
     .dependencies["@openclaw/fs-safe"];
   const installed = JSON.parse(
@@ -61,14 +59,13 @@ export async function createDiskSwap(sourceRoot, base) {
     external = new Map();
   for (const name of files) {
     const filename = path.join(sourceRoot, "src", name + ".ts");
-    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), {
-      fileName: filename,
-      compilerOptions: {
-        target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.ESNext,
-        verbatimModuleSyntax: true,
-      },
-    }).outputText;
+    const code = transformSync(await fs.readFile(filename, "utf8"), {
+      sourcefile: filename,
+      loader: "ts",
+      target: "esnext",
+      format: "esm",
+      tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
+    }).code;
     modules.set(
       path.basename(name) + ".js",
       new vm.SourceTextModule(code, { context, identifier: filename }),

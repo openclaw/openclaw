@@ -277,6 +277,21 @@ export function renderUpdateRunReport(
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
+  const admission = run.origin.admission;
+  if (admission) {
+    const candidateVersion = admission.candidateVersion
+      ? ` (${bounded(admission.candidateVersion, 120)})`
+      : "";
+    lines.push(`Admission: ${admission.owner}${candidateVersion}.`);
+    if (admission.checks?.length) {
+      lines.push(
+        `Admission checks: ${admission.checks.map((check) => `${bounded(check.name, 120)}: ${check.status}`).join(", ")}.`,
+      );
+    }
+    if (admission.fallbackReason) {
+      lines.push(`Admission fallback: ${bounded(admission.fallbackReason, 500)}`);
+    }
+  }
   for (const step of run.steps) {
     if (step.snapshotCapacity) {
       lines.push(formatUpdateSnapshotCapacity(step.snapshotCapacity));
@@ -326,7 +341,7 @@ export function renderUpdateRunReport(
       ),
     );
   }
-  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+  for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];

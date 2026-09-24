@@ -2,12 +2,35 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
-import type { MockToolCallItem, StreamEvent } from "./mock-openai-contracts.js";
+import {
+  type MockToolCallItem,
+  type StreamEvent,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE,
+  QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
+  TINY_PNG_BASE64,
+} from "./mock-openai-contracts.js";
 import { MockResponseStream } from "./mock-openai-stream.js";
 
 let mockFunctionCallSequence = 0;
 
 export const QA_TOOL_SEARCH_SECONDARY_TARGET = "fake_plugin_tool_01";
+
+export function buildWhatsAppAgentActionArgs(prompt: string): Record<string, unknown> | undefined {
+  if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(prompt)) {
+    return { action: "react", emoji: "👍", final: true };
+  }
+  const uploadCaption = QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE.exec(prompt)?.[1];
+  if (uploadCaption) {
+    return {
+      action: "upload-file",
+      buffer: TINY_PNG_BASE64,
+      caption: uploadCaption,
+      contentType: "image/png",
+      filename: "whatsapp-qa-agent-upload.png",
+    };
+  }
+  return undefined;
+}
 
 function normalizePromptPathCandidate(candidate: string) {
   const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
@@ -25,18 +48,13 @@ function normalizePromptPathCandidate(candidate: string) {
 }
 
 export function readTargetFromPrompt(prompt: string) {
-  const backtickedMatches = Array.from(prompt.matchAll(/`([^`]+)`/g))
-    .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => Boolean(value));
-  if (backtickedMatches.length > 0) {
-    return backtickedMatches[0];
-  }
-
-  const quotedMatches = Array.from(prompt.matchAll(/"([^"]+)"/g))
-    .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => Boolean(value));
-  if (quotedMatches.length > 0) {
-    return quotedMatches[0];
+  for (const pattern of [/`([^`]+)`/g, /"([^"]+)"/g]) {
+    for (const match of prompt.matchAll(pattern)) {
+      const candidate = normalizePromptPathCandidate(match[1] ?? "");
+      if (candidate) {
+        return candidate;
+      }
+    }
   }
 
   const repoScoped = /\b(?:repo\/[^\s`",)]+|QA_[A-Z_]+\.md)\b/.exec(prompt)?.[0]?.trim();
@@ -202,6 +220,9 @@ export function buildQaToolSearchArgs(
       ].join("\n"),
     };
   }
+  if (failureMode && targetTool === "sessions_spawn") {
+    return { task: "" };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -254,72 +275,45 @@ export function buildQaToolSearchArgs(
     };
   }
   if (targetTool === "ask_user") {
-    if (/\bask_user_fixture=single\b/i.test(prompt)) {
-      return {
-        questions: [
-          {
-            id: "deploy_target",
-            header: "Deploy",
-            question: "Where should this deploy?",
-            options: [
-              { label: "Staging (Recommended)", description: "Safer default" },
-              { label: "Production 🚀", description: "Ship to users" },
-            ],
-          },
-        ],
-        timeoutSeconds: 60,
-      };
-    }
-    if (/\bask_user_fixture=multi\b/i.test(prompt)) {
-      return {
-        questions: [
-          {
-            id: "checks",
-            header: "Checks",
-            question: "Which checks should run?",
-            options: [
-              { label: "Unit (Recommended)", description: "Fast focused coverage" },
-              { label: "E2E", description: "Full user-path coverage" },
-              { label: "Lint", description: "Static checks" },
-            ],
-            multiSelect: true,
-          },
-        ],
-        timeoutSeconds: 60,
-      };
-    }
-    return {
-      questions: [
-        {
-          id: "deploy_target",
-          header: "Deploy",
-          question: "Where should this deploy?",
-          options: [
-            { label: "Staging (Recommended)", description: "Safer default" },
-            { label: "Production", description: "Ship to users" },
-          ],
-        },
-        {
-          id: "checks",
-          header: "Checks",
-          question: "Which checks should run?",
-          options: [
-            { label: "Unit (Recommended)", description: "Fast focused coverage" },
-            { label: "E2E", description: "Full user-path coverage" },
-            { label: "Lint", description: "Static checks" },
-          ],
-          multiSelect: true,
-        },
-        {
-          id: "release_note",
-          header: "Note",
-          question: "Which release note label should be used?",
-          options: [
-            { label: "Routine (Recommended)", description: "Standard release note" },
-            { label: "Urgent", description: "Highlight prominently" },
-          ],
-        },
+    const single = /\bask_user_fixture=single\b/i.test(prompt);
+    const deployQuestion = {
+      id: "deploy_target",
+      header: "Deploy",
+      question: "Where should this deploy?",
+      options: [
+        { label: "Staging (Recommended)", description: "Safer default" },
+        { label: single ? "Production 🚀" : "Production", description: "Ship to users" },
       ],
+    };
+    const checksQuestion = {
+      id: "checks",
+      header: "Checks",
+      question: "Which checks should run?",
+      options: [
+        { label: "Unit (Recommended)", description: "Fast focused coverage" },
+        { label: "E2E", description: "Full user-path coverage" },
+        { label: "Lint", description: "Static checks" },
+      ],
+      multiSelect: true,
+    };
+    return {
+      questions: single
+        ? [deployQuestion]
+        : /\bask_user_fixture=multi\b/i.test(prompt)
+          ? [checksQuestion]
+          : [
+              deployQuestion,
+              checksQuestion,
+              {
+                id: "release_note",
+                header: "Note",
+                question: "Which release note label should be used?",
+                options: [
+                  { label: "Routine (Recommended)", description: "Standard release note" },
+                  { label: "Urgent", description: "Highlight prominently" },
+                ],
+              },
+            ],
       timeoutSeconds: 60,
     };
   }
@@ -343,6 +337,7 @@ export function buildQaToolSearchArgs(
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
+      expectsCompletionMessage: false,
     };
   }
   if (targetTool === "memory_recall") {

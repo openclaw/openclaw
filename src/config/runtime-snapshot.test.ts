@@ -20,8 +20,6 @@ import {
   getRuntimeConfigSnapshot,
   preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
-  notifyRuntimeConfigWriteListeners,
-  registerRuntimeConfigWriteListener,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
@@ -452,38 +450,6 @@ describe("runtime snapshot state", () => {
       }
     },
   );
-
-  it("notifies registered write listeners with committed runtime snapshots", () => {
-    const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
-    const unsubscribe = registerRuntimeConfigWriteListener((event) => {
-      seen.push({
-        configPath: event.configPath,
-        runtimeConfig: event.runtimeConfig,
-      });
-    });
-
-    try {
-      notifyRuntimeConfigWriteListeners({
-        configPath: "/tmp/openclaw.json",
-        sourceConfig: { gateway: { port: 18789 } },
-        runtimeConfig: { gateway: { port: 19003 } },
-        persistedHash: "abc123",
-        revision: 1,
-        fingerprint: "runtime-fingerprint",
-        sourceFingerprint: "source-fingerprint",
-        writtenAtMs: 1,
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(seen).toEqual([
-      {
-        configPath: "/tmp/openclaw.json",
-        runtimeConfig: { gateway: { port: 19003 } },
-      },
-    ]);
-  });
 
   it("scopes managed write ownership by path and reference count", () => {
     const releaseA = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");

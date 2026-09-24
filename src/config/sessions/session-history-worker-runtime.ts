@@ -22,7 +22,9 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   ChatHistoryPage,
+  ReadSessionMessageByIdResult,
   SessionHistoryDelta,
+  SessionHistoryTranscriptBinding,
   SessionHistorySnapshot,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
@@ -120,13 +122,35 @@ function readQueuedHistory(
 }
 
 function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHistoryWorkerRequest {
-  if (request.kind === "delta" || request.kind === "message-lookup" || request.kind === "recent") {
+  if (request.kind !== "rpc" && request.kind !== "http") {
     const target = request.params.target;
     const capturedTarget = {
       ...target,
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
+    if (request.kind === "transcript-binding") {
+      return {
+        kind: request.kind,
+        params: {
+          target: capturedTarget,
+          run: request.params.run ? { ...request.params.run } : undefined,
+        },
+      };
+    }
+    if (request.kind === "message-count") {
+      return { kind: request.kind, params: { target: capturedTarget } };
+    }
+    if (request.kind === "message-by-id") {
+      return {
+        kind: request.kind,
+        params: {
+          target: capturedTarget,
+          messageId: request.params.messageId,
+          options: request.params.options ? { ...request.params.options } : undefined,
+        },
+      };
+    }
     if (request.kind === "recent") {
       return {
         kind: "recent",
@@ -195,6 +219,18 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
 }
 
 export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
+  signal?: AbortSignal,
+): Promise<SessionHistoryTranscriptBinding | undefined>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "message-by-id" }>,
+  signal?: AbortSignal,
+): Promise<ReadSessionMessageByIdResult>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "message-count" }>,
+  signal?: AbortSignal,
+): Promise<number>;
+export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>,
   signal?: AbortSignal,
 ): Promise<ChatHistoryPage>;
@@ -213,7 +249,16 @@ export function readSessionHistoryPageInWorker(
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<ChatHistoryPage | SessionHistorySnapshot | AdmittedSessionHistoryDelta | unknown[]> {
+): Promise<
+  | SessionHistoryTranscriptBinding
+  | undefined
+  | ChatHistoryPage
+  | SessionHistorySnapshot
+  | AdmittedSessionHistoryDelta
+  | ReadSessionMessageByIdResult
+  | number
+  | unknown[]
+> {
   signal?.throwIfAborted();
   const capturedRequest = captureHistoryRequest(request);
   const scope: SessionTranscriptReadScope =
@@ -394,13 +439,20 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind !== capturedRequest.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
+    if (result.kind === "transcript-binding") {
+      return result.binding;
+    }
     return result.kind === "rpc"
       ? result.page
       : result.kind === "http"
         ? result.snapshot
         : result.kind === "delta"
           ? { ...result, assertCurrent }
-          : result.messages;
+          : result.kind === "message-by-id"
+            ? result.result
+            : result.kind === "message-count"
+              ? result.count
+              : result.messages;
   } catch (error) {
     if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({

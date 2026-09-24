@@ -55,13 +55,10 @@ describe("Discord voice ingress execution correlation", () => {
         accountId: "work",
         userId: owner ? "owner" : "guest",
         message: "Change your voice",
-        cfg: {},
         discordConfig: {},
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
         voiceSelection: { bindRun, unregister: vi.fn() },
-        fetchGuildName: vi.fn(async () => "Guild"),
-        speakerContext: {} as never,
       });
       if (fail) {
         await expect(turn).rejects.toThrow("Agent turn failed");
@@ -105,14 +102,11 @@ describe("Discord voice ingress execution correlation", () => {
         accountId: "work",
         userId: "guest",
         message: "Change your voice",
-        cfg: {},
         discordConfig: {},
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         context: { senderIsOwner: false, speakerLabel: "Guest", isCurrent: () => current },
         voiceSelection: { bindRun, unregister: vi.fn() },
         signal: cancellation.signal,
-        fetchGuildName: vi.fn(async () => "Guild"),
-        speakerContext: {} as never,
       });
       expect(release).toHaveBeenCalledOnce();
     },
@@ -130,12 +124,9 @@ describe("Discord voice ingress execution correlation", () => {
       entry: entry as never,
       accountId: "work",
       userId: "user-1",
-      cfg: {} as never,
       discordConfig: {} as never,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       context: { senderIsOwner: false, speakerLabel: "Guest" },
-      fetchGuildName: vi.fn(async () => "Guild"),
-      speakerContext: {} as never,
     };
 
     await runDiscordVoiceAgentTurn({ ...shared, message: "first turn" });
@@ -175,12 +166,9 @@ describe("Discord voice ingress execution correlation", () => {
         accountId: "work",
         userId: owner ? "owner-1" : "guest-1",
         message: "run the tool",
-        cfg: {} as never,
         discordConfig: {} as never,
         runtime: { log: vi.fn(), error: vi.fn() } as never,
         context: { senderIsOwner: owner, speakerLabel: owner ? "Owner" : "Guest" },
-        fetchGuildName: vi.fn(async () => "Guild"),
-        speakerContext: {} as never,
       });
 
       if (captureOnly || state !== "active") {

@@ -14,26 +14,41 @@ Gateway host and setup credential.
 
 1. Open the OpenClaw app.
 2. Tap `Continue`.
-3. On `Connect Gateway`, tap `Set Up Manually`.
-4. In the `Setup Code` section, tap the `Paste setup code` field.
+3. Tap `Connect Manually` to open `Gateway Setup`.
+4. In the `Setup Code` section, tap the `Enter setup code` field.
 5. Paste the setup code string from the App Review submission `Notes` field.
-6. Tap `Apply Setup Code`.
+6. Tap `Apply`.
 7. If `Trust and connect` appears, tap `Trust and connect`.
-8. Wait for the `Connected` screen.
-9. On `Connected`, tap `Open OpenClaw`.
-10. Confirm the `Control` screen shows `Gateway Online`.
-11. Tap `Settings`.
-12. Tap `Approvals`.
-13. Tap `Open Notifications`.
-14. Tap `Enable Notifications`.
-15. On `Enable OpenClaw Hosted Push Relay?`, tap `Continue`.
-16. If iOS asks whether OpenClaw may send notifications, tap `Allow`.
-17. Confirm `Notifications` shows `Enabled`.
+8. Wait for `You're connected`.
+9. Tap `Go to Chat`.
+
+The app uses a sidebar for navigation. Open it with the sidebar button at the
+top left. `Home` opens the main chat. The gear at the bottom of the sidebar opens
+`Settings`; the Gateway control beside it opens connection settings.
+
+If the app opens directly into chat instead of showing `Continue`, open the
+sidebar and tap the Gateway control at the bottom. Under `Add Gateway`, paste
+the supplied code into `Paste setup code` and tap `Connect`.
+
+### Enable notifications
+
+1. Open the sidebar and tap the `Settings` gear.
+2. Open `This iPhone`.
+3. Ensure the `Notifications` switch is on.
+4. Tap `Back`, then open `Permissions` in the `This iPhone` section of the
+   Settings list. If `Notifications` shows `Not determined`, tap its `Grant…`
+   button.
+5. When either step presents `Enable OpenClaw Hosted Push Relay?` or the iOS
+   notification prompt, tap `Allow`.
+6. Confirm the `Notifications` permission shows `Granted`.
+
+If notifications were previously denied, use the row's `Open System Settings…`
+action to change the permission in iOS Settings, then return to OpenClaw.
 
 ## Chat
 
-1. Tap the `Chat` tab.
-2. Tap the text field labeled `Message main...`.
+1. Open the sidebar and tap `Home`.
+2. Tap the message field at the bottom of the chat.
 3. Send this exact message:
 
 ```text
@@ -44,17 +59,18 @@ Expected result: the assistant replies with the available App Review demos.
 
 ## Approval Demo
 
-1. Tap the `Chat` tab.
-2. Tap the text field labeled `Message main...`.
+1. Open the sidebar and tap `Home`.
+2. Tap the message field at the bottom of the chat.
 3. Send this exact message:
 
 ```text
 Run the approval demo.
 ```
 
-Expected result: the iPhone shows `Exec approval required` with the harmless
-command `printf 'OpenClaw App Review approval demo complete\n'`. Tap
-`Allow Once`. The chat then replies:
+Expected result: the iPhone shows `Exec approval required` for a harmless
+`printf` command that prints `OpenClaw App Review approval demo complete`.
+Tap `Allow Once`, then `Dismiss` if the completed approval remains open.
+The chat then replies:
 
 ```text
 The approval demo completed.
@@ -62,66 +78,79 @@ The approval demo completed.
 
 ## Talk
 
-1. Tap the `Talk` tab.
-2. Tap `Start Talk`.
-3. If iOS asks for microphone access, tap `Allow`.
-4. If iOS asks for Speech Recognition access, tap `Allow`.
-5. Confirm the screen changes to `Ready to talk` and shows `Stop Talk`.
+1. Open the sidebar and tap `Home`.
+2. Wait for any response to finish and leave the message field empty.
+3. Tap the waveform button at the right of the message field.
+4. If iOS asks for microphone access, allow it. If a Speech Recognition prompt
+   appears, allow that too.
+5. Wait for Talk to start listening.
 6. Say:
 
 ```text
-Summarize this review setup in one sentence.
+I'm testing OpenClaw on an iPhone connected to a test Gateway. Summarize that in one sentence.
 ```
 
-Expected result: the assistant responds by voice. Tap `Stop Talk` when done.
+Expected result: the assistant speaks a one-sentence summary of the setup just
+described, and its response appears in chat. Exact wording may vary. Tap the
+waveform button again to stop.
 
 ## Talk + Background Audio
 
-1. Tap the `Talk` tab.
-2. Confirm the speaker button is highlighted.
-3. Confirm the background-listening button is highlighted.
-4. Tap `Start Talk`.
-5. If iOS asks for microphone access, tap `Allow`.
-6. If iOS asks for Speech Recognition access, tap `Allow`.
-7. Confirm `Stop Talk` is visible.
-8. Say:
+1. Open the sidebar, tap the `Settings` gear, and open `Talk`.
+2. In the `This iPhone` section, turn on `Talk in the background` and
+   `Use speakerphone`.
+3. Return to `Home` and start realtime chat as described above.
+4. Say:
 
 ```text
 Tell me when you can hear me.
 ```
 
-9. While Talk is active, send OpenClaw to the background by returning to the
-   Home Screen or locking the iPhone. Do not force quit the app.
-10. Continue speaking then wait for assistant audio reply.
+5. Wait for the assistant's reply. While Talk is still active, send OpenClaw to
+   the background by returning to the Home Screen or locking the iPhone. Do not
+   force quit the app.
+6. With OpenClaw still in the background, say:
 
-Expected result: realtime Talk audio continues while OpenClaw is backgrounded.
-Reopen OpenClaw, confirm Talk is still active, then tap `Stop Talk`.
+```text
+Name one animal.
+```
+
+7. Listen for a spoken answer without reopening OpenClaw.
+
+Expected result: the assistant names an animal aloud while OpenClaw remains in
+the background. Reopen OpenClaw and confirm that response appears in chat and
+Talk is still active, then tap the waveform button to stop.
 
 ## Gateway Status
 
-1. Tap `Control`.
-2. Tap `Instances`.
-3. Confirm the screen shows `Gateway online`.
-4. Confirm at least one `agent` row is connected.
-5. Confirm the iPhone review device appears in the connected instances list.
+1. Open the sidebar and choose `Overview`. If it is not listed under `Pages`,
+   use `Edit Pages` beside that heading to add it.
+2. In the `Gateway` card, confirm `Connection` is `Online` and `Agents` is
+   at least one.
+3. Open the sidebar and tap `Edit Pages` beside `Pages`. Tap the pin beside
+   `Instances` if it is not already pinned, then tap `Done`.
+4. Open `Instances`. This opens the Gateway's `Devices` page.
+5. Confirm the review iPhone appears as a connected node.
 
 ## Live Activity / Dynamic Island
 
-1. Tap `Settings`.
-2. Tap `Reconnect`.
-3. Immediately send OpenClaw to the background by returning to the Home Screen
-   or locking the iPhone.
-4. Watch the Lock Screen or Dynamic Island while the Gateway reconnects.
+1. Start realtime chat with `Talk in the background` enabled, as described
+   above.
+2. Lock the iPhone while Talk is active.
+3. Confirm an `OpenClaw` Live Activity appears on the Lock Screen. On iPhones
+   with Dynamic Island, the activity can also appear there.
+4. Reopen OpenClaw and tap the waveform button to stop.
 
-Expected result: while reconnecting, iOS can show an `OpenClaw` Live Activity
-with connection status such as `Connecting...` or `Reconnecting...`. On a fast
-network this status may be brief because OpenClaw ends the Live Activity after
-the Gateway reconnects successfully.
+Connection status can also appear as a Live Activity. To exercise that path,
+open `Settings` → `Gateway`, tap `Reconnect`, and immediately return to the
+Home Screen or lock the iPhone. Watch for `Connecting...` or `Reconnecting...`.
+On a fast network this status may be brief because OpenClaw ends the connection
+activity after the Gateway reconnects successfully.
 
 ## Push Notification
 
-1. Tap the `Chat` tab.
-2. Tap the text field labeled `Message main...`.
+1. Open the sidebar and tap `Home`.
+2. Tap the message field at the bottom of the chat.
 3. Send this exact message:
 
 ```text
@@ -138,8 +167,8 @@ notification with this body:
 OpenClaw App Review push notification demo
 ```
 
-Tap the notification and unlock the iPhone if prompted. If OpenClaw opens on
-`Control`, tap `Chat`. Expected chat reply:
+Tap the notification and unlock the iPhone if prompted. If the chat is not
+already visible, open the sidebar and tap `Home`. Expected chat reply:
 
 ```text
 The push notification demo completed.
@@ -147,7 +176,7 @@ The push notification demo completed.
 
 ## Push Wake / Status
 
-1. Tap the `Chat` tab.
+1. Open the sidebar and tap `Home`.
 2. Send this exact message:
 
 ```text
@@ -158,8 +187,8 @@ Start push wake demo.
    force quit the app.
 4. Wait for the `OpenClaw` notification on the Lock Screen. It normally appears
    about 10 seconds after the message is sent.
-5. Tap the notification and unlock the iPhone if prompted. If OpenClaw opens on
-   `Control`, tap `Chat`.
+5. Tap the notification and unlock the iPhone if prompted. If the chat is not
+   already visible, open the sidebar and tap `Home`.
 
 Expected result: the app reconnects to the live Gateway and Chat replies:
 
@@ -171,38 +200,39 @@ The push wake and node status demo completed.
 
 OpenClaw does not present an aggregate permissions page during onboarding.
 Optional access is requested when the reviewer invokes the related feature or
-taps `Continue` for a permission in Settings. `Continue` immediately presents
-the native iOS authorization prompt, with no additional OpenClaw dialog or
-deferral action.
+uses its permission control in Settings.
 
-1. Tap `Settings`.
-2. Tap `Permissions`.
-3. Confirm these current app controls are available:
+1. Open the sidebar, tap the `Settings` gear, and open `This iPhone`.
+2. Confirm `Allow Camera` and `Keep awake` controls are available. On supported
+   devices, `Health summaries` is also available.
+3. Tap `Back`, then open `Permissions` in the `This iPhone` section of the
+   Settings list.
+4. Confirm the `System access` section includes:
+   - `Notifications`
    - `Camera`
-   - `Location` with `Off`, `While Using`, and `Always`
-   - `Keep Awake`
-4. Confirm the always-visible `Apple Health` section identifies the integration
-   as `Apple Health Summaries`.
-5. Expand `Privacy & Access` and confirm these controls show `Continue` when
-   access has not previously been requested:
+   - `Microphone`
+   - `Speech Recognition`
+   - `Location`
    - `Contacts`
    - `Photos`
-   - `Calendar (Add Events)`
-   - `Calendar (View Events)`
+   - `Calendars`
    - `Reminders`
-6. Tap `Continue` for any permission that has not been requested. Confirm the
-   corresponding native iOS authorization prompt appears immediately, then
-   make the permission choice in that system prompt.
+5. For a permission marked `Not determined`, tap `Grant…`. Confirm the native
+   iOS authorization prompt appears and make the permission choice there.
+6. Confirm the `Location` section offers `Off`, `While using`, and `Always`,
+   and shows the current `Precise location` status.
 
-If the review device already has a decision for a permission, the row shows
-its current status or a management action instead of `Continue`.
+Previously requested permissions show their current status. Denied permissions
+offer an action to open iOS Settings. Enabling camera access, Health summaries,
+Always location, Voice Wake, or the hosted push relay can also present an
+OpenClaw consent dialog explaining that feature's access.
 
 ### Optional Apple Health summary
 
-Apple Health Summaries is off by default. Under `Settings` → `Permissions`, the
-always-visible `Apple Health` section identifies the feature and the specific
-data it uses. Tap `Enable Apple Health Summaries` to open Apple's Health
-permission sheet. OpenClaw requests read-only access to steps, sleep, resting
+Apple Health Summaries is off by default. Under `Settings` → `This iPhone`, turn
+on `Health summaries`. Read `Share Apple Health summaries with the Gateway?`
+and tap `Allow` to open Apple's Health permission sheet. Choose which data to
+share there. OpenClaw requests read-only access to steps, sleep, resting
 heart rate, and workouts from the Apple Health app. It performs aggregation on
 device and shares only a user-requested `today` summary through the user's
 Gateway and configured AI provider; individual samples, sources, metadata,
@@ -221,11 +251,12 @@ medical advice.
 2. Navigate to `https://example.com`.
 3. Tap the Safari toolbar `More` button.
 4. Tap `Share`.
-5. Tap `OpenClaw`.
-6. Confirm the OpenClaw share extension appears and shows
-   `Edit text, then tap Send.` and `Send to OpenClaw`.
+5. Tap `OpenClaw` in the row of sharing apps. Scroll along that row if it is
+   not immediately visible.
+6. Confirm the OpenClaw share extension appears with the shared page's URL or
+   text in the editable message and a `Send to OpenClaw` button.
 7. Tap `Send to OpenClaw`.
 
 Expected result: the OpenClaw share extension sends the shared Safari page to
 the live review Gateway and shows `Sent to OpenClaw.` Returning to OpenClaw
-Chat shows the shared `Example Domain` page.
+and opening `Home` shows the shared `Example Domain` page or its URL in chat.

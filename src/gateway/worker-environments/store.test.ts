@@ -3,13 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  captureAgentLifecycleBinding,
+  matchesAgentLifecycleBinding,
+} from "../../agents/agent-lifecycle-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type {
   WorkerDesktopEndpoint,
   WorkerProfile,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -98,6 +104,36 @@ describe("worker environment store", () => {
       provisionOperationId: `provision:${environmentId}`,
     });
   }
+
+  it("revalidates agent incarnation inside worker admission without joining its writer lock", async () => {
+    const options = { path: database.path };
+    const config = { agents: { entries: { worker: {} } } };
+    const binding = captureAgentLifecycleBinding(config, "worker", options);
+    expect(binding).toBeDefined();
+    const assertCurrent = () => {
+      if (!binding || !matchesAgentLifecycleBinding(config, binding, options)) {
+        throw new Error("Agent incarnation changed");
+      }
+    };
+    const create = (environmentId: string) =>
+      store.createIntent(
+        {
+          environmentId,
+          providerId: "fake-provider",
+          profileId: "test-profile",
+          profileSnapshot: { settings: {} },
+          provisionOperationId: `provision:${environmentId}`,
+        },
+        assertCurrent,
+      );
+
+    await expect(create("live-agent")).resolves.toMatchObject({ state: "requested" });
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      recordAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
+      await expect(create("replaced-agent")).rejects.toThrow("Agent incarnation changed");
+    }, options);
+    expect(store.get("replaced-agent")).toBeUndefined();
+  });
 
   function fallbackPortRows(environmentId: string) {
     return database.db

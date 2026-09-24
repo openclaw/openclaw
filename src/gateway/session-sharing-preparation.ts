@@ -9,7 +9,7 @@ import {
   retainPreparedSessionSharingFacts,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,9 +31,14 @@ import {
   prepareGatewaySessionStoreTargetReadOnly,
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
-import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
-type ExistingSessionMutationFacts = PreparedSessionMutationFacts & {
+type PreparedSessionSourceFacts = PreparedSessionMutationFacts & {
+  /** Physical source retained by the same read custody as the sharing facts. */
+  sourcePath?: string;
+};
+
+type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
   target: NonNullable<PreparedSessionMutationFacts["target"]>;
 };
 
@@ -66,19 +71,19 @@ type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
 /** Negative durable reads retain the same keyed publication and source guards as existing rows. */
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>>;
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>>;
 export function prepareSessionMutationFacts(
   params: SessionFactsRequest,
 ): Promise<SessionFactsRead<ExistingSessionMutationFacts>>;
 export async function prepareSessionMutationFacts(
   params: SessionFactsRequest & { allowMissing?: true },
-): Promise<SessionFactsRead<PreparedSessionMutationFacts>> {
+): Promise<SessionFactsRead<PreparedSessionSourceFacts>> {
   const route = routeFacts(params.cfg);
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
   const releases: Array<() => void> = [];
   let active = true;
   let invalidated = false;
-  let facts: PreparedSessionMutationFacts | undefined;
+  let facts: PreparedSessionSourceFacts | undefined;
   const selectedPaths = new Set<string>();
   const release = () => {
     if (active) {
@@ -199,6 +204,7 @@ export async function prepareSessionMutationFacts(
           throw new SessionMutationFactsUnavailableError();
         }
         return {
+          sourcePath: storePath,
           target: {
             agentId,
             canonicalKey,
@@ -329,10 +335,7 @@ export async function prepareSessionMutationFacts(
         },
       );
       assertActive();
-      const match = resolveCanonicalSessionStoreMatchFromStoreKeys(
-        selected.store,
-        selected.storeKeys,
-      );
+      const match = findCanonicalStoreMatch(selected.store, selected.storeKeys);
       const sharing = members.get(selected.storePath);
       if (!match) {
         if (!params.allowMissing) {
@@ -352,6 +355,7 @@ export async function prepareSessionMutationFacts(
           storeKey: match.key,
         };
         facts = {
+          sourcePath: sharing.source.path,
           target,
           membership: new Set(
             sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
@@ -381,6 +385,7 @@ export async function prepareSessionMutationFacts(
             throw new SessionMutationFactsUnavailableError();
           }
           return {
+            sourcePath: sharing.source.path,
             target: { ...target, entry: current.entry },
             membership: current.membership,
           };
@@ -389,8 +394,11 @@ export async function prepareSessionMutationFacts(
       assertSource = () => {
         assertRegistry?.();
         for (const { candidate, identity } of candidateIdentities) {
-          assertSessionStoreReadCandidate(candidate.path, [candidate]);
-          if (readDatabasePathIdentitySync(candidate.path).key !== identity) {
+          if (
+            captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
+              candidate.physicalPath ||
+            readDatabasePathIdentitySync(candidate.path).key !== identity
+          ) {
             throw new SessionMutationFactsUnavailableError();
           }
         }

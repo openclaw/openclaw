@@ -7,6 +7,7 @@ import {
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromRuntime } from "../../channels/account-summary.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
@@ -25,10 +26,8 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { defaultRuntime } from "../../runtime.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -39,7 +38,9 @@ import {
 import type { ChannelAccountStartOutcome } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import {
+  logoutChannelAccount,
   resolveChannelGatewayAccountId,
+  type ChannelAccountParams,
   resolveRuntimeAccountSnapshot,
 } from "./channels-account.js";
 import {
@@ -47,15 +48,9 @@ import {
   resolveDeferredChannelReloadIssue,
 } from "./channels-status-issues.js";
 import { respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
-
-type ChannelLogoutPayload = {
-  channel: ChannelId;
-  accountId: string;
-  cleared: boolean;
-  [key: string]: unknown;
-};
 
 type ChannelStartPayload = {
   channel: ChannelId;
@@ -74,14 +69,6 @@ type ChannelStopPayload = {
 type ChannelOperationParams = {
   channel?: unknown;
   accountId?: unknown;
-};
-
-type ChannelAccountParams = {
-  channelId: ChannelId;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  context: GatewayRequestContext;
-  plugin: ChannelPlugin;
 };
 
 function resolveChannelOperationParams<TParams extends ChannelOperationParams>(params: {
@@ -237,36 +224,6 @@ function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: 
   return Math.min(Math.max(1000, params.timeoutMsRaw), CHANNEL_STATUS_MAX_TIMEOUT_MS);
 }
 
-/** Log out one channel account through its owning channel plugin. */
-async function logoutChannelAccount(params: ChannelAccountParams): Promise<ChannelLogoutPayload> {
-  // Credential removal uses current config rather than a paused runtime's older inventory.
-  const resolvedAccountId = resolveChannelGatewayAccountId(params);
-  const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
-  // Stop the runtime before clearing channel-owned auth so no active watcher can
-  // immediately reconnect with credentials the user is trying to remove.
-  await params.context.stopChannel(params.channelId, resolvedAccountId);
-  const result = await params.plugin.gateway?.logoutAccount?.({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    account,
-    runtime: defaultRuntime,
-  });
-  if (!result) {
-    throw new Error(`Channel ${params.channelId} does not support logout`);
-  }
-  const cleared = result.cleared;
-  const loggedOut = typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
-  if (loggedOut) {
-    params.context.markChannelLoggedOut(params.channelId, true, resolvedAccountId);
-  }
-  return {
-    channel: params.channelId,
-    accountId: resolvedAccountId,
-    ...result,
-    cleared,
-  };
-}
-
 /** Start one channel account through its owning channel plugin. */
 async function startChannelAccount(params: ChannelAccountParams): Promise<ChannelStartPayload> {
   if (!params.plugin.gateway?.startAccount) {
@@ -395,7 +352,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (diagnosticSnapshot) {
         return { accountId, snapshot: diagnosticSnapshot };
       }
-      const account = plugin.config.resolveAccount(cfg, accountId);
+      const account = await resolveChannelAccount({ plugin, cfg, accountId });
       const enabled = plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account);
       let probeResult: unknown;
       let lastProbeAt: number | null = null;
@@ -693,7 +650,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
         }),
     });
   },
-  "channels.logout": async ({ params, respond, context }) => {
+  "channels.logout": async (invocation) => {
+    const { params, respond, context } = invocation;
     const resolved = resolveChannelOperationParams({
       method: "channels.logout",
       rawParams: params,
@@ -714,6 +672,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountId = parsedParams.accountId;
+    const methodRegistry = context.getGatewayMethodRegistry?.();
+    const requestAuthority = readGatewayRequestMutationAuthority(invocation);
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       respond(
@@ -732,6 +692,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
           cfg: context.getRuntimeConfig(),
           context,
           plugin,
+          methodRegistry,
+          assertRequestCurrent: requestAuthority.assertCurrent,
         }),
     });
   },

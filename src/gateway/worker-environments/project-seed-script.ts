@@ -2,12 +2,16 @@ import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
 } from "../../worker/workspace-seed-retention.js";
-import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
+import {
+  PREPARE_PROJECT_WORKSPACE_JS,
+  type PreparedProjectVerification,
+} from "./project-setup-script.js";
 
 type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
+  verifiedRetained?: PreparedProjectVerification | null;
   preparation?: {
     preparationKey: string;
     cacheKey: string;
@@ -81,6 +85,7 @@ const ownedDirectory = (parent, target) => {
   }
   try {
     const retained = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
+    const retainedWorkspace = input.preparation ? { retainedWorkspace: retained ?? null } : {};
     if (!transport) {
       if (fs.existsSync(seed)) {
         ownedDirectory(namespace, seed);
@@ -88,7 +93,7 @@ const ownedDirectory = (parent, target) => {
         const preparedWorkspace = retained?.baseCommit === input.baseCommit ? retained : undefined;
         if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
         prune();
-        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
+        process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace, ...retainedWorkspace }));
         return;
       }
       // Provisioning serializes this lease. Discard only this project's abandoned staging.
@@ -99,7 +104,7 @@ const ownedDirectory = (parent, target) => {
         fs.rmSync(stale, { recursive: true });
       }
       const directory = fs.mkdtempSync(path.join(namespace, stagingPrefix));
-      process.stdout.write(JSON.stringify({ ready: false, directory, retainedCommit: retained?.baseCommit }));
+      process.stdout.write(JSON.stringify({ ready: false, directory, ...retainedWorkspace }));
       return;
     }
     const repository = path.join(directory, "repository");
@@ -142,7 +147,12 @@ const ownedDirectory = (parent, target) => {
     if (git(repository, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project checkout is not pristine");
     fs.renameSync(repository, seed);
     prune();
-    process.stdout.write(JSON.stringify({ ready: true }));
+    // Repository code keeps its separate Gateway authority check. A checkout that
+    // cannot run setup can complete under this seed command's existing owner.
+    const preparedWorkspace = input.preparation && (!input.preparation.setupRecipe || input.preparation.runSetupScript === false)
+      ? await prepareWorkspace({ ...input, ...input.preparation, runSetupScript: false })
+      : undefined;
+    process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
   } finally { if (directory !== undefined) fs.rmSync(directory, { recursive: true, force: true }); }
 })().catch((error) => { console.error(error.message); process.exitCode = 1; });
 PROJECT_SEED_SCRIPT`;

@@ -3,6 +3,11 @@ name: OpenClaw Repo E2E (Reusable)
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       ref:
         required: true
         type: string
@@ -19,9 +24,6 @@ on:
         required: true
         type: string
       use_github_hosted_runners:
-        required: true
-        type: boolean
-      advisory:
         required: true
         type: boolean
       allow_unreleased_changelog:
@@ -50,8 +52,7 @@ env:
 jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -114,8 +115,7 @@ jobs:
   test:
     name: Repo E2E (${{ matrix.name }})
     needs: build
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     strategy:
       fail-fast: false

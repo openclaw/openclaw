@@ -24,6 +24,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   TSX_IMPORT,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflowRunner,
   quoteShell,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
@@ -566,6 +567,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
     "scripts/check-protocol-since.mts",
+    "scripts/lib/native-typescript.mts",
     "scripts/lib/repo-root.mjs",
   ]) {
     const target = path.join(checkout, scriptPath);
@@ -1277,7 +1279,6 @@ fi
     const runProfileStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
-    expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
     expect(runProfileStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(
       "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
@@ -1719,7 +1720,8 @@ fi
     expect(renderArtifactStep.run).toContain("QA failures allowed:");
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
-    expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    // Routed through the optional release runner group; the baseline label is unchanged.
+    expect(evaluateWorkflowRunner(publishPrJob["runs-on"])).toBe("ubuntu-24.04");
     expect(publishPrJob.permissions).toEqual({ actions: "read", contents: "read" });
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",

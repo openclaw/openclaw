@@ -143,7 +143,6 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({
         configuredModels: [],
-        quickAddSupported: false,
         unconfiguredProviders: [],
       }),
     );

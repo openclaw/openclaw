@@ -60,6 +60,11 @@ vi.mock("../../tasks/task-executor.js", () => ({
 vi.mock("../../tasks/task-executor-create.async.js", () => ({
   createRunningTaskRunCoreWithReceiptAsync: mocks.coreCreate,
 }));
+vi.mock("../../tasks/task-registry-transition.native.js", () => ({
+  transitionTaskRecordsByRunNative: () => {
+    throw new Error("Legacy task ownership must not use native exact settlement");
+  },
+}));
 vi.mock("../../tasks/task-flow-registry.store.sqlite.js", () => ({
   bindTaskFlowExecution: vi.fn(),
 }));

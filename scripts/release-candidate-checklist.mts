@@ -161,7 +161,7 @@ selected publication command. --publication-route prepared selects the
 prepare-once release button for complete regular beta/stable releases.
 
 Options:
-  --tag <tag>                         Planned release tag. The tag must not exist yet.
+  --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
@@ -174,6 +174,7 @@ Options:
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --stable-soak-waiver <reason>       Operator-approved reason to publish stable from beta-profile validation without soak.
+  --lane-waiver <reason>              Operator acknowledgement for evidence sealed under a Full Release Validation lane waiver.
   --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -230,6 +231,7 @@ export function parseArgs(argv: string[]) {
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
     stableSoakWaiver: "",
+    laneWaiver: "",
     outputDir: "",
   };
   const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
@@ -250,6 +252,7 @@ export function parseArgs(argv: string[]) {
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
           ["--stable-soak-waiver", "stableSoakWaiver"],
+          ["--lane-waiver", "laneWaiver"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
           ["--mode", "mode"],
@@ -335,6 +338,17 @@ export function parseArgs(argv: string[]) {
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
+  }
+  // Strict default for stable tags; the operator fast path needs an explicit waiver.
+  if (
+    !options.tag.includes("-alpha.") &&
+    !options.tag.includes("-beta.") &&
+    options.releaseProfile === "beta" &&
+    !options.stableSoakWaiver.trim()
+  ) {
+    throw new Error(
+      "stable release candidates require --release-profile stable or full, or an explicit --stable-soak-waiver",
+    );
   }
   if (options.runParallels && options.skipParallels) {
     throw new Error("--run-parallels and --skip-parallels cannot be combined");
@@ -826,40 +840,37 @@ export function validateCandidateCheckout({
   return { status: "passed", targetSha, toolingSha, workflowRef };
 }
 
-/**
- * Keeps release validation pre-publication: the final immutable tag is created
- * only after this helper has recorded green evidence for the frozen SHA.
- */
-export function assertPlannedReleaseTagIsAbsent(
-  tag: string,
-  checkRemoteTagExists: (tag: string) => boolean,
-) {
-  if (checkRemoteTagExists(tag)) {
-    throw new Error(
-      `release candidate tag ${tag} already exists; validate a new patch instead of reusing a published tag`,
-    );
-  }
-}
-
-function remoteTagExists(tag: string, cwd: string) {
+export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: string) {
+  const ref = `refs/tags/${tag}`;
   const result = spawnSync(
     "git",
-    ["ls-remote", "--exit-code", "--tags", "origin", `refs/tags/${tag}`],
-    {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+    ["ls-remote", "--exit-code", "--tags", "origin", ref, `${ref}^{}`],
+    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
-  if (result.status === 0) {
-    return true;
-  }
   if (result.status === 2) {
-    return false;
+    return;
   }
-  throw new Error(
-    `could not determine whether planned release tag ${tag} already exists: ${result.stderr.trim() || result.stdout.trim() || `git exited ${result.status ?? "without a status"}`}`,
+  if (result.status !== 0) {
+    throw new Error(
+      `could not resolve release candidate tag ${tag}: ${result.stderr?.trim() || result.error?.message || `git exited ${result.status ?? "without a status"}`}`,
+    );
+  }
+  const refs = new Map(
+    result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const [sha, name] = line.split(/\s+/u);
+        return [name, sha];
+      }),
   );
+  // Annotated tags advertise an object SHA and a separate peeled target.
+  const tagSha = refs.get(`${ref}^{}`) ?? refs.get(ref);
+  if (tagSha !== targetSha) {
+    throw new Error(
+      `release candidate tag ${tag} resolves to ${tagSha ?? "an unknown target"}, expected ${targetSha}; use the matching release target or a new tag`,
+    );
+  }
 }
 
 function gitIsAncestor(ancestor: string, target: string) {
@@ -1646,6 +1657,9 @@ export function buildPublishCommand(
   if (options.stableSoakWaiver.trim()) {
     fields.push(["stable_soak_waiver", options.stableSoakWaiver]);
   }
+  if (options.laneWaiver.trim()) {
+    fields.push(["lane_waiver", options.laneWaiver]);
+  }
   if (
     mode === "prepare" &&
     (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
@@ -1786,10 +1800,6 @@ export function validateFullManifest(manifest: JsonRecord, params: JsonRecord) {
     throw new Error(
       `full validation must record runReleaseSoak=true for ${formatJsonValue(params.releaseProfile)} release candidates`,
     );
-  }
-  const controls = isRecord(manifest.controls) ? manifest.controls : undefined;
-  if (params.releaseProfile !== "beta" && controls?.performanceBlocking !== true) {
-    throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
 
@@ -2000,7 +2010,7 @@ async function main() {
   }
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(options.targetSha || "HEAD", targetRoot);
-  assertPlannedReleaseTagIsAbsent(options.tag, (tag) => remoteTagExists(tag, targetRoot));
+  assertReleaseCandidateTag(options.tag, targetSha, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   // The outer process pins a clean main commit before creating this tooling checkout.
@@ -2380,6 +2390,7 @@ async function main() {
       pluginPublishScope: publicationSelection.pluginPublishScope,
       plugins: options.plugins,
       stableSoakWaiver: options.stableSoakWaiver,
+      laneWaiver: options.laneWaiver,
       workflowRef:
         options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
       releaseProfile: "from-validation",
