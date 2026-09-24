@@ -9,6 +9,7 @@ import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
+import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -27,6 +28,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 
 type SourceReplyTranscriptMirrorParams = {
   action: string;
@@ -456,6 +458,13 @@ function resolveDeliveredCurrentSourceReply(
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
+    case "react":
+      return (
+        params.sourceReplyFinal === true &&
+        params.actionParams.remove !== true &&
+        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+        isDeliveredCurrentSourceReplyAction(params)
+      );
     case "reply":
       return isDeliveredCurrentSourceReplyAction(params);
     case "thread-reply":
@@ -489,8 +498,8 @@ function normalizeMessageIdValue(value: unknown): string | undefined {
 }
 
 /**
- * Confirms a successful reply-type action addressed the message that triggered the
- * current run. Reply actions resolve their conversation from the replied-to message,
+ * Confirms a reply or explicitly terminal reaction addressed the message that triggered
+ * the current run. Reply actions resolve their conversation from the replied-to message,
  * so target matching cannot apply; replying to the run's own inbound message is the
  * one implicit route that provably lands in the current source conversation.
  */
@@ -505,20 +514,31 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   // forms (for example `C123` vs `channel:C123`) are recognized like sends.
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
   if (requestedTarget) {
-    const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-      ?.matchesToolContextTarget;
+    const channelPlugin = getChannelPlugin(params.channel as ChannelId);
+    const matchesToolContextTarget = channelPlugin?.threading?.matchesToolContextTarget;
     if (!matchesToolContextTarget?.({ target: requestedTarget, toolContext })) {
       const currentTargets = [
         normalizeOptionalString(toolContext.currentMessagingTarget),
         normalizeOptionalString(toolContext.currentChannelId),
       ].filter((target): target is string => Boolean(target));
-      if (!currentTargets.some((target) => target === requestedTarget)) {
+      const normalizedTarget =
+        normalizeTargetForProvider(params.channel, requestedTarget, channelPlugin) ??
+        requestedTarget;
+      if (
+        !currentTargets.some(
+          (target) =>
+            (normalizeTargetForProvider(params.channel, target, channelPlugin) ?? target) ===
+            normalizedTarget,
+        )
+      ) {
         return false;
       }
     }
   }
   const repliedToMessageId = normalizeMessageIdValue(
-    params.actionParams.messageId ?? params.actionParams.replyTo,
+    params.action === "react"
+      ? resolveReactionMessageId({ args: params.actionParams, toolContext })
+      : (params.actionParams.messageId ?? params.actionParams.replyTo),
   );
   const currentMessageId = normalizeMessageIdValue(toolContext.currentMessageId);
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);

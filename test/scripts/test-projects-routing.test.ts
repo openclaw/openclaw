@@ -6,6 +6,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { beforeAll, describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -574,7 +576,8 @@ describe("test-projects args", () => {
 
     // Lower bound derived from the repo itself: every tracked test file that
     // directly imports the helper must be picked up by the expansion scan, so
-    // dropped importers still fail without freezing the full inventory.
+    // dropped importers still fail without freezing the full inventory. The
+    // independent AST reader excludes import text inside source fixtures.
     const scanRoots = ["src", "test", "ui", "extensions", "packages"];
     const grep = spawnSync(
       "git",
@@ -582,19 +585,24 @@ describe("test-projects args", () => {
       { encoding: "utf8" },
     );
     expect(grep.status).toBe(0);
+    using parser = createNativeTypeScriptParser();
     const directImporterTests = grep.stdout
       .split("\n")
       .map((line) => line.trim())
       .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
       .filter((file) => {
         const source = fs.readFileSync(file, "utf8");
-        return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
-          const importerDir = path.posix.dirname(file);
-          const resolved = path.posix.normalize(
-            path.posix.join(importerDir, expectDefined(match[1], "match[1] test invariant")),
-          );
-          return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
-        });
+        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
+          acceptSpecifier: (specifier) => {
+            if (!specifier.startsWith(".")) {
+              return false;
+            }
+            const resolved = path.posix.normalize(
+              path.posix.join(path.posix.dirname(file), specifier),
+            );
+            return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
+          },
+        }).some(({ kind }) => kind === "import" || kind === "export");
       });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);

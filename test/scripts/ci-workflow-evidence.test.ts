@@ -566,6 +566,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
     "scripts/check-protocol-since.mts",
+    "scripts/lib/native-typescript.mts",
     "scripts/lib/repo-root.mjs",
   ]) {
     const target = path.join(checkout, scriptPath);

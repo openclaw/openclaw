@@ -265,7 +265,7 @@ export function createWorkerSessionToolExecutor(params: {
         const error = new Error("Cloud child session creation did not persist an incarnation");
         throw creationAttempted ? new WorkerSessionToolOutcomeUnknownError(error) : error;
       }
-      try {
+      const assertChild = () =>
         assertExactChild({
           childSessionKey: operation.childSessionKey,
           childSessionId,
@@ -273,6 +273,8 @@ export function createWorkerSessionToolExecutor(params: {
           sourceSessionId: operation.source.sessionId,
           targetAgentId,
         });
+      try {
+        assertChild();
       } catch (error) {
         if (creationAttempted) {
           throw new WorkerSessionToolOutcomeUnknownError(error);
@@ -327,13 +329,7 @@ export function createWorkerSessionToolExecutor(params: {
         }
         assertActiveChildPlacement();
         assertSource();
-        assertExactChild({
-          childSessionKey: operation.childSessionKey,
-          childSessionId,
-          sourceSessionKey: operation.source.sessionKey,
-          sourceSessionId: operation.source.sessionId,
-          targetAgentId,
-        });
+        assertChild();
         const childRunId = operationKey(operation.operationSeed, "initial-task");
         const config = getRuntimeConfig();
         const sessionSpawnContext = collectExecutionIdentity
@@ -363,13 +359,7 @@ export function createWorkerSessionToolExecutor(params: {
             for (let attempt = 0; attempt < 2; attempt += 1) {
               try {
                 assertSource();
-                assertExactChild({
-                  childSessionKey: operation.childSessionKey,
-                  childSessionId,
-                  sourceSessionKey: operation.source.sessionKey,
-                  sourceSessionId: operation.source.sessionId,
-                  targetAgentId,
-                });
+                assertChild();
                 assertActiveChildPlacement();
                 const request = {
                   method: "agent",

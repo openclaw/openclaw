@@ -656,7 +656,7 @@ function extractJavaScriptImportSpecifiers(
   try {
     const regions: Array<{ start: number; end: number; extensionId?: string }> = [];
     const stack: Array<{ start: number; extensionId?: string }> = [];
-    // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
+    // Published modules need stricter validation than the CommonJS-aware dependency scanner.
     acorn.parse(source, {
       allowHashBang: true,
       ecmaVersion: "latest",

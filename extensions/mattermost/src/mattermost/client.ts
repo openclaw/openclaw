@@ -601,19 +601,8 @@ export function isRetryableError(error: Error): boolean {
   // Check for explicit 4xx status codes - these are client errors and should NOT be retried
   // (except 429 which is handled above)
   // Use "mattermost api" prefix to avoid matching port numbers like :443
-  for (const message of messages) {
-    const clientErrorMatch = message.match(/mattermost api (4\d{2})\b/);
-    if (!clientErrorMatch) {
-      continue;
-    }
-    const statusCodeText = clientErrorMatch[1];
-    if (!statusCodeText) {
-      continue;
-    }
-    const statusCode = Number.parseInt(statusCodeText, 10);
-    if (statusCode >= 400 && statusCode < 500) {
-      return false;
-    }
+  if (messages.some((message) => /mattermost api 4\d{2}\b/.test(message))) {
+    return false;
   }
 
   // Retry on network/transient errors only if no explicit Mattermost API status code is present
@@ -627,25 +616,19 @@ export function isRetryableError(error: Error): boolean {
     return false;
   }
 
-  const codes: string[] = [];
-  for (const candidate of candidates) {
-    const code = readErrorCode(candidate);
-    if (code) {
-      codes.push(code);
-    }
-  }
-  if (codes.some((code) => RETRYABLE_NETWORK_ERROR_CODES.has(code))) {
+  if (
+    candidates.some((candidate) =>
+      RETRYABLE_NETWORK_ERROR_CODES.has(readErrorCode(candidate) ?? ""),
+    )
+  ) {
     return true;
   }
 
-  const names: string[] = [];
-  for (const candidate of candidates) {
-    const name = readErrorName(candidate);
-    if (name) {
-      names.push(name);
-    }
-  }
-  if (names.some((name) => RETRYABLE_NETWORK_ERROR_NAMES.has(name))) {
+  if (
+    candidates.some((candidate) =>
+      RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate) ?? ""),
+    )
+  ) {
     return true;
   }
 

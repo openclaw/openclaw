@@ -118,6 +118,9 @@ suite.define(() => {
             expect(await gateway.getRequests("chat.send")).toHaveLength(1);
             expect(await page.locator(".chat-send-btn--send").isEnabled()).toBe(true);
           } else {
+            await page
+              .locator('[data-chat-model-option="openai/gpt-5.5"]')
+              .waitFor({ state: "attached" });
             expect(
               await page.locator('[data-chat-model-select="true"]').textContent(),
             ).not.toContain("Models unavailable");

@@ -77,6 +77,13 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Control UI updates use a verified helper to stop and restart the managed Gateway.
+On macOS, the helper carries its live update ownership into LaunchAgent activation;
+ordinary commands inside the Gateway still cannot stop their own service. If an
+older installed updater reports `managed-service-stop-failed` before activation,
+the candidate has not replaced that updater. Update from an external terminal
+using the same installation owner, then retry the Control UI update.
+
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater

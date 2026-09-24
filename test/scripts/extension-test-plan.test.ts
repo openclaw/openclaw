@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
@@ -18,6 +20,35 @@ const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
+  it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {
+    const root = "extensions/fixture";
+    for (const snapshot of ["before", "after"]) {
+      const cwd = tempDirs.make(`extension-inventory-${snapshot}-`);
+      const selected = `${root}/${snapshot}.test.ts`;
+      const files = [
+        `${root}/package.json`,
+        `extensions/${snapshot}/package.json`,
+        selected,
+        `${root}/browser/ui.test.ts`,
+        `${root}/dist/generated.test.ts`,
+        `${root}/node_modules/dependency/copied.test.ts`,
+      ];
+      for (const file of files) {
+        const absolute = path.join(cwd, file);
+        mkdirSync(path.dirname(absolute), { recursive: true });
+        writeFileSync(absolute, file.endsWith("package.json") ? "{}\n" : "export {};\n");
+      }
+      if (kind === "git") {
+        for (const args of [["init"], ["add", "."]]) {
+          execFileSync("git", args, { cwd, stdio: "ignore" });
+        }
+      }
+      expect(listAvailableExtensionIds(cwd)).toEqual([snapshot, "fixture"].toSorted());
+      expect(extensionTestPlan.listExtensionTestFilesForRoots([root], cwd)).toEqual([selected]);
+      expect(extensionTestPlan.listExtensionTestFilesForRoots([selected], cwd)).toEqual([selected]);
+    }
+  });
+
   it.each([
     { name: "matrix", limit: 40, workerLimit: 40 },
     { name: "codex", limit: 24, workerLimit: 12 },

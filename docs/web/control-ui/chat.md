@@ -19,6 +19,8 @@ Side chat answers questions about the selected session and its project without e
 
 Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
+Editing a Side chat draft does not interrupt loading its earlier answers. **Clear side chat** removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
@@ -26,6 +28,9 @@ The question box wraps and grows like the main composer; Enter (or your configur
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
 other file types; its previews never add attachments to the main composer.
+Image questions require an image-capable Side chat utility model. A text-only
+model produces a visible error instead of answering without the image; choose
+an image-capable utility model before retrying.
 Images are available only for the current question and are not retained in the
 restored text thread. Reattach an image when asking a later question about it.
 A failed question keeps its image for **Retry** while the current pane is retained;
@@ -219,6 +224,8 @@ Collapsed tool rows keep the tool label visible and truncate long summaries with
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
 Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
+
+Filesystem paths remain readable in tool activity and error messages; credential values are still masked. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
 
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 

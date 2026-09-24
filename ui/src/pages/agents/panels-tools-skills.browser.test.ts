@@ -1,11 +1,34 @@
 // Control UI tests cover agents panels tools skills behavior.
 import { render } from "lit";
 import { assert, describe, expect, it, vi } from "vitest";
+import type { ToolsEffectiveResult } from "../../api/types.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
+
+const toolPreview: ToolsEffectiveResult = {
+  agentId: "main",
+  profile: "full",
+  groups: [
+    {
+      id: "core",
+      label: "Built-in tools",
+      source: "core",
+      tools: [
+        {
+          id: "read",
+          label: "read",
+          description: "Read files",
+          rawDescription: "Read files",
+          source: "core",
+        },
+      ],
+    },
+  ],
+  notices: [{ id: "mcp-not-yet-listed", severity: "info", message: "Discovery is incomplete." }],
+};
 
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   const githubIdentity = new GitHubIdentityController({
@@ -55,7 +78,81 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
 }
 
 describe("agents tools panel (browser)", () => {
-  it("renders catalog provenance and effective runtime tools", async () => {
+  it.each([
+    { name: "not requested", overrides: {}, status: "Not loaded" },
+    { name: "loading", overrides: { toolsEffectiveLoading: true }, status: "Loading…" },
+    {
+      name: "failed",
+      overrides: { toolsEffectiveError: "request failed" },
+      status: "Unavailable",
+    },
+    {
+      name: "another agent",
+      overrides: { runtimeSessionMatchesSelectedAgent: false, toolsEffectiveResult: toolPreview },
+      status: "Other Agent",
+    },
+    {
+      name: "refreshing stale",
+      overrides: { toolsEffectiveLoading: true, toolsEffectiveResult: toolPreview },
+      status: "Loading…",
+    },
+    {
+      name: "failed stale",
+      overrides: { toolsEffectiveError: "request failed", toolsEffectiveResult: toolPreview },
+      status: "Unavailable",
+    },
+  ])("does not treat a $name preview as zero tools or denied access", ({ overrides, status }) => {
+    const container = document.createElement("div");
+    render(renderAgentTools(createBaseParams(overrides)), container);
+
+    expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe(status);
+    expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
+    expect(container.querySelector(".agent-tools-notices")).toBeNull();
+    const row = container.querySelector(".agent-tool-card");
+    expect(row?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
+      status,
+    );
+    expect(row?.textContent).not.toContain("Not Live");
+    expect(row?.textContent).not.toContain("Not available in this chat session");
+  });
+
+  it("distinguishes missing preview entries from disabled tools and an empty result", () => {
+    const container = document.createElement("div");
+    const params = createBaseParams({ toolsEffectiveResult: toolPreview });
+    render(renderAgentTools(params), container);
+
+    const included = container.querySelector("#agent-tool-read");
+    const absent = container.querySelector("#agent-tool-exec");
+    expect(included?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
+      "Included in preview",
+    );
+    expect(included?.textContent).toContain("Listed in preview via Built-In.");
+    expect(absent?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
+      "Not listed",
+    );
+    expect(absent?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(
+      true,
+    );
+    expect(container.querySelector(".agent-tools-group__counts")?.textContent).toContain(
+      "1 Listed Tool",
+    );
+
+    render(
+      renderAgentTools({
+        ...params,
+        toolsEffectiveResult: {
+          ...toolPreview,
+          groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
+        },
+      }),
+      container,
+    );
+    expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
+    expect(container.textContent).toContain("No tools are listed in this preview.");
+    expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
+  });
+
+  it("renders catalog provenance and a prospective tool preview", async () => {
     const container = document.createElement("div");
     render(
       renderAgentTools(
@@ -148,7 +245,13 @@ describe("agents tools panel (browser)", () => {
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
         heading.textContent?.trim(),
       ),
-    ).toEqual(["Available Tools", "Available Right Now", "GitHub account", "Tool Catalog"]);
+    ).toEqual(["Tool access", "Tool preview", "GitHub account", "Tool Catalog"]);
+    expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("2");
+    expect(container.textContent).toContain(
+      "Based on saved session settings and discovered tools.",
+    );
+    expect(container.textContent).toContain("additional tools may become available");
+    expect(container.textContent).toContain("unsaved edits are not included");
     expect(
       Array.from(container.querySelectorAll(".settings-row__title")).some(
         (title) => title.textContent?.trim() === "Tool Presets",
@@ -580,7 +683,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Session", value: "Not available in this chat session right now." },
+      { label: "Tool preview", value: "Not loaded" },
     ]);
   });
 

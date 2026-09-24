@@ -346,6 +346,9 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
           payload: { text },
           abortSignal,
+          ...(params.runStartedAtMs === undefined
+            ? {}
+            : { completion: { job: params.job, runStartedAt: params.runStartedAtMs } }),
           onDeliveryAttempt: (reachedRecipient) => {
             deliveryMayHaveReachedRecipient ||= reachedRecipient;
           },
