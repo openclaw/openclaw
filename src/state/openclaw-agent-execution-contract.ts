@@ -3,6 +3,7 @@ import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "../config/sessions/session-accessor.sqlite-archive-types.js";
+import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
@@ -13,24 +14,27 @@ import type {
 } from "../config/sessions/session-history-archive-pruning.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { SqliteTrajectoryRuntimeAppend } from "../trajectory/runtime-store.sqlite.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
 export type AgentDatabaseExecutionIdentity = {
   kind: "file";
   physicalIdentity: string;
+  birthtime?: string;
   incarnation: string;
   nativeLocation: string;
 };
 
 export type AgentDatabaseExecutionFileIdentity = Pick<
   AgentDatabaseExecutionIdentity,
-  "kind" | "physicalIdentity" | "nativeLocation"
+  "kind" | "physicalIdentity" | "birthtime" | "nativeLocation"
 >;
 
 export type AgentDatabaseExecutionOpen = {
@@ -40,9 +44,11 @@ export type AgentDatabaseExecutionOpen = {
   stateDatabasePath: string;
   environment: SqliteWorkerStateContext["environment"];
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+  creatingIdentity?: DatabasePathIdentity;
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
   "session.archives.preparePublication": {
     input: {
       archiveDirectory: string;
@@ -56,7 +62,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   };
   "session.transcript.initialize": {
     input: { sessionKey: string; sessionId: string; cwd?: string };
-    output: void;
+    output: SessionTranscriptInitializationPublication;
   };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entries.replace": {

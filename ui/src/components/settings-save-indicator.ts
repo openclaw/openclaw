@@ -88,6 +88,25 @@ class SettingsSaveIndicator extends LitElement {
         >
           ${t("configView.recoveryReload")}
         </button>`;
+    } else if (props.status === "rejected") {
+      modifier = " settings-save-indicator--rejected";
+      content = html`<span>${t("configView.autoSaveRejected")}</span>
+        <span>${t("configView.autoSaveRejectedHint")}</span>
+        ${
+          props.lastError
+            ? html`<details>
+                <summary>${t("configView.rejectionDetails")}</summary>
+                <span>${props.lastError}</span>
+              </details>`
+            : nothing
+        }
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onRetry}
+        >
+          ${t("configView.retry")}
+        </button>`;
     } else if (props.status === "error") {
       title = props.lastError?.trim() ?? "";
       label = title ? `${t("configView.autoSaveFailed")}: ${title}` : "";

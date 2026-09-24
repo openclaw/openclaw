@@ -50,7 +50,7 @@ function write(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 
-function capture(f: ReturnType<typeof fixture>) {
+function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "failed") {
   const result = spawnSync(
     node,
     [observer, "capture", f.artifacts, "update-candidate", "1", "", f.artifacts],
@@ -58,12 +58,56 @@ function capture(f: ReturnType<typeof fixture>) {
   );
   expect(result.status, result.stderr).toBe(0);
   const output = path.join(f.root, "public");
-  publishDiagnostics(f.artifacts, output, redactSensitiveText);
-  const text = fs.readFileSync(path.join(output, "failure.json"), "utf8");
+  publishDiagnostics(f.artifacts, output, redactSensitiveText, outcome);
+  const text = fs.readFileSync(
+    path.join(output, outcome === "passed" ? "summary.json" : "failure.json"),
+    "utf8",
+  );
   expect(text).not.toContain(secret);
   expect(text).not.toContain(privateBody);
   return JSON.parse(text);
 }
+
+it.each(["failed", "passed"] as const)(
+  "retains redacted sibling refusal evidence after a %s attempt",
+  (outcome) => {
+    const f = fixture();
+    write(path.join(f.artifacts, "summary.json"), {
+      status: "passed",
+      baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
+      candidate: { kind: "tarball", version: "2026.9.5" },
+      scenario: "custom-plugin-siblings",
+      installedVersion: "2026.9.5",
+      candidateInstallMode: "npm",
+      updateRestartMode: "manual",
+      updateOutcome: "success",
+      phases: [],
+    });
+    write(path.join(f.artifacts, "update.json"), { status: "ok", runId: "healthy-retry" });
+    write(path.join(f.artifacts, "sibling-refusal-update.json"), {
+      status: "error",
+      runId: "refused-run",
+      reason: `output-limit; token=${secret}`,
+    });
+    write(path.join(f.artifacts, "sibling-refusal-status.json"), {
+      lastRun: { runId: "refused-run", status: "failed" },
+    });
+    write(path.join(f.artifacts, "sibling-refusal-worker.json"), { worker: { pid: 123 } });
+    write(path.join(f.artifacts, "sibling-refusal-cleanup.json"), { survivors: [] });
+    const report = capture(f, outcome);
+    expect(JSON.parse(report.logs["update.json"]).runId).toBe("healthy-retry");
+    expect(JSON.parse(report.logs["sibling-refusal-update.json"])).toMatchObject({
+      status: "error",
+      runId: "refused-run",
+      reason: expect.stringContaining("output-limit"),
+    });
+    expect(JSON.parse(report.logs["sibling-refusal-status.json"]).lastRun.runId).toBe(
+      "refused-run",
+    );
+    expect(JSON.parse(report.logs["sibling-refusal-worker.json"]).worker.pid).toBe(123);
+    expect(JSON.parse(report.logs["sibling-refusal-cleanup.json"]).survivors).toEqual([]);
+  },
+);
 
 it("publishes redacted baseline Gateway and agent-turn failures", () => {
   const f = fixture();
@@ -392,7 +436,15 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   const turnLogs = ["baseline", "candidate"].flatMap((stage) =>
     ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
   );
-  const logs = [...turnLogs, ...baselineGatewayLogs];
+  const logs = [
+    ...turnLogs,
+    ...baselineGatewayLogs,
+    "sibling-refusal-update.json",
+    "sibling-refusal-status.json",
+    "sibling-refusal-worker.json",
+    "sibling-refusal-child.json",
+    "sibling-refusal-cleanup.json",
+  ];
   for (const name of logs) {
     fs.mkdirSync(path.dirname(path.join(f.artifacts, name)), { recursive: true });
     fs.writeFileSync(path.join(f.artifacts, name), "previous attempt failure");

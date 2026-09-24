@@ -876,10 +876,6 @@ export function validateDocsSyncDependencies(targetRoot, baseline) {
 }
 
 function syncSupportFiles(targetRoot) {
-  // Retired support files must disappear from existing publish checkouts too.
-  fs.rmSync(path.join(targetRoot, ".openclaw-sync", "lib", "mintlify-accordion.mjs"), {
-    force: true,
-  });
   const baseline = readPublishDependencies(targetRoot);
   const version = sourceSlugifyVersion();
   if (!matchesSlugifyVersion(baseline, version)) {

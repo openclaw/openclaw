@@ -4,7 +4,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import {
+  supportsOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -53,6 +56,7 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  retainedExecution?: OpenClawAgentDatabaseExecution;
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
@@ -123,10 +127,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               });
             let result = await read();
             if (!result.replacement) {
-              await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-                owner.assertCurrent();
-                params.assertCommitAllowed?.();
-              });
+              await prepareSessionEntryReplacementDatabase(
+                databaseOptions,
+                () => {
+                  owner.assertCurrent();
+                  params.assertCommitAllowed?.();
+                },
+                params.retainedExecution,
+              );
               result = await read();
             }
             if (!result.replacement) {
@@ -314,6 +322,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 ? (context) => params.afterCommitted!(operation.result, context)
                 : undefined,
             },
+            params.retainedExecution,
           );
           return { maintenancePlans: committed.maintenancePlans, result: operation.result };
         },

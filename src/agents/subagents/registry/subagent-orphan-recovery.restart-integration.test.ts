@@ -209,7 +209,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       };
       try {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
-          registerSubagentRun({
+          await registerSubagentRun({
             runId,
             childSessionKey,
             requesterSessionKey: "agent:main:main",

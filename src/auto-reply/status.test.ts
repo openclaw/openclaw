@@ -1213,7 +1213,8 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
     expect(normalized).toContain("oauth (anthropic:claude-cli)");
     expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
-    expect(normalized).not.toContain("unknown");
+    expect(normalized).not.toContain("Auth: unknown");
+    expect(normalized).toContain("Endpoint: unknown");
     expect(normalized).toContain("Context: 36k/200k (18%)");
   });
 

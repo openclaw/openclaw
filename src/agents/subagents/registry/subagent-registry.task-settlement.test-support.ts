@@ -72,9 +72,9 @@ export function registerRestoredTaskSettlementTest({
       .mockResolvedValue({ status: "pending" });
     const settleRootWork = observeRootWork();
     try {
-      mod.registerSubagentRun({ runId, childSessionKey, task: "predecessor", collect: true });
+      await mod.registerSubagentRun({ runId, childSessionKey, task: "predecessor", collect: true });
       await writerEntered.promise;
-      mod.registerSubagentRun({ runId, childSessionKey, task: "replacement", collect: true });
+      await mod.registerSubagentRun({ runId, childSessionKey, task: "replacement", collect: true });
       rejectWriter.resolve();
       await expect(settleRootWork()).rejects.toThrow("Failed to settle subagent cleanup roots");
       expect(mod.getSubagentRunByRunId(runId)).toMatchObject({

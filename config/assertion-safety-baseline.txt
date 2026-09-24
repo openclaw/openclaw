@@ -1391,7 +1391,7 @@ packages/ai/src/transports/openai-transport-shared.ts	2
 packages/ai/src/transports/provider-compaction-replay.ts	1
 packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
-packages/ai/src/transports/transport-stream-shared.ts	2
+packages/ai/src/transports/transport-stream-shared.ts	1
 packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/assistant-text-phase.ts	1
 packages/ai/src/utils/credential-redaction.ts	1
@@ -1870,7 +1870,7 @@ src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
-src/agents/tools/image-tool.ts	2
+src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
@@ -1881,7 +1881,7 @@ src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
-src/agents/tools/pdf-tool.ts	3
+src/agents/tools/pdf-tool.ts	2
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
@@ -2877,7 +2877,7 @@ src/infra/system-run-approval-binding.ts	1
 src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	6
+src/infra/unhandled-rejections.ts	5
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1

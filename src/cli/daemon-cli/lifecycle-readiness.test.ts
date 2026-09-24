@@ -1,6 +1,8 @@
 // Gateway lifecycle readiness tests distinguish healthy, still-starting, and failed outcomes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
+import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
 
 const service = vi.hoisted(() => ({ readCommand: vi.fn(), restart: vi.fn() }));
@@ -52,28 +54,6 @@ vi.mock("./restart-health.js", () => ({
 
 const { runDaemonStart, runDaemonRestart } = await import("./lifecycle.js");
 
-type StartPostCheck = (params: {
-  fail: (message: string, hints?: string[]) => void;
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-}) => Promise<void>;
-
-function invokeStartPostCheck() {
-  runServiceStart.mockImplementation(
-    async ({ postStartCheck }: { postStartCheck?: StartPostCheck }) => {
-      await postStartCheck?.({
-        json: true,
-        stdout: process.stdout,
-        warnings: [],
-        fail: (message) => {
-          throw new Error(message);
-        },
-      });
-    },
-  );
-}
-
 describe("Gateway service readiness", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
@@ -108,41 +88,48 @@ describe("Gateway service readiness", () => {
     vi.unstubAllEnvs();
   });
 
-  it("proves Gateway health and readiness before start reports success", async () => {
-    const config = { gateway: { tls: { enabled: true } } };
-    readServiceConfig.mockResolvedValue(config);
-    invokeStartPostCheck();
-
-    await runDaemonStart({ json: true });
-
-    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-      expect.objectContaining({
-        service,
-        port: 18_789,
-        attempts: 90,
-        delayMs: 500,
-        timeoutMs: 45_000,
-      }),
-    );
-    expect(waitForGatewayHttpReadiness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        port: 18_789,
-        attempts: 90,
-        deadlineAt: expect.any(Number),
-        delayMs: 500,
-      }),
-    );
-  });
-
-  it("reports /healthz and /readyz separately when service start remains unready", async () => {
+  it.each([
+    { outcome: "still-starting", runtime: "running", code: 2 },
+    { outcome: "stopped-free", runtime: "stopped", code: 1 },
+    { outcome: "timeout", runtime: "running", code: 1 },
+  ])("reports managed start $outcome with exit $code", async ({ outcome, runtime, code }) => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
+      throw new Error(`exit ${exitCode}`);
+    });
+    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+      await postStartCheck({
+        ...createDaemonActionContext({ action: "start", json: true }),
+        json: true,
+      });
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: runtime, pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      waitOutcome: outcome,
+      elapsedMs: 45_000,
+      ...(outcome === "still-starting" ? { startupPhase: "startup-sidecars" } : {}),
+    });
     waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 503 });
-    invokeStartPostCheck();
 
-    await expect(runDaemonStart({ json: true })).rejects.toThrow(
-      "waiting for /healthz and /readyz",
+    await expect(runDaemonStart({ json: true })).rejects.toThrow(`exit ${code}`);
+
+    const response = writeJson.mock.calls[0]?.[0];
+    expect(response).toMatchObject({ ok: false, action: "start" });
+    if (outcome === "still-starting") {
+      expect(response).toMatchObject({
+        result: "still-starting",
+        error: expect.stringMatching(/still starting.*openclaw gateway status/),
+      });
+    } else {
+      expect(response).not.toHaveProperty("result", "still-starting");
+    }
+    expect(response).toHaveProperty(
+      "warnings",
+      expect.arrayContaining(["Gateway HTTP readiness: /healthz=200; /readyz=503."]),
     );
-    expect(renderRestartDiagnostics).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, "1"])(
@@ -167,8 +154,6 @@ describe("Gateway service readiness", () => {
     "reports progressing startup with the caller's response contract (json=$json, update=$updateMarker)",
     async ({ json, updateMarker, code: expectedExitCode, result }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
-      const { defaultRuntime } = await import("../../runtime.js");
-      const { createDaemonActionContext } = await import("./response.js");
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

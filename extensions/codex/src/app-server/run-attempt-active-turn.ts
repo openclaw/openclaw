@@ -28,6 +28,7 @@ import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
+import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -69,7 +70,7 @@ export function activateCodexAttemptTurn(
     contextSessionKey,
     effectiveCwd,
   } = connection;
-  const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
+  const { dynamicToolParams, toolBridge } = attemptTools;
   const {
     state,
     completion,
@@ -233,25 +234,7 @@ export function activateCodexAttemptTurn(
         : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText,
-      onContextCompacted: async () => {
-        computerContextEpoch.value += 1;
-        delete computerContextEpoch.frameToolCallId;
-        delete computerContextEpoch.frameImageIdentity;
-        try {
-          await compactionPlanState.restore({
-            client: resourceState.client,
-            threadId: resourceState.thread.threadId,
-            timeoutMs: connection.appServer.requestTimeoutMs,
-            signal: runAbortController.signal,
-          });
-        } catch (error) {
-          embeddedAgentLog.warn("failed to restore Codex plan state after compaction", {
-            runId: params.runId,
-            threadId: resourceState.thread.threadId,
-            error: formatErrorMessage(error),
-          });
-        }
-      },
+      onContextCompacted: () => restoreCodexAttemptCompactionContext(resources),
     },
   );
   const activeProjector = projectorRef.current;

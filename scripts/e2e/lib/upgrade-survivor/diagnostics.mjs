@@ -20,12 +20,24 @@ const migrationLabels = {
   manifest: "session migration manifest",
   failureReport: "session migration failure report",
 };
+const siblingRefusalLogs = [
+  "sibling-refusal-update.json",
+  "sibling-refusal-update.err",
+  "sibling-refusal-status.json",
+  "sibling-refusal-status.err",
+  "sibling-refusal-baseline.json",
+  "sibling-refusal-worker.json",
+  "sibling-refusal-child.json",
+  "sibling-refusal-cleanup.json",
+  "sibling-refusal-registrations.jsonl",
+];
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
   "update.json",
   "update.err",
+  ...siblingRefusalLogs,
   "repair.json",
   "repair.err",
   "recovery-update.json",
@@ -1644,6 +1656,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "update.json",
         "repair.json",
         "recovery-update.json",
+        ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",

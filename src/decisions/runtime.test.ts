@@ -17,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as diagnostics from "./diagnostics.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import type {
@@ -59,6 +60,7 @@ function registered(
   isReady?: () => boolean,
   providerId = "fixture",
 ) {
+  const started = createDeferredCore();
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "owner",
@@ -74,7 +76,10 @@ function registered(
       registration.registerDecisionProvider({
         id: providerId,
         contractVersion: 1,
-        evaluate,
+        evaluate: (...args) => {
+          started.resolve();
+          return evaluate(...args);
+        },
         isReady,
       }),
     api,
@@ -89,7 +94,7 @@ function registered(
   });
   const run = (opts = options(), cfg = config) =>
     evaluateDecisionInRegistry(batch, opts, builder.registry, cfg);
-  return { ...builder, record, api, run };
+  return { ...builder, record, api, run, started: started.promise };
 }
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -346,9 +351,13 @@ describe("registered decision capability", () => {
   });
   it("fences a changed agent selection without retiring another agent's concurrent request", async () => {
     const releases = new Map<string, () => void>();
+    const started = createDeferredCore();
     const host = registered(async (_batch, { agentId }) => {
       await new Promise<void>((resolve) => {
         releases.set(agentId!, resolve);
+        if (releases.size === 2) {
+          started.resolve();
+        }
       });
       return answer;
     });
@@ -363,6 +372,7 @@ describe("registered decision capability", () => {
     setRuntimeConfigSnapshot(selected);
     const first = host.run({ ...options(), agentId: "first" }, selected);
     const second = host.run({ ...options(), agentId: "second" }, selected);
+    await started.promise;
     const next = structuredClone(selected);
     next.agents!.entries!.first!.decisionModel = "fixture/first-v2";
     setRuntimeConfigSnapshot(next);
@@ -424,6 +434,7 @@ describe("registered decision capability", () => {
       return answer;
     });
     const pending = host.run();
+    await host.started;
     prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
     expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
     expect(settled).toBe(true);
@@ -439,6 +450,7 @@ describe("registered decision capability", () => {
       return answer;
     });
     const pending = host.run({ ...options(), signal: caller.signal });
+    await host.started;
     caller.abort(new Error("source replaced"));
     await expect(pending).rejects.toThrow("source replaced");
   });
@@ -465,6 +477,7 @@ describe("registered decision capability", () => {
         config,
         consumerId,
       );
+      await host.started;
       prepareDecisionProviderReload(host.registry, new Set(changed));
       if (consumerRetired) {
         await expect(pending).rejects.toThrow("Decision consumer authority closed.");
@@ -496,6 +509,7 @@ describe("registered decision capability", () => {
       return answer;
     });
     const pending = evaluateDecisionInRegistry(batch, options(), host.registry, config, "owner");
+    await host.started;
     prepareDecisionProviderReload(host.registry, new Set(["owner"]));
     await expect(pending).rejects.toThrow("Decision consumer authority closed.");
     expect(await reentered).toMatchObject({ status: "unavailable", reason: "retiring" });
@@ -597,6 +611,7 @@ describe("fault settlement and generation health", () => {
           return answer;
         });
         const pending = host.run({ ...options(), timeoutMs });
+        await host.started;
         await vi.advanceTimersByTimeAsync(deadlineMs - 1);
         expect(settled).toBe(false);
         expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(1);
@@ -648,13 +663,16 @@ describe("fault settlement and generation health", () => {
         await host.run();
       }
       now = 10_001;
+      const trialStarted = createDeferredCore();
       callback.mockImplementation(async () => {
+        trialStarted.resolve();
         await new Promise<void>((resolve) => {
           finish = resolve;
         });
         return answer;
       });
       const trial = host.run();
+      await trialStarted.promise;
       const duringTrial = host.registry.decisionProviders[0]!.host.inspect(config);
       expect(await host.run()).toMatchObject({ reason: "circuit-open" });
       finish();
@@ -758,6 +776,7 @@ describe("immutable finite JSON boundaries", () => {
     expect(Object.hasOwn(submitted.questions, "pick")).toBe(true);
     submitted.state.evidence = "caller mutation";
     Reflect.deleteProperty(submitted.questions, "rank");
+    await host.started;
     finish();
     expect(await pending).toMatchObject({ status: "ok" });
   });
@@ -783,6 +802,7 @@ it("leaves a timed-out rollback fenced after late physical settlement", async ()
     return answer;
   });
   const pending = host.run();
+  await host.started;
   try {
     const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
     const rollback = replacement.rollback(new AbortController().signal);
