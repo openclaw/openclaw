@@ -54,6 +54,51 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
   };
+  const startStream = async (
+    params: Pick<
+      Parameters<typeof startSlackStream>[0],
+      "threadTs" | "text" | "chunks" | "taskDisplayMode"
+    >,
+  ) => {
+    const session = await startSlackStream({
+      client: slackClient,
+      clientOptions: slackClientOptions,
+      channel: message.channel,
+      ...params,
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
+      teamId: await resolveSlackStreamRecipientTeamId({
+        client: slackClient,
+        token: ctx.botToken,
+        userId: message.user,
+        fallbackTeamId: slackStreamFallbackTeamId,
+      }),
+      userId: message.user,
+    });
+    state.streamSession = session;
+    return session;
+  };
+  const deliverPreparedReply = (
+    reply: ReturnType<typeof prepareSlackReply>,
+    replyThreadTs: string | undefined,
+    deferMessageSentHooks = false,
+  ) =>
+    deliverReplies({
+      cfg: ctx.cfg,
+      replies: [reply],
+      target: prepared.replyTarget,
+      token: ctx.botToken,
+      accountId: account.accountId,
+      runtime,
+      textLimit: ctx.textLimit,
+      mediaMaxBytes: ctx.mediaMaxBytes,
+      replyThreadTs,
+      replyToMode: replyDeliveryMode,
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
+      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+      ...messageSentDeliveryHookContext,
+      ...(deferMessageSentHooks ? { deferMessageSentHooks: true } : {}),
+      eventScope: prepared.eventScope,
+    });
   const emitStreamedDelivery = (
     content: string,
     result: { success: boolean; messageId?: string; error?: string },
@@ -144,23 +189,11 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (!fallbackText) {
       return undefined;
     }
-    const sent = await deliverReplies({
-      cfg: ctx.cfg,
-      replies: [prepareSlackReply({ text: fallbackText })],
-      target: prepared.replyTarget,
-      token: ctx.botToken,
-      accountId: account.accountId,
-      runtime,
-      textLimit: ctx.textLimit,
-      mediaMaxBytes: ctx.mediaMaxBytes,
-      replyThreadTs: session.threadTs,
-      replyToMode: replyDeliveryMode,
-      ...(slackIdentity ? { identity: slackIdentity } : {}),
-      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-      ...messageSentDeliveryHookContext,
-      deferMessageSentHooks: true,
-      eventScope: prepared.eventScope,
-    });
+    const sent = await deliverPreparedReply(
+      prepareSlackReply({ text: fallbackText }),
+      session.threadTs,
+      true,
+    );
     if (!sent?.receipt.platformMessageIds.length) {
       return undefined;
     }
@@ -242,22 +275,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return { visibleReplySent: false };
     }
-    const sent = await deliverReplies({
-      cfg: ctx.cfg,
-      replies: [preparedReply],
-      target: prepared.replyTarget,
-      token: ctx.botToken,
-      accountId: account.accountId,
-      runtime,
-      textLimit: ctx.textLimit,
-      mediaMaxBytes: ctx.mediaMaxBytes,
-      replyThreadTs: deliveryReplyThreadTs,
-      replyToMode: replyDeliveryMode,
-      ...(slackIdentity ? { identity: slackIdentity } : {}),
-      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-      ...messageSentDeliveryHookContext,
-      eventScope: prepared.eventScope,
-    });
+    const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
       return { visibleReplySent: false };
     }
@@ -349,24 +367,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           chunks: [],
         });
       } else {
-        session = await startSlackStream({
-          client: slackClient,
-          clientOptions: slackClientOptions,
-          channel: message.channel,
+        session = await startStream({
           threadTs,
           text,
           chunks: [],
           ...(params.taskDisplayMode ? { taskDisplayMode: params.taskDisplayMode } : {}),
-          ...(slackIdentity ? { identity: slackIdentity } : {}),
-          teamId: await resolveSlackStreamRecipientTeamId({
-            client: slackClient,
-            token: ctx.botToken,
-            userId: message.user,
-            fallbackTeamId: slackStreamFallbackTeamId,
-          }),
-          userId: message.user,
         });
-        state.streamSession = session;
       }
       messageId = session.streamer.ts;
     } catch (error) {
@@ -427,6 +433,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     isStreamingEligible,
     markPreviewPayloadDelivered,
     rememberDeliveredThreadTs,
+    startStream,
     resetDeliveryTracker: () => {
       deliveryTracker = createSlackEventDeliveryTracker();
     },

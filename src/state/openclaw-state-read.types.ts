@@ -9,6 +9,8 @@ import type {
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
+import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
@@ -162,6 +164,7 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
   | { type: "updateRuns.interruptedCandidate" }
+  | { type: "worktrees.cleanupState" }
   | { type: "fleet.list" }
   | { type: "workerPlacements.changeSnapshot" }
   | { type: "fleet.get"; tenantId: string }
@@ -399,6 +402,13 @@ export type OpenClawStateReadReply = (
       type: "updateRuns.interruptedCandidate";
       sourceAdmitted: true;
       run: ReturnType<typeof readInterruptedUpdateCandidate>;
+    }
+  | {
+      ok: true;
+      type: "worktrees.cleanupState";
+      sourceAdmitted: true;
+      records: ManagedWorktreeRecord[];
+      leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
   | {

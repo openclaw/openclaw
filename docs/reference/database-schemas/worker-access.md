@@ -104,6 +104,14 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Disk-budget historical discovery reads reference, recent-history, and admitted-key
+protection in the existing maintenance read worker. It returns candidate IDs;
+the host captures live admission identities and rechecks protection before each
+archive and deletion. A deferred WAL checkpoint still blocks another discovery
+pass until a newer completed checkpoint. Exact lifecycle removal and logical
+maintenance planning limit reference results to the generations they might
+delete. No new cache, index, schema, retention policy, or update step is required.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check
@@ -274,11 +282,26 @@ Worktree run-lease cleanup deletes the exact token and reads the Git unlock targ
 through the shared-state worker. Failed deletions yield between bounded retries,
 retaining the original database admission and Git guard until deletion settles.
 Process exit retains its best-effort synchronous deletion because it cannot await
-a worker. Deferred context maintenance also awaits task completion and failure
+a worker. Git-guard admission reads its registry target through the same retained
+worker used by cleanup. Deferred context maintenance publishes its running state
+through the task worker before entering the engine, preparing the existing writer
+and reader owners for completion. It still awaits task completion and failure
 settlement before disposing its engine or releasing its process owner; its progress
-timer ends before terminal persistence. Worktree run admission, task creation and
-progress, and the remaining native cron transitions still need migration. This
+timer ends before terminal persistence. Cold worker startup belongs to admission;
+normal idle retirement and memory-pressure eviction remain in effect. Detached
+worker opening evaluates live admission guards in their captured caller context,
+then releases that capture after native opening settles.
+Worktree run admission writes, task creation and progress, and the remaining native
+cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
+
+Native cron receipt guards read deletion authority through their transaction's
+admitted connection. Other synchronous current-authority readers may reuse that
+same thread's coordinated write transaction, including its pending lifecycle rows;
+ordinary discovery reads retain committed-state isolation. This avoids preparing
+a child-process snapshot while holding the shared-state write coordinator. Agent
+database admission refusals remain with their in-memory admission owner. Schemas,
+retention, configuration, and update behavior are unchanged.
 
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and

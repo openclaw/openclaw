@@ -36,6 +36,31 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Current input files for local execution
+
+A harness that has confirmed unsandboxed execution on the Gateway host may call
+`hostCapabilities.prepareInputAttachments({ placement: "local-host", maxChars, assertCurrent, signal })`.
+The host returns an execution-only note with verified readable document paths,
+using the admitted input and its captured media and tool policy. It retains the
+originals even when native image projection clears the ordinary media field.
+For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
+Path metadata must fit the supplied native input budget. When the complete note
+cannot fit, the host omits it and preserves the original request and inline
+attachment context.
+Append the note to the current native input without rewriting OpenClaw's
+canonical prompt, transcript, or media references. This separation does not imply
+that a harness discards its native input after the turn: Codex retains it in its
+native conversation history. Prepared paths do not replace the existing
+execution and tool-policy admission for later turns.
+
+This optional addition preserves the shipped V2 host capability contract: older
+hosts omit it, so plugins retain ordinary inline attachment context when absent.
+It is not a fallback for remote transports, remote workspace roots, registered
+workspace adapters, sandboxes, or workspace-only/no-read policies. A harness must
+confirm placement from its effective connection, not infer it from the absence
+of a workspace adapter. The supplied current-turn guard and the captured host
+authority are checked across awaited preparation and before returning paths.
+
 ### Workspace files on the harness host
 
 A trusted host plugin can bind the existing `agents.files.list/get/set` methods

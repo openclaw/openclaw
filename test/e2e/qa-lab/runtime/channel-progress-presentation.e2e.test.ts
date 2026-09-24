@@ -1042,6 +1042,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       let terminalTask: Record<string, unknown> | undefined;
       try {
         await waitForFact(async () => {
+          await provider.terminalRequesters.settle(gateway);
           const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
           terminalTask = Array.isArray(listing.tasks)
             ? listing.tasks.map(asRecord).find((task) => task.title === `qa-terminal-${caseName}`)
@@ -1217,7 +1218,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
           const snapshot = Array.isArray(snapshots)
             ? snapshots.map(asRecord).findLast((entry) => entry.raw === raw)
             : undefined;
-          const spawned = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+          const toolOutput = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+          const spawned =
+            asRecord(toolOutput.tool).name === "sessions_spawn"
+              ? asRecord(asRecord(toolOutput.result).details)
+              : toolOutput;
           const acceptedRunId = readStringValue(spawned.runId);
           const acceptedChildSessionKey = readStringValue(spawned.childSessionKey);
           if (
@@ -1386,6 +1391,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       closeOpenClawStateDatabaseByPath(database.path);
     });
     await waitForFact(async () => {
+      await provider.terminalRequesters.settle(gateway);
       const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
       allTaskSummaries = Array.isArray(listing.tasks)
         ? listing.tasks.map((entry) => {

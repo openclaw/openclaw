@@ -246,7 +246,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   it.each([false, true])(
     "preserves the post-progress final when Telegram rejects cleanup (error: %s)",
     async (isError) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
       http.respondToCall = (call) =>
         call.method === "deleteMessage"
           ? { error_code: 400, description: "Bad Request: progress cleanup rejected" }
@@ -273,7 +272,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   );
 
   it("flushes a pending parent progress surface before adopting a fast yield", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const commentary = "The delegated check is still running.";
     let receipt: unknown;
     const waitingPayload = setReplyPayloadMetadata(
@@ -314,7 +312,6 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   it.each([true, false])(
     "retains the existing progress card only when continuation custody is accepted (%s)",
     async (accept) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
       const plan = [

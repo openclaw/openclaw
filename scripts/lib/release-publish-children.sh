@@ -374,52 +374,6 @@ print_failed_run_summary() {
   done < <(printf '%s\n' "${failed_json}" | jq -r '[.databaseId, .name] | @tsv' 2>/dev/null || true)
 }
 
-# Succeeds when every failed job of a terminal child ran before any
-# "${publish_job_prefix}" job, so the run published nothing.
-child_failed_before_publish() {
-  local workflow="$1"
-  local run_id="$2"
-  local publish_job_prefix="$3"
-  local url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-  local jobs_json verdict
-
-  jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs')" || return 1
-  verdict="$(jq -r --arg prefix "$publish_job_prefix" '
-    def failed: .status == "completed" and (.conclusion | IN("success", "skipped", "neutral") | not);
-    if any(.[]; (.name | startswith($prefix)) and .status == "completed" and .conclusion != "skipped") then "after publication started"
-    elif ([.[] | select(failed)] | length) == 0 then "without failed jobs"
-    elif all(.[] | select(failed); .conclusion | IN("failure", "timed_out")) then "before publication"
-    else "with a non-retryable job conclusion" end' <<< "$jobs_json")" || return 1
-  if [[ "$verdict" != "before publication" ]]; then
-    echo "${workflow} run ${run_id} failed ${verdict}; not dispatching a replacement: ${url}" >&2
-    return 1
-  fi
-  echo "${workflow} run ${run_id} failed before any '${publish_job_prefix}' job ran: ${url}"
-}
-
-# Watches the plugin npm child in plugin_npm_run_id. A run that failed before
-# any publish job ran published nothing, and rerunning it cannot pass because
-# its preflight readback is bound to the attempt that produced the artifacts,
-# so a fresh child is dispatched with the recorded inputs, at most twice.
-wait_for_plugin_npm_release() {
-  local redispatched=0 arg npm_args
-  while ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" true "" false; do
-    if (( redispatched == 2 )); then
-      echo "plugin-npm-release.yml failed after 2 fresh dispatches; not dispatching again." >&2
-      return 1
-    fi
-    child_failed_before_publish plugin-npm-release.yml "${plugin_npm_run_id}" "Publish plugin npm package" || return 1
-    npm_args=()
-    while IFS= read -r -d '' arg; do
-      npm_args+=("$arg")
-    done < "${RUNNER_TEMP}/plugin-npm-dispatch-args"
-    redispatched=$((redispatched + 1))
-    echo "plugin-npm-release.yml run ${plugin_npm_run_id} published nothing; dispatching a fresh child (${redispatched} of 2)."
-    plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")" || return 1
-    echo "- plugin-npm-release.yml: previous run failed before publication; fresh child ${plugin_npm_run_id} dispatched (${redispatched} of 2)" >> "$GITHUB_STEP_SUMMARY"
-  done
-}
-
 wait_for_run() {
   local workflow="$1"
   local run_id="$2"
@@ -427,17 +381,14 @@ wait_for_run() {
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
   local approved_environment="${6:-}"
-  # fail_fast=false keeps watching past a failed job until the run is terminal,
-  # so the caller can judge the whole run (see wait_for_plugin_npm_release).
-  local fail_fast="${7:-true}"
-  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json failed_count approval_status run_json jobs_json started_jobs state
+  local wait_for_terminal="${7:-false}"
+  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
     return 1
   fi
 
   last_state=""
-  failed_count=0
   while true; do
     run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,url,updatedAt)"
     status="$(printf '%s' "$run_json" | jq -r '.status')"
@@ -447,16 +398,11 @@ wait_for_run() {
     jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs' || true)"
     failed_json="$(jq -c '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' <<< "${jobs_json}")" || return 1
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
-      if [[ "${fail_fast}" == "true" ]]; then
-        echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
-        jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
+      echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+      jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
+      if [[ "$wait_for_terminal" != "true" ]]; then
         print_failed_run_summary "${run_id}"
         return 1
-      fi
-      if [[ "$(jq 'length' <<< "$failed_json")" != "${failed_count}" ]]; then
-        failed_count="$(jq 'length' <<< "$failed_json")"
-        echo "${workflow} has ${failed_count} failed job(s); waiting for the run to finish before deciding whether to retry: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-        jq '.[] | {name, conclusion, url}' <<< "$failed_json" || true
       fi
     fi
     if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
@@ -1259,7 +1205,7 @@ upload_release_evidence_assets() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver lane_waiver waived_jobs verifier
+  local validation_file workflow_ref telegram_waiver verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1351,20 +1297,12 @@ verify_published_release() {
     exit 1
   fi
   telegram_waiver=""
-  lane_waiver=""
-  waived_jobs="[]"
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
     telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
-    lane_waiver="$(jq -r '.validationInputs.laneWaiver // ""' "${validation_file}")"
-    waived_jobs="$(jq -c '[(.advisoryJobs // [])[] | select(.reason == "lane_waiver") | {child, job, conclusion}]' "${validation_file}")"
   fi
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
-    --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
-    --arg lane_waiver "${lane_waiver}" \
-    --arg lane_waiver_acknowledgement "${LANE_WAIVER_ACKNOWLEDGEMENT:-}" \
-    --argjson waived_jobs "${waived_jobs}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1373,8 +1311,6 @@ verify_published_release() {
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
-      (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
-      (if $lane_waiver == "" then . else .laneWaiver = $lane_waiver | .laneWaiverAcknowledgement = $lane_waiver_acknowledgement | .waivedJobs = $waived_jobs end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1447,9 +1383,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
-    STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
-    LANE_WAIVER="$(jq -r '.laneWaiver // ""' "${evidence_path}")" \
-    WAIVED_JOBS_LINE="$(jq -r '(.waivedJobs // []) | map("\(.child) \(.job) (\(.conclusion))") | join("; ")' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1477,14 +1410,6 @@ const section = [
   ...(process.env.OPENCLAW_NPM_RUN_ID
     ? [
         `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
-      ]
-    : []),
-  ...(process.env.STABLE_SOAK_WAIVER
-    ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
-    : []),
-  ...(process.env.LANE_WAIVER
-    ? [
-        `- Operator lane waiver: ${JSON.stringify(process.env.LANE_WAIVER)}; waived lanes: ${process.env.WAIVED_JOBS_LINE || "none"}`,
       ]
     : []),
   process.env.TELEGRAM_LINE,

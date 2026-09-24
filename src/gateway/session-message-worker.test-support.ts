@@ -48,9 +48,19 @@ export function createWorkerFanoutFixture({
     sessionKey,
     storePath,
   });
-  const receiver = createWorkerLiveEventReceiver({
-    startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
-    startupOwners: new Map([[identity.environmentId, 4]]),
-  });
-  return { committer, identity, receiver, sessionTarget: source.sessionTarget, source };
+  const receiver = createWorkerLiveEventReceiver();
+  const push = (runEpoch = 4, runId = "worker") =>
+    receiver.apply({
+      identity,
+      source,
+      readAckedSeq: () => 0,
+      request: {
+        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
+        lastAckedSeq: 0,
+        seq: 1,
+        runEpoch,
+        runId,
+      },
+    });
+  return { committer, identity, receiver, push, sessionTarget: source.sessionTarget, source };
 }

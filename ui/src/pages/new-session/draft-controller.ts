@@ -1,6 +1,7 @@
 import type { ReactiveControllerHost } from "lit";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -19,6 +20,7 @@ export class NewSessionDraftController {
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   private readonly subscriptions: SubscriptionsController;
+  private modelDefaultsPolicy: "last-used" | "configured" | null | undefined;
 
   constructor(
     host: ReactiveControllerHost,
@@ -106,6 +108,23 @@ export class NewSessionDraftController {
       },
     );
     this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, callbacks);
+    this.submission.draftPersistence.modelSelection = {
+      read: () =>
+        read().context?.config?.current.newSessionModelDefaults === "configured"
+          ? this.place.modelControl.draftSelection(this.place.agentId)
+          : undefined,
+      restore: (selection) => this.place.modelControl.restoreDraftSelection(selection),
+      retire: () => {
+        if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+          this.place.modelControl.retireDraftSelection();
+        }
+      },
+    };
+    this.place.modelControl.onDraftSelectionChange = () => {
+      if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+        this.submission.draftPersistence.noteModelSelectionMutation();
+      }
+    };
     this.subscriptions = new SubscriptionsController(host)
       .watch(
         () => this.read().context?.gateway,
@@ -147,10 +166,26 @@ export class NewSessionDraftController {
   }
 
   synchronizeSelections() {
+    const modelDefaultsPolicy = this.read().context?.config?.current.newSessionModelDefaults;
     if (!this.place.agentsHydrated && this.agentsReady()) {
       this.place.setAgentsHydrated(true);
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
+    } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
+      const { context, data } = this.read();
+      this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
+        agent: this.place.selectedAgent(),
+        preference: this.gateway.readPreference(this.place.agentId),
+      });
     }
+    if (
+      modelDefaultsPolicy === "configured" &&
+      this.modelDefaultsPolicy !== "configured" &&
+      !this.submission.submitting &&
+      this.place.modelControl.draftSelection(this.place.agentId)
+    ) {
+      this.submission.draftPersistence.noteModelSelectionMutation();
+    }
+    this.modelDefaultsPolicy = modelDefaultsPolicy;
     this.place.restorePreferenceSelections();
     this.place.synchronizeTerminalHosts();
   }

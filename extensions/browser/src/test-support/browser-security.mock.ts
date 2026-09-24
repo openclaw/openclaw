@@ -8,19 +8,9 @@ const lookupFn = vi.hoisted(() => async (_hostname: string, options?: { all?: bo
   return options?.all === true ? [result] : result;
 });
 
-vi.mock("../infra/net/ssrf.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
-  return {
-    ...actual,
-    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
-      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
-  };
-});
-
-vi.mock("../sdk-security-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../sdk-security-runtime.js")>(
-    "../sdk-security-runtime.js",
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
   );
   return {
     ...actual,

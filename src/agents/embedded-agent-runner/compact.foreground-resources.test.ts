@@ -177,6 +177,8 @@ it.for([
       const values: unknown[] = [];
       let lateWriteBlocked = false;
       let disposalCalls = 0;
+      let resumedAt = 0;
+      let disposalLatency = 0;
       let physicalDisposals = 0;
       let workSignal: AbortSignal | undefined;
       let backendSignal: AbortSignal | undefined;
@@ -280,6 +282,7 @@ it.for([
                 : pending;
             },
             async dispose() {
+              disposalLatency = performance.now() - resumedAt;
               disposalCalls++;
               disposalEntered.resolve();
               const capturedSignal =
@@ -393,6 +396,7 @@ it.for([
         if (factory === "none") {
           expect.soft(workSignal?.aborted ?? false).toBe(false);
         }
+        resumedAt = performance.now();
         resume.resolve();
         if (deferred) {
           // Worker bookkeeping publishes before engine disposal can start.
@@ -401,11 +405,10 @@ it.for([
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
+        if (deferred) {
+          expect.soft(disposalLatency).toBeLessThan(50);
+        }
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,

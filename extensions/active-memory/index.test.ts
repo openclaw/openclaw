@@ -2677,18 +2677,11 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves leading digits in a plain-text summary", async () => {
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(params.sessionFile, "2024 trip to tokyo and 2% milk");
-      return {
-        payloads: [{ text: "2024 trip to tokyo and 2% milk both matter here." }],
-      };
-    });
-
-    const result = await runPromptBuild({
+    const prependContext = await runRecallWithSummary({
       prompt: "what should i remember from my 2024 trip and should i buy 2% milk?",
+      summary: "2024 trip to tokyo and 2% milk both matter here.",
+      memoryText: "2024 trip to tokyo and 2% milk",
     });
-
-    const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("Context:");
     expect(prependContext).toContain("2024 trip to tokyo");
     expect(prependContext).toContain("2% milk");
@@ -5870,16 +5863,11 @@ describe("active-memory plugin", () => {
   });
 
   it("trusts the subagent's relevance decision for explicit preference recall prompts", async () => {
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(params.sessionFile, "aisle seats and connection buffer");
-      return {
-        payloads: [{ text: "User prefers aisle seats and extra buffer on connections." }],
-      };
+    const prependContext = await runRecallWithSummary({
+      prompt: "u remember my flight preferences",
+      summary: "User prefers aisle seats and extra buffer on connections.",
+      memoryText: "aisle seats and connection buffer",
     });
-
-    const result = await runPromptBuild({ prompt: "u remember my flight preferences" });
-
-    const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("aisle seat");
     expect(prependContext).toContain("extra buffer on connections");
   });

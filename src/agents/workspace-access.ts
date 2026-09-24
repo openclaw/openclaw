@@ -14,6 +14,7 @@ import type {
 } from "../skills/loading/workspace-skill-sources.types.js";
 import type { SkillResourceSourceReader } from "../skills/types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+import type { LocalAttachmentExecutionContext } from "./workspace-attachments.local.js";
 
 type WorkspaceAttachmentTurn = {
   abortSignal?: AbortSignal;
@@ -502,12 +503,18 @@ export async function prepareAgentWorkspaceAttachments(params: {
   workspaceDir: string;
   turn: WorkspaceAttachmentTurn & { userTurnTranscriptRecorder?: UserTurnTranscriptRecorder };
   assertCurrent: () => void;
+  /** Final attempt policy; omission retains the remote-adapter-only SDK contract. */
+  localExecution?: LocalAttachmentExecutionContext;
 }): Promise<string | undefined> {
   if (!params.turn.media?.length && !params.turn.userTurnTranscriptRecorder) {
     return undefined;
   }
+  // Local preparation never substitutes for any registered remote workspace owner.
+  if (params.localExecution && bindings.has(path.resolve(params.workspaceDir))) {
+    return undefined;
+  }
   const access = getAgentWorkspaceAccess(params.workspaceDir, "prepareTurnAttachments");
-  if (!access?.prepareTurnAttachments) {
+  if (!access?.prepareTurnAttachments && !params.localExecution) {
     return undefined;
   }
   const assertCurrent = () => {
@@ -526,15 +533,26 @@ export async function prepareAgentWorkspaceAttachments(params: {
   if (!facts.some((fact) => fact.path?.trim() || fact.url?.trim())) {
     return undefined;
   }
-  const note = await access.prepareTurnAttachments(
-    {
-      config: params.turn.config,
+  let note: string | undefined;
+  if (access?.prepareTurnAttachments) {
+    note = await access.prepareTurnAttachments(
+      {
+        config: params.turn.config,
+        media: facts,
+        timeoutMs: params.turn.timeoutMs,
+        abortSignal: params.turn.abortSignal,
+      },
+      assertCurrent,
+    );
+  } else if (params.localExecution) {
+    const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
+    assertCurrent();
+    note = await prepareLocalWorkspaceAttachments({
       media: facts,
-      timeoutMs: params.turn.timeoutMs,
-      abortSignal: params.turn.abortSignal,
-    },
-    assertCurrent,
-  );
+      execution: params.localExecution,
+      assertCurrent,
+    });
+  }
   assertCurrent();
   return note;
 }

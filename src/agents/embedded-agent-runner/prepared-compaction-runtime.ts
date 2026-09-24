@@ -476,14 +476,19 @@ export async function buildPreparedCompactionRuntime(
       }),
       activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
     };
-    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-      config: params.config,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      permissionMode: sessionPermissionPolicy?.mode,
-      sandboxAvailable: sandbox?.enabled === true,
-      execOverrides,
-    });
+    const sandboxInfoExecPolicy = sandbox?.enabled
+      ? await resolveEmbeddedSandboxInfoExecPolicy(
+          {
+            config: params.config,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            permissionMode: sessionPermissionPolicy?.mode,
+            sandboxAvailable: sandbox.enabled,
+            execOverrides,
+          },
+          { signal: params.abortSignal },
+        )
+      : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(
       sandbox,
       params.bashElevated,

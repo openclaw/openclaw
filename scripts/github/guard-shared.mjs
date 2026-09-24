@@ -5,6 +5,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
+export const SECURITY_REVIEW_CHECK_INTERVAL_MS = 30_000;
 
 const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
 const githubApiRetryCodes = new Set([
@@ -50,7 +51,7 @@ export class GitHubStatusPublicationError extends Error {
 
 export class GitHubDiffDataError extends Error {}
 
-export async function withSecurityReviewRecovery(evaluate) {
+export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}) {
   const recorded = process.env[recoveryDeadlineEnv];
   const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
   if (!Number.isSafeInteger(deadline) || deadline <= 0) {
@@ -59,8 +60,19 @@ export async function withSecurityReviewRecovery(evaluate) {
   if (recorded === undefined && process.env.GITHUB_ENV) {
     await appendFile(process.env.GITHUB_ENV, `${recoveryDeadlineEnv}=${deadline}\n`);
   }
+  let resumeAt = 0;
+  let checkDuringWait = false;
   for (let attempt = 0; ; attempt += 1) {
     try {
+      while (Date.now() < resumeAt) {
+        const remaining = resumeAt - Date.now();
+        await wait(
+          checkDuringWait ? Math.min(remaining, SECURITY_REVIEW_CHECK_INTERVAL_MS) : remaining,
+        );
+        if (checkDuringWait && Date.now() < resumeAt) {
+          await checkCurrent();
+        }
+      }
       return await evaluate();
     } catch (error) {
       const rateLimited = error instanceof GitHubRateLimitError;
@@ -88,7 +100,10 @@ export async function withSecurityReviewRecovery(evaluate) {
       console.warn(
         `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff ? error.message : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
-      await wait(delay);
+      // Never probe during server-directed quota backoff. A rate limit from a
+      // checkpoint joins this same recovery budget instead of starting a poller.
+      resumeAt = Date.now() + delay;
+      checkDuringWait = !rateLimited && Boolean(checkCurrent);
     }
   }
 }
@@ -353,6 +368,9 @@ export function createGitHubApi(token, options = {}) {
   };
   const request = async (path, requestOptions = {}) => {
     const method = (requestOptions.method ?? "GET").toUpperCase();
+    if (method === "GET" || method === "HEAD") {
+      await options.beforeRead?.(path);
+    }
     const timeoutController = new AbortController();
     const requestSignal = combineAbortSignals([requestOptions.signal, timeoutController.signal]);
     let timeout;

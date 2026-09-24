@@ -13,6 +13,7 @@ import {
 } from "../config/sessions.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type {
+  CapturedSessionEntryReadSource,
   SessionEntryListScope,
   SessionEntryReadSource,
 } from "../config/sessions/session-accessor.types.js";
@@ -290,6 +291,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
             store: Record<string, SessionEntry>;
             match: { entry: SessionEntry; key: string };
             readSource?: SessionEntryReadSource;
+            capturedReadSource?: CapturedSessionEntryReadSource;
           }
         | undefined;
       let canonicalValidationError: Error | undefined;
@@ -319,6 +321,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
             store,
             match,
             ...(target.readSource ? { readSource: target.readSource } : {}),
+            ...(target.capturedReadSource ? { capturedReadSource: target.capturedReadSource } : {}),
           };
         }
       }
@@ -340,6 +343,10 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
         storeKeys: Array.from(storeKeys),
         store: best.store,
         ...(best.readSource ? { readSource: best.readSource } : {}),
+        ...(best.capturedReadSource ? { capturedReadSource: best.capturedReadSource } : {}),
+        capturedReadSources: reads.flatMap((read) =>
+          read.capturedReadSource ? [read.capturedReadSource] : [],
+        ),
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
       };
     },
@@ -380,6 +387,12 @@ function prepareGatewaySessionStoreTarget(
         storeKeys: [canonicalKey],
         store: readGatewaySessionStore(read),
         ...(read.readSource ? { readSource: read.readSource } : {}),
+        ...(read.capturedReadSource
+          ? {
+              capturedReadSource: read.capturedReadSource,
+              capturedReadSources: [read.capturedReadSource],
+            }
+          : {}),
       }),
     };
   }
@@ -388,7 +401,14 @@ function prepareGatewaySessionStoreTarget(
   return {
     reads: lookup.reads,
     resolve: () => {
-      const { canonicalValidationError, storePath, store, readSource } = lookup.resolve();
+      const {
+        canonicalValidationError,
+        storePath,
+        store,
+        readSource,
+        capturedReadSource,
+        capturedReadSources,
+      } = lookup.resolve();
       return {
         agentId,
         storePath,
@@ -396,6 +416,8 @@ function prepareGatewaySessionStoreTarget(
         storeKeys: [...storeKeys],
         store,
         ...(readSource ? { readSource } : {}),
+        ...(capturedReadSource ? { capturedReadSource } : {}),
+        ...(capturedReadSources ? { capturedReadSources } : {}),
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
       };
     },
@@ -653,6 +675,8 @@ export function resolveGatewaySessionStoreTarget(params: {
   const {
     store: _store,
     readSource: _readSource,
+    capturedReadSource: _capturedReadSource,
+    capturedReadSources: _capturedReadSources,
     ...target
   } = resolveGatewaySessionStoreTargetWithStore({
     ...params,
