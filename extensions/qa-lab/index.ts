@@ -2,6 +2,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 // Keep plugin registration independent of private QA transports, which packaged runtimes omit.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { QA_SESSION_OBSERVER_HEADER } from "./src/providers/shared/session-observer-registry.js";
 import { createQaLabWebSearchProvider } from "./src/qa-web-search-provider.js";
@@ -27,14 +28,23 @@ export default definePluginEntry({
         if (!context.sessionId) {
           return;
         }
-        const response = await fetch(sessionObserverUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ sessionId: context.sessionId }),
+        const { response, release } = await fetchWithSsrFGuard({
+          url: sessionObserverUrl,
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-session-observer",
+          init: {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ sessionId: context.sessionId }),
+          },
         });
-        await response.text();
-        if (!response.ok) {
-          throw new Error(`QA mock session observation failed: HTTP ${response.status}`);
+        try {
+          await response.text();
+          if (!response.ok) {
+            throw new Error(`QA mock session observation failed: HTTP ${response.status}`);
+          }
+        } finally {
+          await release();
         }
       });
     }
