@@ -96,26 +96,9 @@ function normalizeCodexModelId(modelId: string | undefined): string {
   return normalized.includes("/") ? normalized.split("/").at(-1)! : normalized;
 }
 
-/** Returns true when model behavior requires direct dynamic-tool registration. */
-function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
-  return shouldDisableCodexToolSearchForModel(modelId);
-}
-
 /** Returns true for models whose tool-search path is unsupported or inefficient. */
 export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
   return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
-}
-
-/** Resolves dynamic-tool loading after applying model-specific restrictions. */
-function resolveCodexDynamicToolsLoadingForModel(
-  config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
-  modelId: string | undefined,
-  env: CodexDynamicToolProfileEnv = process.env,
-): CodexDynamicToolsLoading {
-  const loading = resolveCodexDynamicToolsLoading(config, env);
-  return loading === "searchable" && shouldUseDirectCodexDynamicToolsForModel(modelId)
-    ? "direct"
-    : loading;
 }
 
 /** Resolves dynamic-tool loading for the app-server connection that will execute the turn. */
@@ -125,8 +108,11 @@ export function resolveCodexDynamicToolsLoadingForRuntime(
   options: { connectionClass?: CodexAppServerConnectionClass } = {},
   env: CodexDynamicToolProfileEnv = process.env,
 ): CodexDynamicToolsLoading {
-  const loading = resolveCodexDynamicToolsLoadingForModel(config, modelId, env);
-  return loading === "searchable" && options.connectionClass === "remote" ? "direct" : loading;
+  const loading = resolveCodexDynamicToolsLoading(config, env);
+  return loading === "searchable" &&
+    (shouldDisableCodexToolSearchForModel(modelId) || options.connectionClass === "remote")
+    ? "direct"
+    : loading;
 }
 
 /** Filters OpenClaw tools that Codex owns natively or config explicitly excludes. */

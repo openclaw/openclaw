@@ -52,8 +52,6 @@ type DiscordReactionRoutingParams = {
 };
 
 type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
-type DiscordReactionChannelConfig = ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
-type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordReactionIngress>>;
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
 export class DiscordReactionListener extends MessageReactionAddListener {
@@ -240,117 +238,6 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-async function handleDiscordThreadReactionNotification(params: {
-  reactionMode: DiscordReactionMode;
-  message: DiscordReactionEvent["message"];
-  parentId?: string;
-  resolveThreadChannelAccess: () => Promise<{
-    access: DiscordReactionIngressAccess;
-    channelConfig: DiscordReactionChannelConfig;
-  }>;
-  shouldNotifyReaction: (options: {
-    mode: DiscordReactionMode;
-    messageAuthorId?: string;
-    channelConfig?: DiscordReactionChannelConfig;
-  }) => boolean;
-  resolveReactionBase: () => { baseText: string; contextKey: string };
-  emitReaction: (text: string, parentPeerId?: string) => void;
-  emitReactionWithAuthor: (message: DiscordFetchedReactionMessage) => void;
-}) {
-  if (params.reactionMode === "off") {
-    return;
-  }
-
-  if (params.reactionMode === "all" || params.reactionMode === "allowlist") {
-    const { access, channelConfig } = await params.resolveThreadChannelAccess();
-    if (
-      !access.allowed ||
-      !params.shouldNotifyReaction({ mode: params.reactionMode, channelConfig })
-    ) {
-      return;
-    }
-
-    const { baseText } = params.resolveReactionBase();
-    params.emitReaction(baseText, params.parentId);
-    return;
-  }
-
-  const message = await params.message.fetch().catch(() => null);
-  const { access, channelConfig } = await params.resolveThreadChannelAccess();
-  const messageAuthorId = message?.author?.id ?? undefined;
-  if (
-    !access.allowed ||
-    !params.shouldNotifyReaction({
-      mode: params.reactionMode,
-      messageAuthorId,
-      channelConfig,
-    })
-  ) {
-    return;
-  }
-
-  params.emitReactionWithAuthor(message);
-}
-
-async function handleDiscordChannelReactionNotification(params: {
-  isGuildMessage: boolean;
-  reactionMode: DiscordReactionMode;
-  message: DiscordReactionEvent["message"];
-  channelConfig: DiscordReactionChannelConfig;
-  parentId?: string;
-  authorizeReactionIngressForChannel: (
-    channelConfig: DiscordReactionChannelConfig,
-  ) => Promise<DiscordReactionIngressAccess>;
-  shouldNotifyReaction: (options: {
-    mode: DiscordReactionMode;
-    messageAuthorId?: string;
-    channelConfig?: DiscordReactionChannelConfig;
-  }) => boolean;
-  resolveReactionBase: () => { baseText: string; contextKey: string };
-  emitReaction: (text: string, parentPeerId?: string) => void;
-  emitReactionWithAuthor: (message: DiscordFetchedReactionMessage) => void;
-}) {
-  if (params.isGuildMessage) {
-    const access = await params.authorizeReactionIngressForChannel(params.channelConfig);
-    if (!access.allowed) {
-      return;
-    }
-  }
-
-  if (params.reactionMode === "off") {
-    return;
-  }
-
-  if (params.reactionMode === "all" || params.reactionMode === "allowlist") {
-    if (
-      !params.shouldNotifyReaction({
-        mode: params.reactionMode,
-        channelConfig: params.channelConfig,
-      })
-    ) {
-      return;
-    }
-
-    const { baseText } = params.resolveReactionBase();
-    params.emitReaction(baseText, params.parentId);
-    return;
-  }
-
-  const message = await params.message.fetch().catch(() => null);
-  const messageAuthorId = message?.author?.id ?? undefined;
-  if (
-    !params.shouldNotifyReaction({
-      mode: params.reactionMode,
-      messageAuthorId,
-      channelConfig: params.channelConfig,
-    })
-  ) {
-    return;
-  }
-
-  params.emitReactionWithAuthor(message);
-}
-
 function hasDiscordGuildChannelOverrides(
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
 ) {
@@ -485,108 +372,14 @@ async function handleDiscordReactionEvent(
     const parentId = isThreadChannel ? channelContext.threadParentId : channelContext.parentId;
     const parentName = isThreadChannel ? channelContext.threadParentName : undefined;
     const parentSlug = isThreadChannel ? channelContext.threadParentSlug : "";
-    let reactionBase: { baseText: string; contextKey: string } | null = null;
-    const resolveReactionBase = () => {
-      if (reactionBase) {
-        return reactionBase;
-      }
-      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      // Reaction removals do not include member/user details in Discord's gateway payload.
-      const actorLabel = formatDiscordUserTag(user) || user.id;
-      const guildSlug =
-        guildInfo?.slug ||
-        (data.guild?.name
-          ? normalizeDiscordSlug(data.guild.name)
-          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-      const channelLabel = channelSlug
-        ? `#${channelSlug}`
-        : channelName
-          ? `#${normalizeDiscordSlug(channelName)}`
-          : `#${data.channel_id}`;
-      const baseText = `Discord ${data.burst ? "super " : ""}reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}${data.burst ? ":burst" : ""}`;
-      reactionBase = { baseText, contextKey };
-      return reactionBase;
-    };
-    const emitReaction = (text: string, parentPeerId?: string) => {
-      const { contextKey } = resolveReactionBase();
-      const route = resolveAgentRoute({
-        cfg: params.cfg,
-        channel: "discord",
-        accountId: params.accountId,
-        guildId: data.guild_id ?? undefined,
-        memberRoleIds,
-        peer: {
-          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-          id: isDirectMessage ? user.id : data.channel_id,
-        },
-        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
-      });
-      enqueueRoutedSystemEvent(text, route, {
-        contextKey,
-      });
-    };
-    const shouldNotifyReaction = (options: {
-      mode: DiscordReactionMode;
-      messageAuthorId?: string;
-      channelConfig?: DiscordReactionChannelConfig;
-    }) =>
-      shouldEmitDiscordReactionNotification({
-        mode: options.mode,
-        botId: botUserId,
-        messageAuthorId: options.messageAuthorId,
-        userId: user.id,
-        userName: user.username,
-        userTag: formatDiscordUserTag(user),
-        channelConfig: options.channelConfig,
-        guildInfo,
-        memberRoleIds,
-        allowNameMatching: params.allowNameMatching,
-      });
-    const emitReactionWithAuthor = (message: DiscordFetchedReactionMessage) => {
-      const { baseText } = resolveReactionBase();
-      const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
-      const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      emitReaction(text, parentId);
-    };
-    const resolveThreadChannelConfig = () =>
-      resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        parentId,
-        parentName,
-        parentSlug,
-        scope: "thread",
-      });
-    const authorizeReactionIngressForChannel = async (
-      channelConfig: DiscordReactionChannelConfig,
-    ) =>
-      await authorizeDiscordReactionIngress({
-        ...reactionIngressBase,
-        channelConfig,
-      });
-    const resolveThreadChannelAccess = async () => {
-      const channelConfig = resolveThreadChannelConfig();
-      const access = await authorizeReactionIngressForChannel(channelConfig);
-      return { access, channelConfig };
-    };
-
-    if (isThreadChannel) {
-      await handleDiscordThreadReactionNotification({
-        reactionMode,
-        message: data.message,
-        parentId,
-        resolveThreadChannelAccess,
-        shouldNotifyReaction,
-        resolveReactionBase,
-        emitReaction,
-        emitReactionWithAuthor,
-      });
+    if (isThreadChannel && reactionMode === "off") {
       return;
     }
-
+    // Thread authorization follows the message lookup; channel authorization precedes it.
+    let message: DiscordFetchedReactionMessage = null;
+    if (isThreadChannel && reactionMode === "own") {
+      message = await data.message.fetch().catch(() => null);
+    }
     const channelConfig = resolveDiscordChannelConfigWithFallback({
       guildInfo,
       channelId: data.channel_id,
@@ -595,20 +388,67 @@ async function handleDiscordReactionEvent(
       parentId,
       parentName,
       parentSlug,
-      scope: "channel",
+      scope: isThreadChannel ? "thread" : "channel",
     });
-    await handleDiscordChannelReactionNotification({
-      isGuildMessage,
-      reactionMode,
-      message: data.message,
-      channelConfig,
-      parentId,
-      authorizeReactionIngressForChannel,
-      shouldNotifyReaction,
-      resolveReactionBase,
-      emitReaction,
-      emitReactionWithAuthor,
+    if (isGuildMessage || isThreadChannel) {
+      const access = await authorizeDiscordReactionIngress({
+        ...reactionIngressBase,
+        channelConfig,
+      });
+      if (!access.allowed) {
+        return;
+      }
+    }
+    if (!isThreadChannel && reactionMode === "own") {
+      message = await data.message.fetch().catch(() => null);
+    }
+    if (
+      !shouldEmitDiscordReactionNotification({
+        mode: reactionMode,
+        botId: botUserId,
+        messageAuthorId: message?.author?.id,
+        userId: user.id,
+        userName: user.username,
+        userTag: formatDiscordUserTag(user),
+        channelConfig,
+        guildInfo,
+        memberRoleIds,
+        allowNameMatching: params.allowNameMatching,
+      })
+    ) {
+      return;
+    }
+
+    const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+    // Reaction removals do not include member/user details in Discord's gateway payload.
+    const actorLabel = formatDiscordUserTag(user) || user.id;
+    const guildSlug =
+      guildInfo?.slug ||
+      (data.guild?.name
+        ? normalizeDiscordSlug(data.guild.name)
+        : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
+    const channelLabel = channelSlug
+      ? `#${channelSlug}`
+      : channelName
+        ? `#${normalizeDiscordSlug(channelName)}`
+        : `#${data.channel_id}`;
+    const baseText = `Discord ${data.burst ? "super " : ""}reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+    const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
+    const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+    const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}${data.burst ? ":burst" : ""}`;
+    const route = resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "discord",
+      accountId: params.accountId,
+      guildId: data.guild_id ?? undefined,
+      memberRoleIds,
+      peer: {
+        kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+        id: isDirectMessage ? user.id : data.channel_id,
+      },
+      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
     });
+    enqueueRoutedSystemEvent(text, route, { contextKey });
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

@@ -23,7 +23,10 @@ import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   restoreSetupInferenceConfig,
@@ -459,6 +462,13 @@ export async function createSetupMigrationStage(params: {
             await moveRecordedEmptyTarget(component);
           }
           await fs.mkdir(path.dirname(component.finalPath), { recursive: true, mode: 0o700 });
+          if (component.name === "agent") {
+            // Capture fresh shared history before the imported agent becomes a live store.
+            openOpenClawStateDatabase({
+              env: finalEnv,
+              initializationAgentPaths: [path.join(finalAgentDir, "openclaw-agent.sqlite")],
+            });
+          }
           await fs.rename(component.stagedPath, component.finalPath);
           if (component.name === "agent") {
             registerOpenClawAgentDatabase({

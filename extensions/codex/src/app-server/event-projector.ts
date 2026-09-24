@@ -45,6 +45,16 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.completedTurn?.status;
   }
 
+  getPendingNativeCommands(): ReadonlyMap<string, string | null> {
+    return !this.projectionClosed &&
+      !this.aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      this.completedTurn?.status === "completed" &&
+      !this.terminalFailure.promptError
+      ? this.nativeToolLifecycleProjector.pendingCommands()
+      : new Map();
+  }
+
   /** Native completion owns the answer independently of unfinished host projection. */
   recoverCompletedAnswer(): boolean {
     const completed = this.settlement.completedAnswer;

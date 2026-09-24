@@ -82,6 +82,7 @@ it.each(["canonical", "managed"] as const)(
     const selected = selectedKind === "canonical" ? canonical : managed;
 
     const result = await cancelTaskById({ cfg: getRuntimeConfig(), taskId: selected.taskId });
+    await fixture.settle();
 
     expect(result, result.reason).toMatchObject({ found: true, cancelled: true });
     for (const task of [canonical, managed]) {

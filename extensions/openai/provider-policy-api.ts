@@ -230,7 +230,9 @@ function withRuntimePolicy(
     ...candidate,
     runtimePolicy: {
       compatibleIds: codexCanReproduceRoute(candidate, sourceBaseUrl)
-        ? CODEX_RUNTIME_COMPATIBLE_IDS
+        ? candidate.authRequirement === "api-key"
+          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+          : CODEX_RUNTIME_COMPATIBLE_IDS
         : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
     },
   };
@@ -249,7 +251,9 @@ function route(
   candidate: ProviderModelRouteCandidate,
   sourceBaseUrl?: unknown,
 ): ProviderModelRouteResolution & { kind: "routes" } {
-  const compatibleCandidate = withRuntimePolicy(candidate, sourceBaseUrl);
+  const compatibleCandidate = candidate.runtimePolicy
+    ? candidate
+    : withRuntimePolicy(candidate, sourceBaseUrl);
   return {
     kind: "routes",
     routes: [compatibleCandidate],

@@ -174,6 +174,19 @@ Plan-based migrations can use
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
 
+Migrations may supply a read-only `collectBackupResources` callback, including
+through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
+kind `sqlite`, `file`, or `directory`, including destinations that do not exist
+yet. Never open a writable store or run the migration during inventory. When
+`requireLocalResources` is true, reject remote or unlisted data rather than
+reporting an incomplete inventory as complete.
+
+The recovery inventory collector reports one typed
+`undeclared-migration-resources` warning per plugin without a callback; its
+private state is not included in the recovery set. Malformed declarations and
+invalid inventories still fail. Collection does not capture or restore data,
+authorize a migration, or replace an updater's required capture checks.
+
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
 errors and invalid JSON reach Doctor's detection or migration warnings; the

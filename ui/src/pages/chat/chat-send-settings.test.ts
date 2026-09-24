@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import {
   createResolvedModelPatch,
   createSessionsListResult,
 } from "../../test-helpers/chat-model.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -14,6 +15,40 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { getPendingChatPickerPatch, switchChatModel } from "./chat-session.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("does not patch the model for a locked session", async () => {
+  const host = makeChatHost({
+    requestHandlers: {},
+    sessionKey: "main",
+    hello: {
+      ...sessionMutationGatewayHello(),
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+        },
+      },
+    },
+    sessionsResult: {
+      ...createSessionsListResult(),
+      sessions: [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          modelSelectionLocked: true,
+          updatedAt: 1,
+        },
+      ],
+    },
+  });
+  onTestFinished(() => host.sessions.dispose());
+
+  await expect(switchChatModel(host, "openai/gpt-5.4")).resolves.toBe(false);
+  expect(host.request).not.toHaveBeenCalled();
+});
 
 it("dispatches a fresh-pane send without waiting for background roster loading", async () => {
   vi.stubGlobal("sessionStorage", createStorageMock());

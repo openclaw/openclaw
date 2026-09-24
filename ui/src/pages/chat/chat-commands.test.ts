@@ -13,6 +13,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
@@ -20,6 +21,7 @@ import {
   dispatchChatSlashCommand,
   refreshSlashCommands,
 } from "./chat-commands.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -398,6 +400,28 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("conversation reset confirmation", () => {
+  it.each(["owner", "member", "viewer"] as const)(
+    "authorizes /stop with narrow scope for a %s session",
+    async (sharingRole) => {
+      const sessionKey = "agent:main:current";
+      const host = makeChatHost({
+        sessionKey,
+        chatRunId: "run-1",
+        hello: sessionMutationGatewayHello(["operator.sessions.write"]),
+        sessionsResult: {
+          ...createSessionsListResult(),
+          sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
+        },
+        requestHandlers: { "chat.abort": { aborted: true } },
+      });
+      const result = await dispatchChatSlashCommand(host, "stop", "", {
+        sendResetMessage: vi.fn(),
+      });
+      expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
+      expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+    },
+  );
+
   it.each([
     ["stop", "chat.abort"],
     ["reset", "chat.send"],

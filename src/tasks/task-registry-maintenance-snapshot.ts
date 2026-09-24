@@ -2,14 +2,14 @@ import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
-import type { TaskRegistryRead } from "./task-registry-read.js";
+import { isTaskRegistryTaskSettled, type TaskRegistryRead } from "./task-registry-read.js";
 import { cloneTaskRecord, compareTasksNewestFirst } from "./task-registry-records.js";
 import { tasks } from "./task-registry-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 export type TaskRegistryMaintenanceRead = Pick<
   TaskRegistryRead,
-  "assertOwnerCurrent" | "assertCurrent" | "isTaskSettled"
+  "assertOwnerCurrent" | "assertCurrent"
 >;
 
 export const TASK_MAINTENANCE_BATCH_SIZE = 25;
@@ -38,12 +38,11 @@ export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenance
 }
 
 export function getTaskRegistryMaintenanceTask(
-  read: TaskRegistryMaintenanceRead,
   taskId: string,
   now: number,
   cronHistoryOverflowTaskIds: ReadonlySet<string>,
 ): TaskRecord | undefined | "needs-preparation" {
-  if (!read.isTaskSettled(taskId)) {
+  if (!isTaskRegistryTaskSettled(taskId)) {
     return "needs-preparation";
   }
   const task = tasks.get(taskId);
@@ -93,35 +92,24 @@ export async function visitTaskRegistryMaintenanceTasks(
     }
     if (needsPreparation) {
       read = await prepareRead(read);
+      // Revalidate after resuming; selection stays synchronous until the next await.
+      read.assertCurrent();
       needsPreparation = false;
     }
     if (prepareBatch && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
       const candidates = taskIds.slice(index, index + TASK_MAINTENANCE_BATCH_SIZE).flatMap((id) => {
-        const task = source.getTaskRegistryMaintenanceTask(
-          read,
-          id,
-          now,
-          cronHistoryOverflowTaskIds,
-        );
+        const task = source.getTaskRegistryMaintenanceTask(id, now, cronHistoryOverflowTaskIds);
         return task && task !== "needs-preparation" ? [task] : [];
       });
       await prepareBatch(candidates, now);
       read = await prepareRead(read);
+      read.assertCurrent();
     }
-    let selected = source.getTaskRegistryMaintenanceTask(
-      read,
-      taskId,
-      now,
-      cronHistoryOverflowTaskIds,
-    );
+    let selected = source.getTaskRegistryMaintenanceTask(taskId, now, cronHistoryOverflowTaskIds);
     if (selected === "needs-preparation") {
       read = await prepareRead(read);
-      selected = source.getTaskRegistryMaintenanceTask(
-        read,
-        taskId,
-        now,
-        cronHistoryOverflowTaskIds,
-      );
+      read.assertCurrent();
+      selected = source.getTaskRegistryMaintenanceTask(taskId, now, cronHistoryOverflowTaskIds);
       if (selected === "needs-preparation") {
         deferred += 1;
         continue;

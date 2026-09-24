@@ -8,13 +8,11 @@ import {
   PluginDoctorStateMigrationDeclarationError,
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationDetection,
+  type PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
-import {
-  repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
-} from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
@@ -101,6 +99,7 @@ export async function collectPluginDoctorStateMigrationPlans(
     repairAuthority?: PluginDoctorRepairAuthority;
     warnings?: string[];
     plannedActions?: readonly PlannedPluginDoctorAction[];
+    inventory?: PluginDoctorStateMigrationInventory;
     validateDeclarations?: boolean;
   },
 ): Promise<PluginDoctorPlanCollection> {
@@ -122,6 +121,7 @@ export async function collectPluginDoctorStateMigrationPlans(
     entries = listPluginDoctorStateMigrationEntries({
       config,
       env,
+      inventory: params.inventory,
       validateDeclarations: params.validateDeclarations,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
@@ -216,6 +216,7 @@ export async function runPluginDoctorStateMigrationPlans(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   plannedActions?: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
 }): Promise<MigrationMessages> {
   const input: PluginDoctorInput = {
     config: params.config,
@@ -228,6 +229,7 @@ export async function runPluginDoctorStateMigrationPlans(params: {
     includeDoctorOnly: params.detected.doctorOnlyStateMigrations,
     warnings,
     plannedActions: params.plannedActions,
+    inventory: params.inventory,
   });
   const hasDetectorFailure = warnings.length > 0;
   const migrated = await migratePluginDoctorStatePlans(input, collected.plans);
@@ -370,6 +372,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   env: NodeJS.ProcessEnv;
   maintenanceAuthority?: { assertCurrent(): void };
   plannedActions?: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
   beforeCompletion?: (
     completedPluginIds: readonly string[],
     assertCurrent: () => void,
@@ -391,6 +394,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
       repairAuthority,
       warnings,
       plannedActions: params.plannedActions,
+      inventory: params.inventory,
     });
     if (!repairAuthority) {
       return {
@@ -408,6 +412,7 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     // The later phase cannot certify an earlier action that still reports pending work.
     const earlier = await collectPluginDoctorStateMigrationPlans(input, {
       includeDoctorOnly: true,
+      inventory: params.inventory,
       repairAuthority,
       warnings,
     });
@@ -523,13 +528,10 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const prepareStateSchema =
-    params.doctorOnlyStateMigrations === true
-      ? repairOpenClawStateDatabaseSchema
-      : repairOpenClawStateDatabaseSchemaIfNeeded;
-  const stateSchema = prepareStateSchema({
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  const stateSchema = await prepareOpenClawStateDatabaseSchema(
+    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
+    params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
+  );
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];

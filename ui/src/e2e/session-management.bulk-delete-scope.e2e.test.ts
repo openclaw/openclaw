@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -183,7 +184,7 @@ suite.define(() => {
         .getByRole("menuitemradio", { name: "Research", exact: true })
         .click();
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
-      const loadMore = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
+      const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");
       await loadMore.waitFor({ state: "visible" });
       await expect.poll(settledResearchRevision).toBeGreaterThan(0);
       const settledResearch = {
@@ -208,7 +209,12 @@ suite.define(() => {
       const filteredQuery = { agentId: "research", archived: true };
       const previousFiltered = (await gateway.getRequests("sessions.list", filteredQuery)).length;
       await gateway.deferNext("sessions.list", filteredQuery);
+      await page.clock.install();
+      await pauseVirtualClock(page);
       await gateway.resolveDeferred("sessions.delete");
+      // Advance the managed-list refresh window and nested mock response timers.
+      await page.clock.runFor(5_001);
+      await page.clock.resume();
       await gateway.waitForRequest("sessions.delete", { match: { key: targets[1]!.key } });
       await gateway.waitForRequest("sessions.list", {
         after: previous,
@@ -247,10 +253,12 @@ suite.define(() => {
       ).toHaveLength(0);
       await expect.poll(() => loadMore.isDisabled()).toBe(true);
       await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => loadMore.getAttribute("aria-label")).toContain("Loading");
       await gateway.resolveDeferred("sessions.list");
       await expect.poll(sidebarState).toMatchObject(settledResearch);
       await expect.poll(() => loadMore.isDisabled()).toBe(false);
       await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("false");
+      await expect.poll(() => loadMore.getAttribute("aria-label")).toBe("Load more sessions");
       await loadMore.click();
       // Preserve the original assertion failure after exercising the recovery control.
       let paginationFailure: Error | undefined;

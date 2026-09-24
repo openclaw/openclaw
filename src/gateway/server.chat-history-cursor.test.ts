@@ -33,7 +33,10 @@ import * as userProfiles from "../state/user-profiles.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -156,6 +159,7 @@ function renderedMessages(messages: readonly unknown[]): unknown[] {
 }
 
 afterEach(async () => {
+  await disposeSessionReadContexts();
   for (const directory of tempDirs.dirs) {
     await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);

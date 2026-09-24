@@ -68,6 +68,7 @@ const prepareDoctorDatabasePreflight = vi.hoisted(() =>
 const doctorMaintenanceRelease = vi.hoisted(() => vi.fn(async () => {}));
 const beginDoctorMaintenance = vi.hoisted(() =>
   vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () => ({
+    signal: new AbortController().signal,
     run: <T>(operation: () => T): T => operation(),
     releaseState: vi.fn(async () => {}),
     release: doctorMaintenanceRelease,
@@ -81,9 +82,6 @@ const noteSessionTranscriptHealth = vi.hoisted(() =>
 );
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["plugin-imported"])),
-);
-const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["task-imported"])),
 );
 const migrateLegacyConfigMachineState = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
@@ -231,7 +229,6 @@ vi.mock("./doctor-session-transcripts.js", () => ({ noteSessionTranscriptHealth 
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
 }));
 
 vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
@@ -327,7 +324,6 @@ export const preflightStateMigrationMocks = {
   doctorMaintenanceRelease,
   noteSessionTranscriptHealth,
   autoMigrateLegacyPluginDoctorState,
-  autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
   readMigrationCheckpointStatus,
@@ -384,7 +380,6 @@ export function resetStateMigrationPreflightMocks(): void {
   autoMigrateLegacyPluginDoctorState.mockResolvedValue(
     makeStateMigrationResult(["plugin-imported"]),
   );
-  autoMigrateLegacyTaskStateSidecars.mockResolvedValue(makeStateMigrationResult(["task-imported"]));
   repairLegacyCronStoreWithoutPrompt.mockResolvedValue({
     changes: ["cron-imported"],
     warnings: [],

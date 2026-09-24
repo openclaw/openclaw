@@ -11,13 +11,20 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
 import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const scriptPath = path.resolve(
   import.meta.dirname,
   "../../scripts/check-release-metadata-only.mts",
 );
-const tsxLoaderPath = path.resolve(import.meta.dirname, "../../scripts/tsx.mjs");
+const scriptArgs = resolveRuntimeWorkerArgv(
+  resolveRuntimeWorkerUrl(toolingMtsEntrypoints.releaseMetadata),
+);
 const tsconfigPath = path.resolve(import.meta.dirname, "../../tsconfig.json");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -57,15 +64,11 @@ describe("check-release-metadata-only", () => {
     { paths: ["CHANGELOG/2026.9.4.md", "CHANGELOG/other.md"], status: 1 },
     { paths: ["CHANGELOG/2026.9.4.md", "src/index.ts"], status: 1 },
   ])("checks split changelog metadata paths through the CLI: $paths", ({ paths, status }) => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", tsxLoaderPath, scriptPath, "--", ...paths],
-      {
-        cwd: path.resolve(import.meta.dirname, "../.."),
-        encoding: "utf8",
-        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
-      },
-    );
+    const result = spawnSync(process.execPath, [...scriptArgs, "--", ...paths], {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      encoding: "utf8",
+      env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
+    });
     expect(result.status, result.stderr).toBe(status);
   });
 
@@ -208,7 +211,7 @@ if (process.argv.includes("diff")) {
     );
     chmodSync(gitPath, 0o755);
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
+    const result = spawnSync(process.execPath, scriptArgs, {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,
@@ -224,7 +227,7 @@ if (process.argv.includes("diff")) {
       "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
     );
 
-    const fractionalResult = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
+    const fractionalResult = spawnSync(process.execPath, scriptArgs, {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,

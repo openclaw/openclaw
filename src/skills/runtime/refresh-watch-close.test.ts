@@ -1,13 +1,45 @@
 import fs from "node:fs";
 import path from "node:path";
-import { FSWatcher } from "chokidar";
+import chokidar, { FSWatcher } from "chokidar";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNativeSkillsAncestorWatcher } from "./refresh-ancestor-native.js";
 import { joinSkillsWatcherCloses, teardownSkillsPathWatcher } from "./refresh-watch-close.js";
+import {
+  createSkillsContentWatchFactory,
+  shouldUseNativeSkillsWatcher,
+} from "./refresh-watch-transport.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("retains the first fallback close failure and absorbs its late scan error", async () => {
+  const root = roots.make("skills-fallback-close-");
+  const watcher = new FSWatcher({ ignoreInitial: true });
+  const failure = new Error("fallback close failed after removing listeners");
+  const originalClose = watcher.close.bind(watcher);
+  const close = vi.spyOn(watcher, "close").mockImplementationOnce(() => {
+    watcher.removeAllListeners();
+    throw failure;
+  });
+  const watch = vi.spyOn(chokidar, "watch").mockReturnValueOnce(watcher);
+  try {
+    const transport = createSkillsContentWatchFactory((create) => create())(
+      { path: root, depth: 0 },
+      true,
+      () => false,
+      250,
+    );
+    expect(watch).toHaveBeenCalledOnce();
+    const closing = transport.close();
+    expect(await closing).toEqual({ ok: false, error: failure });
+    expect(() => watcher.emit("error", new Error("late scan error"))).not.toThrow();
+    expect(transport.close()).toBe(closing);
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    await originalClose();
+  }
+});
 
 it("keeps retirement terminal while a replacement watcher admits the root", async () => {
   const root = roots.make("skills-retired-watcher-");
@@ -32,13 +64,19 @@ it("keeps retirement terminal while a replacement watcher admits the root", asyn
   }
 });
 
-it
-  .runIf(process.platform === "linux" && !process.versions.bun)
-  .each(["registration", "native-error"] as const)(
+it.runIf(shouldUseNativeSkillsWatcher(false)).each(["registration", "native-error"] as const)(
   "joins native ancestor closure after %s fails without a close event",
   async (failure) => {
     const root = roots.make("skills-native-close-");
     const watch = vi.spyOn(fs, "watch");
+    if (failure === "registration") {
+      watch.mockImplementationOnce(() => {
+        throw Object.assign(new Error("native registration failed"), {
+          code: "EIO",
+          syscall: "watch",
+        });
+      });
+    }
     const watchedPath = failure === "registration" ? path.join(root, "missing") : root;
     const watcher = createNativeSkillsAncestorWatcher(
       watchedPath,

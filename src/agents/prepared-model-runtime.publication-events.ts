@@ -12,7 +12,8 @@ import type {
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 type PreparedModelRuntimePublicationEvent =
-  | { phase: "invalidated" | "published"; modelFactsChanged?: false }
+  | { phase: "invalidated"; modelFactsChanged?: false; replacement?: Promise<void> }
+  | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {
@@ -111,8 +112,11 @@ export function createCatalogAttemptReporter(
       pendingKind = kind;
     },
     withRefreshStatus: (catalog) => {
+      const nativeFailed = Object.values(catalog.nativeProviderOutcomes ?? {}).some((outcomes) =>
+        outcomes.some((outcome) => outcome.status !== "ready"),
+      );
       // Provider renewal does not retry a failed native inventory.
-      if (attempt.failedProviders.native.size > 0) {
+      if (attempt.failedProviders.native.size > 0 || nativeFailed) {
         catalog.authoritative = false;
       }
       Object.defineProperty(catalog, "pendingProviders", {
@@ -126,6 +130,7 @@ export function createCatalogAttemptReporter(
         configurable: true,
         get: () =>
           hasFailedProviders() ||
+          nativeFailed ||
           catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
           undefined,
       });

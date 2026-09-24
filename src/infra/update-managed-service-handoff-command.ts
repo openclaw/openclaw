@@ -7,6 +7,7 @@ export function resolveUpdateCliArgv(params: {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   execPath?: string;
   argv1?: string;
@@ -17,6 +18,7 @@ export function resolveUpdateCliArgv(params: {
     "--json",
     ...(params.reapplyLocalOverrides ? ["--reapply-local-overrides"] : []),
     ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(params.admission ? ["--admission", params.admission] : []),
     ...(params.channel ? ["--channel", params.channel] : []),
     ...(params.tag ? ["--tag", params.tag] : []),
     ...(typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)

@@ -212,7 +212,14 @@ describe("catalog renewal metadata broadcasts", () => {
               ],
         );
         expect(harness.broadcast.mock.calls).toEqual([
-          ["chat.metadata.changed", {}, { dropIfSlow: true }],
+          [
+            "chat.metadata.changed",
+            {
+              modelCatalogChanged: true,
+              authChanged: change !== "identical" && change !== "usage" && change !== "failed",
+            },
+            { dropIfSlow: true },
+          ],
         ]);
         expect(harness.observedCatalogs).toHaveLength(1);
         const observedCatalog = harness.observedCatalogs[0];

@@ -32,10 +32,6 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
 
-function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
-  return compactRuntimeLoader.load();
-}
-
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
@@ -99,18 +95,12 @@ function resolveManualCompactContextTokenBudget(params: {
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
-  const inheritedContextTokens =
-    typeof params.liveContextTokens === "number" &&
-    Number.isFinite(params.liveContextTokens) &&
-    params.liveContextTokens > 0
-      ? Math.floor(params.liveContextTokens)
-      : undefined;
-  const liveContextTokens = inheritedContextTokens;
+  const liveContextTokens = normalizeContextTokenBudget(params.liveContextTokens);
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
   if (!model || !provider) {
-    return liveContextTokens ?? resolvePersistedContextTokens(params.persistedContextTokens);
+    return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
   }
 
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -146,10 +136,10 @@ function resolveManualCompactContextTokenBudget(params: {
     return liveContextTokens;
   }
 
-  return resolvePersistedContextTokens(params.persistedContextTokens);
+  return normalizeContextTokenBudget(params.persistedContextTokens);
 }
 
-function resolvePersistedContextTokens(value: number | undefined): number | undefined {
+function normalizeContextTokenBudget(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
@@ -209,7 +199,7 @@ export async function handleCompactCommand(
       "⚙️ Compaction unavailable (missing session id).",
     );
   }
-  const runtime = await loadCompactRuntime();
+  const runtime = await compactRuntimeLoader.load();
   const sessionId = targetSessionEntry.sessionId;
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({

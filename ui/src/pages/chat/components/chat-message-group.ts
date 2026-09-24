@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { icons } from "../../../components/icons.ts";
@@ -18,12 +19,7 @@ import {
   readToolApprovalReviews,
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
-import {
-  groupToolCards,
-  summarizeToolGroup,
-  readPreparedActivity,
-  type ToolCardGroup,
-} from "../../../lib/chat/tool-call-grouping.ts";
+import { summarizeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
@@ -222,7 +218,7 @@ export function renderActivityGroup(
   const running = opts.runActive
     ? visibleActivity.findLast((item) => item.status === "running")
     : undefined;
-  const cardGroups = groupToolCards(cards);
+  const cardGroups = groupToolCalls(cards);
   let runningOperation = running;
   if (running?.toolCallId) {
     const runningCard = cards.findLast((card) => preparedByCard.get(card) === running);
@@ -268,7 +264,7 @@ export function renderActivityGroup(
       ),
     ),
   );
-  function renderOperation(group: ToolCardGroup): unknown {
+  function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
     const { card, children } = group;
     const context = toolContexts.get(card)!;
     const expanded = opts.isToolExpanded?.(context.disclosureId) ?? false;
@@ -416,7 +412,14 @@ export function resolveMessageGroupSenderLabel(
       );
     });
     if (isError) {
-      return t("chat.messages.errorSender");
+      const isContention = group.messages.every(({ message }) => {
+        const entry = asNullableRecord(message);
+        return (
+          entry?.customType === "run-failed-before-reply" &&
+          asNullableRecord(entry.details)?.errorKind === "state_contention"
+        );
+      });
+      return t(isContention ? "common.system" : "chat.messages.errorSender");
     }
     return group.messages.every(({ message }) => workspaceResultConflictFromTranscript(message))
       ? t("chat.workspaceConflict.eventSender")

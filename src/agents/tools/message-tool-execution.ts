@@ -326,7 +326,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           }),
         );
       }
-      // `final` is a Codex app-server-only source-delivery control. It must
+      // `final` is a host-owned source-reply completion control. It must
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
@@ -369,7 +369,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         ),
         hasScheduledAuthority: Boolean(messageActionAuthorization.scheduled),
       });
-      decisions.runBoundary(() =>
+      await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           accountId: requestedAccountId,
@@ -405,7 +405,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "broadcast" &&
         (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
         requestedAccountId !== undefined;
-      const explicitAccountId = decisions.runBoundary(() =>
+      const explicitAccountId = await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           channel: unscopedExplicitBroadcast ? undefined : scope.channel,
@@ -415,7 +415,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       const broadcastAccountPlan =
         unscopedExplicitBroadcast && explicitAccountId
-          ? resolveMessageBroadcastAccountPlan({
+          ? await resolveMessageBroadcastAccountPlan({
               cfg: rawConfig,
               accountId: explicitAccountId,
             })
@@ -665,6 +665,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
+            sourceReplyFinal: requestedSourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =

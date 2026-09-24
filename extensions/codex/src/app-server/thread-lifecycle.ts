@@ -12,7 +12,6 @@ export { startOrResumeThread } from "./thread-lifecycle-run.js";
 export type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 export {
   CODEX_NATIVE_PERSONALITY_NONE,
-  resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
   resolveCodexAppServerThreadModelSelection,
   resolveCodexBindingModelProviderFallback,

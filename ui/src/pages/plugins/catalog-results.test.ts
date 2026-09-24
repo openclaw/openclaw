@@ -36,6 +36,9 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     result: { items: [plugin("tool")] },
     error: null,
     remoteError: null,
+    categoriesLoading: false,
+    categoriesError: null,
+    onRetryCategories: vi.fn(),
     categories: [
       {
         slug: "channels",
@@ -88,6 +91,18 @@ describe("renderPluginCatalogResults", () => {
     }
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it("keeps built-in filters usable while category placeholders settle", () => {
+    const props = baseProps({ categories: [], categoriesLoading: true });
+    const container = mount(props);
+    const chips = container.querySelector(".plugin-catalog-chips")!;
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
+    expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
+    expect(chips.querySelector('[role="status"]')).not.toBeNull();
+    render(renderPluginCatalogResults({ ...props, categoriesLoading: false }), container);
+    expect(chips.querySelector(".plugin-catalog-chip--skeleton")).toBeNull();
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
   });
 
   it("focuses unified search and places discovery chips before grouped sections", async () => {
