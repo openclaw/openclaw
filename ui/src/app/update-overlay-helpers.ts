@@ -6,7 +6,11 @@ import {
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
@@ -86,6 +90,7 @@ type UpdateSentinelStep = {
 };
 
 export type UpdateRestartStatusResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   activeRun?: UpdateRunRecord;
   lastRun?: UpdateRunRecord;
   sentinel?: {
@@ -189,6 +194,7 @@ function readUpdateFailureCause(
 }
 
 export type UpdateRunResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   runId?: string;
   ok?: boolean;
   result?: {
@@ -259,9 +265,14 @@ export function createUpdateStatusRefresher(params: {
           checkoutRevision++;
           const preserveSchedule = progressRevisionAtStart !== progressRevision;
           // Runs carry their own monotonic revision; legacy sentinels do not.
-          const { activeRun, lastRun, sentinel } = response;
+          const { activeRun, lastRun, sentinel, externalSupervisorGuidance } = response;
           if (!preserveSchedule || activeRun || lastRun) {
-            params.onStatus({ activeRun, lastRun, ...(!preserveSchedule ? { sentinel } : {}) });
+            params.onStatus({
+              activeRun,
+              lastRun,
+              externalSupervisorGuidance,
+              ...(!preserveSchedule ? { sentinel } : {}),
+            });
           }
           params.onCheckout(response, preserveSchedule);
           // Discovery may finish after the fast read captured an empty schedule.
@@ -304,6 +315,7 @@ export function projectUpdateStatusResponse(
   const result = projectUpdateSentinel(response.sentinel);
   return {
     failure: result?.failure ?? null,
+    externalSupervisorGuidance: response.externalSupervisorGuidance ?? null,
     updateStatusBanner: result ? result.banner : current.updateStatusBanner,
     recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
     ...projectUpdateCheckoutResponse(response, current, preserveInstall ? "install" : undefined),

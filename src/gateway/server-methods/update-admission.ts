@@ -164,3 +164,21 @@ export function createUnexpectedUpdateFailureResult(
   );
   return result;
 }
+
+/** Preserve the installation identity when policy redirects an update before mutation. */
+export function buildRefusedUpdateResult(
+  surface: { mode: UpdateRunResult["mode"]; root?: string | null },
+  status: "error" | "skipped",
+  reason: string,
+  beforeVersion?: string | null,
+): UpdateRunResult {
+  return {
+    status,
+    mode: surface.mode,
+    ...(surface.root ? { root: surface.root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  };
+}

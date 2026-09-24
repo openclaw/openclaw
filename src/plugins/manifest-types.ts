@@ -8,6 +8,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginManifestSupervisorGuidance } from "./supervisor-guidance.js";
 
 /** UI hint metadata for plugin config schema fields. */
 export type PluginConfigUiHint = {
@@ -506,6 +507,8 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  /** Configuration-backed deployment copy available before plugin runtime activation. */
+  supervisorGuidance?: PluginManifestSupervisorGuidance;
   themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;

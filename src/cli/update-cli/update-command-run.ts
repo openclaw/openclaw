@@ -71,6 +71,7 @@ import {
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -631,7 +632,9 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   }
 
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
-    throw new Error(formatExternalSupervisorUpdateRequired());
+    throw new Error(
+      formatExternalSupervisorUpdateRequired(await resolveExternalSupervisorGuidance("update")),
+    );
   }
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });

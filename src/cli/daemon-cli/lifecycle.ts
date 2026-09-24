@@ -31,6 +31,7 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -227,7 +228,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   }
   if (!signaled) {
     fail(
-      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway")}`,
+      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway", await resolveExternalSupervisorGuidance("start"))}`,
     );
     return false;
   }
@@ -256,7 +257,11 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
 
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("uninstall the gateway service");
+  assertGatewayServiceMutationAllowed(
+    "uninstall the gateway service",
+    process.env,
+    await resolveExternalSupervisorGuidance("uninstall"),
+  );
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -268,7 +273,11 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("start the gateway");
+  assertGatewayServiceMutationAllowed(
+    "start the gateway",
+    process.env,
+    await resolveExternalSupervisorGuidance("start"),
+  );
   const service = resolveGatewayService();
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   return await runServiceStart({
@@ -318,8 +327,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     fail(NON_INTERACTIVE_GATEWAY_STOP_MESSAGE);
     return;
   }
+  const guidance = await resolveExternalSupervisorGuidance("stop");
   assertGatewayServiceUpdateCurrent();
-  assertGatewayServiceMutationAllowed("stop the gateway");
+  assertGatewayServiceMutationAllowed("stop the gateway", process.env, guidance);
   const service = resolveGatewayService();
   return await runServiceStop({
     serviceNoun: "Gateway",
@@ -368,7 +378,11 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
-    assertGatewayServiceMutationAllowed("restart the gateway");
+    assertGatewayServiceMutationAllowed(
+      "restart the gateway",
+      process.env,
+      await resolveExternalSupervisorGuidance("restart"),
+    );
     if (opts.safe) {
       throw new Error("--preserve-definition requires a native restart without --safe");
     }

@@ -11,6 +11,7 @@ import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { renderExternalSupervisorGuidance } from "../components/external-supervisor-guidance.ts";
 import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -206,6 +207,7 @@ export async function confirmAndStartUpdateRuntime(
                     ></openclaw-update-run-view>`
                   : nothing
               }
+              ${(current.kind === "run" && current.run.reason === "external-supervisor-update-required") || current.kind === "failed" ? renderExternalSupervisorGuidance(latestProgress?.externalSupervisorGuidance) : nothing}
               <div class="exec-approval-actions">
                 ${
                   finished || showRecovery

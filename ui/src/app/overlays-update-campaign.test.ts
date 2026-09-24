@@ -246,6 +246,12 @@ describe("application update campaign overlays", () => {
   it.each([false, true])(
     "discards an explicit refresh after administrator access is revoked (restored: %s)",
     async (restoreAdmin) => {
+      const externalSupervisorGuidance = {
+        version: 1,
+        action: "update",
+        name: "Example Fleet",
+        command: "fleet update example",
+      };
       const updateStatus = deferred<unknown>();
       let statusReads = 0;
       const request = vi.fn<RequestFn>((method, params) => {
@@ -258,11 +264,12 @@ describe("application update campaign overlays", () => {
         statusReads += 1;
         return statusReads === 1
           ? Promise.resolve({
+              externalSupervisorGuidance,
               sentinel: {
                 kind: "update",
-                status: "error",
+                status: "skipped",
                 ts: 500,
-                stats: { reason: "retained-admin-only-attempt" },
+                stats: { reason: "external-supervisor-update-required" },
               },
             })
           : Promise.resolve({});
@@ -271,7 +278,10 @@ describe("application update campaign overlays", () => {
       const overlays = createApplicationOverlays(harness.gateway);
       try {
         await flushMicrotasks();
-        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("retained-admin-only-attempt");
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe(
+          "external-supervisor-update-required",
+        );
+        expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
         const refresh = overlays.refreshUpdateStatus();
         harness.update({
           hello: {
@@ -281,6 +291,7 @@ describe("application update campaign overlays", () => {
         });
         expect(overlays.snapshot.updateStatusBanner).toBeNull();
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
         if (restoreAdmin) {
           harness.update({
             hello: {
@@ -290,17 +301,19 @@ describe("application update campaign overlays", () => {
           });
         }
         updateStatus.resolve({
+          externalSupervisorGuidance,
           sentinel: {
             kind: "update",
-            status: "error",
+            status: "skipped",
             ts: 62_000,
-            stats: { reason: "admin-only-attempt" },
+            stats: { reason: "external-supervisor-update-required" },
           },
         });
         expect(await refresh).toBe(false);
 
         expect(overlays.snapshot.updateStatusBanner).toBeNull();
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
         expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
       } finally {
         updateStatus.resolve({});

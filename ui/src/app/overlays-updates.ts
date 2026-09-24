@@ -71,6 +71,7 @@ export function createApplicationUpdateOverlays(
     updateStatusBanner: null,
     updateStatusCheckBanner: null,
     recordedUpdateAttempt: null,
+    externalSupervisorGuidance: null,
     diagnosableUpdateFailureId: null,
     reportableUpdateFailureId: null,
     updateFailureReportBusy: false,
@@ -424,6 +425,7 @@ export function createApplicationUpdateOverlays(
         updateStatusBanner: null,
         updateStatusCheckBanner: null,
         recordedUpdateAttempt: null,
+        externalSupervisorGuidance: null,
         heldUpdateCampaignId: null,
       };
     }
@@ -594,6 +596,7 @@ export function createApplicationUpdateOverlays(
         updateStatusBanner: null,
         updateStatusCheckBanner: null,
         recordedUpdateAttempt: null,
+        externalSupervisorGuidance: null,
       };
       publish();
       const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
@@ -615,6 +618,10 @@ export function createApplicationUpdateOverlays(
         if (!isCurrent()) {
           return;
         }
+        snapshot = {
+          ...snapshot,
+          externalSupervisorGuidance: response.externalSupervisorGuidance ?? null,
+        };
         if (response.runId) {
           runId = response.runId;
           await refreshRun();

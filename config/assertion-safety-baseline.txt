@@ -2189,7 +2189,6 @@ src/commands/doctor-auth-profile-config.ts	4
 src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
-src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	5
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1

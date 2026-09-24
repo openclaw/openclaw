@@ -1,7 +1,4 @@
 /** Doctor repairs for installed gateway service config and duplicate legacy services. */
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -16,7 +13,6 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
-import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
@@ -42,6 +38,7 @@ import { isSystemdUnitActive, uninstallLegacySystemdUnits } from "../daemon/syst
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -55,6 +52,7 @@ import {
   resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
+import { cleanupLegacyLaunchdService } from "./doctor-gateway-legacy-launchd.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -82,31 +80,6 @@ type GatewayServiceConfigRepairOptions = {
   serviceMaintenance?: DoctorGatewayInstallationMaintenance;
 };
 
-const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
-const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
-async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
-  const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const remainingMs = Math.max(1, deadline - Date.now());
-    const probe = await execLaunchctl(
-      ["print", serviceTarget],
-      Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
-    );
-    if (probe.code !== 0) {
-      // A successful print (including a stopped job) means launchd still owns
-      // the label. Unknown errors and probe timeouts stay fail-closed.
-      return isLaunchctlNotLoaded(probe);
-    }
-    const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
-    if (delayMs <= 0) {
-      break;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-  }
-  return false;
-}
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function extractDetailPath(detail: string, prefix: string): string | null {
@@ -177,45 +150,6 @@ export function extraGatewayServiceToRepairEffects(
       dryRunSafe: false,
     },
   ];
-}
-
-async function cleanupLegacyLaunchdService(params: {
-  label: string;
-  plistPath: string;
-}): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
-  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await execLaunchctl(["bootout", domain, params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
-  await execLaunchctl(["unload", params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
-
-  // bootout/unload can return before launchd finishes stopping the job. A plist
-  // must stay in place unless a bounded print probe observes the label gone.
-  if (!(await confirmLegacyLaunchdServiceUnloaded(`${domain}/${params.label}`))) {
-    return { status: "failed", reason: "launchctl could not confirm unload" };
-  }
-
-  const trashDir = path.join(os.homedir(), ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
-  try {
-    await fs.access(params.plistPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { status: "removed" };
-    }
-    return { status: "failed", reason: "could not inspect plist" };
-  }
-
-  const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
-  try {
-    await fs.rename(params.plistPath, dest);
-    return { status: "removed", destination: dest };
-  } catch {
-    return { status: "failed", reason: "could not move plist" };
-  }
 }
 
 function classifyLegacyServices(legacyServices: ExtraGatewayService[]): {
@@ -572,7 +506,13 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), "Gateway service config");
+    note(
+      formatServiceRepairDeferredNote(
+        undefined,
+        await resolveExternalSupervisorGuidance("repair", { config: cfg }),
+      ),
+      "Gateway service config",
+    );
     return cfg;
   }
 
@@ -739,7 +679,13 @@ export async function maybeScanExtraGatewayServices(
     const serviceRepairPolicy = resolveServiceRepairPolicy();
     const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
+      note(
+        formatServiceRepairDeferredNote(
+          undefined,
+          await resolveExternalSupervisorGuidance("repair"),
+        ),
+        "Legacy gateway cleanup skipped",
+      );
     }
     const shouldRemove = serviceRepairDeferred
       ? false

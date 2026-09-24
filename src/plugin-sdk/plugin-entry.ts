@@ -257,3 +257,11 @@ export function definePluginEntry({
     register,
   };
 }
+
+export { parseSupervisorGuidance } from "../plugins/supervisor-guidance.js";
+export type {
+  PluginManifestSupervisorGuidance,
+  SupervisorAction,
+  SupervisorDisplayGuidance,
+  SupervisorGuidanceV1,
+} from "../plugins/supervisor-guidance.js";

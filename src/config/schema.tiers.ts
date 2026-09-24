@@ -145,7 +145,7 @@ nodeHost.mcp.servers.*.command nodeHost.mcp.servers.*.env
 nodeHost.mcp.servers.*.headers nodeHost.mcp.servers.*.transport
 nodeHost.mcp.servers.*.url plugins.allow plugins.entries.*.apiKey
 plugins.entries.*.config plugins.entries.*.enabled plugins.entries.*.env
-plugins.slots.contextEngine plugins.slots.memory secrets.providers.*.command
+plugins.slots.contextEngine plugins.slots.memory plugins.slots.supervisorGuidance secrets.providers.*.command
 secrets.providers.*.path secrets.providers.*.source skills.allowBundled
 skills.entries.*.apiKey skills.entries.*.config skills.entries.*.enabled
 skills.entries.*.env skills.install.allowUploadedArchives skills.install.nodeManager

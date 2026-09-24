@@ -24,6 +24,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
+  "plugins.slots.supervisorGuidance":
+    "Selects the plugin supplying display-only external-supervisor instructions. Leave unset or use none to retain built-in guidance; this does not change lifecycle authority or execute commands.",
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.entries":

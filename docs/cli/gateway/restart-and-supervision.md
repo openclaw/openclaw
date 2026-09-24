@@ -177,6 +177,13 @@ The claim is idempotent for the same stable manager identifier and refuses a dif
 
 For upgrades and rollbacks, have the supervisor create a consolidated WAL-consistent copied snapshot with no SQLite sidecars, then run the target release's own `openclaw database preflight <copied-state.sqlite> --json` before activation. Numeric schema versions alone do not prove that a same-version additive shape is compatible. See [Database schemas](/reference/database-schemas).
 
+Deployment plugins can replace the displayed supervisor instructions with
+[manifest-backed supervisor guidance](/plugins/manifest/surfaces#supervisor-guidance).
+Select an enabled plugin using `plugins.slots.supervisorGuidance`; configure its
+name, optional command location, and action commands in the plugin's declared
+config property. This changes copy only. Without valid guidance for the action,
+OpenClaw retains its built-in instructions and existing lifecycle policy.
+
 `OPENCLAW_SERVICE_REPAIR_POLICY=external` remains a separate Doctor repair policy. It does not declare runtime ownership; supervisors that need both behaviors should set both variables.
 
 External supervisors can negotiate and consume restart handoffs through the hidden machine contract:

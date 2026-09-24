@@ -22,6 +22,7 @@ import {
   getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
+import { renderExternalSupervisorGuidance } from "../../components/external-supervisor-guidance.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -135,6 +136,10 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
             description: props.update.updateStatusBanner.text,
           })
         : nothing,
+    (run?.reason ?? props.update.recordedUpdateAttempt?.reason) ===
+    "external-supervisor-update-required"
+      ? renderExternalSupervisorGuidance(props.update.externalSupervisorGuidance)
+      : nothing,
     ...(!failed && !readError
       ? []
       : [

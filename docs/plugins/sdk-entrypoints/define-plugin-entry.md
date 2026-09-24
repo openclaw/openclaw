@@ -292,3 +292,12 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+## Supervisor guidance contracts
+
+`openclaw/plugin-sdk/plugin-entry` exports `SupervisorAction`,
+`SupervisorGuidanceV1`, `SupervisorDisplayGuidance`,
+`PluginManifestSupervisorGuidance`, and `parseSupervisorGuidance` for deployment
+plugins. Declare the configuration property through the manifest; no runtime
+registration callback is required. See [Supervisor guidance](/plugins/manifest/surfaces#supervisor-guidance)
+for configuration, validation limits, fallback behavior, and lifecycle policy.

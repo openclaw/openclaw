@@ -643,3 +643,94 @@ Use `preferOver` when your plugin is the preferred owner for a channel id that a
 When `channels.chat` is configured, OpenClaw considers both the channel id and the preferred plugin id. If the lower-priority plugin was only selected because it is bundled or enabled by default, OpenClaw disables it in the effective runtime config so one plugin owns the channel and its tools. Explicit user selection still wins: if the user explicitly enables both plugins (via `plugins.allow` or a material `plugins.entries` config), OpenClaw preserves that choice and reports duplicate channel/tool diagnostics instead of silently changing the requested plugin set.
 
 Keep `preferOver` scoped to plugin ids that can really provide the same channel. It is not a general priority field and it does not rename user config keys.
+
+## Supervisor guidance
+
+A deployment plugin can supply the instructions OpenClaw displays when an external
+supervisor owns service management. Declare the immediate configuration property
+containing the guidance in `openclaw.plugin.json`:
+
+```json
+{
+  "id": "compose-deployment",
+  "supervisorGuidance": { "version": 1, "configKey": "guidance" },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "guidance": { "type": "object" }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "guidance": {
+      "label": "Supervisor guidance",
+      "help": "Display-only commands for managing this deployment from its Docker host."
+    }
+  }
+}
+```
+
+Then select the installed plugin and configure its copy in `openclaw.json`:
+
+```json5
+{
+  plugins: {
+    slots: { supervisorGuidance: "compose-deployment" },
+    entries: {
+      "compose-deployment": {
+        enabled: true,
+        config: {
+          guidance: {
+            version: 1,
+            name: "Docker Compose",
+            runFrom: "Docker host",
+            actions: {
+              restart: "docker compose restart gateway",
+              update: "docker compose pull gateway && docker compose up -d gateway",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Set `OPENCLAW_SUPERVISOR_MODE=external` in the Gateway and CLI process environment
+as well. Plugin selection supplies copy, not supervisor ownership or permission
+to manage the service. Existing enablement, allowlist, and denylist policy still
+applies; add the plugin to `plugins.allow` if your deployment uses an allowlist.
+
+The host reads the declaration through plugin metadata without importing plugin
+runtime code. `configKey` is a literal immediate own property, not a dotted path.
+The declaration accepts only `version` and `configKey`; invalid declarations are
+ignored. The `version` must be `1`, and `configKey` must be a nonempty string of at
+most 128 UTF-8 bytes; reserved prototype keys are rejected.
+
+The guidance object accepts only:
+
+| Field     | Required | Meaning                                                                                                                                      |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version` | Yes      | `1`.                                                                                                                                         |
+| `name`    | Yes      | Supervisor display name, at most 128 UTF-8 bytes.                                                                                            |
+| `runFrom` | No       | Where to run commands, at most 256 UTF-8 bytes.                                                                                              |
+| `actions` | Yes      | Nonempty map of `start`, `stop`, `restart`, `install`, `uninstall`, `repair`, or `update` to command strings, each at most 1024 UTF-8 bytes. |
+
+The serialized guidance is limited to 8192 UTF-8 bytes. Strings must be nonempty,
+without surrounding whitespace, control or format characters, Unicode line or
+paragraph separators, or unpaired surrogates. Unknown fields or invalid values
+reject the entire guidance object. Commands retain their exact bytes and are
+shown as literal text; OpenClaw never executes them or adds them to the system
+prompt. Keep secrets out of these user-visible values.
+
+An unset slot or `"none"`, unavailable or disabled plugin, invalid guidance, or
+omitted action preserves the existing built-in instructions. Guidance does not
+enable self-update or native service management under external supervision.
+Deployment configuration should be maintained by its supervisor so copying an
+installation does not carry stale host-specific commands to a new deployment.
+
+Plugin authors can import `SupervisorAction`, `SupervisorGuidanceV1`,
+`SupervisorDisplayGuidance`, `PluginManifestSupervisorGuidance`, and
+`parseSupervisorGuidance` from `openclaw/plugin-sdk/plugin-entry`. The parser
+returns validated guidance or `undefined`; it neither executes commands nor
+resolves configuration. See [Gateway supervision](/cli/gateway/restart-and-supervision).
