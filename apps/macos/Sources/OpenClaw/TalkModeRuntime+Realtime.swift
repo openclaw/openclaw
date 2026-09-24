@@ -422,7 +422,8 @@ extension TalkModeRuntime {
             provider: realtimeProvider,
             model: realtimeModelId,
             voice: realtimeSpeakerVoice,
-            localStopPhrases: stopPhrases)
+            localStopPhrases: stopPhrases,
+            speechLocaleID: self.speechLocaleID)
         #if DEBUG
         let audioCaptureProvider = self.realtimeAudioCaptureProvider
         #endif

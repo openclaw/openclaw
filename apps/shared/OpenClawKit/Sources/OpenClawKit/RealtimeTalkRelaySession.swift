@@ -140,6 +140,7 @@ public final class RealtimeTalkRelaySession {
         public let model: String?
         public let voice: String?
         public let localStopPhrases: [String]?
+        public let speechLocaleID: String?
         public let supportsVoiceSelection: Bool
         public let voiceChangeId: String?
 
@@ -149,6 +150,7 @@ public final class RealtimeTalkRelaySession {
             model: String?,
             voice: String?,
             localStopPhrases: [String]? = nil,
+            speechLocaleID: String? = nil,
             supportsVoiceSelection: Bool = false,
             voiceChangeId: String? = nil)
         {
@@ -157,6 +159,7 @@ public final class RealtimeTalkRelaySession {
             self.model = model
             self.voice = voice
             self.localStopPhrases = localStopPhrases
+            self.speechLocaleID = speechLocaleID
             self.supportsVoiceSelection = supportsVoiceSelection
             self.voiceChangeId = voiceChangeId
         }
@@ -495,6 +498,9 @@ public final class RealtimeTalkRelaySession {
         if let voice = self.nonEmpty(self.options.voice) {
             payload["voice"] = AnyCodable(voice)
         }
+        if let language = TalkConfigParsing.explicitRealtimeTranscriptionLanguage(self.options.speechLocaleID) {
+            payload["language"] = AnyCodable(language)
+        }
         if self.options.provider == "openai", self.options.model == "gpt-realtime-2.1",
            let phrases = self.options.localStopPhrases, RealtimeTalkTranscriptionHints.accepts(phrases)
         {
@@ -512,7 +518,14 @@ public final class RealtimeTalkRelaySession {
             if let startupIssue {
                 throw Self.startupFailureError(startupIssue)
             }
-            if let catalog, RealtimeTalkTranscriptionHints.isSupported(catalog: catalog) {
+            let supported = catalog.map { RealtimeTalkTranscriptionHints.isSupported(catalog: $0) } ?? false
+            self.logger.info(
+                """
+                talk realtime transcription hints catalogAvailable=\(catalog != nil, privacy: .public) \
+                supported=\(supported, privacy: .public) \
+                sentPhraseCount=\(supported ? phrases.count : 0, privacy: .public)
+                """)
+            if supported {
                 payload["transcriptionHints"] = AnyCodable([
                     "version": AnyCodable(1),
                     "kind": AnyCodable("local-stop-phrases"),

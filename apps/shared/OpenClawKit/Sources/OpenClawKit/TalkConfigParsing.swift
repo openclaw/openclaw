@@ -109,6 +109,18 @@ public enum TalkConfigParsing {
         return normalized == automaticID ? nil : normalized
     }
 
+    /// Forward only an explicitly configured Talk locale; device and wake defaults
+    /// must not turn automatic cloud transcription into a fixed-language session.
+    public static func explicitRealtimeTranscriptionLanguage(_ speechLocaleID: String?) -> String? {
+        guard let locale = self.normalizedExplicitSpeechLocaleID(speechLocaleID),
+              locale.range(of: #"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"#, options: .regularExpression) != nil,
+              let language = Locale(identifier: locale).language.languageCode,
+              language.identifier.range(of: #"^[a-z]{2}$"#, options: .regularExpression) != nil,
+              Locale.LanguageCode.isoLanguageCodes.contains(language)
+        else { return nil }
+        return language.identifier.lowercased()
+    }
+
     public static func resolvedSpeechRecognitionLocaleID(
         preferredLocaleIDs: [String?],
         fallbackLocaleID: String = "en-US",

@@ -69,6 +69,7 @@ struct RealtimeTalkRelaySessionHintsTests {
         model: String? = "gpt-realtime-2.1",
         supportsVoiceSelection: Bool = false,
         voiceChangeId: String? = nil,
+        speechLocaleID: String? = nil,
         catalog: Data?) async throws -> [RealtimeRelayStartupRequest]
     {
         let requests = RealtimeRelayStartupRequestLog()
@@ -85,8 +86,14 @@ struct RealtimeTalkRelaySessionHintsTests {
                     throw HintTestError.unavailable
                 }),
             options: .init(
-                sessionKey: "main", provider: provider, model: model, voice: nil, localStopPhrases: phrases,
-                supportsVoiceSelection: supportsVoiceSelection, voiceChangeId: voiceChangeId),
+                sessionKey: "main",
+                provider: provider,
+                model: model,
+                voice: nil,
+                localStopPhrases: phrases,
+                speechLocaleID: speechLocaleID,
+                supportsVoiceSelection: supportsVoiceSelection,
+                voiceChangeId: voiceChangeId),
             audioCapture: capture,
             pcmPlayer: UnusedPCMStreamingAudioPlayer(),
             onStatus: { _ in },
@@ -100,6 +107,21 @@ struct RealtimeTalkRelaySessionHintsTests {
         session.stop()
         #expect(!capture.isStarted)
         return await requests.snapshot()
+    }
+
+    @Test func `explicit Talk language reaches relay while automatic replacement clears it`() async throws {
+        let cases: [(String?, String?)] = [
+            ("en-US", "en"), (" ru_RU ", "ru"), ("zh-Hant-TW", "zh"),
+            (nil, nil), ("", nil), ("auto", nil), ("AUTO", nil), ("und", nil),
+            ("fil-PH", nil), ("haw-US", nil),
+            ("not a locale", nil), ("xx-XX", nil), ("en-US", "en"), (nil, nil),
+        ]
+        for (locale, expected) in cases {
+            let recorded = try await self.recordCreate(phrases: nil, speechLocaleID: locale, catalog: nil)
+            #expect(recorded.map(\.method) == ["talk.session.create"])
+            #expect(recorded.last?.params?["language"]?.stringValue == expected)
+            #expect(recorded.last?.params?["transcriptionHints"] == nil)
+        }
     }
 
     @Test func `negotiated custom phrases reach the actual create request unchanged`() async throws {

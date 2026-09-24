@@ -4,6 +4,33 @@ import Testing
 @testable import OpenClawKit
 
 extension TalkModeRuntimeSpeechTests {
+    @Test @MainActor func `relay language follows explicit Talk config and clears on replacement`() async throws {
+        try #require(AppStateStore.shared.isPreview)
+        let previousWakeLocale = AppStateStore.shared.voiceWakeLocaleID
+        defer { AppStateStore.shared.voiceWakeLocaleID = previousWakeLocale }
+        AppStateStore.shared.voiceWakeLocaleID = "ja-JP"
+        let requests = RuntimeTestRelayRequestLog()
+        let locales: [String?] = ["en-US", "ru_RU", nil, "auto"]
+        let bootstraps = try locales.map { locale in
+            try makeRuntimeTestBootstrap(requests: requests, speechLocaleID: locale)
+        }
+        let sequence = RuntimeTestBootstrapSequence(bootstraps: bootstraps)
+        let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { try await sequence.next() })
+        await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
+        for _ in locales {
+            let lifecycle = await runtime._test_prepareEnabledLifecycle()
+            await runtime._test_enableRealtimeRelaySelection()
+            do {
+                try await runtime.startRealtimeRelay(generation: lifecycle)
+            } catch {
+                await runtime.setEnabled(false)
+                throw error
+            }
+            await runtime.setEnabled(false)
+        }
+        #expect(await requests.createdLanguages() == ["en", "ru", nil, nil])
+    }
+
     @Test @MainActor func `relay hints use current preferences and never retain command authority`() async throws {
         try #require(AppStateStore.shared.isPreview)
         let previous = AppStateStore.shared.talkStopPhrases

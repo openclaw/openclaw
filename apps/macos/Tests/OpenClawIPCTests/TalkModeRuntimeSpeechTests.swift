@@ -123,12 +123,14 @@ actor RuntimeTestRelayRequestLog {
     private var methods: [String] = []
     private var sessionIds: [String?] = []
     private var hintPhrases: [[String]?] = []
+    private var languages: [String?] = []
     private nonisolated let changed = RuntimeTestSignal<Void>()
 
     func record(method: String, params: [String: AnyCodable]?) {
         self.methods.append(method)
         self.sessionIds.append(params?["sessionId"]?.stringValue)
         if method == "talk.session.create" {
+            self.languages.append(params?["language"]?.stringValue)
             self.hintPhrases.append(params?["transcriptionHints"]?.dictionaryValue?["phrases"]?
                 .arrayValue?.compactMap(\.stringValue))
         }
@@ -137,6 +139,10 @@ actor RuntimeTestRelayRequestLog {
 
     func snapshot() -> (methods: [String], sessionIds: [String?]) {
         (self.methods, self.sessionIds)
+    }
+
+    func createdLanguages() -> [String?] {
+        self.languages
     }
 
     func createdHintPhrases() -> [[String]?] {
@@ -347,7 +353,8 @@ private func makeRuntimeTestRealtimeSession(
 
 private func makeRuntimeTestConfigSnapshot(
     sessionKey: String = "main",
-    realtimeModel: String = "gpt-realtime-2") -> ConfigSnapshot
+    realtimeModel: String = "gpt-realtime-2",
+    speechLocaleID: String? = nil) -> ConfigSnapshot
 {
     ConfigSnapshot(
         path: nil,
@@ -359,6 +366,7 @@ private func makeRuntimeTestConfigSnapshot(
         config: [
             "session": AnyCodable(["mainKey": AnyCodable(sessionKey)]),
             "talk": AnyCodable([
+                "speechLocale": AnyCodable(speechLocaleID),
                 "realtime": AnyCodable([
                     "provider": AnyCodable("openai"),
                     "providers": AnyCodable([
@@ -393,6 +401,7 @@ func makeRuntimeTestBootstrap(
     sessionKey: String = "main",
     realtimeModel: String = "gpt-realtime-2",
     catalog: Data? = nil,
+    speechLocaleID: String? = nil,
     eventChannel: (stream: AsyncStream<EventFrame>, continuation: AsyncStream<EventFrame>.Continuation)? = nil) throws
     -> GatewayConnection.RealtimeTalkBootstrap
 {
@@ -438,11 +447,12 @@ func makeRuntimeTestBootstrap(
         transport: transport,
         configSnapshot: makeRuntimeTestConfigSnapshot(
             sessionKey: sessionKey,
-            realtimeModel: realtimeModel),
+            realtimeModel: realtimeModel,
+            speechLocaleID: speechLocaleID),
         sessionKey: sessionKey)
 }
 
-private actor RuntimeTestBootstrapSequence {
+actor RuntimeTestBootstrapSequence {
     private var bootstraps: [GatewayConnection.RealtimeTalkBootstrap]
     private let firstBarrier: RuntimeContinuationBarrier?
     private var count = 0
@@ -1230,7 +1240,7 @@ struct TalkModeRuntimeSpeechTests {
             relayGeneration: relayGeneration,
             status: "native",
             recoverySuggestion: recovery))
-        let expected = ["native", recovery].compactMap { $0 }.joined(separator: " ")
+        let expected = ["native", recovery].compactMap(\.self).joined(separator: " ")
         #expect(TalkModeController.shared.partialTranscript == expected)
         #expect(await runtime.phase == .listening)
         #expect(TalkModeController.shared.phase == .listening)
@@ -1259,7 +1269,7 @@ struct TalkModeRuntimeSpeechTests {
         #expect(await runtime.phase == .idle)
         #expect(TalkModeController.shared.phase == .idle)
         let expected = [String(localized: "Realtime unavailable — native speech could not start"), recovery]
-            .compactMap { $0 }.joined(separator: " ")
+            .compactMap(\.self).joined(separator: " ")
         #expect(TalkModeController.shared.partialTranscript == expected)
 
         await runtime.setEnabled(false)
