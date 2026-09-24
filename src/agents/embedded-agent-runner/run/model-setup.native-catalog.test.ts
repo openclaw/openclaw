@@ -7,8 +7,8 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import type { AgentHarness } from "../../harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../model-catalog.types.js";
 import {
+  bindPreparedModelRuntimeAuth,
   copyPreparedModelRuntimeAuthBindings,
-  setPreparedModelRuntimeAuthStore,
 } from "../../prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -128,7 +128,7 @@ describe("first-turn native catalog model setup", () => {
           throw new Error("Native model setup must not create execution stores");
         },
       };
-      setPreparedModelRuntimeAuthStore(ownerSnapshot, { version: 1, profiles: {} });
+      bindPreparedModelRuntimeAuth(ownerSnapshot, { store: { version: 1, profiles: {} } });
       // Run setup enriches the owner snapshot with per-run fields. Private auth bindings
       // must follow that clone for first-turn native readiness decisions.
       const snapshot = Object.freeze({

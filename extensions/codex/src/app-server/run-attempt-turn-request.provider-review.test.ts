@@ -119,7 +119,8 @@ async function prepare(
   acknowledgment?: Acknowledgment,
   native = createNativeThread(),
   usesSupervisionConnection = true,
-  assertNativeModelSelectionCurrent?: () => void,
+  assertNativeModelSelectionCurrent?: (attempt?: { authBindingFingerprint?: string }) => void,
+  authBindingFingerprint?: string,
 ) {
   const writtenMethods: string[] = [];
   const request = vi.fn(
@@ -174,6 +175,9 @@ async function prepare(
         workspaceBootstrapContext: { promptContext: "workspace reference" },
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {
+          ...(authBindingFingerprint
+            ? { preparedAuthBinding: { fingerprint: authBindingFingerprint } }
+            : {}),
           runtimeParams: { model: { api: "openai-chatgpt-responses" } },
           connection: {
             params: {
@@ -306,8 +310,9 @@ describe("native acknowledged turn requests", () => {
   it("writes turn/start after profile auth applies its expected account revision", async () => {
     let profileAuthRevision = 1;
     let clientRegistered = true;
-    const assertProfileSelectionCurrent = vi.fn(() => {
-      if (!clientRegistered) {
+    const selectedProfileFingerprint = "synthetic-profile-binding";
+    const assertProfileSelectionCurrent = vi.fn((attempt?: { authBindingFingerprint?: string }) => {
+      if (!clientRegistered || attempt?.authBindingFingerprint !== selectedProfileFingerprint) {
         throw new Error("Codex native model catalog selection is no longer current");
       }
     });
@@ -316,15 +321,50 @@ describe("native acknowledged turn requests", () => {
       createNativeThread(),
       true,
       assertProfileSelectionCurrent,
+      selectedProfileFingerprint,
     );
 
     profileAuthRevision += 1;
     expect(profileAuthRevision).toBe(2);
     await attempt.prepared.startCodexTurn();
-    expect(assertProfileSelectionCurrent).toHaveBeenCalledOnce();
+    expect(assertProfileSelectionCurrent).toHaveBeenCalledWith({
+      authBindingFingerprint: selectedProfileFingerprint,
+    });
     expect(attempt.writtenMethods).toContain("turn/start");
     clientRegistered = false;
   });
+
+  it.each(["reassigned", "missing/revoked"] as const)(
+    "rejects a %s selected profile binding before writing turn/start",
+    async (change) => {
+      const selectedProfileFingerprint = "synthetic-profile-binding-a";
+      const attemptFingerprint =
+        change === "reassigned" ? "synthetic-profile-binding-b" : undefined;
+      const assertProfileSelectionCurrent = vi.fn(
+        (attempt?: { authBindingFingerprint?: string }) => {
+          if (attempt?.authBindingFingerprint !== selectedProfileFingerprint) {
+            throw new Error("Codex native model catalog selection is no longer current");
+          }
+        },
+      );
+      const attempt = await prepare(
+        undefined,
+        createNativeThread(),
+        true,
+        assertProfileSelectionCurrent,
+        attemptFingerprint,
+      );
+
+      await expect(attempt.prepared.startCodexTurn()).rejects.toThrow(
+        "Codex native model catalog selection is no longer current",
+      );
+      expect(assertProfileSelectionCurrent).toHaveBeenCalledWith({
+        authBindingFingerprint: attemptFingerprint,
+      });
+      expect(attempt.writtenMethods).not.toContain("turn/start");
+      expect(cleanup.interrupt).not.toHaveBeenCalled();
+    },
+  );
 
   it.each<SelectionChange>(["thread", "thread ID"])(
     "settles the dispatched thread when its %s changes before the accepted response",

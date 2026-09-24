@@ -3,6 +3,7 @@ import { sealSecretSentinel } from "../secrets/sentinel.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintAuthProfileOwnerShape,
+  fingerprintAuthProfileStoreEntry,
   fingerprintAwsSdkRuntimeOwner,
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedAuthProfileCredential,
@@ -257,6 +258,22 @@ describe("execution auth binding fingerprints", () => {
         credential: undefined,
       }),
     ).toBeUndefined();
+  });
+
+  it("revalidates SecretRef profiles by non-secret reference identity", () => {
+    const fingerprint = (keyRef: string) =>
+      fingerprintAuthProfileStoreEntry({
+        profileId: "openai:secret-ref",
+        credential: {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: keyRef },
+        },
+      });
+
+    expect(fingerprint("OPENAI_KEY")).toBeDefined();
+    expect(fingerprint("OPENAI_KEY")).toBe(fingerprint("OPENAI_KEY"));
+    expect(fingerprint("OPENAI_KEY")).not.toBe(fingerprint("REPLACED_KEY"));
   });
 
   it("binds AWS SDK owners only to concrete bearer and static credentials", () => {

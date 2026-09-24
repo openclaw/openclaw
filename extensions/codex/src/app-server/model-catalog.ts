@@ -1,5 +1,9 @@
-import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  fingerprintAuthProfileStoreEntry,
+  type AgentHarnessModelCatalogParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
@@ -59,6 +63,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     accountType?: "apiKey" | "chatgpt";
     authMode?: string;
     profileAuthSelected?: boolean;
+    authProfileId?: string;
+    authProfileOwnerFingerprint?: string;
+    authBindingFingerprint?: string;
     isClientCurrent?: () => boolean;
     isCurrent?: () => boolean;
   };
@@ -81,6 +88,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.pluginConfig === pluginConfig &&
         observation.models?.has(params.modelId) &&
         observation.accountType &&
+        (!observation.profileAuthSelected || observation.authBindingFingerprint !== undefined) &&
         observation.isCurrent?.()
         ? {
             accountType: observation.accountType,
@@ -93,6 +101,31 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       pluginConfig: unknown,
     ) {
       const observation = scopes.get(params.config)?.get(scopeKey(params));
+      const isLiveProfileOwnerCurrent = () => {
+        if (!observation?.profileAuthSelected) {
+          return true;
+        }
+        const authProfileId = observation.authProfileId;
+        const authProfileOwnerFingerprint = observation.authProfileOwnerFingerprint;
+        if (!authProfileId || !authProfileOwnerFingerprint) {
+          return false;
+        }
+        try {
+          const store = resolveCodexAppServerAuthProfileStore({
+            agentDir: params.agentDir,
+            authProfileId,
+            config: params.config,
+          });
+          return (
+            fingerprintAuthProfileStoreEntry({
+              profileId: authProfileId,
+              credential: store.profiles[authProfileId],
+            }) === authProfileOwnerFingerprint
+          );
+        } catch {
+          return false;
+        }
+      };
       const isCurrent = () =>
         !disposed &&
         params.provider === "openai" &&
@@ -102,13 +135,19 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.models?.has(params.modelId) === true &&
         observation.accountType !== undefined &&
         (observation.profileAuthSelected
-          ? observation.isClientCurrent?.() === true
+          ? observation.isClientCurrent?.() === true &&
+            observation.authBindingFingerprint !== undefined &&
+            isLiveProfileOwnerCurrent()
           : observation.isCurrent?.() === true);
       if (!isCurrent()) {
         return undefined;
       }
-      return () => {
-        if (!isCurrent()) {
+      return (attempt?: { authBindingFingerprint?: string }) => {
+        if (
+          !isCurrent() ||
+          (attempt !== undefined &&
+            attempt.authBindingFingerprint !== observation?.authBindingFingerprint)
+        ) {
           throw new Error("Codex native model catalog selection is no longer current");
         }
       };
@@ -148,6 +187,26 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
         : undefined;
       observation.profileAuthSelected = authProfileId !== undefined;
+      observation.authProfileId = authProfileId;
+      if (authProfileId && authProfileStore) {
+        observation.authProfileOwnerFingerprint = fingerprintAuthProfileStoreEntry({
+          profileId: authProfileId,
+          credential: authProfileStore.profiles[authProfileId],
+        });
+        try {
+          observation.authBindingFingerprint = (
+            await prepareCodexAppServerAuthBinding({
+              authProfileId,
+              authProfileStore,
+              agentDir: params.agentDir,
+              config: params.config,
+            })
+          )?.fingerprint;
+        } catch {
+          // Discovery can still populate the picker, but an unresolvable profile cannot
+          // authorize a later attempt to reuse its native model selection.
+        }
+      }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {

@@ -291,6 +291,26 @@ export function fingerprintResolvedAuthProfileCredential(params: {
 }
 
 /**
+ * Fingerprint one current profile row for local owner revalidation. SecretRef-backed rows fall
+ * back to their non-secret owner shape, so this cannot observe a value rotation behind an
+ * unchanged reference without resolving the secret asynchronously.
+ */
+export function fingerprintAuthProfileStoreEntry(params: {
+  profileId: string;
+  credential: AuthProfileCredential | undefined;
+}): string | undefined {
+  if (!params.credential) {
+    return undefined;
+  }
+  return (
+    fingerprintAuthProfileCredential({
+      profileId: params.profileId,
+      credential: params.credential,
+    }) ?? fingerprintAuthProfileOwnerShape(params)
+  );
+}
+
+/**
  * Fingerprint an ambient/config/env credential that was actually selected.
  *
  * The digest covers only the credential material and its transport mode.

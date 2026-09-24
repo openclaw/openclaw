@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
@@ -348,6 +349,87 @@ describe("Codex app-server model catalog", () => {
     expect(() => assertSelectionCurrent?.()).not.toThrow();
     rpc.registered = false;
     expect(() => assertSelectionCurrent?.()).toThrow(
+      "Codex native model catalog selection is no longer current",
+    );
+  });
+
+  it("revokes profile-auth model selection when the selected profile binding changes or disappears", async () => {
+    profiles.store = {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 60 * 60_000,
+          accountId: "synthetic-account-a",
+        },
+      },
+      order: { openai: ["openai:work"] },
+    };
+    const params = {
+      ...catalogParams,
+      config: { auth: { order: { openai: ["openai:work"] } } },
+    };
+    const pluginConfig = { appServer: { homeScope: "agent" } };
+    rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-profile-model",
+          model: "synthetic-profile-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    await owner.load(params, pluginConfig);
+    const assertSelectionCurrent = owner.captureSelectionAuthority(
+      { ...params, provider: "openai", modelId: "synthetic-profile-model" },
+      pluginConfig,
+    );
+    expect(assertSelectionCurrent).toBeTypeOf("function");
+    const originalBinding = await prepareCodexAppServerAuthBinding({
+      authProfileId: "openai:work",
+      authProfileStore: profiles.store,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    expect(originalBinding?.fingerprint).toBeTruthy();
+    expect(() =>
+      assertSelectionCurrent?.({ authBindingFingerprint: originalBinding?.fingerprint }),
+    ).not.toThrow();
+
+    // The attempt still holds the original prepared binding, but the live selected profile
+    // changed after that preparation and before the physical turn/start assertion.
+    profiles.store = {
+      ...profiles.store,
+      profiles: {
+        "openai:work": {
+          ...profiles.store.profiles["openai:work"]!,
+          accountId: "synthetic-account-b",
+        },
+      },
+    };
+    expect(() =>
+      assertSelectionCurrent?.({ authBindingFingerprint: originalBinding?.fingerprint }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+    const reassignedBinding = await prepareCodexAppServerAuthBinding({
+      authProfileId: "openai:work",
+      authProfileStore: profiles.store,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    expect(reassignedBinding?.fingerprint).not.toBe(originalBinding?.fingerprint);
+    expect(() =>
+      assertSelectionCurrent?.({ authBindingFingerprint: reassignedBinding?.fingerprint }),
+    ).toThrow("Codex native model catalog selection is no longer current");
+
+    // A profile removed/revoked before attempt preparation has no fingerprint to match.
+    profiles.store = { version: 1, profiles: {} };
+    expect(() => assertSelectionCurrent?.({ authBindingFingerprint: undefined })).toThrow(
       "Codex native model catalog selection is no longer current",
     );
   });

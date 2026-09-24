@@ -41,6 +41,7 @@ import {
   acquirePreparedMediaCapabilityProviders,
   buildPreparedPluginModelCatalog,
 } from "./prepared-model-runtime.plugin-generation.js";
+import type { PreparedNativeModelCatalogLoadOptions } from "./prepared-model-runtime.types.js";
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
@@ -518,6 +519,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   ) => Promise<ModelCatalogSnapshot>;
   loadNativeModelCatalog: (
     selection: PreparedNativeModelSelection,
+    options?: PreparedNativeModelCatalogLoadOptions,
   ) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
 }>;

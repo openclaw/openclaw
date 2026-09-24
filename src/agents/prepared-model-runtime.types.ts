@@ -44,6 +44,11 @@ export type PreparedNativeModelSelection = {
   runtime: string;
 };
 
+/** Per-call selected-row result; never persisted on a catalog snapshot. */
+export type PreparedNativeModelCatalogLoadOptions = {
+  onSelectionReady?: (ready: boolean) => void;
+};
+
 export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };
 
 export type PreparedMediaCapabilityProviderSource = Readonly<{
@@ -117,6 +122,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Acquires the selected runtime's native facts before host model resolution. */
   loadNativeModelCatalog?: (
     selection: PreparedNativeModelSelection,
+    options?: PreparedNativeModelCatalogLoadOptions,
   ) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];

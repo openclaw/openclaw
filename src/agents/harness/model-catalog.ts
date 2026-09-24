@@ -353,20 +353,31 @@ export function isPreparedNativeModelCatalogReady(params: {
   const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
     (registration) => registration.harness.id === selection.runtime,
   )?.harness;
+  const selectedProvider = normalizeProviderId(selection.provider);
+  if (
+    snapshot.nativeProviderOutcomes?.[selection.runtime]?.some(
+      (outcome) =>
+        normalizeProviderId(outcome.provider) === selectedProvider && outcome.status !== "ready",
+    )
+  ) {
+    return false;
+  }
   return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+    (snapshot.authoritative !== false ||
+      typeof harness?.readModelCatalogReadiness === "function") &&
+    (!harness?.readModelCatalogReadiness ||
+      withPluginRuntimeGenerationScope(
+        {
+          metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+          pluginRegistry: pluginGeneration.pluginRegistry,
+        },
+        () =>
+          harness.readModelCatalogReadiness?.({
+            ...preparedHarnessCatalogScope(params.input),
+            provider: selection.provider,
+            modelId: selection.modelId,
+          }),
+      ) !== undefined)
   );
 }
 
