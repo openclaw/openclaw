@@ -143,7 +143,11 @@ export async function swapStagedPackageInstall(
   let projectActivated = false;
   let activationCompleted = false;
   const assertReplacementUnowned = async () => {
-    await assertPacmanUnowned(targetPackageRoot, params.timeoutMs);
+    await assertPacmanUnowned(
+      targetPackageRoot,
+      params.timeoutMs,
+      shims.map((shim) => shim.destination),
+    );
     // A fresh observation, not an atomic lock against an external pkg writer.
     const inspection = createFreeBsdPkgOwnershipInspection(
       params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,

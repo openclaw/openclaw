@@ -25,57 +25,74 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("clears cached npm availability and automatic updates for a pacman installation", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "update-pacman-startup-",
-    env: {
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_NO_AUTO_UPDATE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-    },
-  });
-  try {
-    writeConfigMachineState("update.checkState", {
-      lastCheckedAt: new Date().toISOString(),
-      lastCheckedChannel: "stable",
-      lastAvailableVersion: "9999.0.0",
-      lastAvailableTag: "latest",
-      autoFirstSeenVersion: "9999.0.0",
-      autoFirstSeenTag: "latest",
-      autoFirstSeenAt: new Date().toISOString(),
-    });
-    setUpdateAvailableCache({
-      next: { currentVersion: "1.0.0", latestVersion: "9999.0.0", channel: "latest" },
-    });
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "unknown",
-      systemPackage: {
-        manager: "pacman",
-        packageName: "openclaw",
-        nextAction: "Use the distribution updater.",
+it.each(["owned", "uncertain"] as const)(
+  "clears cached npm availability and automatic updates when pacman ownership is %s",
+  async (ownership) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "update-pacman-startup-",
+      env: {
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_NO_AUTO_UPDATE: undefined,
+        OPENCLAW_SUPERVISOR_MODE: undefined,
       },
     });
-    const runAutoUpdate = vi.fn();
-    await runGatewayUpdateCheck({
-      getConfig: () => ({ update: { channel: "stable", auto: { enabled: true } } }),
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
-      runAutoUpdate,
-    });
-    expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()).toMatchObject({ autoEnabled: false });
-    expect(getUpdateSchedule()?.target).toBeUndefined();
-    expect(getUpdateSchedule()?.campaign).toBeUndefined();
-    expect(readConfigMachineState("update.checkState")).not.toHaveProperty("lastAvailableVersion");
-    expect(readConfigMachineState("update.checkState")).not.toHaveProperty("autoFirstSeenVersion");
-    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(runAutoUpdate).not.toHaveBeenCalled();
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
+    try {
+      writeConfigMachineState("update.checkState", {
+        lastCheckedAt: new Date().toISOString(),
+        lastCheckedChannel: "stable",
+        lastAvailableVersion: "9999.0.0",
+        lastAvailableTag: "latest",
+        autoFirstSeenVersion: "9999.0.0",
+        autoFirstSeenTag: "latest",
+        autoFirstSeenAt: new Date().toISOString(),
+      });
+      setUpdateAvailableCache({
+        next: { currentVersion: "1.0.0", latestVersion: "9999.0.0", channel: "latest" },
+      });
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: "/opt/openclaw",
+        installKind: "package",
+        packageManager: "unknown",
+        ...(ownership === "owned"
+          ? {
+              systemPackage: {
+                manager: "pacman" as const,
+                packageName: "openclaw",
+                nextAction: "Use the distribution updater.",
+              },
+            }
+          : {
+              error: {
+                status: "failed" as const,
+                code: "pacman-ownership-unavailable" as const,
+                message: "Pacman ownership could not be verified.",
+              },
+            }),
+      });
+      const runAutoUpdate = vi.fn();
+      await runGatewayUpdateCheck({
+        getConfig: () => ({ update: { channel: "stable", auto: { enabled: true } } }),
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+        runAutoUpdate,
+      });
+      expect(getUpdateAvailable()).toBeNull();
+      expect(getUpdateSchedule()).toMatchObject({ autoEnabled: false });
+      expect(getUpdateSchedule()?.target).toBeUndefined();
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+      expect(readConfigMachineState("update.checkState")).not.toHaveProperty(
+        "lastAvailableVersion",
+      );
+      expect(readConfigMachineState("update.checkState")).not.toHaveProperty(
+        "autoFirstSeenVersion",
+      );
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+      expect(runAutoUpdate).not.toHaveBeenCalled();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);

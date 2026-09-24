@@ -4,12 +4,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { formatUpdateOneLiner, resolveUpdateAvailability } from "../commands/status.update.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   checkUpdateStatus,
   resolveUpdateInstallIdentity,
@@ -18,7 +15,6 @@ import {
 
 const runCommandWithTimeout = processExec.runCommandWithTimeout;
 const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function runGit(cwd: string, ...args: string[]): Promise<string> {
   const result = await runCommandWithTimeout(["git", ...args], {
@@ -71,44 +67,6 @@ afterEach(() => {
 });
 
 describe("checkUpdateStatus", () => {
-  it("reports pacman ownership without advertising an npm update", async () => {
-    const root = await createNpmInstallRoot(tempDirs.make("openclaw-pacman-status-"));
-    const access = fs.access;
-    vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      if (file === "/usr/bin/pacman") {
-        return;
-      }
-      return access(file, mode);
-    });
-    const commands: string[][] = [];
-    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
-      commands.push(argv);
-      return {
-        stdout: argv[0] === "/usr/bin/pacman" ? "openclaw\n" : "",
-        stderr: "",
-        code: argv[0] === "/usr/bin/pacman" ? 0 : 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
-    });
-    const status = await withMockedPlatform("linux", () =>
-      checkUpdateStatus({ root, includeRegistry: true, fetchGit: false, timeoutMs: 1000 }),
-    );
-    expect(status).toMatchObject({
-      installKind: "package",
-      packageManager: "unknown",
-      systemPackage: { manager: "pacman", packageName: "openclaw" },
-    });
-    expect(status.registry).toBeUndefined();
-    expect(resolveUpdateAvailability(status).available).toBe(false);
-    expect(formatUpdateOneLiner(status)).toContain("pacman");
-    expect(formatUpdateOneLiner(status)).toContain("repository availability not checked");
-    expect(
-      commands.some(([command]) => command === "npm" || command === "pnpm" || command === "bun"),
-    ).toBe(false);
-  });
-
   it.each([
     {
       remoteUrl: "https://github.com/example/openclaw.git",

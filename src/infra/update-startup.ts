@@ -353,13 +353,16 @@ async function runGatewayUpdateCheckOwned(
     installKind: installStatus.status.installKind,
     git: installStatus.status.git,
   }).channel;
+  const pacmanPreventsUpdate =
+    Boolean(installStatus.status.systemPackage) ||
+    installStatus.status.error?.code === "pacman-ownership-unavailable";
   const autoDesired =
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||
       configuredChannel === "dev") &&
     autoEnabled &&
     !autoDisabledByExternalSupervisor &&
-    !installStatus.status.systemPackage;
+    !pacmanPreventsUpdate;
 
   if (updateCampaign.getState()?.state === "applying") {
     return;
@@ -394,7 +397,7 @@ async function runGatewayUpdateCheckOwned(
   if (!autoDesired) {
     updateCampaign.clear();
   }
-  if (installStatus.status.systemPackage) {
+  if (pacmanPreventsUpdate) {
     const state = readState();
     clearAvailabilityState(state);
     clearAutoState(state);

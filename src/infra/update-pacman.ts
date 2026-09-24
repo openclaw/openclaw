@@ -17,7 +17,7 @@ export class PacmanOwnershipError extends Error {
     super(
       ownership
         ? `This OpenClaw installation is managed by pacman (${ownership.packageName}). ${ownership.nextAction}`
-        : "Pacman ownership could not be verified. Check access to the pacman database and run pacman -Qo on this installation's package.json before retrying.",
+        : "Pacman ownership could not be verified. Check access to the pacman database and run pacman -Qo on the installation files and launcher before retrying.",
     );
     this.name = "PacmanOwnershipError";
   }
@@ -32,6 +32,7 @@ export async function inspectPacmanOwnership(
   root: string | null | undefined,
   timeoutMs = 30_000,
   signal?: AbortSignal,
+  additionalEntries: readonly string[] = [],
 ): Promise<PacmanOwnership | null> {
   if (process.platform !== "linux" || !root) {
     return null;
@@ -45,11 +46,14 @@ export async function inspectPacmanOwnership(
     }
     throw new PacmanOwnershipError(root);
   }
-  for (const name of ["package.json", "openclaw.mjs"]) {
+  for (const entry of [
+    path.resolve(root, "package.json"),
+    path.resolve(root, "openclaw.mjs"),
+    ...additionalEntries,
+  ]) {
     signal?.throwIfAborted();
     let file: string;
     try {
-      const entry = path.resolve(root, name);
       await fs.lstat(entry);
       // Pacman owns the symlink entry, not an unrelated referent.
       file = path.join(await fs.realpath(path.dirname(entry)), path.basename(entry));
@@ -106,8 +110,9 @@ export async function inspectPacmanOwnership(
 export async function assertPacmanUnowned(
   root: string | null | undefined,
   timeoutMs?: number,
+  additionalEntries: readonly string[] = [],
 ): Promise<void> {
-  const ownership = await inspectPacmanOwnership(root, timeoutMs);
+  const ownership = await inspectPacmanOwnership(root, timeoutMs, undefined, additionalEntries);
   if (ownership && root) {
     throw new PacmanOwnershipError(root, ownership);
   }

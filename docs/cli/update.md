@@ -23,6 +23,10 @@ skips package replacement and leaves the Gateway running. On Arch Linux, run
 pacman owner; it does not treat a newer npm release as an available distribution
 package or schedule an npm auto-update.
 
+Ownership checks also protect launcher destinations before replacement or
+rollback. If pacman ownership cannot be verified, update status reports the
+inspection error and automatic updates remain disabled until ownership is known.
+
 Older installed updaters, including 2026.9.4, do not have this ownership check.
 They must receive the fix through the distribution package manager: a candidate
 cannot repair an updater that fails before staging it. Do not run the npm updater
