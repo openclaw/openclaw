@@ -1,39 +1,29 @@
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
-import {
-  postNativeBrowserMessage,
-  type NativeBrowserTab,
-} from "../../app/native-browser-bridge.ts";
+import { postNativeBrowserMessage } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  downloadBrowserDocument,
-  type BrowserDashboardTarget,
-  type BrowserRequestClient,
-} from "./browser-client.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
+import { downloadBrowserDocument } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 
 registerBrowserEnglish();
 
-interface BrowserPanelDownloadHost {
-  readonly host: {
-    readonly isConnected: boolean;
-    readonly resourceBasePath: string;
-    readonly authToken: string | null;
-    readonly dashboardTarget?: BrowserDashboardTarget;
-    requestUpdate(): void;
-  };
-  readonly operations: { captureClient(): BrowserRequestClient | null };
-  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
-  readonly activeTargetId: string | null;
-  readonly view: BrowserPanelView | null;
-  readonly unavailableTabText: string | null;
-  readonly pendingNewTab: boolean;
-  readonly loading: boolean;
-  setState(key: "errorText" | "noticeText", value: string | null): void;
-}
+type BrowserPanelDownloadHost = Readonly<
+  Pick<
+    BrowserPanelController,
+    "activeTargetId" | "view" | "unavailableTabText" | "pendingNewTab" | "loading"
+  >
+> & {
+  readonly host: Pick<
+    BrowserPanelController["host"],
+    "isConnected" | "resourceBasePath" | "authToken" | "dashboardTarget" | "requestUpdate"
+  >;
+  readonly operations: Pick<BrowserPanelController["operations"], "captureClient">;
+  readonly native: Pick<BrowserPanelController["native"], "activeTab">;
+  setState(key: "errorText" | "noticeText", value: BrowserPanelController["errorText"]): void;
+};
 
 /** Saves the displayed document; address-bar edits never select the download. */
 export class BrowserPanelDownload {

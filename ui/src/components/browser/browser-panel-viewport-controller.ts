@@ -1,24 +1,16 @@
-import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
-import {
-  resizeBrowserViewport,
-  type BrowserPageMetrics,
-  type BrowserRequestClient,
-} from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
-import type { BrowserPanelStream } from "./browser-panel-stream.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
+import { resizeBrowserViewport, type BrowserPageMetrics } from "./browser-client.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 
-interface BrowserPanelViewportHost {
-  readonly host: { browserPanelIsOpen(): boolean };
-  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
-  readonly activeTargetId: string | null;
-  readonly view: BrowserPanelView | null;
-  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
-  readonly stream: Pick<BrowserPanelStream, "resize">;
-  readonly pendingInput: Pick<BrowserPanelPendingInput, "scheduleViewportResize">;
-  runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
-}
+type BrowserPanelViewportHost = Readonly<
+  Pick<BrowserPanelController, "activeTargetId" | "view">
+> & {
+  readonly host: Pick<BrowserPanelController["host"], "browserPanelIsOpen">;
+  readonly native: Pick<BrowserPanelController["native"], "activeTab">;
+  readonly operations: Pick<BrowserPanelController["operations"], "captureClient">;
+  readonly stream: Pick<BrowserPanelController["stream"], "resize">;
+  readonly pendingInput: Pick<BrowserPanelController["pendingInput"], "scheduleViewportResize">;
+  runAction(action: Parameters<BrowserPanelController["runAction"]>[0]): Promise<boolean>;
+};
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;

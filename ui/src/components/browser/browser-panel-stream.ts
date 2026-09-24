@@ -1,10 +1,7 @@
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
-import type {
-  BrowserPanelControllerHost,
-  BrowserPanelOperationOwnership,
-} from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
@@ -16,29 +13,30 @@ const FIRST_FRAME_TIMEOUT_MS = 1500;
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  urlDraft: string;
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
-  readonly host: BrowserPanelControllerHost;
-  readonly mode: "interact" | "annotate" | "inspect";
-  readonly operations: Pick<
-    BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
-  >;
-  readonly urlDraftEditing: boolean;
-  readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
-  clearUnavailableView(): boolean;
-  scheduleViewportSync(): void;
-  refreshView(targetId: string): Promise<void>;
-  refreshAll(): Promise<void>;
-}
+type StreamState = Pick<
+  BrowserPanelController,
+  "activeTargetId" | "view" | "tabs" | "urlDraft" | "loading"
+>;
+type BrowserPanelStreamHost = StreamState &
+  Readonly<
+    Pick<
+      BrowserPanelController,
+      | "host"
+      | "mode"
+      | "urlDraftEditing"
+      | "observedViewportSize"
+      | "clearUnavailableView"
+      | "scheduleViewportSync"
+      | "refreshAll"
+    >
+  > & {
+    readonly operations: Pick<
+      BrowserPanelController["operations"],
+      "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
+    >;
+    setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
+    refreshView(targetId: string): Promise<void>;
+  };
 
 type Recovery = Pick<Attempt, "targetId" | "epoch" | "client">;
 
@@ -61,7 +59,7 @@ type Attempt = {
 export class BrowserPanelStream {
   private attempt?: Attempt;
   frameRevision = 0;
-  private scope?: { client: BrowserPanelControllerHost["client"]; route: string };
+  private scope?: { client: BrowserPanelController["host"]["client"]; route: string };
   private unsupported = false;
   private readonly lastFailures = new Map<string, number>();
   private objectUrl?: string;

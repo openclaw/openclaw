@@ -597,11 +597,8 @@ function renderSessionListBody(params: {
               })
             : nothing;
         }
-        if (section.id === "work") {
-          if (section.totalRowCount === 0) {
-            return nothing;
-          }
-          return renderSessionSection({ host, section, personHeaders });
+        if (section.id === "work" && section.totalRowCount === 0) {
+          return nothing;
         }
         // Personal filters already omit empty sections in the projection.
         // Otherwise preserve the collaborator and drag destination behavior.
@@ -659,13 +656,7 @@ export function renderSessionList(params: {
     host,
     html`
       <div class="sidebar-recent-sessions">
-        ${renderSessionListBody({
-          host,
-          sections: params.sections,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-          catalogs: params.catalogs,
-          catalogRenderer: params.catalogRenderer,
-        })}
+        ${renderSessionListBody(params)}
         ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore, params.nativeSessionsLoading)}
         ${
           host.sessionsStatusFilter === "archived" && params.empty

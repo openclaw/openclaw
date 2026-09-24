@@ -1,21 +1,17 @@
-import {
-  postNativeBrowserMessage,
-  type NativeBrowserTab,
-} from "../../app/native-browser-bridge.ts";
+import { postNativeBrowserMessage } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 
-interface BrowserPanelNativePresentationHost {
+type BrowserPanelNativePresentationHost = Readonly<
+  Pick<BrowserPanelController, "activeTargetId" | "mode" | "reportError">
+> & {
   readonly host: Pick<
-    BrowserPanelControllerHost,
+    BrowserPanelController["host"],
     "isConnected" | "browserPanelIsOpen" | "renderRoot"
   >;
-  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
-  readonly activeTargetId: string | null;
-  readonly mode: "interact" | "annotate" | "inspect";
-  reportError(error: unknown): void;
-}
+  readonly native: Pick<BrowserPanelController["native"], "activeTab">;
+};
 
 let presentationOrder = 0;
 

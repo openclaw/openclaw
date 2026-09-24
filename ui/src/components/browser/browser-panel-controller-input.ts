@@ -1,10 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type {
-  BrowserRequestClient,
-  BrowserInspectedNode,
-  BrowserPanelTab,
-} from "./browser-client.ts";
+import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
@@ -13,8 +9,7 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
@@ -22,48 +17,40 @@ import {
   browserPanelShouldForwardKey,
   dispatchCompositedBrowserAnnotation,
   paintBrowserPanelOverlay,
-  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
 
-type BrowserPanelInputState = {
-  mode: "interact" | "annotate" | "inspect";
-  strokes: AnnotationStroke[];
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-  evaluateUnavailable: boolean;
-  errorText: string | null;
-  noticeText: string | null;
-};
+type BrowserPanelInputState = Pick<
+  BrowserPanelController,
+  | "mode"
+  | "strokes"
+  | "view"
+  | "tabs"
+  | "activeTargetId"
+  | "inspected"
+  | "inspectPointer"
+  | "evaluateUnavailable"
+  | "errorText"
+  | "noticeText"
+>;
 
-interface BrowserPanelInputHost extends BrowserPanelInputState {
-  readonly host: {
-    readonly renderRoot: HTMLElement | DocumentFragment;
-    readonly updateComplete: Promise<boolean>;
+type BrowserPanelInputHost = BrowserPanelInputState &
+  Pick<BrowserPanelController, "runAction" | "reportError" | "exitCaptureModes"> & {
+    readonly host: Pick<BrowserPanelController["host"], "renderRoot" | "updateComplete">;
+    readonly operations: Pick<
+      BrowserPanelController["operations"],
+      "beginInspection" | "captureClient" | "epoch" | "isLive"
+    >;
+    readonly pendingInput: Pick<
+      BrowserPanelController["pendingInput"],
+      "clearInput" | "queueInspection" | "queueWheel"
+    >;
+    setState<Key extends keyof BrowserPanelInputState>(
+      key: Key,
+      value: BrowserPanelInputState[Key],
+    ): void;
   };
-  readonly operations: Pick<
-    BrowserPanelOperationOwnership,
-    "beginInspection" | "captureClient" | "epoch" | "isLive"
-  >;
-  readonly pendingInput: Pick<
-    BrowserPanelPendingInput,
-    "clearInput" | "queueInspection" | "queueWheel"
-  >;
-  setState<Key extends keyof BrowserPanelInputState>(
-    key: Key,
-    value: BrowserPanelInputState[Key],
-  ): void;
-  runAction(
-    action: (client: BrowserRequestClient) => Promise<void>,
-    refreshView?: boolean,
-  ): Promise<boolean>;
-  reportError(error: unknown): void;
-  exitCaptureModes(): void;
-}
 
 type BrowserPanelDrawingGesture = {
   pointerId: number;
@@ -399,14 +386,12 @@ export class BrowserPanelInputController {
       this.host.reportError(error);
       return;
     }
-    if (result === "unhandled") {
+    if (result !== "accepted") {
       this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    if (result === "rejected") {
-      this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.annotationLimitReached"));
+      this.host.setState(
+        "errorText",
+        t(result === "unhandled" ? "browser.noChatTarget" : "browser.annotationLimitReached"),
+      );
       return;
     }
     this.host.setState("errorText", null);

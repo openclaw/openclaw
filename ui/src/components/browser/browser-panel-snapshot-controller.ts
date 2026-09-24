@@ -1,58 +1,54 @@
 import {
   isBrowserNavigationBlockedError,
   listBrowserTabs,
-  type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
-import type { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import {
   captureBrowserPanelOwnedView,
-  type BrowserPanelControllerHost,
-  type BrowserPanelOperationOwnership,
   type BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
-import type { BrowserPanelStream } from "./browser-panel-stream.ts";
-import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
 
-type BrowserPanelSnapshotState = {
-  running: boolean | null;
-  tabs: BrowserPanelTab[];
-  view: BrowserPanelView | null;
-  loading: boolean;
-  evaluateUnavailable: boolean;
-};
+type BrowserPanelSnapshotState = Pick<
+  BrowserPanelController,
+  "running" | "tabs" | "view" | "loading" | "evaluateUnavailable"
+>;
 
-interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
-  readonly host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken" | "fixedTab">;
-  readonly native: Pick<BrowserPanelNativeController, "activeTab" | "mergeRemoteTabs">;
-  readonly stream: Pick<
-    BrowserPanelStream,
-    "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"
-  >;
-  readonly activeTargetId: string | null;
-  readonly mode: "interact" | "annotate" | "inspect";
-  readonly operations: Pick<
-    BrowserPanelOperationOwnership,
-    | "epoch"
-    | "captureClient"
-    | "isLive"
-    | "beginCapture"
-    | "capturedTabs"
-    | "route"
-    | "completeCapture"
-    | "beginSnapshot"
-    | "acceptSnapshot"
-    | "retainTabSnapshot"
-  >;
-  setState<Key extends keyof BrowserPanelSnapshotState>(
-    key: Key,
-    value: BrowserPanelSnapshotState[Key],
-  ): void;
-  clearUnavailableView(): boolean;
-  syncUrlDraft(url: string): void;
-  reportError(error: unknown): void;
-}
+type BrowserPanelSnapshotHost = BrowserPanelSnapshotState &
+  Readonly<
+    Pick<
+      BrowserPanelController,
+      "activeTargetId" | "mode" | "clearUnavailableView" | "syncUrlDraft" | "reportError"
+    >
+  > & {
+    readonly host: Pick<
+      BrowserPanelController["host"],
+      "resourceBasePath" | "authToken" | "fixedTab"
+    >;
+    readonly native: Pick<BrowserPanelController["native"], "activeTab" | "mergeRemoteTabs">;
+    readonly stream: Pick<
+      BrowserPanelController["stream"],
+      "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"
+    >;
+    readonly operations: Pick<
+      BrowserPanelController["operations"],
+      | "epoch"
+      | "captureClient"
+      | "isLive"
+      | "beginCapture"
+      | "capturedTabs"
+      | "route"
+      | "completeCapture"
+      | "beginSnapshot"
+      | "acceptSnapshot"
+      | "retainTabSnapshot"
+    >;
+    setState<Key extends keyof BrowserPanelSnapshotState>(
+      key: Key,
+      value: BrowserPanelSnapshotState[Key],
+    ): void;
+  };
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export class BrowserPanelSnapshotController {
