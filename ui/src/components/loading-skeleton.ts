@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 
 export function renderLoadingSkeleton() {
@@ -30,7 +31,7 @@ export function renderConnectingSplash(status?: string) {
     aria-live="polite"
     aria-label=${status ?? t("common.loading")}
   >
-    <div class="connect-splash__layout" aria-hidden="true">
+    <div class="connect-splash__layout" aria-hidden="true" @mousedown=${beginNativeWindowDrag}>
       <aside class="connect-splash__sidebar">
         <div class="skeleton loading-skeleton__avatar"></div>
         <div class="skeleton connect-splash__new-session"></div>

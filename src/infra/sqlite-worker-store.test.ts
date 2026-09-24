@@ -782,7 +782,7 @@ describe("SQLite worker store", () => {
       }
     }
     const writes: ReturnType<typeof append>[] = [];
-    for (let round = 0; round < 32; round += 1) {
+    for (let round = 0; round < 128; round += 1) {
       for (const [index, store] of active.entries()) {
         writes.push(append(store, `${index}:${round}`));
       }
@@ -809,7 +809,7 @@ describe("SQLite worker store", () => {
       expect(results.find((result) => result.status === "rejected")).toBeUndefined();
       for (const [index, store] of active.entries()) {
         expect(await read(store)).toEqual(
-          Array.from({ length: 32 }, (_, round) => `${index}:${round}`),
+          Array.from({ length: 128 }, (_, round) => `${index}:${round}`),
         );
       }
       const admitted = await open(pendingFile);

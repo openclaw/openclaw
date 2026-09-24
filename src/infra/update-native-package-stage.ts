@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
@@ -96,6 +97,63 @@ async function nativeProjectFingerprint(
   // Rollback also tracks direct sibling entries, never payloads or shared stores.
   await visit(root, 0);
   return fingerprint;
+}
+
+export function resolveNativeInstallSpecFromCwd(
+  spec: string,
+  packageName: string,
+  sourceCwd: string,
+  manager: "pnpm" | "bun",
+): string {
+  const trimmed = spec.trim();
+  const aliasPrefix = `${packageName.trim()}@`;
+  const hasAlias = trimmed.toLowerCase().startsWith(aliasPrefix.toLowerCase());
+  const targetSpec = hasAlias ? trimmed.slice(aliasPrefix.length).trim() : trimmed;
+  const windowsPath = /^[a-z]:[\\/]/iu.test(sourceCwd) || sourceCwd.startsWith("\\\\");
+  const paths = windowsPath ? path.win32 : path;
+  const localProtocol = /^(file:|git\+file:|link:)(.*)$/iu.exec(targetSpec);
+  if (localProtocol) {
+    const protocol = localProtocol[1] ?? "";
+    // Bun's link: names refer to its global link registry, not caller-relative directories.
+    if (manager === "bun" && protocol.toLowerCase() === "link:") {
+      return spec;
+    }
+    const target = localProtocol[2]?.trim() ?? "";
+    const fragmentIndex = protocol.toLowerCase() === "git+file:" ? target.indexOf("#") : -1;
+    const targetPath = fragmentIndex >= 0 ? target.slice(0, fragmentIndex) : target;
+    const fragment = fragmentIndex >= 0 ? target.slice(fragmentIndex) : "";
+    const resolvedTarget =
+      targetPath &&
+      !/^~[\\/]/u.test(targetPath) &&
+      !path.isAbsolute(targetPath) &&
+      !path.win32.isAbsolute(targetPath)
+        ? paths.resolve(sourceCwd, targetPath)
+        : targetPath;
+    if (protocol.toLowerCase() === "git+file:") {
+      return resolvedTarget === targetPath
+        ? spec
+        : `${hasAlias ? aliasPrefix : ""}git+${pathToFileURL(resolvedTarget, { windows: windowsPath }).href}${fragment}`;
+    }
+    return `${aliasPrefix}${protocol}${resolvedTarget}`;
+  }
+  const isPath =
+    /^(?:\.{1,2}|~)(?:[\\/]|$)/u.test(targetSpec) ||
+    path.isAbsolute(targetSpec) ||
+    path.win32.isAbsolute(targetSpec);
+  // Match the updater's explicit archive targets; bare .tar remains a registry name.
+  if (
+    !isPath &&
+    (hasAlias || /[:@]/u.test(targetSpec) || !/\.(?:tgz|tar\.gz)$/iu.test(targetSpec))
+  ) {
+    return spec;
+  }
+  const target =
+    isPath && !/^\.{1,2}(?:[\\/]|$)/u.test(targetSpec)
+      ? targetSpec
+      : paths.resolve(sourceCwd, targetSpec);
+  // Native pnpm needs a package name; source links must follow atomic file replacements.
+  const protocol = manager === "bun" || /\.(?:tgz|tar\.gz|tar)$/iu.test(target) ? "file" : "link";
+  return `${aliasPrefix}${protocol}:${target}`;
 }
 
 /** Stage a native global project without changing its live package, metadata, or launchers. */

@@ -65,7 +65,15 @@ node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative
   >"$ARTIFACT_DIR/negative-fixture.json"
 node "$FIXTURE_HELPER" future-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/future.tgz" 1 \
   >"$ARTIFACT_DIR/second-hop-fixture.json"
+ADMISSION_PROTOCOL="$(tar -xOf "$PACKAGE_TGZ" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).openclaw?.updateAdmissionProtocol ?? ""')"
+if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+  node "$FIXTURE_HELPER" unsupported-admission-tarball "$FIXTURE_ROOT/future.tgz" \
+    "$FIXTURE_ROOT/unsupported-admission.tgz" 2 >"$ARTIFACT_DIR/unsupported-admission-fixture.json"
+fi
 docker_e2e_package_mount_args "$FIRST_HOP_TGZ" /tmp/openclaw-update-first-hop-candidate.tgz
+if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+  DOCKER_E2E_PACKAGE_ARGS+=(-v "$FIXTURE_ROOT/unsupported-admission.tgz:/tmp/openclaw-update-first-hop-unsupported-admission.tgz:ro")
+fi
 
 mkdir -p "$FIXTURE_ROOT/packages/original"
 tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/original"
@@ -115,6 +123,9 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     printf 'candidate=%s\n' "$FIRST_HOP_TGZ"
     printf 'expected_missing_chunk=%s\n' "$expected_missing_chunk"
     shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative.tgz" "$FIXTURE_ROOT/future.tgz"
+    if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+      shasum -a 256 "$FIXTURE_ROOT/unsupported-admission.tgz"
+    fi
     printf '\nsource_build_info=' && tar -xOf "$source_package" package/dist/build-info.json
     printf '\noriginal_candidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
     printf '\ncandidate_build_info=' && tar -xOf "$FIRST_HOP_TGZ" package/dist/build-info.json
@@ -126,6 +137,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     -e OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 \
     -e OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR=/tmp/openclaw-update-first-hop-artifacts \
     -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$expected_missing_chunk" \
+    -e OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL="$ADMISSION_PROTOCOL" \
     -v "$lane_artifact_dir:/tmp/openclaw-update-first-hop-artifacts" \
     -v "$(docker_e2e_abs_path "$source_package"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \

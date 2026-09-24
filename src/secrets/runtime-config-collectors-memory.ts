@@ -15,7 +15,7 @@ import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-k
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -150,7 +150,7 @@ export function collectAgentMemorySearchAssignments(params: {
     const hasApiKeyOverride = Boolean(remote && Object.hasOwn(remote, "apiKey"));
     const apiKeyTarget = hasApiKeyOverride ? remote : defaultRemote;
     if (apiKeyTarget && Object.hasOwn(apiKeyTarget, "apiKey")) {
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value: apiKeyTarget.apiKey,
         path: hasApiKeyOverride
           ? `${agentPath}.memory.search.remote.apiKey`
@@ -176,7 +176,7 @@ export function collectAgentMemorySearchAssignments(params: {
       return;
     }
     for (const [headerKey, headerValue] of Object.entries(headerTarget)) {
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value: headerValue,
         path: overrideHeaders
           ? appendConfigPathSegment(`${agentPath}.memory.search.remote.headers`, headerKey)
@@ -200,7 +200,7 @@ export function collectAgentMemorySearchAssignments(params: {
   entries.forEach(collectForAgent);
 
   if (defaultRemote && !defaultApiKeyAssignmentCollected) {
-    collectRuntimeSecretInputAssignment({
+    collectSecretInputAssignment({
       value: defaultRemote.apiKey,
       path: "memory.search.remote.apiKey",
       expected: "string",
@@ -217,7 +217,7 @@ export function collectAgentMemorySearchAssignments(params: {
     if (collectedDefaultHeaderKeys.has(headerKey)) {
       continue;
     }
-    collectRuntimeSecretInputAssignment({
+    collectSecretInputAssignment({
       value: headerValue,
       path: appendConfigPathSegment("memory.search.remote.headers", headerKey),
       expected: "string",

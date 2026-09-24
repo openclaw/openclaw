@@ -203,7 +203,7 @@ async function runExecutionTimeoutScenario(notifications: CodexServerNotificatio
   const onRunAgentEvent = vi.fn();
   const params = makeTestParams({ timeoutMs: 60_000, onAgentEvent: onRunAgentEvent });
   const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -214,7 +214,7 @@ async function runExecutionTimeoutScenario(notifications: CodexServerNotificatio
 async function runClientCloseScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(createTestParams());
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -286,7 +286,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: MAX_TIMER_TIMEOUT_MS }));
     const settled = vi.fn();
     void run.then(settled);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (const notification of notifications) {
       await harness.notify(notification);
     }
@@ -388,7 +388,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const onAttemptTimeout = vi.fn();
     params.onAttemptTimeout = onAttemptTimeout;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (let index = 0; index < 5; index += 1) {
       await vi.advanceTimersByTimeAsync(10_000);
       await harness.notify(makeAgentMessageDelta({ delta: `progress ${index}` }));
@@ -407,7 +407,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await harness.notify(
       rawItemCompleted({
         id: "ig_raw_1",
@@ -884,7 +884,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.timeoutMs = 60_000;
     const firstRun = runCodexAppServerAttempt(firstParams);
-    await Promise.race([firstRun, firstHarness.waitForMethod("turn/start")]);
+    await firstRun.waitForTurnAccepted();
     expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -1274,7 +1274,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     abortController.abort("user_cancelled");
     await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
 
@@ -1299,7 +1299,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const timeoutError = new Error("cron watchdog timeout");
     timeoutError.name = "TimeoutError";
     abortController.abort(timeoutError);
@@ -1334,7 +1334,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
       const run = runCodexAppServerAttempt(params);
 
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       closeHost();
       harness.close();
 
@@ -1504,7 +1504,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createTestParams());
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const completed = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     harness.close();
     await completed;

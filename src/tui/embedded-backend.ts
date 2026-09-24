@@ -449,51 +449,27 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
-    if (!opts.runId) {
-      // Session-scoped abort for local embedded: abort all matching runs.
-      let aborted = false;
-      const runIds: string[] = [];
-      for (const [runId, run] of this.runs) {
-        if (run.isBtw) {
-          continue;
-        }
-        if (run.sessionKey !== opts.sessionKey) {
-          continue;
-        }
-        if (opts.sessionKey === "global") {
-          const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-          const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-          const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-          if (runAgentId !== requestedAgentId) {
-            continue;
-          }
-        }
-        if (!this.isAbortableRun(runId, run)) {
-          continue;
-        }
-        run.controller.abort();
-        aborted = true;
-        runIds.push(runId);
+    const runIds: string[] = [];
+    const candidates = opts.runId ? [[opts.runId, this.runs.get(opts.runId)] as const] : this.runs;
+    for (const [runId, run] of candidates) {
+      if (!run || (!opts.runId && run.isBtw) || run.sessionKey !== opts.sessionKey) {
+        continue;
       }
-      return { ok: true, aborted, runIds };
-    }
-    const run = this.runs.get(opts.runId);
-    if (!run || run.sessionKey !== opts.sessionKey) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    if (opts.sessionKey === "global") {
-      const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
-      const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-      const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-      if (runAgentId !== requestedAgentId) {
-        return { ok: true, aborted: false, runIds: [] };
+      if (opts.sessionKey === "global") {
+        const defaultAgentId = resolveDefaultAgentId(getRuntimeConfig());
+        const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
+        const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
+        if (runAgentId !== requestedAgentId) {
+          continue;
+        }
       }
+      if (!this.isAbortableRun(runId, run)) {
+        continue;
+      }
+      run.controller.abort();
+      runIds.push(runId);
     }
-    if (!this.isAbortableRun(opts.runId, run)) {
-      return { ok: true, aborted: false, runIds: [] };
-    }
-    run.controller.abort();
-    return { ok: true, aborted: true, runIds: [opts.runId] };
+    return { ok: true, aborted: runIds.length > 0, runIds };
   }
 
   async loadImage(opts: TuiImageRequest): Promise<TuiImageData> {
