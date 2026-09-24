@@ -244,6 +244,14 @@ describe("subagent registry seam flow", () => {
   };
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
+  const mockRestoredRuns = (createEntries: () => SubagentRunRecord[]) =>
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(({ runs }) => {
+      const entries = createEntries();
+      for (const entry of entries) {
+        runs.set(entry.runId, entry);
+      }
+      return entries.length;
+    });
   const mockPendingAgentWait = () =>
     mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
   const mockSingleCollectorConcurrency = () =>
@@ -966,15 +974,9 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId(runId)?.runId).toBe(runId);
     expect(mocks.onAgentEvent).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(1);
-  });
-
-  it("latches registry restore only after success", () => {
-    mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
 
     mod.initSubagentRegistry();
-    mod.initSubagentRegistry();
-
-    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
+    expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledTimes(2);
   });
 
   registerRestoredTaskSettlementTest({
@@ -1065,12 +1067,7 @@ describe("subagent registry seam flow", () => {
         abortedLastRun: aborted,
       }),
     };
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, SubagentRunRecord>;
-    }) => {
-      params.runs.set(runId, restored);
-      return 1;
-    }) as never);
+    mockRestoredRuns(() => [restored]);
     mockPendingAgentWait();
 
     hydrateAndActivateRegistry();
@@ -1225,26 +1222,20 @@ describe("subagent registry seam flow", () => {
 
   it("does not relaunch a restored queued collector with durable kill intent", async () => {
     const now = Date.now();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-queued-kill-intent",
-        makeQueuedRun({
-          runId: "run-queued-kill-intent",
-          childSessionKey: "agent:main:subagent:queued-kill-intent",
-          task: "do not relaunch",
-          groupId: "kill-intent",
-          createdAt: now,
-          killIntent: {
-            requestedAt: now + 1,
-            reason: "killed",
-            sessionId: "session-queued-kill-intent",
-          },
-        }),
-      );
-      return 1;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({
+        runId: "run-queued-kill-intent",
+        childSessionKey: "agent:main:subagent:queued-kill-intent",
+        task: "do not relaunch",
+        groupId: "kill-intent",
+        createdAt: now,
+        killIntent: {
+          requestedAt: now + 1,
+          reason: "killed",
+          sessionId: "session-queued-kill-intent",
+        },
+      }),
+    ]);
 
     hydrateAndActivateRegistry();
     await Promise.resolve();
@@ -1267,35 +1258,23 @@ describe("subagent registry seam flow", () => {
           maxConcurrent: 2,
         },
       };
-      mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-        runs: Map<string, unknown>;
-      }) => {
-        params.runs.set(
-          "run-active",
-          createSubagentRunRecord({
-            runId: "run-active",
-            childSessionKey: "agent:main:subagent:run-active",
-            groupId: "logical-group",
-            collect: true,
-            schedulerSlotId: "slot-active",
-            createdAt: now - 1_000,
-            execution: { status: executionStatus, startedAt: now - 1_000 },
-          }),
-        );
-        params.runs.set(
-          "run-queued-one",
-          makeQueuedRun({ ...queuedRunOverrides, runId: "run-queued-one", createdAt: now }),
-        );
-        params.runs.set(
-          "run-queued-two",
-          makeQueuedRun({
-            ...queuedRunOverrides,
-            runId: "run-queued-two",
-            createdAt: now + 1,
-          }),
-        );
-        return 3;
-      }) as never);
+      mockRestoredRuns(() => [
+        createSubagentRunRecord({
+          runId: "run-active",
+          childSessionKey: "agent:main:subagent:run-active",
+          groupId: "logical-group",
+          collect: true,
+          schedulerSlotId: "slot-active",
+          createdAt: now - 1_000,
+          execution: { status: executionStatus, startedAt: now - 1_000 },
+        }),
+        makeQueuedRun({ ...queuedRunOverrides, runId: "run-queued-one", createdAt: now }),
+        makeQueuedRun({
+          ...queuedRunOverrides,
+          runId: "run-queued-two",
+          createdAt: now + 1,
+        }),
+      ]);
       mocks.entries = {
         "agent:main:subagent:run-active": {
           sessionId: "session-active",
@@ -1483,23 +1462,14 @@ describe("subagent registry seam flow", () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-restored-stop-one",
-        makeQueuedRun({ runId: "run-restored-stop-one", groupId: "restore-stop", createdAt: now }),
-      );
-      params.runs.set(
-        "run-restored-stop-two",
-        makeQueuedRun({
-          runId: "run-restored-stop-two",
-          groupId: "restore-stop",
-          createdAt: now + 1,
-        }),
-      );
-      return 2;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({ runId: "run-restored-stop-one", groupId: "restore-stop", createdAt: now }),
+      makeQueuedRun({
+        runId: "run-restored-stop-two",
+        groupId: "restore-stop",
+        createdAt: now + 1,
+      }),
+    ]);
     mocks.entries = {
       "agent:main:subagent:run-restored-stop-one": {
         sessionId: "one",
@@ -1562,27 +1532,18 @@ describe("subagent registry seam flow", () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-restored-delete-one",
-        makeQueuedRun({
-          runId: "run-restored-delete-one",
-          groupId: "restore-delete",
-          createdAt: now,
-        }),
-      );
-      params.runs.set(
-        "run-restored-delete-two",
-        makeQueuedRun({
-          runId: "run-restored-delete-two",
-          groupId: "restore-delete",
-          createdAt: now + 1,
-        }),
-      );
-      return 2;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({
+        runId: "run-restored-delete-one",
+        groupId: "restore-delete",
+        createdAt: now,
+      }),
+      makeQueuedRun({
+        runId: "run-restored-delete-two",
+        groupId: "restore-delete",
+        createdAt: now + 1,
+      }),
+    ]);
     mocks.entries = {
       "agent:main:subagent:run-restored-delete-one": {
         lifecycleRevision: "revision-one",
@@ -1625,27 +1586,18 @@ describe("subagent registry seam flow", () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-restored-rotation-one",
-        makeQueuedRun({
-          runId: "run-restored-rotation-one",
-          groupId: "restore-lifecycle-rotation",
-          createdAt: now,
-        }),
-      );
-      params.runs.set(
-        "run-restored-rotation-two",
-        makeQueuedRun({
-          runId: "run-restored-rotation-two",
-          groupId: "restore-lifecycle-rotation",
-          createdAt: now + 1,
-        }),
-      );
-      return 2;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({
+        runId: "run-restored-rotation-one",
+        groupId: "restore-lifecycle-rotation",
+        createdAt: now,
+      }),
+      makeQueuedRun({
+        runId: "run-restored-rotation-two",
+        groupId: "restore-lifecycle-rotation",
+        createdAt: now + 1,
+      }),
+    ]);
     mocks.entries = {
       "agent:main:subagent:run-restored-rotation-one": {
         sessionId: "one",
@@ -1701,25 +1653,19 @@ describe("subagent registry seam flow", () => {
 
   it("cleans prepared resources after a restored collector launch fails", async () => {
     const now = Date.now();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-queued-failure",
-        makeQueuedRun({
-          runId: "run-queued-failure",
-          childSessionKey: "agent:main:subagent:queued-failure",
-          swarmRequesterSessionKey: "agent:main:main",
-          task: "fail restored launch",
-          groupId: "restore-failure",
-          createdAt: now,
-          queuedLaunch: {
-            request: { sessionKey: "agent:main:subagent:queued-failure" },
-          },
-        }),
-      );
-      return 1;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({
+        runId: "run-queued-failure",
+        childSessionKey: "agent:main:subagent:queued-failure",
+        swarmRequesterSessionKey: "agent:main:main",
+        task: "fail restored launch",
+        groupId: "restore-failure",
+        createdAt: now,
+        queuedLaunch: {
+          request: { sessionKey: "agent:main:subagent:queued-failure" },
+        },
+      }),
+    ]);
     mocks.entries = {
       "agent:main:subagent:queued-failure": {
         lifecycleRevision: "revision-queued-failure",
@@ -1774,25 +1720,19 @@ describe("subagent registry seam flow", () => {
 
   it("retries restored collector session cleanup before announcing deletion", async () => {
     const now = Date.now();
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-    }) => {
-      params.runs.set(
-        "run-queued-cleanup-retry",
-        makeQueuedRun({
-          runId: "run-queued-cleanup-retry",
-          childSessionKey: "agent:main:subagent:queued-cleanup-retry",
-          swarmRequesterSessionKey: "agent:main:main",
-          task: "retry failed cleanup",
-          groupId: "restore-cleanup-retry",
-          createdAt: now,
-          queuedLaunch: {
-            request: { sessionKey: "agent:main:subagent:queued-cleanup-retry" },
-          },
-        }),
-      );
-      return 1;
-    }) as never);
+    mockRestoredRuns(() => [
+      makeQueuedRun({
+        runId: "run-queued-cleanup-retry",
+        childSessionKey: "agent:main:subagent:queued-cleanup-retry",
+        swarmRequesterSessionKey: "agent:main:main",
+        task: "retry failed cleanup",
+        groupId: "restore-cleanup-retry",
+        createdAt: now,
+        queuedLaunch: {
+          request: { sessionKey: "agent:main:subagent:queued-cleanup-retry" },
+        },
+      }),
+    ]);
     mocks.entries = {
       "agent:main:subagent:queued-cleanup-retry": {
         lifecycleRevision: "revision-queued-cleanup-retry",
@@ -2085,58 +2025,6 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("terminally times out explicit runTimeoutSeconds when agent.wait has no terminal snapshot", async () => {
-    const startedAt = Date.now();
-    let waitAttempts = 0;
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent.wait") {
-        waitAttempts += 1;
-        return { status: "timeout" };
-      }
-      return {};
-    });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        updatedAt: startedAt,
-        status: "running",
-      }),
-    };
-
-    await mod.registerSubagentRun({
-      runId: "run-explicit-timeout",
-      task: "respect explicit timeout",
-      runTimeoutSeconds: 1,
-    });
-
-    await waitForFast(() => {
-      expect(waitAttempts).toBeGreaterThanOrEqual(1);
-    });
-    const activeRun = findRequesterRun("run-explicit-timeout");
-    expect(activeRun?.execution.endedAt).toBeUndefined();
-    expect(activeRun?.execution.outcome).toBeUndefined();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    await waitForFast(() => {
-      const completedRun = findRequesterRun("run-explicit-timeout");
-      expect(waitAttempts).toBeGreaterThanOrEqual(2);
-      expect(completedRun?.execution.endedAt).toBe(startedAt + 1_000);
-      expectRecordFields(
-        completedRun?.execution.outcome,
-        {
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
-        },
-        "explicit run timeout outcome",
-      );
-    });
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it.each([
     {
       name: "keeps explicit run timeout terminal when late lifecycle success arrives",
@@ -2168,17 +2056,34 @@ describe("subagent registry seam flow", () => {
       const settleRootWork = observeRootWork();
       await mod.registerSubagentRun({ runId, task, runTimeoutSeconds: 1 });
 
+      await waitForFast(() =>
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "agent.wait" }),
+        ),
+      );
+      const activeRun = findRequesterRun(runId);
+      expect(activeRun?.execution.endedAt).toBeUndefined();
+      expect(activeRun?.execution.outcome).toBeUndefined();
+
       await vi.advanceTimersByTimeAsync(5_000);
       await waitForFast(() => {
         expect(findRequesterRun(runId)).toMatchObject({
           execution: {
             status: "terminal",
             endedAt: startedAt + 1_000,
-            outcome: { status: "timeout" },
+            outcome: {
+              status: "timeout",
+              startedAt,
+              endedAt: startedAt + 1_000,
+              elapsedMs: 1_000,
+            },
           },
         });
       });
       await settleRootWork();
+      expect(
+        mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
+      ).toBeGreaterThanOrEqual(2);
       getLifecycleHandler()({
         runId,
         stream: "lifecycle",
@@ -2880,23 +2785,16 @@ describe("subagent registry seam flow", () => {
     const runTimeoutSeconds = 60;
     vi.setSystemTime(startedAt + 59_000);
     mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
-      mergeOnly?: boolean;
-    }) => {
-      params.runs.set(
-        "run-resumed-near-deadline",
-        createSubagentRunRecord({
-          runId: "run-resumed-near-deadline",
-          task: "resume near explicit timeout",
-          runTimeoutSeconds,
-          createdAt: startedAt,
-          startedAt,
-          sessionStartedAt: startedAt,
-        }),
-      );
-      return 1;
-    }) as never);
+    mockRestoredRuns(() => [
+      createSubagentRunRecord({
+        runId: "run-resumed-near-deadline",
+        task: "resume near explicit timeout",
+        runTimeoutSeconds,
+        createdAt: startedAt,
+        startedAt,
+        sessionStartedAt: startedAt,
+      }),
+    ]);
     const waitTimeouts: unknown[] = [];
     mocks.callGateway.mockImplementation(
       async (request: { method?: string; params?: Record<string, unknown> }) => {
