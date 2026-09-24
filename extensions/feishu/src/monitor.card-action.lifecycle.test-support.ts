@@ -29,11 +29,9 @@ const {
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
   resolveAgentRouteMock,
-  resolveBoundConversationMock,
+  resolveRuntimeConversationBindingRouteMock,
   sendCardFeishuMock,
   sendMessageFeishuMock,
-  touchBindingMock,
-  withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -128,6 +126,7 @@ function latestReplyDispatcherParams() {
   }
   return call[0] as {
     accountId?: string;
+    agentId?: string;
     chatId?: string;
     replyToMessageId?: string;
   };
@@ -156,10 +155,27 @@ describe("Feishu card-action lifecycle", () => {
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
 
-    resolveBoundConversationMock.mockImplementation(() => ({
-      bindingId: "binding-card",
-      targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-    }));
+    resolveRuntimeConversationBindingRouteMock.mockReturnValue({
+      bindingRecord: {
+        bindingId: "binding-card",
+        targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        targetKind: "session",
+        conversation: { channel: "feishu", accountId: "acct-card", conversationId: "ou_user1" },
+        status: "active",
+        boundAt: 0,
+      },
+      boundSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      boundAgentId: "bound-agent",
+      route: {
+        agentId: "bound-agent",
+        channel: "feishu",
+        accountId: "acct-card",
+        sessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        mainSessionKey: "agent:bound-agent:main",
+        lastRoutePolicy: "session",
+        matchedBy: "binding.channel",
+      },
+    });
 
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
@@ -178,7 +194,6 @@ describe("Feishu card-action lifecycle", () => {
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
       dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
       storePath: "/tmp/feishu-card-action-sessions.json",
     });
   });
@@ -214,13 +229,18 @@ describe("Feishu card-action lifecycle", () => {
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     const dispatcherParams = latestReplyDispatcherParams();
     expect(dispatcherParams.accountId).toBe("acct-card");
+    expect(dispatcherParams.agentId).toBe("bound-agent");
     expect(dispatcherParams.chatId).toBe("p2p:ou_user1");
     expect(dispatcherParams.replyToMessageId).toBeUndefined();
     const finalized = latestFinalizedContext();
     expect(finalized.AccountId).toBe("acct-card");
     expect(finalized.SessionKey).toBe("agent:bound-agent:feishu:direct:ou_user1");
     expect(finalized.MessageSid).toBe("card-action-tok-card-once");
-    expect(touchBindingMock).toHaveBeenCalledWith("binding-card");
+    expect(resolveRuntimeConversationBindingRouteMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        conversation: { channel: "feishu", accountId: "acct-card", conversationId: "ou_user1" },
+      }),
+    );
 
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
@@ -260,6 +280,7 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     const dispatcherParams = latestReplyDispatcherParams();
     expect(dispatcherParams.accountId).toBe("acct-card");
+    expect(dispatcherParams.agentId).toBe("bound-agent");
     expect(dispatcherParams.chatId).toBe(chatId);
     expect(dispatcherParams.replyToMessageId).toBe("om_card_v2");
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-v2-context");
@@ -382,6 +403,7 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     const dispatcherParams = latestReplyDispatcherParams();
     expect(dispatcherParams.accountId).toBe("acct-card");
+    expect(dispatcherParams.agentId).toBe("bound-agent");
     expect(dispatcherParams.chatId).toBe("ou_user1");
     expect(dispatcherParams.replyToMessageId).toBe("om_sdk_card");
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-sdk-flat");
@@ -412,6 +434,7 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     const dispatcherParams = latestReplyDispatcherParams();
     expect(dispatcherParams.accountId).toBe("acct-card");
+    expect(dispatcherParams.agentId).toBe("bound-agent");
     expect(dispatcherParams.chatId).toBe("ou_user1");
     expect(dispatcherParams.replyToMessageId).toBeUndefined();
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-no-reply-target");

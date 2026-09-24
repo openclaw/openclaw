@@ -65,19 +65,13 @@ const proxyEnvKeys = [
   "HTTPS_PROXY",
   "http_proxy",
   "HTTP_PROXY",
+  "all_proxy",
+  "ALL_PROXY",
+  "no_proxy",
+  "NO_PROXY",
   "OPENCLAW_PROXY_ACTIVE",
 ] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
-const registerFeishuDocToolsMock = vi.hoisted(() => vi.fn());
-const registerFeishuChatToolsMock = vi.hoisted(() => vi.fn());
-const registerFeishuWikiToolsMock = vi.hoisted(() => vi.fn());
-const registerFeishuDriveToolsMock = vi.hoisted(() => vi.fn());
-const registerFeishuPermToolsMock = vi.hoisted(() => vi.fn());
-const registerFeishuBitableToolsMock = vi.hoisted(() => vi.fn());
-const feishuPluginMock = vi.hoisted(() => ({ id: "feishu-test-plugin" }));
-const setFeishuRuntimeMock = vi.hoisted(() => vi.fn());
-const registerFeishuSubagentHooksMock = vi.hoisted(() => vi.fn());
-
 let createFeishuClient: CreateFeishuClient;
 let createFeishuWSClient: CreateFeishuWSClient;
 let getFeishuUserAgent: GetFeishuUserAgent;
@@ -93,42 +87,6 @@ function setFeishuTestEnvValue(key: string, value: string | undefined): void {
     Reflect.set(process.env, key, value);
   }
 }
-
-vi.mock("./channel.js", () => ({
-  feishuPlugin: feishuPluginMock,
-}));
-
-vi.mock("./docx.js", () => ({
-  registerFeishuDocTools: registerFeishuDocToolsMock,
-}));
-
-vi.mock("./chat.js", () => ({
-  registerFeishuChatTools: registerFeishuChatToolsMock,
-}));
-
-vi.mock("./wiki.js", () => ({
-  registerFeishuWikiTools: registerFeishuWikiToolsMock,
-}));
-
-vi.mock("./drive.js", () => ({
-  registerFeishuDriveTools: registerFeishuDriveToolsMock,
-}));
-
-vi.mock("./perm.js", () => ({
-  registerFeishuPermTools: registerFeishuPermToolsMock,
-}));
-
-vi.mock("./bitable.js", () => ({
-  registerFeishuBitableTools: registerFeishuBitableToolsMock,
-}));
-
-vi.mock("./runtime.js", () => ({
-  setFeishuRuntime: setFeishuRuntimeMock,
-}));
-
-vi.mock("./subagent-hooks.js", () => ({
-  registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
-}));
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
@@ -207,16 +165,9 @@ beforeAll(async () => {
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
   }));
-  vi.doMock("@openclaw/proxyline", () => ({
+  vi.doMock("@openclaw/proxyline", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@openclaw/proxyline")>()),
     createAmbientNodeProxyAgent: proxyAgentCtorMock,
-    hasAmbientNodeProxyConfigured: vi.fn(() =>
-      Boolean(
-        process.env.HTTPS_PROXY ??
-        process.env.https_proxy ??
-        process.env.HTTP_PROXY ??
-        process.env.http_proxy,
-      ),
-    ),
   }));
 
   ({ createFeishuClient, createFeishuWSClient, getFeishuUserAgent, resetFeishuProxyAgentForTest } =
@@ -244,15 +195,6 @@ afterEach(() => {
 
 afterAll(() => {
   resetFeishuProxyAgentForTest();
-  vi.doUnmock("./channel.js");
-  vi.doUnmock("./docx.js");
-  vi.doUnmock("./chat.js");
-  vi.doUnmock("./wiki.js");
-  vi.doUnmock("./drive.js");
-  vi.doUnmock("./perm.js");
-  vi.doUnmock("./bitable.js");
-  vi.doUnmock("./runtime.js");
-  vi.doUnmock("./subagent-hooks.js");
   vi.doUnmock("@larksuiteoapi/node-sdk");
   vi.doUnmock("@openclaw/proxyline");
   vi.resetModules();
@@ -866,13 +808,27 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toBe(proxyAgentInstance);
   });
 
-  it("falls back to HTTP_PROXY for ws proxy agent creation", async () => {
+  it("does not use HTTP_PROXY alone for the HTTPS websocket endpoint", async () => {
     setFeishuTestEnvValue("HTTP_PROXY", "http://upper-http:8999");
 
     await createFeishuWSClient(baseAccount);
 
-    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(proxyAgentCtorMock).not.toHaveBeenCalled();
     const options = firstWsClientOptions();
-    expect(options.agent).toBe(proxyAgentInstance);
+    expect(options.agent).toBeUndefined();
+  });
+  it("uses ALL_PROXY for the HTTPS websocket endpoint", async () => {
+    setFeishuTestEnvValue("ALL_PROXY", "http://all-proxy:8999");
+    await createFeishuWSClient(baseAccount);
+    expect(proxyAgentCtorMock).toHaveBeenCalledOnce();
+    expect(firstWsClientOptions().agent).toBe(proxyAgentInstance);
+  });
+
+  it("honors a global NO_PROXY bypass for websocket proxy selection", async () => {
+    setFeishuTestEnvValue("HTTPS_PROXY", "http://https-proxy:8999");
+    setFeishuTestEnvValue("NO_PROXY", "*");
+    await createFeishuWSClient(baseAccount);
+    expect(proxyAgentCtorMock).not.toHaveBeenCalled();
+    expect(firstWsClientOptions().agent).toBeUndefined();
   });
 });

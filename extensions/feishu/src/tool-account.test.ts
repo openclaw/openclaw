@@ -97,7 +97,6 @@ describe("resolveFeishuToolAccount", () => {
             },
           },
         },
-        defaultAccountId: "ops",
         requiredTool,
       }),
     ).toThrow('Feishu Wiki tools are disabled for account "ops"');

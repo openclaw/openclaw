@@ -35,17 +35,6 @@ const createFeishuClientMock = vi.hoisted(() =>
 );
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
-const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () =>
-    (params: {
-      mediaUrl?: string;
-      audioAsVoice?: boolean;
-      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
-    }) =>
-      params.ttsSupplement
-        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
-        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
-);
 const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
   vi.fn(async (hostname: string) => {
     if (hostname === "files.example.test") {
@@ -67,10 +56,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./media.js", () => ({
+vi.mock("./media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.js")>()),
   sendMediaFeishu: sendMediaFeishuMock,
   sendStickerFeishu: vi.fn(),
-  shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 
 vi.mock("./send.js", async (importOriginal) => ({
@@ -80,24 +69,6 @@ vi.mock("./send.js", async (importOriginal) => ({
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
-  resolveFeishuCardTemplate: (template?: string) =>
-    new Set([
-      "blue",
-      "green",
-      "red",
-      "orange",
-      "purple",
-      "indigo",
-      "wathet",
-      "turquoise",
-      "yellow",
-      "grey",
-      "carmine",
-      "violet",
-      "lime",
-    ]).has(template ?? "")
-      ? template
-      : undefined,
 }));
 
 vi.mock("./runtime.js", () => ({

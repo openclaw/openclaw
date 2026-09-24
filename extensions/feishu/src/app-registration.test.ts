@@ -10,6 +10,7 @@ import {
   pollAppRegistration,
   printQrCode,
 } from "./app-registration.js";
+import { writeOversizedJson } from "./http-test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -101,48 +102,6 @@ function writeJson(res: ServerResponse, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
-function writeOversizedJson(
-  res: ServerResponse,
-  totalBytes: number,
-): { bytesPulled: () => number; canceled: () => boolean } {
-  const chunk = Buffer.alloc(1024 * 1024, 0x20);
-  let bytesPulled = 0;
-  let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
-  });
-  const prefix = Buffer.from('{"device_code":"dev","padding":"');
-  bytesPulled += prefix.byteLength;
-  res.write(prefix);
-  const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
-      }
-      return;
-    }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
-      setImmediate(sendChunk);
-      return;
-    }
-    res.once("drain", sendChunk);
-  };
-  setImmediate(sendChunk);
-  return {
-    bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
-  };
-}
-
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   let body = "";
   for await (const chunk of req) {
@@ -186,10 +145,16 @@ function beginRegistrationJson<T>(
 }
 
 describe("Feishu app registration", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    renderQrTerminalMock.mockClear();
+  let finishPoll: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    try {
+      await finishPoll?.();
+    } finally {
+      finishPoll = undefined;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      renderQrTerminalMock.mockClear();
+    }
   });
 
   it("defaults unsafe begin polling lifetimes from provider responses", async () => {
@@ -218,13 +183,20 @@ describe("Feishu app registration", () => {
       }),
     ) as FeishuAppRegistrationFetch;
 
+    const controller = new AbortController();
     const poll = pollAppRegistration({
       deviceCode: "device-code",
+      abortSignal: controller.signal,
       interval: 10_000_000,
       expireIn: 10_000_000,
       fetchImpl,
       lookupFn: hermeticPublicLookup,
     });
+    finishPoll = async () => {
+      controller.abort();
+      await vi.runOnlyPendingTimersAsync();
+      await poll;
+    };
     await vi.advanceTimersByTimeAsync(0);
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
@@ -312,31 +284,32 @@ describe("Feishu app registration", () => {
     );
   });
 
-  // over-cap: body > 16 MiB, no Content-Length. The bounded reader cancels
-  // through the real SSRF guard and rejects before full buffering.
-  it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
-    await withRegistrationServer(
+  // Observe the real socket close before fixture teardown, separately from the byte bound.
+  it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async (context) => {
+    let streamState: ReturnType<typeof writeOversizedJson> | undefined;
+    let operation: Promise<void> | undefined;
+    context.onTestFinished(async () => {
+      await operation;
+    });
+    operation = withRegistrationServer(
       (_req, res) => {
-        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2, {
+          prefix: '{"device_code":"dev","padding":"',
+          signal: context.signal,
+        });
       },
       async (options) => {
         await expect(beginAppRegistration("feishu", options)).rejects.toThrow(
           /feishu\.api: JSON response exceeds \d+ bytes/,
         );
+        if (!streamState) {
+          throw new Error("expected oversized response");
+        }
+        await expect(streamState.closed).resolves.toEqual({ completed: false });
+        expect(streamState.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
       },
     );
-
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu fetchFeishuJson bound proof] over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await operation;
   });
 
   // under-cap: a normal-sized valid JSON response is parsed and returned correctly.

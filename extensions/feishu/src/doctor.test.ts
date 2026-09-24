@@ -347,6 +347,26 @@ describe("Feishu doctor state repair", () => {
       }),
     });
 
+    const protectedSession = {
+      agentId: defaultAgentId,
+      storePath: targetStorePath,
+      sessionId: "sess-acp-bad",
+      sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+    };
+    for (const content of blankUserMessages) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...protectedSession,
+        message: { role: "user", content },
+      });
+    }
+    const protectedEntry = readStoreEntries(targetStorePath)[protectedSession.sessionKey];
+    const protectedTranscript = await readSessionTranscriptEvents(protectedSession);
+    expect(protectedTranscript).toHaveLength(4);
+
+    const preview = await runDoctor(false);
+    expect(preview.warningNotes.join("\n")).toContain(defaultFeishuSessionKey);
+    expect(preview.warningNotes.join("\n")).not.toContain(protectedSession.sessionKey);
+
     const result = await runDoctor(true);
 
     expect(result.warningNotes).toEqual([]);
@@ -370,7 +390,10 @@ describe("Feishu doctor state repair", () => {
 
     const store = readStoreEntries(targetStorePath);
     expect(store[defaultFeishuSessionKey]).toBeUndefined();
-    expect(store["agent:codex:acp:binding:feishu:default:abc123"]).toBeDefined();
+    expect(store[protectedSession.sessionKey]).toEqual(protectedEntry);
+    await expect(readSessionTranscriptEvents(protectedSession)).resolves.toEqual(
+      protectedTranscript,
+    );
     expect(store["agent:main:discord:direct:user"]).toBeDefined();
 
     expect(fs.existsSync(acpTranscriptPath)).toBe(true);
@@ -379,20 +402,24 @@ describe("Feishu doctor state repair", () => {
 
   it("preserves locked harness sessions while repairing ordinary Feishu sessions", async () => {
     const targetStorePath = storePath();
-    await upsertSessionEntry({
-      agentId: "main",
+    const protectedSession = await seedSession({
       storePath: targetStorePath,
       sessionKey: "agent:main:ordinary-codex-locked",
+      sessionId: "sess-codex-locked",
+      contents: blankUserMessages,
       entry: {
-        sessionId: "sess-codex-locked",
         agentHarnessId: "codex",
         modelSelectionLocked: true,
+        origin: { provider: "feishu", surface: "feishu", from: "feishu:ou_user" },
         delivery: normalizeSessionDeliveryState({
           route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
         }),
         updatedAt: 1,
       },
     });
+    const protectedEntry = readStoreEntries(targetStorePath)[protectedSession.sessionKey];
+    const protectedTranscript = await readSessionTranscriptEvents(protectedSession);
+    expect(protectedTranscript).toHaveLength(4);
     await seedSession({
       sessionId: "sess-feishu-bad",
       storePath: targetStorePath,
@@ -400,12 +427,19 @@ describe("Feishu doctor state repair", () => {
       contents: blankUserMessages,
     });
 
+    const preview = await runDoctor(false);
+    expect(preview.warningNotes.join("\n")).toContain(defaultFeishuSessionKey);
+    expect(preview.warningNotes.join("\n")).not.toContain(protectedSession.sessionKey);
+
     const result = await runDoctor(true);
 
     expect(result.warningNotes).toEqual([]);
     expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
     const store = readStoreEntries(targetStorePath);
-    expect(store["agent:main:ordinary-codex-locked"]).toBeDefined();
+    expect(store[protectedSession.sessionKey]).toEqual(protectedEntry);
+    await expect(readSessionTranscriptEvents(protectedSession)).resolves.toEqual(
+      protectedTranscript,
+    );
     expect(store[defaultFeishuSessionKey]).toBeUndefined();
   });
 

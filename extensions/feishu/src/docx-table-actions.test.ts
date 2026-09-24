@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -125,7 +125,13 @@ describe("registered feishu_doc table patches", () => {
       const response = createDeferred<PatchResponse>();
       const patch = vi.spyOn(client.docx.documentBlock, "patch").mockReturnValue(response.promise);
       const params = paramsFor(sample);
-      const pending = resolveTool(client).execute("table-patch", params);
+      const tool = resolveTool(client);
+      let pending: ReturnType<typeof tool.execute> | undefined;
+      onTestFinished(async () => {
+        response.resolve({ code: 0, data: { block, client_token: "table-client-token" } });
+        await pending;
+      });
+      pending = tool.execute("table-patch", params);
       const request = {
         path: { document_id: "doc_table", block_id: "table_target" },
         data: sample.data,

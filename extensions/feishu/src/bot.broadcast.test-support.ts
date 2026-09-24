@@ -1,4 +1,7 @@
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
@@ -14,7 +17,6 @@ const {
   mockCreateFeishuReplyDispatcher,
   mockCreateFeishuClient,
   mockDispatchReply,
-  mockRecordInboundSession,
   mockResolveAgentRoute,
   mockResolveStorePath,
 } = vi.hoisted(() => ({
@@ -27,7 +29,6 @@ const {
   })),
   mockCreateFeishuClient: vi.fn(),
   mockDispatchReply: vi.fn().mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
-  mockRecordInboundSession: vi.fn().mockResolvedValue(undefined),
   mockResolveAgentRoute: vi.fn(),
   mockResolveStorePath: vi.fn(
     (_store?: unknown, _options?: { agentId?: string }) => "/tmp/feishu-session-store.json",
@@ -83,7 +84,7 @@ export function createRuntimeEnv() {
 export function setupFeishuBroadcastTestHarness() {
   const mockGetChatInfo = vi.fn();
   const mockShouldComputeCommandAuthorized = vi.fn(() => false);
-  const resolvedTurnCalls: Array<Record<string, unknown>> = [];
+  const resolvedTurnCalls: ChannelInboundTurnPlan[] = [];
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
@@ -102,7 +103,6 @@ export function setupFeishuBroadcastTestHarness() {
       },
       session: {
         resolveStorePath: mockResolveStorePath,
-        recordInboundSession: mockRecordInboundSession,
       },
       reply: {},
       commands: {
@@ -131,17 +131,8 @@ export function setupFeishuBroadcastTestHarness() {
           if (!("route" in turn) || !("delivery" in turn)) {
             throw new Error("expected assembled Feishu channel turn plan");
           }
-          resolvedTurnCalls.push(turn as unknown as Record<string, unknown>);
+          resolvedTurnCalls.push(turn);
           const routeSessionKey = turn.route.sessionKey;
-          await mockRecordInboundSession({
-            storePath: mockResolveStorePath(),
-            sessionKey: turn.ctxPayload.SessionKey ?? routeSessionKey,
-            ctx: turn.ctxPayload,
-            groupResolution: turn.record?.groupResolution,
-            createIfMissing: turn.record?.createIfMissing,
-            updateLastRoute: turn.record?.updateLastRoute,
-            onRecordError: turn.record?.onRecordError ?? (() => undefined),
-          });
           const dispatchResult = await mockDispatchReply({
             ctx: turn.ctxPayload,
             cfg: turn.cfg,

@@ -20,7 +20,7 @@ describe("broadcast routing", () => {
     mockDispatchReply,
     mockGetChatInfo,
     mockResolveAgentRoute,
-    runtimeStub,
+    resolvedTurnCalls,
   } = setupFeishuBroadcastTestHarness();
 
   it("dispatches to all broadcast agents when bot is mentioned", async () => {
@@ -42,29 +42,12 @@ describe("broadcast routing", () => {
     const sessionKeys = builtInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
-    const recordCalls = (
-      runtimeStub.channel.session.recordInboundSession as unknown as {
-        mock: {
-          calls: Array<
-            [
-              {
-                updateLastRoute?: {
-                  sessionKey?: unknown;
-                  channel?: unknown;
-                  to?: unknown;
-                };
-              },
-            ]
-          >;
-        };
-      }
-    ).mock.calls;
     expect(
-      recordCalls
-        .map(([call]) => ({
-          sessionKey: call.updateLastRoute?.["sessionKey"],
-          channel: call.updateLastRoute?.["channel"],
-          to: call.updateLastRoute?.["to"],
+      resolvedTurnCalls
+        .map((turn) => ({
+          sessionKey: turn.record?.updateLastRoute?.sessionKey,
+          channel: turn.record?.updateLastRoute?.channel,
+          to: turn.record?.updateLastRoute?.to,
         }))
         .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
     ).toEqual([

@@ -5,6 +5,7 @@ import {
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
@@ -65,9 +66,6 @@ type FeishuDispatchReplyMock = Mock<
     };
   }) => Promise<{ queuedFinal: boolean; counts: FeishuDispatchReplyCounts }>
 >;
-type RuntimeReplyDispatcher = NonNullable<
-  Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]["dispatcher"]
->;
 type FeishuLifecycleReplyDispatcher = {
   dispatcherOptions: Record<string, never>;
   delivery: {
@@ -126,7 +124,6 @@ function createImmediateInboundDebounce() {
 function installFeishuLifecycleRuntime(params: {
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
-  withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
   resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
@@ -148,43 +145,12 @@ function installFeishuLifecycleRuntime(params: {
       reply: {
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
         formatAgentEnvelope: vi.fn((value: { body: string }) => value.body),
-        dispatchReplyWithBufferedBlockDispatcher: async ({
-          cfg,
-          ctx,
-          dispatcherOptions,
-          replyOptions,
-        }) => {
-          // ReplyDispatcher enqueue methods are synchronous; settlement owns async delivery.
-          const pendingDeliveries: Promise<unknown>[] = [];
-          const dispatcher: RuntimeReplyDispatcher = {
-            sendToolResult: () => false,
-            sendBlockReply: () => false,
-            sendFinalReply: (payload) => {
-              pendingDeliveries.push(
-                Promise.resolve(dispatcherOptions.deliver(payload, { kind: "final" })),
-              );
-              return true;
-            },
-            waitForIdle: async () => {
-              await Promise.all(pendingDeliveries);
-            },
-            getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-            getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-            markComplete: () => {},
-          };
-          return await params.withReplyDispatcher({
-            dispatcher,
-            run: () =>
-              params.dispatchReplyFromConfig({
-                cfg,
-                ctx: ctx as Parameters<typeof params.dispatchReplyFromConfig>[0]["ctx"],
-                dispatcher,
-                replyOptions,
-              }),
-          });
-        },
+        dispatchReplyWithBufferedBlockDispatcher: (options) =>
+          dispatchReplyWithBufferedBlockDispatcher({
+            ...options,
+            dispatchReplyFromConfig: params.dispatchReplyFromConfig,
+          }),
         dispatchReplyFromConfig: params.dispatchReplyFromConfig,
-        withReplyDispatcher: params.withReplyDispatcher,
       },
       commands: {
         shouldComputeCommandAuthorized: params.shouldComputeCommandAuthorized ?? vi.fn(() => false),
@@ -212,7 +178,6 @@ function installFeishuLifecycleRuntime(params: {
 export function installFeishuLifecycleReplyRuntime(params: {
   resolveAgentRouteMock: unknown;
   dispatchReplyFromConfigMock: unknown;
-  withReplyDispatcherMock: unknown;
   storePath: string;
 }): PluginRuntime {
   return installFeishuLifecycleRuntime({
@@ -220,8 +185,6 @@ export function installFeishuLifecycleReplyRuntime(params: {
       params.resolveAgentRouteMock as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
     dispatchReplyFromConfig:
       params.dispatchReplyFromConfigMock as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
-    withReplyDispatcher:
-      params.withReplyDispatcherMock as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
     resolveStorePath: vi.fn(() => params.storePath),
   });
 }

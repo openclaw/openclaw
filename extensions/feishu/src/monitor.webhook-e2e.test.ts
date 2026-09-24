@@ -10,6 +10,7 @@ import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
+  cleanupRunningWebhookMonitors,
   createFeishuWebhookTestAccount,
   getFreePort,
   signFeishuPayload,
@@ -92,7 +93,11 @@ async function sendRawSignedFeishuRequest(params: {
 }
 
 afterEach(async () => {
-  await cleanupFeishuMonitorStateForTests();
+  try {
+    await cleanupRunningWebhookMonitors();
+  } finally {
+    await cleanupFeishuMonitorStateForTests();
+  }
 });
 
 afterAll(() => {

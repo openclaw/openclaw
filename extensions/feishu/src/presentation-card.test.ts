@@ -37,19 +37,26 @@ describe("buildFeishuPresentationCard", () => {
 });
 
 describe("isFeishuCardWithinEnvelope", () => {
-  it("counts nested elements against the 200-element API limit", () => {
-    const buildCard = (elementCount: number) => ({
-      schema: "2.0",
-      body: {
-        elements: Array.from({ length: elementCount }, (_entry, index) => ({
-          tag: "markdown",
-          content: String(index),
-        })),
-      },
-    });
-
+  it("counts flat and nested elements against the 200-element API limit", () => {
+    const buildCard = (leafCount: number, nested = false) => {
+      const elements = Array.from({ length: leafCount }, (_entry, index) => ({
+        tag: "markdown",
+        content: String(index),
+      }));
+      return {
+        schema: "2.0",
+        body: {
+          elements: nested
+            ? [{ tag: "column_set", columns: [{ tag: "column", elements }] }]
+            : elements,
+        },
+      };
+    };
     expect(isFeishuCardWithinEnvelope(buildCard(200))).toBe(true);
     expect(isFeishuCardWithinEnvelope(buildCard(201))).toBe(false);
+    // The column set and column count alongside their nested markdown elements.
+    expect(isFeishuCardWithinEnvelope(buildCard(198, true))).toBe(true);
+    expect(isFeishuCardWithinEnvelope(buildCard(199, true))).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ import {
 } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
+  cleanupRunningWebhookMonitors,
   createFeishuWebhookTestAccount,
   getFreePort,
   signFeishuPayload,
@@ -268,10 +269,14 @@ function waitForWebhookResponseClose(accountId: string): Promise<void> {
 }
 
 afterEach(async () => {
-  preAuthInFlightLimit.value = undefined;
-  webhookBodyTimeoutMs.value = 50;
-  feishuWebhookRateLimiter.clear();
-  await cleanupFeishuMonitorStateForTests();
+  try {
+    await cleanupRunningWebhookMonitors();
+  } finally {
+    preAuthInFlightLimit.value = undefined;
+    webhookBodyTimeoutMs.value = 50;
+    feishuWebhookRateLimiter.clear();
+    await cleanupFeishuMonitorStateForTests();
+  }
 });
 
 afterAll(() => {

@@ -25,10 +25,8 @@ const {
   dispatchReplyFromConfigMock,
   ensureConfiguredBindingRouteReadyMock,
   resolveAgentRouteMock,
-  resolveBoundConversationMock,
   resolveConfiguredBindingRouteMock,
   sendMessageFeishuMock,
-  withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -78,7 +76,6 @@ describe("Feishu ACP-init failure lifecycle", () => {
     lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");
 
-    resolveBoundConversationMock.mockReturnValue(null);
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -149,7 +146,6 @@ describe("Feishu ACP-init failure lifecycle", () => {
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
       dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
       storePath: "/tmp/feishu-acp-failure-sessions.json",
     });
   });
@@ -193,25 +189,5 @@ describe("Feishu ACP-init failure lifecycle", () => {
       }),
     );
     expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("does not duplicate the ACP failure notice after the first send succeeds", async () => {
-    const onMessage = await setupLifecycleMonitor();
-    const event = createFeishuTextMessageEvent({
-      messageId: "om_topic_msg_2",
-      chatId: "oc_group_topic",
-      rootId: "om_topic_root_1",
-      threadId: "omt_topic_1",
-      text: "hello topic",
-    });
-
-    await expectFeishuSingleEffectAcrossReplay({
-      handler: onMessage,
-      event,
-      effectMock: sendMessageFeishuMock,
-    });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
   });
 });

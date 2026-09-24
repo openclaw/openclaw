@@ -27,8 +27,6 @@ const {
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
   resolveAgentRouteMock,
-  resolveBoundConversationMock,
-  withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
 let handlersByAccount = new Map<string, Record<string, (data: unknown) => Promise<void>>>();
@@ -144,7 +142,6 @@ describe("Feishu broadcast reply-once lifecycle", () => {
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
 
-    resolveBoundConversationMock.mockReturnValue(null);
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -165,7 +162,6 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
       dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
       storePath: "/tmp/feishu-broadcast-sessions.json",
     });
   });

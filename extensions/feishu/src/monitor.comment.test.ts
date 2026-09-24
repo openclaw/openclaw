@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.comment plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -11,6 +12,22 @@ import {
 
 const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+
+const queuedCommentTasks = vi.hoisted(() => [] as Promise<void>[]);
+vi.mock("./sequential-queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sequential-queue.js")>();
+  return {
+    ...actual,
+    createSequentialQueue: (...options: Parameters<typeof actual.createSequentialQueue>) => {
+      const enqueue = actual.createSequentialQueue(...options);
+      return (...args: Parameters<typeof enqueue>) => {
+        const task = enqueue(...args);
+        queuedCommentTasks.push(task);
+        return task;
+      };
+    },
+  };
+});
 
 let lastRuntime = createNonExitingRuntimeEnv();
 const TEST_DOC_TOKEN = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
@@ -27,6 +44,7 @@ vi.mock("./comment-handler.js", () => ({
 afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./comment-handler.js");
+  vi.doUnmock("./sequential-queue.js");
   vi.resetModules();
 });
 
@@ -736,39 +754,27 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
 
   it("serializes same-document comment notices before invoking handleFeishuCommentEvent", async () => {
     const onComment = await setupCommentMonitorHandler();
-    let resolveFirst: (() => void) | undefined;
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    queuedCommentTasks.length = 0;
+    onTestFinished(async () => {
+      releaseFirst.resolve();
+      await Promise.all(queuedCommentTasks);
+    });
     handleFeishuCommentEventMock
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
+      .mockImplementationOnce(() => {
+        firstStarted.resolve();
+        return releaseFirst.promise;
+      })
       .mockImplementationOnce(async () => {});
 
-    await onComment(
-      makeDriveCommentEvent({
-        event_id: "evt_1",
-        reply_id: "reply_1",
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
-    });
-
-    await onComment(
-      makeDriveCommentEvent({
-        event_id: "evt_2",
-        reply_id: "reply_2",
-      }),
-    );
+    await onComment(makeDriveCommentEvent({ event_id: "evt_1", reply_id: "reply_1" }));
+    await firstStarted.promise;
+    await onComment(makeDriveCommentEvent({ event_id: "evt_2", reply_id: "reply_2" }));
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
-
-    resolveFirst?.();
-
-    await vi.waitFor(() => {
-      expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2);
-    });
+    releaseFirst.resolve();
+    await Promise.all(queuedCommentTasks);
+    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2);
     const firstCallArgs = mockCallAt(
       handleFeishuCommentEventMock,
       0,
@@ -786,13 +792,17 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
   });
 
   it("does not execute a queued durable comment after its claim aborts", async () => {
-    let resolveFirst!: () => void;
-    handleFeishuCommentEventMock.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveFirst = resolve;
-        }),
-    );
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    queuedCommentTasks.length = 0;
+    onTestFinished(async () => {
+      releaseFirst.resolve();
+      await Promise.all(queuedCommentTasks);
+    });
+    handleFeishuCommentEventMock.mockImplementationOnce(() => {
+      firstStarted.resolve();
+      return releaseFirst.promise;
+    });
     const controller = new AbortController();
     const abandoned = vi.fn(async () => {});
     const lifecycle: FeishuIngressLifecycle = {
@@ -813,11 +823,11 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     });
 
     await onComment(makeDriveCommentEvent({ event_id: "evt_blocking" }));
-    await vi.waitFor(() => expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1));
+    await firstStarted.promise;
     const queued = onComment(makeDriveCommentEvent({ event_id: "evt_queued" }));
     controller.abort(new Error("adoption timeout"));
-    resolveFirst();
-    await queued;
+    releaseFirst.resolve();
+    await Promise.all([queued, ...queuedCommentTasks]);
 
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
     expect(abandoned).toHaveBeenCalledTimes(1);

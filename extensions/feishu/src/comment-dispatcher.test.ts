@@ -1,5 +1,6 @@
 // Feishu tests cover comment dispatcher plugin behavior.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -88,7 +89,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
       deliver: created.delivery.deliver,
     } as {
       deliver: (payload: { text: string }, phase: { kind: string }) => Promise<unknown>;
-      onCleanup?: () => Promise<void> | void;
+      onCleanup?: () => void;
       onReplyStart?: () => Promise<void> | void;
     };
   }
@@ -128,13 +129,13 @@ describe("createFeishuCommentReplyDispatcher", () => {
   });
 
   it("sends final comment text without waiting for typing cleanup", async () => {
-    let resolveCleanup: (() => void) | undefined;
-    const cleanup = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveCleanup = resolve;
-        }),
-    );
+    const cleanupFinished = createDeferred<void>();
+    const cleanup = vi.fn(() => cleanupFinished.promise);
+    let deliverPromise: Promise<unknown> | undefined;
+    onTestFinished(async () => {
+      cleanupFinished.resolve();
+      await Promise.all([deliverPromise, cleanupFinished.promise]);
+    });
     createCommentTypingReactionLifecycleMock.mockReturnValue({
       start: vi.fn(async () => {}),
       cleanup,
@@ -142,9 +143,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
     const created = createTestCommentReplyDispatcher();
     const options = replyDispatcherOptions(created);
-    const deliverPromise = Promise.resolve(
-      options.deliver({ text: "hello world" }, { kind: "final" }),
-    );
+    deliverPromise = Promise.resolve(options.deliver({ text: "hello world" }, { kind: "final" }));
     const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
@@ -161,11 +160,11 @@ describe("createFeishuCommentReplyDispatcher", () => {
     });
     expect(cleanup).not.toHaveBeenCalled();
 
-    void options.onCleanup?.();
+    options.onCleanup?.();
     expect(cleanup).toHaveBeenCalledTimes(1);
 
-    resolveCleanup?.();
-    await deliverPromise;
+    cleanupFinished.resolve();
+    await Promise.all([deliverPromise, cleanupFinished.promise]);
   });
 
   it("starts the typing reaction from dispatcher onReplyStart", async () => {
@@ -382,11 +381,8 @@ describe("createFeishuCommentReplyDispatcher", () => {
   });
 
   it("chunks the transformed comment text including attachment links", async () => {
-    const chunkTextWithMode = vi.fn((text: string) =>
-      Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
-        text.slice(index * 12, (index + 1) * 12),
-      ),
-    );
+    const chunks = ["caption\n\n", "https://", "example.com/", "file.png"];
+    const chunkTextWithMode = vi.fn(() => chunks);
     getFeishuRuntimeMock.mockReturnValue({
       channel: {
         text: {
@@ -405,9 +401,12 @@ describe("createFeishuCommentReplyDispatcher", () => {
     );
 
     expect(chunkTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
-    expect(
-      deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
-    ).toBe(true);
+    expect(deliverCommentThreadTextMock.mock.calls.map((call) => call[1].content)).toEqual([
+      "caption\n\n",
+      "https://",
+      "example.com/",
+      "file.png",
+    ]);
     expect(result).toMatchObject({ content: expected, visibleReplySent: true });
   });
 

@@ -32,17 +32,6 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
-const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () =>
-    (params: {
-      mediaUrl?: string;
-      audioAsVoice?: boolean;
-      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
-    }) =>
-      params.ttsSupplement
-        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
-        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
-);
 const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
   vi.fn(async (hostname: string) => {
     if (hostname === "files.example.test") {
@@ -71,9 +60,9 @@ vi.mock("./send.js", async (importOriginal) => ({
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
   sendCardFeishu: sendCardFeishuMock,
 }));
-vi.mock("./media.js", () => ({
+vi.mock("./media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.js")>()),
   sendMediaFeishu: sendMediaFeishuMock,
-  shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -91,22 +80,9 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const { mergeStreamingText } = await import("./card-test-helpers.js");
-  class FeishuStreamingFinalizationError extends Error {
-    result: { visibleReplySent: boolean; content?: string; messageId?: string };
-
-    constructor(
-      cause: unknown,
-      result: { visibleReplySent: boolean; content?: string; messageId?: string },
-    ) {
-      super(cause instanceof Error ? cause.message : String(cause), { cause });
-      this.result = result;
-    }
-  }
+vi.mock("./streaming-card.js", async (importOriginal) => {
   return {
-    mergeStreamingText,
-    FeishuStreamingFinalizationError,
+    ...(await importOriginal<typeof import("./streaming-card.js")>()),
     FeishuStreamingSession: class {
       active = false;
       credentials: unknown;

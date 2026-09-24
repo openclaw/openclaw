@@ -968,65 +968,53 @@ describe("Feishu inbound debounce regressions", () => {
   });
 
   describe("monitorSingleAccount channelRuntime guard", () => {
-    it("falls back to local runtime when channelRuntime is partial (no inbound)", async () => {
-      setFeishuRuntime(createFeishuMonitorRuntime());
-      const register = vi.fn();
-      createEventDispatcherMock.mockReturnValue({ register });
+    it.each(["partial", "provided", "undefined"] as const)(
+      "selects the debounce owner for %s channelRuntime",
+      async (kind) => {
+        const localRuntime = createFeishuMonitorRuntime();
+        const localDebounce = {
+          resolveInboundDebounceMs: vi.spyOn(
+            localRuntime.channel.debounce,
+            "resolveInboundDebounceMs",
+          ),
+          createInboundDebouncer: vi.spyOn(localRuntime.channel.debounce, "createInboundDebouncer"),
+        };
+        const providedDebounce = {
+          resolveInboundDebounceMs: vi.fn(() => 2000),
+          createInboundDebouncer: vi.fn(createInboundDebouncer),
+        };
+        setFeishuRuntime(localRuntime);
+        const register = vi.fn();
+        createEventDispatcherMock.mockReturnValue({ register });
+        const cfg = buildDebounceConfig();
+        const channelRuntime =
+          kind === "provided"
+            ? { inbound: { run: vi.fn() }, debounce: providedDebounce }
+            : kind === "partial"
+              ? { runtimeContexts: {} }
+              : undefined;
 
-      await expect(
-        monitorSingleAccount({
-          cfg: buildDebounceConfig(),
-          account: buildDebounceAccount(),
-          runtime: createNonExitingRuntimeEnv(),
-          channelRuntime: { runtimeContexts: {} } as unknown as PluginRuntime["channel"],
-          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-        }),
-      ).resolves.toBeUndefined();
+        await expect(
+          monitorSingleAccount({
+            cfg,
+            account: buildDebounceAccount(),
+            runtime: createNonExitingRuntimeEnv(),
+            channelRuntime: channelRuntime as unknown as PluginRuntime["channel"],
+            botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
+          }),
+        ).resolves.toBeUndefined();
 
-      expect(register).toHaveBeenCalled();
-    });
-
-    it("uses provided channelRuntime when it has inbound", async () => {
-      setFeishuRuntime(createFeishuMonitorRuntime());
-      const register = vi.fn();
-      createEventDispatcherMock.mockReturnValue({ register });
-
-      await expect(
-        monitorSingleAccount({
-          cfg: buildDebounceConfig(),
-          account: buildDebounceAccount(),
-          runtime: createNonExitingRuntimeEnv(),
-          channelRuntime: {
-            runtimeContexts: {} as never,
-            inbound: { run: vi.fn() },
-            debounce: {
-              resolveInboundDebounceMs: vi.fn().mockReturnValue(2000),
-              createInboundDebouncer: vi.fn(),
-            },
-          } as unknown as PluginRuntime["channel"],
-          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(register).toHaveBeenCalled();
-    });
-
-    it("falls back to local runtime when channelRuntime is undefined", async () => {
-      setFeishuRuntime(createFeishuMonitorRuntime());
-      const register = vi.fn();
-      createEventDispatcherMock.mockReturnValue({ register });
-
-      await expect(
-        monitorSingleAccount({
-          cfg: buildDebounceConfig(),
-          account: buildDebounceAccount(),
-          runtime: createNonExitingRuntimeEnv(),
-          channelRuntime: undefined,
-          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(register).toHaveBeenCalled();
-    });
+        const selected = kind === "provided" ? providedDebounce : localDebounce;
+        const unused = kind === "provided" ? localDebounce : providedDebounce;
+        expect(selected.resolveInboundDebounceMs).toHaveBeenCalledExactlyOnceWith({
+          cfg,
+          channel: "feishu",
+        });
+        expect(selected.createInboundDebouncer).toHaveBeenCalledOnce();
+        expect(unused.resolveInboundDebounceMs).not.toHaveBeenCalled();
+        expect(unused.createInboundDebouncer).not.toHaveBeenCalled();
+        expect(register).toHaveBeenCalled();
+      },
+    );
   });
 });

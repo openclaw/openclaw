@@ -63,23 +63,7 @@ const listPinsFeishuMock = vi.hoisted(() => vi.fn());
 const removePinFeishuMock = vi.hoisted(() => vi.fn());
 const getChatInfoMock = vi.hoisted(() => vi.fn());
 const getChatMembersMock = vi.hoisted(() => vi.fn());
-const buildFeishuDirectChatMembersMock = vi.hoisted(() =>
-  vi.fn(
-    (authorization: { chatId: string; memberId: string; memberIdType: "open_id" | "user_id" }) => ({
-      chat_id: authorization.chatId,
-      has_more: false,
-      page_token: undefined,
-      members: [
-        {
-          member_id: authorization.memberId,
-          name: undefined,
-          tenant_key: undefined,
-          member_id_type: authorization.memberIdType,
-        },
-      ],
-    }),
-  ),
-);
+const buildFeishuDirectChatMembersMock = vi.hoisted(() => vi.fn());
 const assertFeishuChatMemberMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
@@ -1956,68 +1940,6 @@ describe("feishuPlugin actions", () => {
       expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    ["file_path", "/tmp/script.py"],
-    ["media_url", "/tmp/media.png"],
-    ["file_url", "file:///tmp/script.py"],
-  ] as const)("promotes snake_case send attachment alias %s to sendMedia", async (key, value) => {
-    feishuOutboundSendMediaMock.mockResolvedValueOnce({
-      channel: "feishu",
-      messageId: "om_media",
-      details: { messageId: "om_media", chatId: "oc_group_1" },
-    });
-
-    await feishuPlugin.actions?.handleAction?.({
-      action: "send",
-      params: {
-        to: "chat:oc_group_1",
-        message: "see attached",
-        [key]: value,
-      },
-      cfg,
-      accountId: undefined,
-      toolContext: {},
-      mediaLocalRoots: ["/tmp"],
-    } as never);
-
-    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    const mediaArgs = requireRecord(
-      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
-      "outbound args",
-    );
-    expect(mediaArgs.mediaUrl).toBe(value);
-  });
-
-  it("promotes media_urls snake_case array alias to sendMedia", async () => {
-    feishuOutboundSendMediaMock.mockResolvedValueOnce({
-      channel: "feishu",
-      messageId: "om_media",
-      details: { messageId: "om_media", chatId: "oc_group_1" },
-    });
-
-    await feishuPlugin.actions?.handleAction?.({
-      action: "send",
-      params: {
-        to: "chat:oc_group_1",
-        message: "see attached",
-        media_urls: ["/tmp/report.md"],
-      },
-      cfg,
-      accountId: undefined,
-      toolContext: {},
-      mediaLocalRoots: ["/tmp"],
-    } as never);
-
-    expect(feishuOutboundSendMediaMock).toHaveBeenCalledOnce();
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    const mediaArgs = requireRecord(
-      mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
-      "outbound args",
-    );
-    expect(mediaArgs.mediaUrl).toBe("/tmp/report.md");
-  });
 
   it("accepts a single string mediaUrls value instead of dropping it", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({

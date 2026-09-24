@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { withEnvAsync, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -24,17 +25,22 @@ afterAll(() => {
 });
 
 describe("saveMessageResourceFeishu stream ownership", () => {
-  it.each([false, true])(
+  it.for([false, true])(
     "closes an acquired stream on terminal storage failure (teardown throws: %s)",
-    async (teardownThrows) => {
-      await withTempDir("openclaw-feishu-download-", (stateDir) =>
+    async (teardownThrows, context) => {
+      let operation: Promise<void> | undefined;
+      context.onTestFinished(async () => {
+        await operation;
+      });
+      operation = withTempDir("openclaw-feishu-download-", (stateDir) =>
         withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-          let serverSawClose = false;
+          let closed: Promise<true | { error: unknown }> | undefined;
           await withServer(
             (_request, response) => {
-              response.once("close", () => {
-                serverSawClose = true;
-              });
+              closed = once(response, "close", { signal: context.signal }).then(
+                () => true as const,
+                (error: unknown) => ({ error }),
+              );
               response.writeHead(200, {
                 "content-type": "image/jpeg",
                 "content-length": "1024",
@@ -43,7 +49,9 @@ describe("saveMessageResourceFeishu stream ownership", () => {
             },
             async (baseUrl) => {
               const stream = await new Promise<http.IncomingMessage>((resolve, reject) => {
-                http.get(`${baseUrl}/media`, resolve).once("error", reject);
+                http
+                  .get(`${baseUrl}/media`, { signal: context.signal }, resolve)
+                  .once("error", reject);
               });
               messageResourceGet.mockResolvedValueOnce({
                 getReadableStream: () => stream,
@@ -77,7 +85,7 @@ describe("saveMessageResourceFeishu stream ownership", () => {
                 await expect(download).rejects.toBe(storageError);
                 expect(iterate).not.toHaveBeenCalled();
                 expect(stream.destroyed).toBe(true);
-                await vi.waitFor(() => expect(serverSawClose).toBe(true));
+                await expect(closed).resolves.toBe(true);
               } finally {
                 mkdir.mockRestore();
                 iterate.mockRestore();
@@ -89,6 +97,7 @@ describe("saveMessageResourceFeishu stream ownership", () => {
           );
         }),
       );
+      await operation;
     },
   );
 });

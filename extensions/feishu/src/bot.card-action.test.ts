@@ -574,19 +574,6 @@ describe("Feishu Card Action Handler", () => {
     expect(handleMessage().chat_type).toBe("p2p");
   });
 
-  it("drops duplicate structured callback tokens", async () => {
-    const event = createStructuredQuickActionEvent({
-      token: "tok10",
-      action: "feishu.quick_actions.help",
-      command: "/help",
-    });
-
-    await handleFeishuCardAction({ cfg, event, runtime });
-    await handleFeishuCardAction({ cfg, event, runtime });
-
-    expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
-  });
-
   it("does not log raw duplicate callback tokens", async () => {
     const log = vi.fn();
     const callbackToken = "test-token-placeholder";

@@ -27,10 +27,8 @@ const {
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
   resolveAgentRouteMock,
-  resolveBoundConversationMock,
+  resolveRuntimeConversationBindingRouteMock,
   sendCardFeishuMock,
-  touchBindingMock,
-  withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -84,10 +82,27 @@ describe("Feishu bot-menu lifecycle", () => {
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
 
-    resolveBoundConversationMock.mockImplementation(() => ({
-      bindingId: "binding-menu",
-      targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-    }));
+    resolveRuntimeConversationBindingRouteMock.mockReturnValue({
+      bindingRecord: {
+        bindingId: "binding-menu",
+        targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        targetKind: "session",
+        conversation: { channel: "feishu", accountId: "acct-menu", conversationId: "ou_user1" },
+        status: "active",
+        boundAt: 0,
+      },
+      boundSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+      boundAgentId: "bound-agent",
+      route: {
+        agentId: "bound-agent",
+        channel: "feishu",
+        accountId: "acct-menu",
+        sessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        mainSessionKey: "agent:bound-agent:main",
+        lastRoutePolicy: "session",
+        matchedBy: "binding.channel",
+      },
+    });
 
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
@@ -106,7 +121,6 @@ describe("Feishu bot-menu lifecycle", () => {
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
       dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
       storePath: "/tmp/feishu-bot-menu-sessions.json",
     });
   });
@@ -168,6 +182,7 @@ describe("Feishu bot-menu lifecycle", () => {
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "acct-menu",
+        agentId: "bound-agent",
         chatId: "p2p:ou_user1",
         replyToMessageId: undefined,
       }),
@@ -181,7 +196,11 @@ describe("Feishu bot-menu lifecycle", () => {
         }),
       }),
     );
-    expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
+    expect(resolveRuntimeConversationBindingRouteMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        conversation: { channel: "feishu", accountId: "acct-menu", conversationId: "ou_user1" },
+      }),
+    );
 
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });

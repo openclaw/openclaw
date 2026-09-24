@@ -101,7 +101,15 @@ function expectDriveOutcome(
 }
 
 describe("feishu_drive comments through the installed Lark SDK", () => {
-  afterEach(() => vi.restoreAllMocks());
+  let finishHeldWork: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    try {
+      await finishHeldWork?.();
+    } finally {
+      finishHeldWork = undefined;
+      vi.restoreAllMocks();
+    }
+  });
   afterAll(() => vi.resetModules());
 
   it.each(["list_comments", "list_comment_replies"] as const)(
@@ -388,6 +396,23 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
     async ({ action, failure }) => {
       const deletionStarted = createDeferred<void>();
       const releaseDeletion = createDeferred<void>();
+      let lifecycle: ReturnType<typeof createCommentTypingReactionLifecycle> | undefined;
+      let start: Promise<void> | undefined;
+      let output:
+        | ReturnType<Awaited<ReturnType<typeof createDriveLoopback>>["tool"]["execute"]>
+        | undefined;
+      let cleanup: Promise<void> | undefined;
+      // Release and join SDK work before mocks restore and the server's finished hook closes it.
+      finishHeldWork = () =>
+        (cleanup ??= (async () => {
+          releaseDeletion.resolve();
+          try {
+            await start;
+            await output;
+          } finally {
+            await lifecycle?.cleanup();
+          }
+        })());
       const isReply = action === "reply_comment";
       const fixture = await createDriveLoopback(
         [
@@ -402,18 +427,22 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         ],
         { channel: "feishu", to: "comment:docx:file:comment", threadId: "typing_reply" },
       );
-      const lifecycle = createCommentTypingReactionLifecycle({
+      lifecycle = createCommentTypingReactionLifecycle({
         cfg: config,
         fileType: "docx",
         fileToken: "file",
         replyId: "typing_reply",
       });
-      await lifecycle.start();
-      const output = fixture.tool.execute("write", { action, content: "Write text" });
+      start = lifecycle.start();
+      await start;
+      output = fixture.tool.execute("write", { action, content: "Write text" });
       let returned = false;
-      void Promise.resolve(output).then(() => {
-        returned = true;
-      });
+      void Promise.resolve(output).then(
+        () => {
+          returned = true;
+        },
+        () => {}, // The result assertion and cleanup below retain the original rejection.
+      );
       try {
         await deletionStarted.promise;
         expect(returned).toBe(true);
@@ -460,9 +489,7 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
               },
         );
       } finally {
-        releaseDeletion.resolve();
-        await lifecycle.cleanup();
-        await output;
+        await finishHeldWork();
       }
       expect(
         fixture.requests.filter((request) => request.body.includes('"action":"delete"')),

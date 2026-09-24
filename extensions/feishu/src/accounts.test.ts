@@ -1,4 +1,5 @@
 // Feishu tests cover accounts plugin behavior.
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
   FeishuSecretRefUnavailableError,
@@ -35,33 +36,6 @@ function expectExplicitDefaultAccountSelection(
   expect(account.selectionSource).toBe("explicit-default");
   expect(account.configured).toBe(true);
   expect(account.appId).toBe(appId);
-}
-
-function setTestEnvValue(key: string, value: string | undefined): () => void {
-  const prev = process.env[key];
-  if (value === undefined) {
-    Reflect.deleteProperty(process.env, key);
-  } else {
-    Reflect.set(process.env, key, value);
-  }
-  return () => restoreTestEnvValue(key, prev);
-}
-
-function restoreTestEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    Reflect.deleteProperty(process.env, key);
-  } else {
-    Reflect.set(process.env, key, value);
-  }
-}
-
-function withEnvVar(key: string, value: string | undefined, run: () => void): void {
-  const restore = setTestEnvValue(key, value);
-  try {
-    run();
-  } finally {
-    restore();
-  }
 }
 
 function asConfig(config: Partial<FeishuConfig>): FeishuConfig {
@@ -212,16 +186,14 @@ describe("resolveFeishuCredentials", () => {
 
   it("throws unresolved SecretRef error when env SecretRef points to missing env var", () => {
     const key = "FEISHU_APP_SECRET_MISSING_TEST";
-    withEnvVar(key, undefined, () => {
+    withEnv({ [key]: undefined }, () => {
       expectUnresolvedEnvSecretRefError(key);
     });
   });
 
   it("resolves env SecretRef objects in inspect mode", () => {
     const key = "FEISHU_APP_SECRET_TEST";
-    const restore = setTestEnvValue(key, " secret_from_env ");
-
-    try {
+    withEnv({ [key]: " secret_from_env " }, () => {
       const creds = resolveFeishuCredentials(
         asConfig({
           appId: "cli_123",
@@ -237,16 +209,12 @@ describe("resolveFeishuCredentials", () => {
         verificationToken: undefined,
         domain: "feishu",
       });
-    } finally {
-      restore();
-    }
+    });
   });
 
   it("does not resolve an unconfigured custom provider alias", () => {
     const key = "FEISHU_APP_SECRET_CUSTOM_PROVIDER_TEST";
-    const restore = setTestEnvValue(key, " secret_from_env_alias ");
-
-    try {
+    withEnv({ [key]: " secret_from_env_alias " }, () => {
       const creds = resolveFeishuCredentials(
         asConfig({
           appId: "cli_123",
@@ -256,14 +224,12 @@ describe("resolveFeishuCredentials", () => {
       );
 
       expect(creds).toBeNull();
-    } finally {
-      restore();
-    }
+    });
   });
 
   it("preserves unresolved SecretRef diagnostics for env refs in default mode", () => {
     const key = "FEISHU_APP_SECRET_POLICY_TEST";
-    withEnvVar(key, "secret_from_env", () => {
+    withEnv({ [key]: "secret_from_env" }, () => {
       expectUnresolvedEnvSecretRefError(key);
     });
   });
@@ -364,7 +330,7 @@ describe("resolveFeishuAccount", () => {
   it.each([true, false])(
     "keeps collision credentials separate from enabled=%s filtering",
     (enabled) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
+      withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "selected-secret" }, () => {
         const cfg = createFeishuTestConfig(
           {
             accounts: {
@@ -393,7 +359,7 @@ describe("resolveFeishuAccount", () => {
   it.each(["encryptKey", "verificationToken"] as const)(
     "inspects webhook %s through the selected env collision without weakening strict mode",
     (field) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "event-secret", () => {
+      withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "event-secret" }, () => {
         const cfg = createFeishuTestConfig(
           {
             connectionMode: "webhook",
@@ -420,8 +386,8 @@ describe("resolveFeishuAccount", () => {
   it.each(feishuSecretRefPolicyCases)(
     "enforces read-only provider policy for $name",
     (testCase) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, " selected-secret ", () => {
-        withEnvVar(FEISHU_SIBLING_SECRET_ENV, "sibling-secret", () => {
+      withEnv({ [FEISHU_SELECTED_SECRET_ENV]: " selected-secret " }, () => {
+        withEnv({ [FEISHU_SIBLING_SECRET_ENV]: "sibling-secret" }, () => {
           const account = resolveFeishuAccount({
             cfg: createFeishuSecretRefPolicyConfig(testCase),
             accountId: "selected",
@@ -437,7 +403,7 @@ describe("resolveFeishuAccount", () => {
   );
 
   it("applies the configured default env provider to refs without a provider", () => {
-    withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
+    withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "selected-secret" }, () => {
       const account = resolveFeishuAccount({
         cfg: {
           secrets: {
@@ -611,7 +577,7 @@ describe("resolveFeishuAccount", () => {
   it.each(feishuSecretRefPolicyCases.filter((testCase) => testCase.configured))(
     "does not resolve allowed ambient env refs in strict runtime account snapshots: $name",
     (testCase) => {
-      withEnvVar(FEISHU_SELECTED_SECRET_ENV, "selected-secret", () => {
+      withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "selected-secret" }, () => {
         expect(() =>
           resolveFeishuRuntimeAccount({
             cfg: createFeishuSecretRefPolicyConfig(testCase),

@@ -222,7 +222,7 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.content[0]?.text).not.toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>");
   });
 
-  it("inserts blocks sequentially to preserve document order", async () => {
+  it("orders descendants to preserve document order", async () => {
     const blocks = [
       { block_type: 3, block_id: "h1" },
       { block_type: 2, block_id: "t1" },

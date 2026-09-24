@@ -22,19 +22,6 @@ function createDocxDescendantClient(create: DocxDescendantCreate): InsertBlocksC
   } as InsertBlocksClient;
 }
 
-function createCountingIterable<T>(values: T[]) {
-  let iterations = 0;
-  return {
-    values: {
-      *[Symbol.iterator]() {
-        iterations += 1;
-        yield* values;
-      },
-    },
-    getIterations: () => iterations,
-  };
-}
-
 function createSuccessfulDocxDescendantCreateMock() {
   return vi.fn(
     async (params?: DocxDescendantCreateParams): Promise<DocxDescendantCreateResponse> => ({
@@ -74,18 +61,19 @@ describe("insertBlocksInBatches", () => {
       block_id: `block_${index}`,
       block_type: 2,
     }));
-    const counting = createCountingIterable(blocks);
+    const rootIds = blocks.map((block) => block.block_id);
+    const iterate = blocks[Symbol.iterator].bind(blocks);
+    let iterations = 0;
+    blocks[Symbol.iterator] = function () {
+      iterations += 1;
+      return iterate();
+    };
     const createMock = createSuccessfulDocxDescendantCreateMock();
     const client = createDocxDescendantClient((params) => createMock(params));
 
-    const result = await insertBlocksInBatches(
-      client,
-      "doc_1",
-      Array.from(counting.values),
-      blocks.map((block) => block.block_id),
-    );
+    const result = await insertBlocksInBatches(client, "doc_1", blocks, rootIds);
 
-    expect(counting.getIterations()).toBe(1);
+    expect(iterations).toBe(1);
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(createCallParams(createMock).data.children_id).toHaveLength(BATCH_SIZE);
     expect(createCallParams(createMock, 1).data.children_id).toHaveLength(200);

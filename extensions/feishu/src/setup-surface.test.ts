@@ -189,6 +189,8 @@ describe("feishu setup wizard", () => {
     expect(feishuConfig?.domain).toBe("lark");
     expect(feishuConfig?.groupPolicy).toBe("open");
     expect(feishuConfig?.requireMention).toBe(true);
+    expect(feishuConfig?.dmPolicy).toBe("allowlist");
+    expect(feishuConfig?.allowFrom).toEqual(["ou_owner"]);
   });
 
   it("propagates the persistent-effect guard before scan-to-create begins", async () => {
@@ -355,8 +357,6 @@ describe("feishu setup wizard status", () => {
   });
 
   it("localizes existing bot setup prompts and status lines", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const confirm = vi.fn(async () => true);
     const note = vi.fn(async () => {});
     const prompter = createTestWizardPrompter({
@@ -364,7 +364,7 @@ describe("feishu setup wizard status", () => {
       note,
     });
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {
@@ -385,18 +385,10 @@ describe("feishu setup wizard status", () => {
         }),
       );
       expect(note).toHaveBeenCalledWith("Bot 已配置。", "");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("localizes new bot setup prompts and progress", async () => {
-    const previousLocale = process.env.OPENCLAW_LOCALE;
-    process.env.OPENCLAW_LOCALE = "zh-CN";
     const note = vi.fn(async () => {});
     const stop = vi.fn();
     const progress = vi.fn(() => ({ update: vi.fn(), stop }));
@@ -423,7 +415,7 @@ describe("feishu setup wizard status", () => {
       text,
     });
 
-    try {
+    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
       await runSetupWizardConfigure({
         configure: feishuConfigure,
         cfg: {} as never,
@@ -466,13 +458,7 @@ describe("feishu setup wizard status", () => {
       );
       expect(progress).toHaveBeenCalledWith("正在配置...");
       expect(stop).toHaveBeenCalledWith("Bot 已配置。");
-    } finally {
-      if (previousLocale === undefined) {
-        delete process.env.OPENCLAW_LOCALE;
-      } else {
-        process.env.OPENCLAW_LOCALE = previousLocale;
-      }
-    }
+    });
   });
 
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
