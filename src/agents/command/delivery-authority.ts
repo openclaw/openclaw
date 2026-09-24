@@ -1,7 +1,8 @@
 // Authority checks at final platform handoff and restart-only transport cancellation.
+import { CommandOwnerRevokedError } from "../../auto-reply/command-owner-authority.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { AGENT_RUN_RESTART_ABORT_ERROR, isAgentRunRestartAbortReason } from "../run-termination.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 
 export function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   signal?: AbortSignal;
@@ -35,13 +36,14 @@ export function createAgentCommandDeliveryGuard(params: {
     try {
       params.assertDeliveryCurrent?.();
     } catch (error) {
+      const restart = isAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
       const retryable =
-        isAgentRunRestartAbortReason(error) ||
-        (isSessionWorkStartInvalidatedError(error) &&
-          isAgentRunRestartAbortReason(params.opts.abortSignal?.reason));
-      // Assertions precede I/O; only restart retirement preserves durable custody.
+        !(error instanceof CommandOwnerRevokedError) &&
+        (restart ||
+          (!params.opts.abortSignal?.aborted && !isSessionWorkStartInvalidatedError(error)));
+      // Assertions precede I/O: read failures retain custody; revocation does not.
       throw new PlatformMessageNotDispatchedError(
-        retryable ? AGENT_RUN_RESTART_ABORT_ERROR : "Agent final delivery custody was revoked",
+        error instanceof Error ? error.message : "Agent final delivery source check failed",
         { cause: error, retryable },
       );
     }

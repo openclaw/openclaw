@@ -1,6 +1,8 @@
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{ isCurrent: () => boolean }>;
 
+export class CommandOwnerRevokedError extends Error {}
+
 class CommandOwnerCapability implements CommandOwnerAuthority {
   readonly #checkCurrent: () => boolean;
 
@@ -38,7 +40,7 @@ export function captureCommandOwnerAssertion(context: object): (() => void) | un
   }
   return () => {
     if (!authority.isCurrent()) {
-      throw new Error("Channel operator authority changed; send a new request.");
+      throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
     }
   };
 }

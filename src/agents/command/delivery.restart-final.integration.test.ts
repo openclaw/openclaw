@@ -62,6 +62,9 @@ it.each(
         "restart-owner-revoked",
         "revoked",
         "replaced",
+        "source-unavailable",
+        "restart-source-unavailable",
+        "cancelled",
       ] as const
     ).map((boundary) => ({ handoff, boundary })),
   ),
@@ -232,7 +235,8 @@ it.each(
         });
         const restarting = boundary.startsWith("restart");
         const ownerRevoked = boundary === "restart-owner-revoked";
-        const recoverable = restarting && !replaced && !ownerRevoked;
+        const sourceUnavailable = boundary.endsWith("source-unavailable");
+        const recoverable = (restarting || sourceUnavailable) && !replaced && !ownerRevoked;
         if (ownerRevoked) {
           setUserProfileRole(admin.profile.id, "member");
           expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
@@ -240,7 +244,11 @@ it.each(
         if (restarting) {
           controller.abort(createAgentRunRestartAbortError());
         }
-        if (boundary !== "restart" && !ownerRevoked) {
+        if (sourceUnavailable) {
+          custodyError = new Error("Source session read unavailable");
+        } else if (boundary === "cancelled") {
+          controller.abort(new Error("Operator cancelled the run"));
+        } else if (boundary !== "restart" && !ownerRevoked) {
           custodyError =
             boundary === "revoked" || boundary === "restart-invalidated"
               ? new SessionWorkStartInvalidatedError("Source admission invalidated")
