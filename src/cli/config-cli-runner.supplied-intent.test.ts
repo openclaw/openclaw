@@ -408,7 +408,7 @@ describe("replacement guard advice per subcommand", () => {
     },
   );
 
-  it("recommends a re-parsable path for a dotted provider key", async () => {
+  it("recommends a shell-safe path for a dotted provider key", async () => {
     const dottedPath = ["models", "providers", "local.service", "models"];
     loadSnapshot({ models: { providers: { "local.service": { models: resolvedRows } } } });
     await expect(
@@ -419,7 +419,7 @@ describe("replacement guard advice per subcommand", () => {
         successMode: "patch",
       }),
     ).rejects.toThrow(
-      'Use --replace-path models.providers["local.service"].models to replace intentionally.',
+      `Use --replace-path 'models.providers["local.service"].models' to replace intentionally.`,
     );
   });
 });

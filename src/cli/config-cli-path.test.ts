@@ -91,6 +91,8 @@ describe("replacement guard advice", () => {
       providers: {
         ollama: { models: [{ id: "llama3.2" }, { id: "qwen3" }] },
         "local.service": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
+        "local]service": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
+        "it's": { models: [{ id: "llama3.1:70b" }, { id: "qwen3:8b" }] },
       },
     },
   } as Record<string, unknown>;
@@ -110,6 +112,28 @@ describe("replacement guard advice", () => {
       throw new Error(`refusal names no --replace-path argument: ${message}`);
     }
     return argument;
+  }
+
+  /** Delivers one argument the way a shell does: quoted spans are literal, `'\''` splices a quote. */
+  function readShellArgument(token: string): string {
+    let value = "";
+    for (let index = 0; index < token.length; index += 1) {
+      const character = token[index];
+      if (character === "'") {
+        const close = token.indexOf("'", index + 1);
+        if (close === -1) {
+          throw new Error(`advice left an unbalanced quote: ${token}`);
+        }
+        value += token.slice(index + 1, close);
+        index = close;
+      } else if (character === "\\") {
+        value += token[index + 1];
+        index += 1;
+      } else {
+        value += character;
+      }
+    }
+    return value;
   }
 
   it.each([
@@ -158,9 +182,25 @@ describe("replacement guard advice", () => {
     ).toThrow(`Cannot merge models.providers.ollama.models; use ${flag} to replace intentionally.`);
   });
 
-  it("brackets a dotted provider key so the suggested argument is a usable path", () => {
-    const path = ["models", "providers", "local.service", "models"];
-    const argument = requireReplacePathArgument(
+  it.each([
+    {
+      key: "local.service",
+      argument: 'models.providers["local.service"].models',
+      token: `'models.providers["local.service"].models'`,
+    },
+    {
+      key: "local]service",
+      argument: 'models.providers["local]service"].models',
+      token: `'models.providers["local]service"].models'`,
+    },
+    {
+      key: "it's",
+      argument: `models.providers["it's"].models`,
+      token: `'models.providers["it'\\''s"].models'`,
+    },
+  ])("suggests a $key retry that survives the shell", ({ key, argument, token }) => {
+    const path = ["models", "providers", key, "models"];
+    const guardArgument = requireReplacePathArgument(
       refusal(() =>
         assertNonDestructiveReplacement({
           root,
@@ -170,10 +210,22 @@ describe("replacement guard advice", () => {
         }),
       ),
     );
-    expect(argument).toBe('models.providers["local.service"].models');
-    expect(parseConfigSetPath(argument)).toEqual(path);
-    expect(refusal(() => mergeAtPath(root, path, {}, { command: "patch" }))).toBe(
-      `Cannot merge models.providers["local.service"].models; use --replace-path models.providers["local.service"].models to replace intentionally.`,
+    expect(guardArgument).toBe(token);
+    expect(readShellArgument(guardArgument)).toBe(argument);
+    expect(parseConfigSetPath(readShellArgument(guardArgument))).toEqual(path);
+    expect(
+      readShellArgument(
+        requireReplacePathArgument(
+          refusal(() => mergeAtPath(root, path, {}, { command: "patch" })),
+        ),
+      ),
+    ).toBe(argument);
+  });
+
+  it("strands a bare retry whose key contains a closing bracket", () => {
+    // What the shell hands the CLI once it strips the inner quotes of the bare bracketed form.
+    expect(() => parseConfigSetPath("models.providers[local]service].models")).toThrow(
+      "Invalid path (missing separator after bracket): models.providers[local]service].models",
     );
   });
 });

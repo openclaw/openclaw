@@ -41,6 +41,17 @@ function refusalPathLabel(command: ConfigMutationCommand, path: PathSegment[]): 
   return command === "patch" ? formatConfigSetPath(path) : toDotPath(path);
 }
 
+const COPYABLE_ARGUMENT_RE = /^[A-Za-z0-9_.:/@+-]+$/;
+
+/** A copied retry crosses a shell, which strips the quotes a bracketed path needs to re-parse. */
+function shellArgument(raw: string): string {
+  return COPYABLE_ARGUMENT_RE.test(raw) ? raw : `'${raw.replaceAll("'", `'\\''`)}'`;
+}
+
+function replacePathArgument(pathLabel: string): string {
+  return `--replace-path ${shellArgument(pathLabel)}`;
+}
+
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
   pathTokens?: readonly ConcreteConfigPathSegment[];
@@ -470,7 +481,7 @@ function mergeConfigValue(
   const label = refusalPathLabel(command, path);
   throw new Error(
     `Cannot merge ${label}; use ${
-      command === "patch" ? `--replace-path ${label}` : "--replace"
+      command === "patch" ? replacePathArgument(label) : "--replace"
     } to replace intentionally.`,
   );
 }
@@ -519,7 +530,7 @@ function replacementAdvice(
 ): string {
   // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
   if (command === "patch") {
-    return `Use --replace-path ${pathLabel} to replace intentionally.`;
+    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
   }
   return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
 }
