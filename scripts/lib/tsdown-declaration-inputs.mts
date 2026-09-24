@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BuildContext } from "tsdown";
 import { portableRelativePath } from "./build-artifact-cache.mts";
-import {
-  createDeclarationInputBoundary,
-  readDeclarationBuildInputs,
-} from "./tsdown-declaration-boundary.mts";
+import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import { readDeclarationBuildInputs } from "./tsdown-declaration-boundary.mts";
 
 const stagePrefix = (root: string) =>
   path.join(fs.realpathSync.native(root), ".artifacts/plugin-sdk-staging-");

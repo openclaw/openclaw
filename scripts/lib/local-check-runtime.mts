@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createDeclarationInputBoundary } from "./tsdown-declaration-boundary.mts";
 
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
@@ -74,6 +73,65 @@ export function resolveLocalCheckEnv(env: Env = process.env) {
   return {
     ...env,
     OPENCLAW_LOCAL_CHECK: "1",
+  };
+}
+
+const withinRoot = (root: string, file: string) => {
+  const relative = path.relative(root, file);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+function findAncestorInstall(root: string, real: string): string | undefined {
+  let ancestor = path.dirname(root);
+  while (true) {
+    const install = path.join(ancestor, "node_modules");
+    if (withinRoot(install, real)) {
+      return install;
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) {
+      return undefined;
+    }
+    ancestor = parent;
+  }
+}
+
+export function createDeclarationInputBoundary(cwd: string) {
+  const declared = path.resolve(cwd);
+  const prefixes = [declared];
+  if (fs.lstatSync(declared).isSymbolicLink()) {
+    prefixes.push(path.resolve(path.dirname(declared), fs.readlinkSync(declared)));
+  }
+  prefixes.push(fs.realpathSync(declared));
+  const root = fs.realpathSync.native(declared);
+  // Runtimes differ on whether realpath preserves a case-only symlink target.
+  // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
+  const resolve = (file: string) => {
+    const absolute = path.resolve(declared, file);
+    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    return prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+  };
+  return {
+    root,
+    resolve,
+    assert(file: string) {
+      const absolute = resolve(file);
+      // Generated declaration IDs do not exist yet, but their source directory does.
+      let existing = absolute;
+      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+        existing = path.dirname(existing);
+      }
+      const real = fs.realpathSync.native(existing);
+      if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+        // Hermetic declaration inputs must not inherit an ancestor install's exposed packages.
+        const ancestorInstall = findAncestorInstall(root, real);
+        const diagnosis = ancestorInstall
+          ? `This checkout is nested inside another install at ${ancestorInstall}. Module resolution can read candidate manifests there even with a complete local install and a checkout-local final resolution. Repeating pnpm install will not isolate ancestor lookup. Provision a separate physical checkout outside ancestor node_modules installations, run pnpm install --frozen-lockfile there, and rerun declaration preparation and its dependent checks there. Do not modify the ancestor install or share its node_modules.`
+          : `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
+      }
+      return absolute;
+    },
   };
 }
 

@@ -61,30 +61,40 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
     if (diagnostics.length) {
       throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
     }
-    const graph = new Map<string, string[]>();
+    const repoPaths = new Map<ts.Path, string>();
+    const importedPaths = new Map<string, ts.Path[]>();
     for (const file of files) {
       const absoluteFile = path.resolve(repoRoot, file);
       const sourceFile = project.program.getSourceFile(absoluteFile);
       if (!sourceFile) {
         throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
       }
+      const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
+      if (repoPath) {
+        repoPaths.set(sourceFile.path, repoPath);
+      }
       const specifiers = collectStaticModuleSpecifiers(sourceFile);
       const imports = project.checker.getSymbolAtLocation(specifiers).flatMap((symbol) => {
-        const declaration = symbol?.declarations
-          .find((candidate) => candidate.kind === ts.SyntaxKind.SourceFile)
-          ?.resolve(project);
-        if (!declaration || !ts.isSourceFile(declaration)) {
-          return [];
-        }
-        const repoPath = absoluteToRepoPath.get(path.resolve(declaration.fileName));
-        return repoPath ? [repoPath] : [];
+        const declaration = symbol?.declarations.find(
+          (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
+        );
+        return declaration ? [declaration.path] : [];
       });
-      graph.set(
-        file,
-        imports.toSorted((left, right) => left.localeCompare(right)),
-      );
+      importedPaths.set(file, imports);
+      // Keep graph edges across files, not every decoded importer and target AST.
+      session.api.clearSourceFileCache();
     }
-    return graph;
+    return new Map(
+      [...importedPaths].map(([file, imports]) => [
+        file,
+        imports
+          .flatMap((importedPath) => {
+            const repoPath = repoPaths.get(importedPath);
+            return repoPath ? [repoPath] : [];
+          })
+          .toSorted((left, right) => left.localeCompare(right)),
+      ]),
+    );
   } finally {
     session.close();
   }

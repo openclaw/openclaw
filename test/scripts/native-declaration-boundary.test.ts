@@ -5,8 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { portableRelativePath } from "../../scripts/lib/build-artifact-cache.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
-import { createDeclarationInputBoundary } from "../../scripts/lib/tsdown-declaration-boundary.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,

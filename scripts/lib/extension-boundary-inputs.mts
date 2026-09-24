@@ -8,7 +8,7 @@ import {
   type ArtifactRecord,
 } from "./build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
-import { createDeclarationInputBoundary } from "./tsdown-declaration-boundary.mts";
+import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
 
 export const LOCAL_SDK_ROOT = "packages/plugin-sdk/dist";
 export const BOUNDARY_CACHE_ROOT = ".artifacts/extension-package-boundary";
