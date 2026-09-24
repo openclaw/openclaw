@@ -15,6 +15,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { resolveHookModelSelection } from "../embedded-agent-runner/run/setup.js";
@@ -23,7 +24,7 @@ import type { RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
-export type CliModelResolveHookInput = {
+type CliModelResolveHookInput = {
   hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeModelResolve"> | null;
   prompt: string;
   /** Execution backend this turn spawns through, e.g. `claude-cli`. */
@@ -45,7 +46,7 @@ export type CliModelResolveHookInput = {
   messageProvider?: string;
 };
 
-export type CliModelResolveHookOutcome = {
+type CliModelResolveHookOutcome = {
   /** Provider and model the CLI child must run with after hook resolution. */
   provider: string;
   modelId: string;
@@ -55,7 +56,7 @@ export type CliModelResolveHookOutcome = {
   rejectedOverride?: { provider: string; modelId: string };
 };
 
-export async function resolveCliModelOverrideForTurn(
+async function resolveCliModelOverrideForTurn(
   params: CliModelResolveHookInput,
 ): Promise<CliModelResolveHookOutcome> {
   const original: CliModelResolveHookOutcome = {
@@ -83,12 +84,20 @@ export async function resolveCliModelOverrideForTurn(
       sessionId: params.sessionId,
       workspaceDir: params.workspaceDir,
       modelProviderId: params.logicalProvider,
-      messageProvider: params.messageProvider,
       trigger: params.trigger,
-      channelId: params.channelId,
+      messageProvider: params.messageProvider,
+      ...(params.channelId ? { channelId: params.channelId } : {}),
+      ...(params.accountId ? { accountId: params.accountId } : {}),
     },
   });
-  if (hookSelection.modelId === params.modelId) {
+  // Unchanged selections (same logical provider and model) leave the caller's turn
+  // untouched. A provider-only override is still an override attempt: it must fall
+  // through to the backend-resolution check below so it is rejected with a warning
+  // instead of being silently dropped.
+  if (
+    hookSelection.modelId === params.modelId &&
+    hookSelection.provider === params.logicalProvider
+  ) {
     return original;
   }
   // A provider override that leaves the logical provider cannot run through this
@@ -120,7 +129,7 @@ export async function resolveCliModelOverrideForTurn(
  * child must run with, or undefined when the caller's selection stands. Callers
  * must keep this before CLI preparation, which normalizes the model for the child.
  */
-export async function runCliModelResolveHookForTurn(
+async function runCliModelResolveHookForTurn(
   params: CliModelResolveHookInput,
 ): Promise<string | undefined> {
   const outcome = await resolveCliModelOverrideForTurn(params);
@@ -148,6 +157,9 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
   if (params.isolatedCompletion || params.controlOperation) {
     return;
   }
+  // Same channel/account projection the prompt-build hook context reports, so both
+  // CLI-side hooks see identical routing fields for plugins.
+  const channelFields = buildAgentHookContextChannelFields(params);
   const hookModelId = await runCliModelResolveHookForTurn({
     hookRunner: getGlobalHookRunner(),
     prompt: params.prompt,
@@ -164,6 +176,8 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     workspaceDir: params.workspaceDir,
     trigger: params.trigger,
     messageProvider: params.messageProvider,
+    channelId: channelFields.channelId ?? undefined,
+    accountId: channelFields.accountId,
   });
   if (hookModelId !== undefined) {
     params.model = hookModelId;

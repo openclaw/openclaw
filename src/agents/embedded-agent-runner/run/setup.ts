@@ -40,6 +40,8 @@ type HookContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Configured channel account; routing context, not requester identity. */
+  accountId?: string;
 };
 
 type HookRunnerLike = {
