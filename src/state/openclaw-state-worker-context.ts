@@ -14,20 +14,14 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-/** Capture host facts before asynchronous work, without opening SQLite. */
-export function captureOpenClawStateWorkerContext(
-  options: {
-    path?: string;
-    env?: NodeJS.ProcessEnv;
-    initializationAgentPaths?: readonly string[];
-  } = {},
-): OpenClawStateWorkerContext {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  const environment: OpenClawStateWorkerContext["environment"] = {
-    OPENCLAW_STATE_DIR: resolveStateDir(env),
-    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
-  };
-  const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(environment));
+/** Capture read authority without constructing a worker environment. */
+export function captureOpenClawStateReadContext(
+  pathname = resolveOpenClawStateSqlitePath(),
+): Pick<
+  OpenClawStateWorkerContext,
+  "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
+> {
+  const databasePath = path.resolve(pathname);
   isExistingOpenClawStateSchema(databasePath);
   const existingSchemaPath = getExistingOpenClawStateSchemaPath();
   const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
@@ -49,6 +43,26 @@ export function captureOpenClawStateWorkerContext(
   return {
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
+    existingSchemaPath,
+    runInCapturedSchemaScope,
+  };
+}
+
+/** Capture host facts before asynchronous work, without opening SQLite. */
+export function captureOpenClawStateWorkerContext(
+  options: {
+    path?: string;
+    env?: NodeJS.ProcessEnv;
+    initializationAgentPaths?: readonly string[];
+  } = {},
+): OpenClawStateWorkerContext {
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
+  const environment: OpenClawStateWorkerContext["environment"] = {
+    OPENCLAW_STATE_DIR: resolveStateDir(env),
+    ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+  };
+  return {
+    ...captureOpenClawStateReadContext(options.path ?? resolveOpenClawStateSqlitePath(environment)),
     environment,
     initializationEnvironment: mergeProcessEnv([
       env,
@@ -63,7 +77,5 @@ export function captureOpenClawStateWorkerContext(
         }
       : {}),
     coordinatorRuntime: captureStateDatabaseCoordinatorRuntime(),
-    existingSchemaPath,
-    runInCapturedSchemaScope,
   };
 }
