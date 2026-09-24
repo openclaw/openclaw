@@ -2633,7 +2633,7 @@ describe("handleFeishuMessage command authorization", () => {
     ];
 
     expect(parseMergeForwardContent(items)).toBe(
-      "[Merged and Forwarded Messages]\n- partial\n- valid",
+      "[Merged and Forwarded Messages]\n- partial\n- [1970-01-01T00:00:01.000Z] valid",
     );
   });
 

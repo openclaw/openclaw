@@ -4,6 +4,23 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { renderPostContent } from "./post.js";
 
+export type MergeForwardMessageItem = {
+  msg_type?: string;
+  body?: { content?: string };
+  upper_message_id?: string;
+  create_time?: string;
+  sender?: {
+    id?: string;
+    id_type?: string;
+    sender_type?: string;
+  };
+};
+
+export type ParseMergeForwardContentOptions = {
+  /** Display names keyed by sender id (open_id / user_id / union_id). */
+  senderNames?: ReadonlyMap<string, string>;
+};
+
 export function formatFeishuMediaContent(
   parsed: Record<string, unknown>,
   messageType: string,
@@ -52,13 +69,45 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
+function formatMergeForwardCreateTime(createTime?: string): string | undefined {
+  const createTimeMs = parseStrictNonNegativeInteger(createTime);
+  if (createTimeMs === undefined) {
+    return undefined;
+  }
+  const date = new Date(createTimeMs);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
+function formatMergeForwardSenderLabel(
+  item: MergeForwardMessageItem,
+  senderNames?: ReadonlyMap<string, string>,
+): string | undefined {
+  const senderId = item.sender?.id?.trim();
+  if (!senderId) {
+    return undefined;
+  }
+  return senderNames?.get(senderId) ?? senderId;
+}
+
+function formatMergeForwardLine(
+  item: MergeForwardMessageItem,
+  senderNames?: ReadonlyMap<string, string>,
+): string {
+  const body = formatSubMessageContent(item.body?.content || "", item.msg_type || "text");
+  const time = formatMergeForwardCreateTime(item.create_time);
+  const sender = formatMergeForwardSenderLabel(item, senderNames);
+  const prefix = [time ? `[${time}]` : undefined, sender ? `${sender}:` : undefined]
+    .filter(Boolean)
+    .join(" ");
+  return prefix ? `- ${prefix} ${body}` : `- ${body}`;
+}
+
 export function parseMergeForwardContent(
-  items: ReadonlyArray<{
-    msg_type?: string;
-    body?: { content?: string };
-    upper_message_id?: string;
-    create_time?: string;
-  }>,
+  items: ReadonlyArray<MergeForwardMessageItem>,
+  options?: ParseMergeForwardContentOptions,
 ): string {
   const maxMessages = 50;
   if (items.length === 0) {
@@ -81,7 +130,7 @@ export function parseMergeForwardContent(
 
   const lines = ["[Merged and Forwarded Messages]"];
   for (const item of subMessages.slice(0, maxMessages)) {
-    lines.push(`- ${formatSubMessageContent(item.body?.content || "", item.msg_type || "text")}`);
+    lines.push(formatMergeForwardLine(item, options?.senderNames));
   }
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);

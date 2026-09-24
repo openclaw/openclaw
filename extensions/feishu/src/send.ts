@@ -6,6 +6,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
+import { resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
@@ -24,7 +25,12 @@ import { renderPostContent } from "./post.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
-import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
+import type {
+  FeishuChatType,
+  FeishuMessageInfo,
+  FeishuSendResult,
+  ResolvedFeishuAccount,
+} from "./types.js";
 
 export { resolveFeishuCardTemplate };
 
@@ -286,6 +292,43 @@ function parseFeishuMessageItem(
   };
 }
 
+async function resolveMergeForwardSenderNames(params: {
+  account: ResolvedFeishuAccount;
+  items: ReadonlyArray<FeishuMessageGetItem>;
+}): Promise<ReadonlyMap<string, string> | undefined> {
+  if (!(params.account.config?.resolveSenderNames ?? true)) {
+    return undefined;
+  }
+
+  const senderIds = new Set<string>();
+  for (const item of params.items) {
+    const senderId = item.sender?.id?.trim();
+    if (senderId) {
+      senderIds.add(senderId);
+    }
+  }
+  if (senderIds.size === 0) {
+    return undefined;
+  }
+
+  const senderNames = new Map<string, string>();
+  await Promise.all(
+    [...senderIds].map(async (senderId) => {
+      const result = await resolveFeishuSenderName({
+        account: params.account,
+        senderId,
+        log: (...args: unknown[]) => {
+          logVerbose(args.map(String).join(" "));
+        },
+      });
+      if (result.name) {
+        senderNames.set(senderId, result.name);
+      }
+    }),
+  );
+  return senderNames.size > 0 ? senderNames : undefined;
+}
+
 /**
  * Get a message by its ID.
  * Useful for fetching quoted/replied message content.
@@ -330,9 +373,13 @@ export async function getMessageFeishu(params: {
 
     const parsedItem = parseFeishuMessageItem(item, messageId);
     if (parsedItem.contentType === "merge_forward" && responseItems) {
+      const senderNames = await resolveMergeForwardSenderNames({
+        account,
+        items: responseItems,
+      });
       return {
         ...parsedItem,
-        content: parseMergeForwardContent(responseItems),
+        content: parseMergeForwardContent(responseItems, { senderNames }),
       };
     }
     return parsedItem;
