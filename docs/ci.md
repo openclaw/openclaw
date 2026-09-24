@@ -23,6 +23,11 @@ Core-test-only PRs use targeted type checks only when every selected test exists
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
 
+The opt-in [budgeted backend](/ci/runners#budgeted-backend) uses the existing hosted
+Node plan, limited RunsOn workflow exceptions, and a retrospective monthly
+Blacksmith admission report. Production activation requires exact-head
+qualification and hosted-capacity review.
+
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).

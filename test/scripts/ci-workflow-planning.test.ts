@@ -1260,6 +1260,34 @@ function runControlUiI18nSourceFixture(options: {
   }
 }
 describe("ci workflow guards", () => {
+  it.each(["push", "pull_request"] as const)(
+    "keeps the hosted Node manifest unchanged in budgeted %s runs",
+    (eventName) => {
+      const options = {
+        bundledPlanner: true,
+        eventName,
+        runnerProfile: "github" as const,
+        runnerBackend: "github" as const,
+        changedPaths: [".github/workflows/ci.yml"],
+      };
+      const hosted = runCiManifestFixture({ ...options, nodeRunnerBackend: "github" });
+      const budgeted = runCiManifestFixture({
+        ...options,
+        scopeEnv: { OPENCLAW_CI_NODE_RUNNER_BACKEND: "budgeted" },
+      });
+      expect(hosted.status, hosted.output).toBe(0);
+      expect(budgeted.status, budgeted.output).toBe(0);
+      for (const output of ["checks_node_core_nondist_matrix", "run_checks_node_core_dist"]) {
+        expect(expectDefined(budgeted.outputs[output], output)).toBe(hosted.outputs[output]);
+      }
+      const rows = JSON.parse(
+        expectDefined(budgeted.outputs.checks_node_core_nondist_matrix, "budgeted Node matrix"),
+      ).include;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].env.OPENCLAW_CI_TEST_RUNNER_BACKEND).toBe("github");
+    },
+  );
+
   it("credits the max-lines baseline only through an emitted required ratchet guard", () => {
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
@@ -3498,7 +3526,7 @@ describe("ci workflow guards", () => {
     });
     expect(invalid.status).toBe(1);
     expect(invalid.output).toContain(
-      "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, or runson",
+      "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, runson, or budgeted",
     );
 
     const workflow = readCiWorkflow();
@@ -4064,9 +4092,19 @@ describe("ci workflow guards", () => {
         );
       }
     }
-    expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
-    );
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["timeout-minutes"], {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt,
+          preflightOutputs: {
+            effective_runner_backend: "github",
+            node_runner_backend: "budgeted",
+          },
+        }),
+      ).toBe(runAttempt === 1 ? 20 : 35);
+    }
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
     // dispatch-only, mirroring ci-check-testbox.yml.
@@ -4173,7 +4211,9 @@ describe("ci workflow guards", () => {
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+      expect(gate.if).toContain(
+        "(needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github'",
+      );
     }
     expect(hostedLintCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
@@ -4268,7 +4308,9 @@ describe("ci workflow guards", () => {
       expect(gate.run).toContain(".source-fingerprint");
       expect(gate.run).not.toContain("git rev-parse HEAD:");
       expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+      expect(gate.if).toContain(
+        "(needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github'",
+      );
     }
     // Seeding is writer-only work: PR mounts never commit, so seeding there
     // would burn wall clock on a discarded clone.
@@ -7265,7 +7307,7 @@ describe("ci workflow guards", () => {
     expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
-      "node-version": "24.x",
+      "node-version": expect.any(String),
       "install-bun": "false",
       "dependency-cache": expect.any(String),
     } as const;
@@ -7284,6 +7326,19 @@ describe("ci workflow guards", () => {
       with: expectedSharedUiE2eSetup,
     });
     expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
+    for (const setup of [uiE2eSetup, realGatewaySetup]) {
+      for (const backend of ["", "github", "hybrid", "runson", "budgeted"]) {
+        expect(
+          evaluateWorkflowExpression(setup.with["node-version"], {
+            eventName: "push",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { node_runner_backend: backend },
+            env: { NODE_VERSION: "24.19.0" },
+          }),
+        ).toBe(backend === "budgeted" ? "24.19.0" : "24.x");
+      }
+    }
 
     // Failed-job retries can retain an earlier six-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.

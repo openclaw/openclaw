@@ -2731,8 +2731,14 @@ AFTER_CD
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.strategy).toBeUndefined();
     expect(job.steps[0]).toEqual(jobs["build-artifacts"].steps[0]);
-    expect(job.steps[1].uses).toBe("./.ci-harness/.github/actions/setup-node-env");
-    expect(job.steps[1].with).toMatchObject({
+    const setup = expectDefined(
+      job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Docker seed Node setup",
+    );
+    expect(job.steps[0].name).toBe("Checkout");
+    expect(job.steps.indexOf(setup)).toBeGreaterThan(0);
+    expect(setup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
+    expect(setup.with).toMatchObject({
       "build-all-cache-scope": "full",
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
     });
@@ -3539,6 +3545,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
           ci_shape: mainShape ? "main" : "default",
           ci_qualification: String(mainShape),
           qualification_runner_backend: mainShape ? "hybrid" : "",
+          effective_runner_backend: mainShape ? "hybrid" : runnerBackend,
         },
       };
       const expectedHosted = expectedCommands === 3;
@@ -3586,7 +3593,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
-      "contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1",
+      'contains(fromJSON(\'["hybrid","runson"]\'), (needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1',
     );
     expect(nativeResourcesSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     expect(nativeResourcesSetup.if).toBe(
@@ -4185,7 +4192,7 @@ setImmediate(() => {
         );
       }
       expect(jobs[jobName]?.["timeout-minutes"], jobName).toContain(
-        "(needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github'",
+        "(needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github'",
       );
     }
     expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
@@ -4209,9 +4216,21 @@ setImmediate(() => {
         "ubuntu-24.04",
       ],
       [
-        "trusted fork first attempt",
-        { headRepository: "contributor/openclaw" },
+        "trusted fork with explicit backend",
+        { headRepository: "contributor/openclaw", runnerBackend: "blacksmith" },
         "blacksmith-8vcpu-ubuntu-2404",
+      ],
+      [
+        "fork without backend configuration",
+        {
+          headRepository: "contributor/openclaw",
+          preflightOutputs: {
+            effective_runner_backend: "github",
+            runner_profile: "github",
+            node_runner_backend: "github",
+          },
+        },
+        "ubuntu-24.04",
       ],
       [
         "trusted fork retry",
@@ -4662,9 +4681,11 @@ setImmediate(() => {
     });
     expect(preflightRestore?.step.if).toContain("github.ref == 'refs/heads/main'");
     expect(preflightRestore?.step.if).toContain("github.event_name == 'pull_request'");
-    expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     expect(preflightRestore?.step.if).toContain(
-      '!contains(fromJSON(\'["hybrid","runson"]\'), vars.OPENCLAW_CI_RUNNER_BACKEND)',
+      "(steps.runner_profile.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github'",
+    );
+    expect(preflightRestore?.step.if).toContain(
+      '!contains(fromJSON(\'["hybrid","runson"]\'), (steps.runner_profile.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND))',
     );
     const consumers = dependencySetups.filter(({ jobName }) => jobName !== "preflight");
     expect(consumers.map(({ jobName }) => jobName).toSorted()).toEqual([
@@ -6420,9 +6441,11 @@ server.listen(0, "127.0.0.1", () => {
     // budget 429-failed every mount fleet-wide.
     expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
     expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+      "(needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github'",
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+    expect(pointStep.if).toContain(
+      "(needs.preflight.outputs.effective_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github'",
+    );
     // Single semantic writer: protected pushes commit explicitly (on-change's
     // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
     expect(mountWith.commit).toBe(
@@ -7540,7 +7563,7 @@ server.listen(0, "127.0.0.1", () => {
         ref: "${{ github.workflow_sha }}",
         path: ".ci-harness",
         "sparse-checkout":
-          "/.github/actions/\n/scripts/lib/pnpm-lockfile-documents.mjs\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
+          "/.github/actions/\n/scripts/ci-blacksmith-budget.mjs\n/scripts/lib/direct-run.mjs\n/scripts/lib/pnpm-lockfile-documents.mjs\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
         "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },

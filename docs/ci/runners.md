@@ -8,7 +8,11 @@ read_when:
 
 ## Runners
 
-Runner choice follows contributor trust, not whether a pull request came from a fork. Every `runs-on` expression admits Blacksmith only when `github.event.pull_request.author_association` is `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`, so a fork pull request from someone who has already landed a commit is routed exactly like a maintainer pull request. `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, and `MANNEQUIN` stay on GitHub-hosted runners, which are free for public repositories, so an unreviewed author cannot spend Blacksmith capacity. Maintainers report `CONTRIBUTOR` here because org membership is concealed; keep `CONTRIBUTOR` in that list or maintainer pull requests lose Blacksmith. Pushes and manual dispatches are unaffected. Cache trust is a separate, stricter boundary: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes the shared archives. The separate trusted warmer owns publication.
+Runner choice uses the configured backend and contributor trust. When that configuration is available, Blacksmith requires `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR` author association. `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, and `MANNEQUIN` stay on GitHub-hosted runners. Maintainers can report `CONTRIBUTOR` when org membership is concealed, so that association remains eligible.
+
+Fork pull requests with no backend variable use GitHub-hosted runners from preflight onward. Forks have been observed receiving an empty variable while same-repository runs received `hybrid`; treating that absence as Blacksmith authorization would bypass the budgeted mode. This hosted fallback also applies when the canonical repository uses a different backend, because the fork cannot observe that choice. Canonical runs with an unset variable retain their existing default.
+
+Cache trust remains separate: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes shared archives. The separate trusted warmer owns publication.
 
 | Runner                           | Jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -196,12 +200,13 @@ The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend
 
 | Value                 | Light lanes                                                                 | Heavy lanes                                                                      | Rerun behavior                                                                        |
 | --------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks      | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Existing behavior is unchanged                                                        |
+| unset or `blacksmith` | Blacksmith-first, with the existing manual-dispatch and fork fallbacks      | Blacksmith-first, with the existing manual-dispatch and fork fallbacks           | Forks without configuration remain hosted; canonical defaults are retained            |
 | `github`              | GitHub-hosted                                                               | GitHub-hosted                                                                    | Every configurable job remains hosted                                                 |
 | `hybrid`              | Eligible preflight and other critical-path jobs use Blacksmith on attempt 1 | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`               | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity  |
 | `runson`              | Hybrid baseline                                                             | Hybrid baseline, with pure cron child rows on RunsOn for eligible first attempts | Automatic Spot-interruption retries disabled; other reruns retain the hybrid fallback |
+| `budgeted`            | GitHub-hosted                                                               | Hosted Node; RunsOn workflow exceptions; metered main Windows                    | All paid exceptions use hosted fallbacks on retries                                   |
 
-Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift, iOS build, and screenshot jobs always use GitHub-hosted `xcode-27` with Xcode 27. The focused `macos-node` lane uses the existing GitHub-hosted `macos-15` image in hybrid mode, with the same test inventory and two-worker limit. `openclaw/ci-gate` always uses `ubuntu-24.04`: its Bash-only result aggregation needs no checkout or dependency setup. This removes one Blacksmith registration from previously eligible runs without adding jobs or changing the required check. Hosted runner assignment can still delay completion. Trusted automatic hybrid first-attempt `preflight` requests the existing 16-class after three nearby hosted preflights remained unassigned while their Blacksmith security jobs completed. Hybrid retries, manual dispatches, untrusted and noncanonical contexts, and the `github` override stay hosted. Unset or `blacksmith` keeps the existing 4-class route. Logical planner profile, cache trust, steps and the 20-minute deadline remain unchanged; actual assignment and completion still require CI proof. `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. Budget two control-job registrations per eligible hybrid first attempt when optional hosted admission is closed, one when admitted, and one per normal Blacksmith run; both jobs are already reserved in the conservative registration ceiling. The `github` override remains unchanged. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on canonical automatic runs (six rows for manual dispatches), the two-part Windows matrix, `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, `checks-ui` and only the browser-extension E2E row move to hosted Ubuntu when preflight admits at most five optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the core-lint jobs, the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
+Configurable heavy lanes are `build-artifacts` and `android`. The macOS Swift, iOS build, and screenshot jobs always use GitHub-hosted `xcode-27` with Xcode 27. The focused `macos-node` lane uses the existing GitHub-hosted `macos-15` image in hybrid mode, with the same test inventory and two-worker limit. `openclaw/ci-gate` always uses `ubuntu-24.04`: its Bash-only result aggregation needs no checkout or dependency setup. This removes one Blacksmith registration from previously eligible runs without adding jobs or changing the required check. Hosted runner assignment can still delay completion. Trusted automatic hybrid first-attempt `preflight` requests the existing 16-class after three nearby hosted preflights remained unassigned while their Blacksmith security jobs completed. Hybrid retries, manual dispatches, untrusted and noncanonical contexts, and the `github` override stay hosted. Canonical unset or `blacksmith` contexts keep the existing 4-class route; forks without the backend variable start hosted. Logical planner profile, cache trust, steps and the 20-minute deadline remain unchanged; actual assignment and completion still require CI proof. `security-fast` uses Blacksmith only on eligible hybrid first attempts when the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) cannot admit optional work, and stays hosted outside `hybrid`. It waits for preflight to count the selected hosted rows, and still executes after a preflight failure unless the workflow is canceled. Security hooks use pinned installed packages and local hook definitions, so they no longer initialize remote Git repositories. Budget two control-job registrations per eligible hybrid first attempt when optional hosted admission is closed, one when admitted, and one per normal Blacksmith run; both jobs are already reserved in the conservative registration ceiling. The `github` override remains unchanged. Hybrid sends the compact Node matrix, up to 80 compact rows plus separately appended plugin fallback rows, thirteen-row `checks-ui-e2e` matrix for targets with the named-project contract, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, four-row QA Smoke matrix on canonical automatic runs (six rows for manual dispatches), the two-part Windows matrix, `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` rows, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Eligible two-child ordinary compact rows request `blacksmith-32vcpu-ubuntu-2404`; bins containing the full `agentic-cli` group request `blacksmith-32vcpu-ubuntu-2404` after planning. Other compact-small rows retain `blacksmith-4vcpu-ubuntu-2404`, compact-large rows retain `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Within that set, `checks-ui` and only the browser-extension E2E row move to hosted Ubuntu when preflight admits at most five optional rows below the 45-row hosted limit. Every other configurable `ci.yml` lane stays hosted in hybrid, including the core-lint jobs, the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
 
 ### RunsOn qualification
 
@@ -343,3 +348,73 @@ gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
 
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+## Budgeted backend
+
+`OPENCLAW_CI_RUNNER_BACKEND=budgeted` is an opt-in qualification mode. It uses
+GitHub-hosted preflight, static checks, Node tests, PR Windows, and Apple runners.
+The Node matrix consumes the existing GitHub planner and its worker policies;
+it adds no second test selector. Docker seed and QA smoke also use hosted
+runners. The named performance exceptions are Control UI browser rows on the
+RunsOn general pool and artifact builds plus real-Gateway browser rows on its
+memory pool. Hosted artifact builds reached 898 seconds before preflight and
+the gate in the [routing measurements](/ci/routing-costs); the real-Gateway
+lane needs the existing eight-CPU memory allowance. These exceptions reuse the
+diversified families from the RunsOn qualification.
+They use on-demand: they do not have a complete runtime forecast that fits
+the 480-second Spot admission window after the measured 320-second launch/setup
+reserve. All pools retain `retry=false`. Failed-job-only retries use hosted fallbacks.
+No test inventory or timeout is expanded.
+
+Hourly main CI uses the broader full-manual tier and retains its existing
+hosted fallback. The named AWS exceptions apply to eligible canonical PRs,
+per-push main CI when enabled, and admitted qualification runs.
+
+Fork PRs that cannot read the repository backend variable use the hosted
+fallback independently of this opt-in setting. This prevents missing
+configuration from silently selecting the legacy Blacksmith default.
+
+The only Blacksmith exception in `ci.yml` is `checks-windows` on a canonical
+main-push first attempt (including an admitted main-shaped qualification), and only
+when a fresh budget report admits it. PR Windows always uses `windows-2025`.
+The dependency/code warmer uses hosted Linux in this mode.
+
+The hosted **CI Blacksmith Budget** workflow reads Blacksmith's native
+organization-wide compute usage from the start of the current UTC month.
+Blacksmith owns platform pricing and attempt/cancellation accounting; the
+publisher does not crawl Actions history or maintain a spending ledger.
+The monthly budget is $200,000 / 12, and new Blacksmith admission closes at
+**$15,000 (90%)** or on uncertainty.
+
+The publisher runs only on canonical `main`, hourly while the backend is
+`budgeted` or on manual dispatch. It authenticates the pinned Blacksmith CLI
+with the repository secret `BLACKSMITH_ORG_TOKEN`, removes the credential at
+job cleanup, and publishes only the aggregate routing report. Private repository
+breakdowns and raw provider responses are not published. Preflight accepts only
+the named artifact from a successful canonical main publisher. Missing,
+invalid, stale or unavailable accounting closes the allowance with a visible
+warning and summary; hosted/RunsOn validation continues. Neither the publisher
+nor its consumers write the backend variable.
+
+This is a retrospective routing breaker, not a provider invoice cap: provider
+reporting delay and already admitted execution can add spend. Organization-wide
+usage includes other repositories, but this mode controls only ordinary CI and
+its cache warmer. Release and specialized workflows retain their own routing.
+The native estimate excludes storage and other non-compute charges.
+
+Qualify both coverage shapes on the exact PR head before changing the repository
+variable. The existing maintainer qualification dispatch accepts
+`runner_backend=budgeted`, `release_gate=true`, the exact `target_ref`, and its
+open canonical `pull_request_number`; add `ci_shape=main` for main coverage.
+Keep the production backend unchanged during qualification. After qualification
+and hosted-capacity review, an operator can switch with:
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body budgeted
+```
+
+Run `CI Blacksmith Budget` on main to begin accounting without enabling the mode.
+Restore the previously recorded backend to roll back. The broader hosted-first
+rollout also needs selection/fail-fast reductions: free hosted compute still
+shares organization concurrency, and RunsOn spend remains a separate AWS bill.
+See [routing costs](/ci/routing-costs) for measured limits and qualification gaps.

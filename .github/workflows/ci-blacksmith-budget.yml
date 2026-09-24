@@ -1,0 +1,74 @@
+name: CI Blacksmith Budget
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-blacksmith-budget
+  cancel-in-progress: false
+
+jobs:
+  meter:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'budgeted' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BLACKSMITH_DISABLE_AUTO_UPDATE: "1"
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Blacksmith CLI
+        id: install
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/blacksmith-bin"
+          curl --fail --silent --show-error --location \
+            https://clireleases.blacksmith.sh/cli/v0.4.61/linux/amd64/blacksmith \
+            --output "$RUNNER_TEMP/blacksmith-bin/blacksmith"
+          echo "011ca8f0c5dab2f0f128801f20d8c82a58f002a19c8f2b0393cc4b4dcc42ee0c  $RUNNER_TEMP/blacksmith-bin/blacksmith" | sha256sum --check --strict
+          chmod 700 "$RUNNER_TEMP/blacksmith-bin/blacksmith"
+          "$RUNNER_TEMP/blacksmith-bin/blacksmith" --version
+          echo "$RUNNER_TEMP/blacksmith-bin" >> "$GITHUB_PATH"
+      - name: Authenticate organization usage reader
+        id: auth
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        env:
+          BLACKSMITH_ORG_TOKEN: ${{ secrets.BLACKSMITH_ORG_TOKEN }}
+        run: |
+          set +x
+          if [[ -z "$BLACKSMITH_ORG_TOKEN" ]] || ! printf '%s' "$BLACKSMITH_ORG_TOKEN" | blacksmith auth login --api-token - --non-interactive --organization openclaw >/dev/null 2>&1; then
+            echo '::warning title=Blacksmith usage authentication unavailable::Monthly budget admission will remain closed.'
+            exit 1
+          fi
+      - name: Measure organization-wide Blacksmith execution
+        if: ${{ !cancelled() }}
+        env:
+          AUTHENTICATED: ${{ steps.auth.outcome == 'success' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/blacksmith-budget"
+          args=()
+          if [[ "$AUTHENTICATED" != 'true' ]]; then
+            args+=(--unavailable)
+          fi
+          node scripts/ci-blacksmith-budget.mjs \
+            --repository openclaw/openclaw \
+            --report "$RUNNER_TEMP/blacksmith-budget/blacksmith-budget.json" \
+            "${args[@]}"
+      - name: Remove usage credentials
+        if: always() && steps.install.outcome == 'success'
+        run: blacksmith auth logout --org openclaw >/dev/null 2>&1
+      - name: Publish budget routing report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: blacksmith-budget
+          path: ${{ runner.temp }}/blacksmith-budget/blacksmith-budget.json
+          if-no-files-found: error

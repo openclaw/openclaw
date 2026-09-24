@@ -20,10 +20,10 @@ jobs:
     # Shared CI cache publication is isolated from pull-request execution.
     # Trusted release/proof workflows may save only through the same authority contract.
     if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
-    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || ((matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15' || ((matrix.platform == 'linux-hosted' || contains(fromJSON('["github","budgeted"]'), vars.OPENCLAW_CI_RUNNER_BACKEND)) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 20
     concurrency:
-      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
+      group: ${{ format('vitest-cache-warm-dependencies-{0}-{1}', matrix.platform == 'linux' && contains(fromJSON('["github","budgeted"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       # Each platform publishes its own cache namespace independently.
@@ -78,10 +78,10 @@ jobs:
 
   warm:
     if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (github.event_name != 'push' || vars.OPENCLAW_CI_ON_PUSH == 'true') }}
-    runs-on: ${{ (matrix.platform == 'linux-hosted' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'github') && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ (matrix.platform == 'linux-hosted' || contains(fromJSON('["github","budgeted"]'), vars.OPENCLAW_CI_RUNNER_BACKEND)) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     concurrency:
-      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
+      group: ${{ format('vitest-cache-warm-code-{0}-{1}', matrix.platform == 'linux' && contains(fromJSON('["github","budgeted"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'linux-hosted' || matrix.platform, format('{0}-{1}', github.event_name, github.ref)) }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
