@@ -4,6 +4,7 @@ import {
   dispatchChannelInboundTurn,
   getGroupThreadDeliverySession,
   hasFinalInboundReplyDispatch,
+  hasVisibleInboundReplyDispatch,
   readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -71,10 +72,16 @@ type DiscordProviderDeliveryInfo = ReplyDispatchRuntimeInfo & {
   assertPlatformSendAuthorized: () => void;
 };
 
+export type DiscordMessageProcessResult =
+  | { kind: "visible-dispatch" }
+  | { kind: "no-visible-dispatch" }
+  | { kind: "skipped" }
+  | undefined;
+
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
-) {
+): Promise<DiscordMessageProcessResult> {
   const dispatchStartedAt = Date.now();
   const {
     cfg,
@@ -97,12 +104,12 @@ export async function processDiscordMessage(
     preparedMedia: mediaList,
   } = ctx;
   if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
-    return;
+    return { kind: "skipped" };
   }
   const text = messageText;
   if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
-    return;
+    return { kind: "skipped" };
   }
 
   const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
@@ -118,7 +125,7 @@ export async function processDiscordMessage(
       );
     }
     if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
-      return;
+      return { kind: "skipped" };
     }
   }
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
@@ -155,7 +162,7 @@ export async function processDiscordMessage(
     mediaList,
   });
   if (!processContext) {
-    return;
+    return { kind: "skipped" };
   }
   const {
     ctxPayload,
@@ -509,7 +516,7 @@ export async function processDiscordMessage(
   try {
     if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
       dispatchAborted = true;
-      return;
+      return { kind: "skipped" };
     }
     const preparedResult = await dispatchChannelInboundTurn({
       cfg,
@@ -577,12 +584,12 @@ export async function processDiscordMessage(
       },
     });
     if (!preparedResult.dispatched) {
-      return;
+      return { kind: "skipped" };
     }
     dispatchResult = preparedResult.dispatchResult;
     if (abortSignal?.aborted) {
       dispatchAborted = true;
-      return;
+      return { kind: "skipped" };
     }
     if (activeThreadRoute.threadReplyDelivered) {
       await observeFinalDelivery();
@@ -590,7 +597,7 @@ export async function processDiscordMessage(
   } catch (err) {
     if (abortSignal?.aborted) {
       dispatchAborted = true;
-      return;
+      return { kind: "skipped" };
     }
     dispatchError = true;
     const conflictOutcome = await completeDiscordSessionConflict(
@@ -610,7 +617,7 @@ export async function processDiscordMessage(
           `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
       );
       // Both a delivered notice and recorded policy suppression consume the event.
-      return;
+      return { kind: "visible-dispatch" };
     }
     throw err;
   } finally {
@@ -624,12 +631,15 @@ export async function processDiscordMessage(
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
   if (dispatchAborted) {
-    return;
+    return { kind: "skipped" };
   }
 
   const finalDispatchResult = dispatchResult;
+  if (!hasVisibleInboundReplyDispatch(finalDispatchResult)) {
+    return { kind: "no-visible-dispatch" };
+  }
   if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
-    return;
+    return { kind: "visible-dispatch" };
   }
   if (shouldLogVerbose()) {
     const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
@@ -637,4 +647,5 @@ export async function processDiscordMessage(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
+  return { kind: "visible-dispatch" };
 }

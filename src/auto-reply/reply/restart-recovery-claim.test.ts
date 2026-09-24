@@ -364,6 +364,85 @@ describe("createReplyRestartRecoveryClaimController", () => {
     expect(persisted?.restartRecoveryTerminalRunIds).toContain("source-turn");
   });
 
+  it.each([
+    { observed: false, expectedTerminal: false },
+    { observed: true, expectedTerminal: true },
+  ])(
+    "records message_tool_only recovery sources as terminal only after observed source delivery: $observed",
+    async ({ observed, expectedTerminal }) => {
+      const root = tempDirs.make("openclaw-reply-claim-message-tool-only-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:infra-ops";
+      const sessionId = "infra-ops-session";
+      const sourceTurnId = "discord-owner-room-event";
+      const deliveryContext = {
+        channel: "discord",
+        to: "infra-ops",
+        accountId: "default",
+      };
+      let entry: InternalSessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        status: "done",
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const admission = createTestAdmission({
+        entryId: sourceTurnId,
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+      const recorder = {
+        message: undefined,
+        getPersistedMessage: () => ({
+          role: "user" as const,
+          content: "status?",
+          idempotencyKey: sourceTurnId,
+          timestamp: Date.now(),
+        }),
+        resolveMessage: async () => undefined,
+        getAdmissionReceipt: () => admission,
+        markRuntimePersistencePending: () => {},
+        markRuntimePersisted: () => {},
+        markBlocked: () => {},
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistApproved: async () => undefined,
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
+      } satisfies UserTurnTranscriptRecorder;
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        hasObservedSourceReplyDelivery: () => observed,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => deliveryContext,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceTurnId,
+        storePath,
+      });
+
+      await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+      await controller.clear();
+
+      const persisted = loadSessionEntry({ storePath, sessionKey });
+      expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      if (expectedTerminal) {
+        expect(persisted?.restartRecoveryTerminalRunIds).toContain(sourceTurnId);
+      } else {
+        expect(persisted?.restartRecoveryTerminalRunIds).toBeUndefined();
+      }
+    },
+  );
+
   it("adopts an exact channel recovery claim before execution starts", async () => {
     const root = tempDirs.make("openclaw-reply-channel-claim-adoption-");
     const storePath = path.join(root, "sessions.json");

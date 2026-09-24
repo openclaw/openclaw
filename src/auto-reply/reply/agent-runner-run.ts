@@ -108,6 +108,14 @@ export async function runReplyAgent(
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext);
   // One lifecycle for all adoption sites in this run.
   const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+  let observedSourceReplyDelivery = false;
+  const effectiveOpts = {
+    ...opts,
+    onObservedReplyDelivery: async () => {
+      observedSourceReplyDelivery = true;
+      await opts?.onObservedReplyDelivery?.();
+    },
+  };
   const releaseAdmissionTicket = () => opts?.[REPLY_ADMISSION_TICKET]?.release();
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -615,7 +623,7 @@ export async function runReplyAgent(
     cfg,
     followupRun,
     getActiveSessionEntry: () => activeSessionEntry,
-    opts,
+    opts: effectiveOpts,
     replyOperation,
     restartRecoverySourceTurnId,
     runtimePolicySessionKey,
@@ -625,6 +633,7 @@ export async function runReplyAgent(
       activeSessionEntry = entry;
     },
     storePath,
+    hasObservedSourceReplyDelivery: () => observedSourceReplyDelivery,
   });
   try {
     return await executePreparedReplyAgentRun({
@@ -641,7 +650,10 @@ export async function runReplyAgent(
       getActiveSessionEntry: () => activeSessionEntry,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts: runOpts,
+      opts: {
+        ...runOpts,
+        onObservedReplyDelivery: effectiveOpts.onObservedReplyDelivery,
+      },
       pendingToolTasks,
       replyMediaContext,
       replyOperation,

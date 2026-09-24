@@ -42,11 +42,17 @@ async function processDiscordQueuedMessage(params: {
     const processDiscordMessageImpl =
       params.testing?.processDiscordMessage ??
       (await loadMessageProcessRuntime()).processDiscordMessage;
-    await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
+    const result = await processDiscordMessageImpl(
+      materializeDiscordInboundJob(params.job, abortSignal),
+    );
     if (abortSignal?.aborted) {
       // Cancellation ended ownership before delivery; retain prior retry facts
       // so the durable claim can replay under a replacement lifecycle.
       await params.job.ingressSettlement?.cancel();
+    } else if (result?.kind === "no-visible-dispatch") {
+      await params.job.ingressSettlement?.abandon(
+        new Error("discord queued run produced no visible reply dispatch"),
+      );
     } else {
       await params.job.ingressSettlement?.settle();
     }

@@ -219,7 +219,10 @@ export async function prepareReplyAgentPayloads(state: {
     if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
       return undefined;
     }
-    if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
+    if (
+      (sessionCtx.InboundEventKind === "room_event" && followupRun.run.senderIsOwner !== true) ||
+      completedSourceReplyDelivery
+    ) {
       return undefined;
     }
     const sourceReplyPolicy = resolveSourceReplyPolicy({
