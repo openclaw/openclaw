@@ -20,6 +20,8 @@ The tool registers only when OpenClaw can resolve a PDF-capable model for the ag
 
 Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
 
+PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key.
+
 ## Input reference
 
 <ParamField path="pdf" type="string">

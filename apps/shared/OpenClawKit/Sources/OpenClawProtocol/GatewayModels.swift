@@ -10928,17 +10928,20 @@ public struct PluginRuntimeApplication: Codable, Sendable {
     public let generation: Int
     public let pluginids: [String]
     public let sourcedigests: [String: AnyCodable]?
+    public let selectedentries: [String: AnyCodable]?
 
     public init(
         operationid: String,
         generation: Int,
         pluginids: [String],
-        sourcedigests: [String: AnyCodable]? = nil)
+        sourcedigests: [String: AnyCodable]? = nil,
+        selectedentries: [String: AnyCodable]? = nil)
     {
         self.operationid = operationid
         self.generation = generation
         self.pluginids = pluginids
         self.sourcedigests = sourcedigests
+        self.selectedentries = selectedentries
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10946,6 +10949,7 @@ public struct PluginRuntimeApplication: Codable, Sendable {
         case generation
         case pluginids = "pluginIds"
         case sourcedigests = "sourceDigests"
+        case selectedentries = "selectedEntries"
     }
 }
 

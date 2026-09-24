@@ -954,6 +954,41 @@ describe("frozen admission workflow barriers", () => {
     expect(f.outputs.resolved_admission?.outputs.baseline_scope).toBe("all-scenarios");
   });
 
+  it("rejects a pre-June dist-tag before publishing resolved baseline admission", () => {
+    const f = packageAdmissionBaselineFixture({
+      docker_lanes: "published-upgrade-survivor",
+      published_upgrade_survivor_baseline: "openclaw@beta",
+    });
+    writeFileSync(join(f.f.root, "bin/npm"), "#!/bin/sh\nprintf '\"2026.5.31\"\\n'\n", {
+      mode: 0o755,
+    });
+    const result = f.resolveBaselines();
+    expect(result.failedStep).toBe("Pin published upgrade baseline versions");
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(f.outputs.exact_baselines?.outputs).toEqual({});
+    expect(f.request().options.baselinesResolved).toBe(false);
+  });
+
+  it("rejects a pre-June inherited baseline at direct frozen preflight admission", () => {
+    const f = packageAdmissionBaselineFixture({ docker_lanes: "root-managed-vps-upgrade" });
+    const request = f.request();
+    Object.assign(request.options, {
+      baselinesResolved: true,
+      upgradeSurvivorBaseline: "openclaw@2026.5.31",
+      upgradeSurvivorBaselines: "",
+    });
+    const requestPath = join(f.f.root, "frozen-admission-request.json");
+    writeFileSync(requestPath, JSON.stringify(request));
+    const result = spawnSync(
+      process.execPath,
+      [join(f.f.tooling, "scripts/preflight-frozen-target-contracts.mjs"), "--plan", requestPath],
+      { encoding: "utf8", env: { PATH: process.env.PATH, HOME: f.f.root } },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(result.stdout).toBe("");
+  });
+
   it.each(["onboard", "upgrade-survivor"])(
     "preserves unused multiline package baselines and scope for %s",
     (lane) => {
@@ -5690,7 +5725,6 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       version: "2026.8.1-beta.3",
     },
   ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
-    const stableSoakWaiver = mode.fullReleasePreflight ? "Soak infrastructure unavailable" : "";
     const producerRunId = mode.independentProducer ? "333" : "111";
     const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
     const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
@@ -5720,7 +5754,6 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
-      "${{ inputs.stable_soak_waiver }}": stableSoakWaiver,
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5803,7 +5836,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       JSON.stringify({
         openclawNpmTarball: "https://example.invalid/openclaw.tgz",
         openclawNpmIntegrity: "sha512-fixture",
-        ...(stableSoakWaiver ? { stableSoakWaiver } : {}),
         ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
       }),
     );
@@ -5834,7 +5866,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(dispatched.status, dispatched.stderr).toBe(0);
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
-    expect(dispatch).toContain(`-f stable_soak_waiver=${stableSoakWaiver}`);
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -5848,12 +5879,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     expect(proof.status, proof.stderr).toBe(0);
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
-    expect(proofText.includes("Stable soak waived by operator:")).toBe(Boolean(stableSoakWaiver));
-    if (stableSoakWaiver) {
-      expect(proofText).toContain(
-        `Stable soak waived by operator: ${JSON.stringify(stableSoakWaiver)}`,
-      );
-    }
     expect(proofText).toContain(
       mode.fullReleasePreflight
         ? `Telegram integration checks: waived by the release owner for ${mode.version} (source QA, Package Acceptance, published-package E2E); not run.`
@@ -6246,11 +6271,9 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     "keeps verifier success separate from postpublish %s completion",
     (outcome) => {
       const version = "2026.9.1";
-      const stableSoakWaiver = "Soak infrastructure unavailable: 100% blocked\nOperator approved";
       const fixture = createReleasePublishFixture(
         {
           RELEASE_TAG: `v${version}`,
-          STABLE_SOAK_WAIVER: stableSoakWaiver,
           PUBLISH_OPENCLAW_NPM: "false",
           CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
@@ -6347,7 +6370,6 @@ if (args[0] === "view") {
         expect(receipt).toMatchObject({
           version: 1,
           releasePublishRunId: "44",
-          stableSoakWaiver,
           workflowRuns: expect.arrayContaining([
             expect.objectContaining({
               id: "66",
@@ -7945,12 +7967,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("last-stable-4");
-    expect(workflow).toContain("all-since-2026.4.23");
+    expect(workflow).toContain("all-since-2026.6.1");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
-    expect(workflow).toContain("--history-count 6");
-    expect(workflow).toContain("--include-version 2026.4.23");
-    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain('"last-stable-"');
     expect(workflow).toContain('"all-since-"');
     const smoke = runPackageAcceptanceProfile({ suiteProfile: "smoke" });
@@ -8435,7 +8454,6 @@ test "$package_manager" = "pnpm@12.1.0"
       expect(step.env).toMatchObject({
         RELEASE_TAG: "${{ inputs.tag }}",
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
-        STABLE_SOAK_WAIVER: "${{ inputs.stable_soak_waiver }}",
       });
     }
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
@@ -9185,7 +9203,6 @@ describe("package artifact reuse", () => {
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
-    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
     expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
@@ -9195,7 +9212,6 @@ describe("package artifact reuse", () => {
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -9221,11 +9237,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(
-      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
-    ).toBeLessThan(
-      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
-    );
   });
 
   it("reuses a content-addressed bare image for prepared E2E images", () => {

@@ -4,11 +4,6 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  isOpenClawAgentDatabasePathCurrent,
-  readOpenClawAgentDatabaseIdentity,
-} from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -52,7 +47,10 @@ import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
+import {
+  assertCapturedSessionEntryReadSource,
+  resolveSessionEntry,
+} from "./session-accessor.sqlite-exact-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
@@ -456,25 +454,10 @@ async function patchSqliteSessionEntrySnapshot(
     if (!captured) {
       return;
     }
-    if (typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(databasePath, `file:${captured.databaseIdentity}`);
-    }
-    const current = database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions);
-    if (!current) {
-      if (typeof captured.databaseIdentity === "symbol") {
-        throw new Error("Captured session database is no longer open");
-      }
-      return;
-    }
-    const physical = readOpenClawAgentDatabaseIdentity(current);
-    if (
-      current.agentId !== captured.agentId ||
-      physical.identity !== captured.databaseIdentity ||
-      physical.birthtime !== captured.databaseBirthtime ||
-      !isOpenClawAgentDatabasePathCurrent(current)
-    ) {
-      throw new Error("Captured session database changed before update");
-    }
+    assertCapturedSessionEntryReadSource(
+      captured,
+      database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions),
+    );
   };
   const assertCurrent = captured ? () => assertCapturedSource() : undefined;
   const withDatabase = <T>(operation: () => T | Promise<T>) => {

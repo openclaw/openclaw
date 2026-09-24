@@ -318,14 +318,26 @@ describe("plugins tool", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps Gateway restart guidance when reload output is compacted (%s)",
-    async (oversized) => {
+  it.each([
+    { oversized: false, restartRequired: false },
+    { oversized: true, restartRequired: false },
+    { oversized: false, restartRequired: true },
+    { oversized: true, restartRequired: true },
+  ])(
+    "keeps selected-entry guidance with compact=$oversized and restart=$restartRequired",
+    async ({ oversized, restartRequired }) => {
       callGateway.mockResolvedValue({
         ok: true,
-        runtime,
-        restartRequired: true,
-        warnings: oversized ? ["x".repeat(4_000)] : ["Compiled bundled code needs a restart."],
+        runtime: {
+          ...runtime,
+          selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+        },
+        restartRequired,
+        warnings: oversized
+          ? ["x".repeat(4_000)]
+          : restartRequired
+            ? ["Compiled bundled code needs a restart."]
+            : [],
       });
       const result = await createPluginsTool().execute("reload", {
         action: "reload",
@@ -333,12 +345,22 @@ describe("plugins tool", () => {
       });
       expect(result).toMatchObject({
         details: {
-          restartRequired: true,
+          restartRequired,
           runtime: { generation: runtime.generation },
-          next: expect.stringMatching(/restart the Gateway/i),
+          next: expect.stringContaining(
+            "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+          ),
         },
       });
-      expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+      if (restartRequired) {
+        expect(result.details).toMatchObject({
+          next: expect.stringMatching(/restart the Gateway/i),
+        });
+        expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+      }
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
     },
   );
 

@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -257,7 +257,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -937,12 +937,7 @@ jobs:
             args+=(--npm-dist-tags-json "$npm_dist_tags_json")
           fi
           if [[ -n "$releases_json" ]]; then
-            args+=(
-              --releases-json "$releases_json"
-              --history-count 6
-              --include-version 2026.4.23
-              --pre-date 2026-03-15T00:00:00Z
-            )
+            args+=(--releases-json "$releases_json")
           fi
           node --import tsx scripts/resolve-upgrade-survivor-baselines.mts "${args[@]}" >/dev/null
           echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"
@@ -958,7 +953,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
           import { execFileSync } from 'node:child_process';
-          import { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } from './scripts/lib/upgrade-survivor-policy.mjs';
+          import { assertSupportedUpgradeSurvivorBaselineSpec, normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } from './scripts/lib/upgrade-survivor-policy.mjs';
           import { resolveNpmJsonString } from './scripts/lib/npm-json-output.mts';
           const captured = new Map();
           const exact = raw => {
@@ -970,6 +965,7 @@ jobs:
                   ['view', spec, 'version', '--json', '--silent', '--prefer-online'],
                   { encoding: 'utf8', timeout: 60000, maxBuffer: 1024 * 1024 }))));
               if (!/^openclaw@[0-9]/u.test(value ?? '')) throw new Error('upgrade baseline did not resolve to an exact version');
+              assertSupportedUpgradeSurvivorBaselineSpec(value);
               captured.set(spec, value);
             }
             return captured.get(spec);

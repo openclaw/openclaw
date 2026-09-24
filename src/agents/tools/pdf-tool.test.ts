@@ -9,8 +9,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createApiKeyCredential,
@@ -29,20 +27,15 @@ import {
 } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
-const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
   return {
     ...actual,
-    complete: completeMock,
+    completeSimple: completeMock,
   };
 });
-
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
 
 const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
@@ -153,7 +146,6 @@ describe("createPdfTool", () => {
   beforeEach(() => {
     resetPdfToolAuthEnv();
     completeMock.mockReset();
-    registerProviderStreamForModelMock.mockReset();
   });
 
   afterEach(() => {
@@ -748,110 +740,65 @@ describe("createPdfTool", () => {
     },
   );
 
-  it("uses the prepared provider stream for extraction fallback", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      const pluginRegistry = createEmptyPluginRegistry();
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        api: "openai-completions",
-        input: ["text"],
-        pluginRegistry,
-      });
-      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Managed model content",
-        images: [],
-      });
-      const order: string[] = [];
-      const providerStreamFn = vi.fn(async () => {
-        order.push("request");
-        return {
-          result: async () => ({
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "managed summary" }],
-          }),
-        };
-      });
-      registerProviderStreamForModelMock.mockImplementationOnce(() => {
-        order.push("prepare");
-        expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
-        return providerStreamFn;
-      });
-      completeMock.mockImplementationOnce(() => {
-        throw new Error("unprepared completion dispatched");
-      });
+  it.each(["bedrock-converse-stream", "openai-completions"])(
+    "allows keyless AWS SDK auth only for the Bedrock transport (%s)",
+    async (api) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
+          provider: "amazon-bedrock",
+          api,
+          input: ["text", "image"],
+        });
+        vi.mocked(modelAuth.getApiKeyForModelCore).mockResolvedValue({
+          apiKey: "",
+          source: "aws-sdk default chain",
+          mode: "aws-sdk",
+        });
+        vi.mocked(modelAuth.requireApiKey).mockImplementation(() => {
+          throw new Error("Bedrock aws-sdk auth must not require a literal API key");
+        });
+        vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+          text: "Extracted content",
+          images: [],
+        });
+        completeMock.mockResolvedValue({
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Bedrock summary" }],
+        } as never);
 
-      const cfg = withPdfModel(OPENAI_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
+        const bedrockModel = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
+        const tool = requirePdfTool(
+          (await loadCreatePdfTool())({ config: withPdfModel(bedrockModel), agentDir }),
+        );
+        if (api !== "bedrock-converse-stream") {
+          vi.mocked(modelAuth.requireApiKey).mockRestore();
+          await expect(
+            tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" }),
+          ).rejects.toThrow("No API key");
+          expect(completeMock).not.toHaveBeenCalled();
+          return;
+        }
+        const result = await tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+        });
 
-      expect(order).toEqual(["prepare", "request"]);
-      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
-        expect.objectContaining({ wrapProviderStream: true }),
-      );
-      expect(providerStreamFn).toHaveBeenCalledOnce();
-      expect(completeMock).not.toHaveBeenCalled();
-      expect(result.content).toEqual([{ type: "text", text: "managed summary" }]);
-    });
-  });
-
-  it("uses the AWS SDK credential chain for Bedrock PDF models", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        input: ["text", "image"],
-      });
-      vi.mocked(modelAuth.getApiKeyForModelCore).mockResolvedValue({
-        apiKey: "",
-        source: "aws-sdk default chain",
-        mode: "aws-sdk",
-      });
-      vi.mocked(modelAuth.requireApiKey).mockImplementation(() => {
-        throw new Error("Bedrock aws-sdk auth must not require a literal API key");
-      });
-      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Bedrock summary" }],
-      } as never);
-
-      const bedrockModel = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
-      const tool = requirePdfTool(
-        (await loadCreatePdfTool())({ config: withPdfModel(bedrockModel), agentDir }),
-      );
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
-
-      expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
-      expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
-      expect(setRuntimeApiKey).not.toHaveBeenCalled();
-      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: expect.objectContaining({
+        expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
+        expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
+        expect(setRuntimeApiKey).not.toHaveBeenCalled();
+        expect(completeMock).toHaveBeenCalledWith(
+          expect.objectContaining({
             provider: "amazon-bedrock",
             api: "bedrock-converse-stream",
           }),
-          cfg: expect.objectContaining({
-            agents: expect.objectContaining({
-              defaults: expect.objectContaining({ pdfModel: { primary: bedrockModel } }),
-            }),
-          }),
-          agentDir,
-        }),
-      );
-      expect(firstMockCall(completeMock, "complete")[2]).toMatchObject({ apiKey: "" });
-    });
-  });
+          expect.anything(),
+          expect.objectContaining({ apiKey: "" }),
+          expect.any(Function),
+        );
+      });
+    },
+  );
 
   it("passes password to PDF extraction fallback", async () => {
     await withTempPdfAgentDir(async (agentDir) => {

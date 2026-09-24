@@ -486,7 +486,7 @@ suite.define(() => {
           ts: Date.now(),
         });
         await expect
-          .poll(() => runRow.locator(".chat-working-indicator__preamble").textContent())
+          .poll(() => runRow.locator(".chat-text").last().textContent())
           .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const preamble = await dockGeometry(page);
@@ -544,7 +544,7 @@ suite.define(() => {
           },
         );
         await expect
-          .poll(() => runRow.locator(".chat-working-indicator__preamble").textContent())
+          .poll(() => runRow.locator(".chat-text").last().textContent())
           .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const after = await dockGeometry(page);
