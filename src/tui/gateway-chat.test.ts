@@ -71,13 +71,8 @@ describe("GatewayChatClient", () => {
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
-    let finishStop: (() => void) | undefined;
-    const stopAndWait = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishStop = resolve;
-        }),
-    );
+    const finishStop = createDeferred();
+    const stopAndWait = vi.fn(() => finishStop.promise);
     (client as unknown as { client: { stopAndWait: typeof stopAndWait } }).client.stopAndWait =
       stopAndWait;
 
@@ -86,10 +81,13 @@ describe("GatewayChatClient", () => {
       stopped = true;
     });
 
-    expect(stopAndWait).toHaveBeenCalledOnce();
-    expect(stopped).toBe(false);
-    finishStop?.();
-    await stopPromise;
+    try {
+      expect(stopAndWait).toHaveBeenCalledOnce();
+      expect(stopped).toBe(false);
+    } finally {
+      finishStop.resolve();
+      await stopPromise;
+    }
     expect(stopped).toBe(true);
   });
 
@@ -265,34 +263,41 @@ describe("GatewayChatClient", () => {
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     const historyPromise = client.loadHistory({ sessionKey: "main", limit: 200 });
-    await vi.advanceTimersByTimeAsync(250);
+    const settledHistory = Promise.allSettled([historyPromise]);
+    let pendingHistory: Promise<unknown[]> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(250);
 
-    await expect(historyPromise).resolves.toEqual({ messages: [] });
-    expect(request).toHaveBeenCalledTimes(2);
+      await expect(historyPromise).resolves.toEqual({ messages: [] });
+      expect(request).toHaveBeenCalledTimes(2);
 
-    const baselineTimerCount = vi.getTimerCount();
-    request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
-    const pendingHistory = Promise.all([
-      client.loadHistory({ sessionKey: "first" }).catch((error: unknown) => error),
-      client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
-    ]);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(vi.getTimerCount()).toBe(baselineTimerCount + 2);
+      const baselineTimerCount = vi.getTimerCount();
+      request.mockRejectedValueOnce(startupError).mockRejectedValueOnce(startupError);
+      pendingHistory = Promise.all([
+        client.loadHistory({ sessionKey: "first" }).catch((error: unknown) => error),
+        client.loadHistory({ sessionKey: "second" }).catch((error: unknown) => error),
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(vi.getTimerCount()).toBe(baselineTimerCount + 2);
 
-    await client.stop();
+      await client.stop();
 
-    expect(vi.getTimerCount()).toBe(baselineTimerCount);
-    await expect(pendingHistory).resolves.toEqual([
-      expect.objectContaining({ name: "AbortError" }),
-      expect.objectContaining({ name: "AbortError" }),
-    ]);
-    await expect(client.loadHistory({ sessionKey: "stopped" })).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    await vi.advanceTimersByTimeAsync(250);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(vi.getTimerCount()).toBe(baselineTimerCount);
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+      await expect(pendingHistory).resolves.toEqual([
+        expect.objectContaining({ name: "AbortError" }),
+        expect.objectContaining({ name: "AbortError" }),
+      ]);
+      await expect(client.loadHistory({ sessionKey: "stopped" })).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    } finally {
+      await client.stop();
+      await Promise.all([settledHistory, pendingHistory]);
+    }
   });
 
   it("passes selected-agent global scope through chat methods", async () => {

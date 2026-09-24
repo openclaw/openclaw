@@ -29,6 +29,39 @@ import {
 import { getPendingSubmitAcceptedRunId, getPendingSubmitDraft } from "./tui-submit-state.js";
 import { createEditorSubmitHandler, createSubmitBurstCoalescer } from "./tui-submit.js";
 
+function createUnfinishedSessionStates() {
+  return [
+    {
+      activeChatRunId: "active-run",
+      pendingSubmit: null,
+      activityStatus: "running",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "accepted" as const,
+        runId: "pending-run",
+        draftText: null,
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: {
+        phase: "sending" as const,
+        runId: "pending-run",
+        draftText: "pending",
+      },
+      activityStatus: "sending",
+    },
+    {
+      activeChatRunId: null,
+      pendingSubmit: null,
+      activityStatus: "finishing context",
+    },
+  ];
+}
+
 describe("tui command handlers", () => {
   it.each([false, true])(
     "reopens /question locally without sending a chat turn (local=%s)",
@@ -346,13 +379,8 @@ describe("tui command handlers", () => {
   });
 
   it("renders the sending indicator before chat.send resolves", async () => {
-    let resolveSend: (value: { runId: string }) => void = () => {
-      throw new Error("sendChat promise resolver was not initialized");
-    };
-    const sendPromise = new Promise<{ runId: string }>((resolve) => {
-      resolveSend = (value) => resolve(value);
-    });
-    const sendChat = vi.fn(() => sendPromise);
+    const deferred = createDeferred<{ runId: string }>();
+    const sendChat = vi.fn(() => deferred.promise);
     const setActivityStatus = vi.fn();
 
     const { handleCommand, requestRender } = createTuiCommandHandlersHarness({
@@ -368,7 +396,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > sendingOrder)).not.toEqual([]);
 
-    resolveSend({ runId: "r1" });
+    deferred.resolve({ runId: "r1" });
     await pending;
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });
@@ -405,13 +433,15 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("projects the canonical pending user before chat.send is acknowledged", async () => {
+  it("projects the pending user before ACK and retains its runId before events", async () => {
     const deferred = createDeferred<{ runId: string }>();
     const sendChat = vi.fn(() => deferred.promise);
     const harness = createTuiCommandHandlersHarness({ sendChat });
 
     const sending = harness.handleCommand("hello");
     const provisionalRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(typeof provisionalRunId).toBe("string");
+    expect(provisionalRunId.length).toBeGreaterThan(0);
 
     expect(harness.state.sessionProjection?.scope).toEqual({
       sessionKey: "agent:main:main",
@@ -431,6 +461,8 @@ describe("tui command handlers", () => {
 
     deferred.resolve({ runId: provisionalRunId });
     await sending;
+    expect(harness.state.activeChatRunId).toBeNull();
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe(provisionalRunId);
   });
 
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {
@@ -789,20 +821,13 @@ describe("tui command handlers", () => {
     });
   });
 
-  it("opens a context mode selector for /context without sending immediately", async () => {
-    const { handleCommand, sendChat, openOverlay } = createTuiCommandHandlersHarness();
-
-    await handleCommand("/context");
-
-    expect(sendChat).not.toHaveBeenCalled();
-    expect(openOverlay).toHaveBeenCalledTimes(1);
-  });
-
   it("sends the selected context mode through the gateway command path", async () => {
     const { handleCommand, sendChat, openOverlay, closeOverlay, overlayHandle } =
       createTuiCommandHandlersHarness();
 
     await handleCommand("/context");
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(openOverlay).toHaveBeenCalledTimes(1);
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
@@ -962,21 +987,6 @@ describe("tui command handlers", () => {
 
     const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
-    expect(state.activeChatRunId).toBeNull();
-    expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
-  });
-
-  it("tracks the in-flight runId so escape can abort during the wait", async () => {
-    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
-      runId: opts.runId,
-    }));
-    const { handleCommand, state } = createTuiCommandHandlersHarness({ sendChat });
-
-    await handleCommand("hello");
-
-    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
-    expect(typeof sentRunId).toBe("string");
-    expect(sentRunId.length).toBeGreaterThan(0);
     expect(state.activeChatRunId).toBeNull();
     expect(getPendingSubmitAcceptedRunId(state)).toBe(sentRunId);
   });
@@ -1688,98 +1698,41 @@ describe("tui command handlers", () => {
     });
   });
 
-  it.each([
-    {
-      activeChatRunId: "active-run",
-      pendingSubmit: null,
-      activityStatus: "running",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: {
-        phase: "accepted" as const,
-        runId: "pending-run",
-        draftText: null,
-      },
-      activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: {
-        phase: "sending" as const,
-        runId: "pending-run",
-        draftText: "pending",
-      },
-      activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: null,
-      activityStatus: "finishing context",
-    },
-  ])("blocks /new while the current session lifecycle is unfinished", async (runState) => {
-    const createSession = vi.fn();
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
-      createSession,
-      ...runState,
-    });
+  it.each(createUnfinishedSessionStates())(
+    "blocks /new while the current session lifecycle is unfinished",
+    async (runState) => {
+      const createSession = vi.fn();
+      const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
+        createSession,
+        ...runState,
+      });
 
-    await handleCommand("/new");
+      await handleCommand("/new");
 
-    expect(createSession).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
-  });
+      expect(createSession).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith("abort the current run before /new");
+    },
+  );
 
-  it.each([
-    {
-      activeChatRunId: "active-run",
-      pendingSubmit: null,
-      activityStatus: "running",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: {
-        phase: "accepted" as const,
-        runId: "pending-run",
-        draftText: null,
-      },
-      activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: {
-        phase: "sending" as const,
-        runId: "pending-run",
-        draftText: "pending",
-      },
-      activityStatus: "sending",
-    },
-    {
-      activeChatRunId: null,
-      pendingSubmit: null,
-      activityStatus: "finishing context",
-    },
-  ])("blocks /reset while the current session lifecycle is unfinished", async (runState) => {
-    const resetSession = vi.fn();
-    const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
-      resetSession,
-      ...runState,
-    });
+  it.each(createUnfinishedSessionStates())(
+    "blocks /reset while the current session lifecycle is unfinished",
+    async (runState) => {
+      const resetSession = vi.fn();
+      const { handleCommand, addSystem } = createTuiCommandHandlersHarness({
+        resetSession,
+        ...runState,
+      });
 
-    await handleCommand("/reset");
+      await handleCommand("/reset");
 
-    expect(resetSession).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("abort the current run before /reset");
-  });
+      expect(resetSession).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith("abort the current run before /reset");
+    },
+  );
 
   it("serializes input until /new adopts the created session", async () => {
-    let resolveCreate: ((value: { ok: true; key: string }) => void) | undefined;
-    const createSession = vi.fn().mockImplementation(
-      () =>
-        new Promise<{ ok: true; key: string }>((resolve) => {
-          resolveCreate = resolve;
-        }),
-    );
+    const deferred = createDeferred<{ ok: true; key: string }>();
+    const createSession = vi.fn(() => deferred.promise);
     const { handleCommand, sendMessage, resolveMessageAdmission, sendChat, addSystem } =
       createTuiCommandHandlersHarness({ createSession });
 
@@ -1797,10 +1750,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
 
-    if (!resolveCreate) {
-      throw new Error("expected pending session creation");
-    }
-    resolveCreate({ ok: true, key: "agent:main:tui-created" });
+    deferred.resolve({ ok: true, key: "agent:main:tui-created" });
     await creating;
   });
 
@@ -2858,15 +2808,8 @@ describe("tui command handlers", () => {
   });
 
   it("does not restore a queued run that completes before the followup send fails", async () => {
-    let rejectSend: (error: Error) => void = () => {
-      throw new Error("sendChat promise rejector was not initialized");
-    };
-    const sendChat = vi.fn(
-      () =>
-        new Promise<never>((_resolve, reject) => {
-          rejectSend = reject;
-        }),
-    );
+    const deferred = createDeferred<never>();
+    const sendChat = vi.fn(() => deferred.promise);
     const { handleCommand, state } = createTuiCommandHandlersHarness({
       sendChat,
       activeChatRunId: "run-active",
@@ -2875,8 +2818,9 @@ describe("tui command handlers", () => {
 
     const pendingSend = handleCommand("queued followup");
     await Promise.resolve();
+    expect(sendChat).toHaveBeenCalledTimes(1);
     state.activeChatRunId = null;
-    rejectSend(new Error("network error"));
+    deferred.reject(new Error("network error"));
     await pendingSend;
 
     expect(state.activeChatRunId).toBeNull();
@@ -3211,17 +3155,8 @@ describe("tui command handlers", () => {
   });
 
   it("renders model listing feedback before the backend list resolves", async () => {
-    let resolveModels: (
-      value: Array<{ provider: string; id: string; name?: string }>,
-    ) => void = () => {
-      throw new Error("model list promise resolver was not initialized");
-    };
-    const listModelsPromise = new Promise<Array<{ provider: string; id: string; name?: string }>>(
-      (resolve) => {
-        resolveModels = (value) => resolve(value);
-      },
-    );
-    const listModels = vi.fn(() => listModelsPromise);
+    const deferred = createDeferred<Array<{ provider: string; id: string; name?: string }>>();
+    const listModels = vi.fn(() => deferred.promise);
     const { handleCommand, addPendingSystem, openOverlay, requestRender } =
       createTuiCommandHandlersHarness({
         listModels,
@@ -3237,7 +3172,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.filter((order) => order > feedbackOrder)).not.toEqual([]);
 
-    resolveModels([{ provider: "openrouter", id: "openrouter/auto" }]);
+    deferred.resolve([{ provider: "openrouter", id: "openrouter/auto" }]);
     await pending;
 
     expect(openOverlay).toHaveBeenCalledTimes(1);

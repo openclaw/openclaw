@@ -106,21 +106,33 @@ describe("GatewayChatClient session description lifetime", () => {
       callbacks.onHelloOk?.(hello("old"));
       const description = client.describeSession({ sessionKey: selectedKey });
       const rejected = expect(description).rejects.toMatchObject({ name: "AbortError" });
-      await entered.promise;
-      callbacks.onClose?.(1001, "reconnecting");
-      held.resolve({ session: oldDescription.session });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      await client.stop();
-      await rejected;
-      const completedCalls = request.mock.calls.length;
-      callbacks.onHelloOk?.(hello("late"));
-      expect(request).toHaveBeenCalledTimes(completedCalls);
-      await expect(client.describeSession({ sessionKey: selectedKey })).rejects.toMatchObject({
-        name: "AbortError",
-      });
-      expect(request).toHaveBeenCalledTimes(completedCalls);
+      const settledDescription = Promise.allSettled([description, rejected]);
+      try {
+        await expect(
+          Promise.race([
+            entered.promise.then(() => "entered"),
+            description.then(() => "completed"),
+          ]),
+        ).resolves.toBe("entered");
+        callbacks.onClose?.(1001, "reconnecting");
+        held.resolve({ session: oldDescription.session });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await client.stop();
+        await rejected;
+        const completedCalls = request.mock.calls.length;
+        callbacks.onHelloOk?.(hello("late"));
+        expect(request).toHaveBeenCalledTimes(completedCalls);
+        await expect(client.describeSession({ sessionKey: selectedKey })).rejects.toMatchObject({
+          name: "AbortError",
+        });
+        expect(request).toHaveBeenCalledTimes(completedCalls);
+      } finally {
+        held.resolve(undefined);
+        await client.stop();
+        await settledDescription;
+      }
     });
   });
 
@@ -154,19 +166,33 @@ describe("GatewayChatClient session description lifetime", () => {
             sessionKey: selectedKey,
             agentId: "work",
           });
-          await entered.promise;
-          callbacks.onClose?.(1001, "reconnecting");
-          current = true;
-          callbacks.onHelloOk?.(hello("current"));
-          if (oldOutcome === "failure") {
-            held.reject(new Error("Old metadata request lost its connection"));
-          } else {
-            held.resolve(
-              heldMethod === "sessions.describe" ? { session: oldDescription.session } : oldListing,
-            );
-          }
+          const settledDescription = Promise.allSettled([description]);
+          try {
+            await expect(
+              Promise.race([
+                entered.promise.then(() => "entered"),
+                description.then(() => "completed"),
+              ]),
+            ).resolves.toBe("entered");
+            callbacks.onClose?.(1001, "reconnecting");
+            current = true;
+            callbacks.onHelloOk?.(hello("current"));
+            if (oldOutcome === "failure") {
+              held.reject(new Error("Old metadata request lost its connection"));
+            } else {
+              held.resolve(
+                heldMethod === "sessions.describe"
+                  ? { session: oldDescription.session }
+                  : oldListing,
+              );
+            }
 
-          await expect(description).resolves.toEqual(currentDescription);
+            await expect(description).resolves.toEqual(currentDescription);
+          } finally {
+            held.resolve(undefined);
+            await client.stop();
+            await settledDescription;
+          }
         });
       },
     );

@@ -2337,15 +2337,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
-  it("keeps pending user text after run binding until history catches up", () => {
-    const pendingUsers = new Map([["run-gateway", "queued hello"]]);
-    const chatLog = {
-      ...createMockChatLog(),
-      countPendingUsers: () => pendingUsers.size,
-      render: (_width: number) => Array.from(pendingUsers.values()),
-    };
+  it("clears a sending pending submit when its known local run starts streaming", () => {
     const { state, noteLocalRunId, handleChatEvent } = createHandlersHarness({
-      chatLog: chatLog as unknown as HandlerChatLog,
       state: {
         activeChatRunId: null,
         pendingSubmit: sendingSubmit("run-gateway", "queued hello"),
@@ -2359,8 +2352,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(state.pendingSubmit).toBeNull();
-    expect(chatLog.countPendingUsers()).toBe(1);
-    expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
   it("does not bind unknown gateway run ids while an optimistic message is pending", () => {
@@ -3648,16 +3639,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     it("coalesces a burst of transcript updates into one follow-up reload", async () => {
-      let resolveFirstHistory: ((result: TuiHistoryLoadResult) => void) | undefined;
+      const firstHistory = createDeferred<TuiHistoryLoadResult>();
       const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: { activeChatRunId: null },
       });
-      loadHistory.mockImplementationOnce(
-        () =>
-          new Promise<TuiHistoryLoadResult>((resolve) => {
-            resolveFirstHistory = resolve;
-          }),
-      );
+      loadHistory.mockReturnValueOnce(firstHistory.promise);
 
       for (let index = 0; index < 250; index += 1) {
         handleSessionMessageEvent({
@@ -3668,7 +3654,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(loadHistory).toHaveBeenCalledTimes(1);
       expect(state.sessionInfo.updatedAt).toBe(249);
 
-      resolveFirstHistory?.({
+      firstHistory.resolve({
         loaded: true,
         runOutcome: { state: "completed" },
       });
@@ -3758,13 +3744,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     };
 
     const deferNextHistoryLoad = (loadHistory: MockFn) => {
-      let resolveHistory: (result: TuiHistoryLoadResult) => void = () => {};
-      const result = new Promise<TuiHistoryLoadResult>((resolve) => {
-        resolveHistory = resolve;
-      });
-      loadHistory.mockReturnValueOnce(result);
+      const history = createDeferred<TuiHistoryLoadResult>();
+      loadHistory.mockReturnValueOnce(history.promise);
       return (loaded: boolean, inFlightRunId: string | null = null) =>
-        resolveHistory(
+        history.resolve(
           loaded
             ? {
                 loaded: true,
@@ -4132,7 +4115,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
   });
 
   it("refreshes the watchdog window on each new stream delta", () => {
-    const { state, setActivityStatus, handlers } = createHarness({
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
     });
 
@@ -4152,17 +4135,19 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-flow");
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(2_500);
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-flow");
+    expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-flow", expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
 
   it("rearms the watchdog on active-run tool events even when tool verbosity is off", () => {
-    const { state, setActivityStatus, handlers } = createHarness({
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
     });
     state.sessionInfo.verboseLevel = "off";
@@ -4184,11 +4169,13 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-tools");
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(2_001);
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-tools");
+    expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-tools", expectedTimeoutMessage);
 
     handlers.dispose?.();
   });

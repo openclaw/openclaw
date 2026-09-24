@@ -732,29 +732,33 @@ describe("resolveGatewayConnection", () => {
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-file-secret-"));
       const secretFile = path.join(tempDir, "secrets.json");
-      await fs.writeFile(secretFile, JSON.stringify({ gatewayToken: "file-secret-token" }), "utf8");
-      await fs.chmod(secretFile, 0o600);
+      try {
+        await fs.writeFile(
+          secretFile,
+          JSON.stringify({ gatewayToken: "file-secret-token" }),
+          "utf8",
+        );
+        await fs.chmod(secretFile, 0o600);
 
-      loadConfig.mockReturnValue({
-        secrets: {
-          providers: {
-            fileprovider: {
-              source: "file",
-              path: secretFile,
-              mode: "json",
-              allowInsecurePath: true,
+        loadConfig.mockReturnValue({
+          secrets: {
+            providers: {
+              fileprovider: {
+                source: "file",
+                path: secretFile,
+                mode: "json",
+                allowInsecurePath: true,
+              },
             },
           },
-        },
-        gateway: {
-          mode: "local",
-          auth: {
-            token: { source: "file", provider: "fileprovider", id: "/gatewayToken" },
+          gateway: {
+            mode: "local",
+            auth: {
+              token: { source: "file", provider: "fileprovider", id: "/gatewayToken" },
+            },
           },
-        },
-      });
+        });
 
-      try {
         const result = await resolveGatewayConnection({});
         expect(result.token).toBe("file-secret-token");
       } finally {
@@ -794,57 +798,48 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("resolves only token SecretRef when gateway.auth.mode is token", async () => {
-    await withModeExecProviderFixture(
-      "token",
-      async ({ tokenMarker, passwordMarker, providers }) => {
-        loadConfig.mockReturnValue({
-          secrets: {
-            providers,
-          },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
+  it.each([
+    {
+      mode: "token",
+      expectedToken: "token-from-exec",
+      expectedPassword: undefined,
+      tokenRan: true,
+      passwordRan: false,
+    },
+    {
+      mode: "password",
+      expectedToken: undefined,
+      expectedPassword: "password-from-exec",
+      tokenRan: false,
+      passwordRan: true,
+    },
+  ] as const)(
+    "resolves only $mode SecretRef when gateway.auth.mode is $mode",
+    async ({ mode, expectedToken, expectedPassword, tokenRan, passwordRan }) => {
+      await withModeExecProviderFixture(
+        mode,
+        async ({ tokenMarker, passwordMarker, providers }) => {
+          loadConfig.mockReturnValue({
+            secrets: {
+              providers,
             },
-          },
-        });
-
-        const result = await resolveGatewayConnection({});
-        expect(result.token).toBe("token-from-exec");
-        expect(result.password).toBeUndefined();
-        expect(await fileExists(tokenMarker)).toBe(true);
-        expect(await fileExists(passwordMarker)).toBe(false);
-      },
-    );
-  });
-
-  it("resolves only password SecretRef when gateway.auth.mode is password", async () => {
-    await withModeExecProviderFixture(
-      "password",
-      async ({ tokenMarker, passwordMarker, providers }) => {
-        loadConfig.mockReturnValue({
-          secrets: {
-            providers,
-          },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "password",
-              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
-              password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
+            gateway: {
+              mode: "local",
+              auth: {
+                mode,
+                token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+                password: { source: "exec", provider: "passwordprovider", id: "PASSWORD_SECRET" },
+              },
             },
-          },
-        });
+          });
 
-        const result = await resolveGatewayConnection({});
-        expect(result.password).toBe("password-from-exec");
-        expect(result.token).toBeUndefined();
-        expect(await fileExists(tokenMarker)).toBe(false);
-        expect(await fileExists(passwordMarker)).toBe(true);
-      },
-    );
-  });
+          const result = await resolveGatewayConnection({});
+          expect(result.token).toBe(expectedToken);
+          expect(result.password).toBe(expectedPassword);
+          expect(await fileExists(tokenMarker)).toBe(tokenRan);
+          expect(await fileExists(passwordMarker)).toBe(passwordRan);
+        },
+      );
+    },
+  );
 });

@@ -77,6 +77,13 @@ describe("SearchableSelectList", () => {
     expect(output.join("\n")).toContain("No matches");
   }
 
+  function expectLinesWithinWidth(lines: string[], width: number, expectedLineCount: number) {
+    expect(lines).toHaveLength(expectedLineCount);
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  }
+
   function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {
     const items = [
       { value: "one", label: "one", description: "desc" },
@@ -97,8 +104,13 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     const output = list.render(80);
 
-    // Should have search prompt line, spacer, and items
-    expect(output.length).toBeGreaterThanOrEqual(3);
+    expect(output.slice(2)).toEqual([
+      "**→ anthropic/claude-3-opus  Claude 3 Opus**",
+      "  anthropic/claude-3-sonnet  (Claude 3 Sonnet)",
+      "  openai/gpt-4  (GPT-4)",
+      "  openai/gpt-4-turbo  (GPT-4 Turbo)",
+      "  google/gemini-pro  (Gemini Pro)",
+    ]);
     expect(output[0]).toContain("search");
   });
 
@@ -131,14 +143,11 @@ describe("SearchableSelectList", () => {
       const list = new SearchableSelectList(items, 1, ansiHighlightTheme);
       list.focused = true;
 
-      for (const line of list.render(width)) {
-        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      }
+      // Keep item/scroll and no-match rows observable even when width is zero.
+      expectLinesWithinWidth(list.render(width), width, 4);
 
       list.handleInput("missing");
-      for (const line of list.render(width)) {
-        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      }
+      expectLinesWithinWidth(list.render(width), width, 3);
     },
   );
 
@@ -171,9 +180,7 @@ describe("SearchableSelectList", () => {
 
     const width = 80;
     const output = list.render(width);
-    for (const line of output) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
+    expectLinesWithinWidth(output, width, 3);
   });
 
   it("keeps model-search rows within width when filtering by m", () => {
@@ -199,9 +206,7 @@ describe("SearchableSelectList", () => {
     typeInput(list, "m");
 
     const width = 209;
-    for (const line of list.render(width)) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
+    expectLinesWithinWidth(list.render(width), width, 6);
   });
 
   it("ignores ANSI escape codes in search matching", () => {
@@ -267,30 +272,12 @@ describe("SearchableSelectList", () => {
   it("keeps exact label matches ahead of description matches", () => {
     const longPrefix = "x".repeat(250);
     const items = [
-      { value: "late-label", label: `${longPrefix}opus`, description: "late exact match" },
       { value: "desc-first", label: "provider/other", description: "opus in description" },
+      { value: "late-label", label: `${longPrefix}opus`, description: "late exact match" },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
     expectSelectedValueForQuery(list, "opus", "late-label");
-  });
-
-  it("exact label match beats description match", () => {
-    const items = [
-      {
-        value: "provider/other",
-        label: "provider/other",
-        description: "This mentions opus in description",
-      },
-      { value: "provider/opus-model", label: "provider/opus-model", description: "Something else" },
-    ];
-    const list = new SearchableSelectList(items, 5, mockTheme);
-
-    typeInput(list, "opus");
-
-    // Label match should win over description match
-    const selected = selectByEnter(list);
-    expect(selected?.value).toBe("provider/opus-model");
   });
 
   it("orders description matches by earliest index", () => {
@@ -399,20 +386,6 @@ describe("SearchableSelectList", () => {
 
     expect(selectByEnter(list)?.value).toBe(expectedValue);
     expect(stripAnsi(list.render(80)[0] ?? "")).toContain(query);
-  });
-
-  it("calls onSelect when enter is pressed", () => {
-    const list = new SearchableSelectList(testItems, 5, mockTheme);
-    let selectedValue: string | undefined;
-
-    list.onSelect = (item) => {
-      selectedValue = item.value;
-    };
-
-    // Press enter
-    list.handleInput("\r");
-
-    expect(selectedValue).toBe("anthropic/claude-3-opus");
   });
 
   it("sanitizes rendered fields before applying trusted highlighting", () => {
