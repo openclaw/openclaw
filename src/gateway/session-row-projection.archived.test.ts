@@ -15,13 +15,15 @@ import {
 } from "./session-projection-work.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
-import { ready } from "./session-row-projection-record.js";
+import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const { ready } = records;
 
 it("keeps archived rows cold at hydration and across broad refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -550,4 +552,86 @@ it("withdraws in-flight live backfill authority when its row is archived", async
       projection.dispose();
     }
   });
+});
+
+it("discards backfill superseded by a same-lifecycle publication after rematerialization", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const target = { agentId: "main", sessionKey: "agent:main:backfill-successor" };
+    const query = { agentId: "main", key: target.sessionKey };
+    const entry = {
+      sessionId: "backfill-successor",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+    };
+    const reads = ["Superseded preview", "Current preview"].map((preview) => ({
+      preview,
+      started: createDeferredCore(),
+      release: createDeferredCore(),
+    }));
+    const published = createDeferredCore();
+    const aborted = createDeferredCore();
+    const abort = () => aborted.reject(signal.reason);
+    const wait = (promise: Promise<void>) => Promise.race([promise, aborted.promise]);
+    let readIndex = 0;
+    vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockImplementation(
+      async () => {
+        const read = reads[readIndex++];
+        if (!read) {
+          throw new Error("Unexpected backfill read");
+        }
+        read.started.resolve();
+        await read.release.promise;
+        return { lastMessagePreview: read.preview, fallbackModel: undefined };
+      },
+    );
+    const publishTranscriptFields = records.publishTranscriptFields;
+    const publish = vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
+      const changed = publishTranscriptFields(...args);
+      published.resolve();
+      return changed;
+    });
+    replaceSessionEntrySync(target, entry);
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      signal.throwIfAborted();
+      await wait(reads[0]!.started.promise);
+      const previous = projection.capture(query)!;
+      const materialized = previous.materialized;
+      replaceSessionEntrySync(target, { ...entry, updatedAt: 2, label: "Updated metadata" });
+      await projection.ensureMaterialized();
+      const current = projection.capture(query)!;
+      expect(current.generation).toBe(previous.generation);
+      expect(current.materialized).not.toBe(materialized);
+      expect(current.entry).toMatchObject({ ...entry, updatedAt: 2, label: "Updated metadata" });
+      expect(ready(current)).toBe(true);
+
+      reads[0]!.release.resolve();
+      // The successor can start only after the previous read's publication decision.
+      await wait(reads[1]!.started.promise);
+      expect(publish).not.toHaveBeenCalled();
+      expect(
+        projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+      ).toBeUndefined();
+
+      reads[1]!.release.resolve();
+      await wait(published.promise);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Current preview",
+      );
+      expect(publish).toHaveBeenCalledTimes(1);
+    } finally {
+      signal.removeEventListener("abort", abort);
+      projection.dispose();
+      for (const read of reads) {
+        read.release.resolve();
+      }
+    }
+  });
+  onTestFinished(() => run);
+  return run;
 });
