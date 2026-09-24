@@ -126,6 +126,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.pdfMaxMb": "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+  "agents.defaults.imageMaxInputPixels":
+    "Maximum source image pixels accepted during inbound image hydration before resize (default: 25000000, maximum: 50000000). This does not raise output/provider limits.",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.imageQuality":

@@ -197,6 +197,19 @@ describe("image ops Rastermill adapter", () => {
       ).resolves.toBeNull();
     });
 
+    it("admits a 32 MP source under the configurable cap while rejecting sources above 50 MP", async () => {
+      const { MAX_IMAGE_INPUT_PIXELS } = await import("./image-ops.js");
+      const { createImageProcessorWithPixelLimits } = await import("./image-processor.js");
+      const source = jpegWithDimensions(5658, 5655);
+      const bounded = createImageProcessorWithPixelLimits({
+        inputPixels: 50_000_000,
+        outputPixels: MAX_IMAGE_INPUT_PIXELS,
+      });
+
+      await expect(bounded.probe(source)).resolves.toMatchObject({ width: 5658, height: 5655 });
+      await expect(bounded.probe(jpegWithDimensions(8000, 7000))).resolves.toBeNull();
+    });
+
     it("preserves native fallback and the SDK unavailable classification when the worker declines", async () => {
       const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
       const unavailableError = new actualRastermill.RastermillUnavailableError(

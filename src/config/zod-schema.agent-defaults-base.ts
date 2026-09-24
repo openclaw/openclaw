@@ -1,5 +1,6 @@
 // Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
+import { MAX_CONFIGURED_IMAGE_INPUT_PIXELS } from "../media/image-pixel-limits.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
 import {
@@ -249,6 +250,12 @@ export const AgentDefaultsBaseSchema = z
     // 0 = unlimited run budget; stream liveness watchdogs still apply.
     timeoutSeconds: z.number().int().nonnegative().optional(),
     mediaMaxMb: z.number().positive().optional(),
+    imageMaxInputPixels: z
+      .number()
+      .int()
+      .positive()
+      .max(MAX_CONFIGURED_IMAGE_INPUT_PIXELS)
+      .optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),

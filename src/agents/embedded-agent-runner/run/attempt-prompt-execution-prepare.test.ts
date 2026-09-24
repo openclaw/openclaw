@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   detectAndLoadPromptImages: vi.fn(),
+  resolveImageInputPixelLimit: vi.fn(() => 50_000_000),
   resolveImageSanitizationLimits: vi.fn(() => ({ maxDimensionPx: 2048 })),
 }));
 
@@ -10,6 +11,10 @@ vi.mock("@openclaw/media-core/constants", async (importOriginal) => ({
   MAX_IMAGE_BYTES: 1_234,
   mediaKindFromMime: (mime?: string) =>
     mime ? (mime.startsWith("image/") ? "image" : "unknown") : undefined,
+}));
+vi.mock("../../image-input-limits.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../image-input-limits.js")>()),
+  resolveImageInputPixelLimit: hoisted.resolveImageInputPixelLimit,
 }));
 vi.mock("../../image-sanitization.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../image-sanitization.js")>()),
@@ -27,7 +32,9 @@ function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecu
   return {
     attempt: {
       workspaceDir: "/agent/workspace",
-      config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
+      config: {
+        agents: { defaults: { imageMaxDimensionPx: 2048, imageMaxInputPixels: 50_000_000 } },
+      },
       imageOrder: ["inline"],
       images: [{ type: "image", data: "data", mimeType: "image/png" }],
       model: {
@@ -55,6 +62,7 @@ function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecu
 describe("prepareEmbeddedAttemptPromptExecution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.resolveImageInputPixelLimit.mockReturnValue(50_000_000);
     hoisted.resolveImageSanitizationLimits.mockReturnValue({ maxDimensionPx: 2048 });
     hoisted.detectAndLoadPromptImages.mockResolvedValue({
       images: [{ type: "image", data: "loaded", mimeType: "image/png" }],
@@ -100,6 +108,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       imageOrder: ["inline"],
       maxBytes: 1_234,
       maxDimensionPx: 2048,
+      maxInputPixels: 50_000_000,
       workspaceOnly: true,
       sandbox: {
         root: "/sandbox/workspace",

@@ -1,5 +1,6 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import { resolveImageInputPixelLimit } from "../../image-input-limits.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -55,6 +56,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     userTurnTranscriptRecorder: attempt.userTurnTranscriptRecorder,
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
+    maxInputPixels: resolveImageInputPixelLimit(attempt.config),
     workspaceOnly: input.effectiveFsWorkspaceOnly,
     localRoots: input.effectiveFsWorkspaceOnly
       ? undefined

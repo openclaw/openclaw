@@ -213,6 +213,7 @@ async function loadMediaFromRef(
   options?: {
     label?: string;
     maxBytes?: number;
+    maxInputPixels?: number;
     signal?: AbortSignal;
     workspaceOnly?: boolean;
     localRoots?: readonly string[];
@@ -253,14 +254,21 @@ async function loadMediaFromRef(
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
+          maxInputPixels: options.maxInputPixels,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
       : await loadWebMedia(
           targetPath,
           options?.workspaceOnly || options?.localRoots
-            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
-            : options?.maxBytes,
+            ? {
+                maxBytes: options.maxBytes,
+                maxInputPixels: options.maxInputPixels,
+                localRoots: options.localRoots ?? [workspaceDir],
+              }
+            : options?.maxBytes === undefined && options?.maxInputPixels === undefined
+              ? undefined
+              : { maxBytes: options.maxBytes, maxInputPixels: options.maxInputPixels },
         );
 
     options?.signal?.throwIfAborted();
@@ -304,6 +312,7 @@ export async function detectAndLoadPromptImages(params: {
   mediaImageLayout?: MediaImageLayout;
   maxBytes?: number;
   maxDimensionPx?: number;
+  maxInputPixels?: number;
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
@@ -447,6 +456,7 @@ export async function detectAndLoadPromptImages(params: {
       );
     const image = await loadImageFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
       maxBytes: params.maxBytes,
+      maxInputPixels: params.maxInputPixels,
       workspaceOnly: params.workspaceOnly,
       localRoots: gatewayAttachment
         ? [getMediaDir()]

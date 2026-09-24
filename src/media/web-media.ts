@@ -77,6 +77,7 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   imageCompression?: ImageCompressionPolicy;
+  maxInputPixels?: number;
   ssrfPolicy?: SsrFPolicy;
   proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -981,6 +982,8 @@ async function loadWebMediaInternal(
   const {
     maxBytes,
     optimizeImages = true,
+    imageCompression,
+    maxInputPixels,
     ssrfPolicy,
     proxyUrl,
     fetchImpl,
@@ -993,7 +996,6 @@ async function loadWebMediaInternal(
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
-    imageCompression,
   } = options;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
@@ -1029,6 +1031,7 @@ async function loadWebMediaInternal(
           fileName: params.fileName,
           maxBytes: cap,
           imageCompression,
+          maxInputPixels,
         });
       }
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;

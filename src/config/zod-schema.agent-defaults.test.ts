@@ -27,6 +27,18 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("bounds inbound image source pixels at 50 MP", () => {
+    expect(
+      AgentDefaultsSchema.parse({ imageMaxInputPixels: 50_000_000 })?.imageMaxInputPixels,
+    ).toBe(50_000_000);
+    for (const imageMaxInputPixels of [0, -1, 50_000_001, 50_000_000.5]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ imageMaxInputPixels }),
+        "imageMaxInputPixels",
+      );
+    }
+  });
+
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
     const models = {
       "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
