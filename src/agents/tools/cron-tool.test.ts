@@ -908,6 +908,20 @@ describe("cron tool", () => {
     });
   });
 
+  it.each([true, false])(
+    "preserves scoped lookup recovery guidance when triggers=%s",
+    (enabled) => {
+      const tool = createTestCronTool({ config: { cron: { triggers: { enabled } } } });
+
+      // A scoped miss must not turn an update/remove request into a duplicate automation.
+      expect(tool.description).toContain(
+        "an empty list or failed list/get/update/remove (including not-found) does not establish global absence",
+      );
+      expect(tool.description).toContain("Never recreate or replace a known automation");
+      expect(tool.description).toContain("ask an authorized administrator");
+    },
+  );
+
   it.each([true, false])("includes trigger authoring guidance only when enabled=%s", (enabled) => {
     const tool = createTestCronTool({ config: { cron: { triggers: { enabled } } } });
 

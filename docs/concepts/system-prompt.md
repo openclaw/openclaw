@@ -71,8 +71,11 @@ The `secrets` tool description teaches metadata-first discovery, task-needed
 masked requests, and returned store SecretRefs for supported config fields.
 Setup tool descriptions route credential collection through masked flows.
 The **Care** section tells the agent to use or store credentials the user shares
-as asked, and directs user-requested login or pairing codes and verification URLs
-from group conversations to the requesting user in private, followed by a group
+as asked, complete the task, and briefly acknowledge how the supplied credential
+was used or stored in the final reply without repeating its value. The
+acknowledgment stays factual and non-alarming. It also directs user-requested login
+or pairing codes and verification URLs from group conversations to the requesting
+user in private, followed by a group
 acknowledgment without the code or URL. When neither `openclaw` nor `gateway` is
 available, it directs channel, provider, and credential setup to
 `openclaw channels add <channel>` or `openclaw configure` in a terminal, where

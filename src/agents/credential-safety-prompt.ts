@@ -14,7 +14,7 @@ export function buildCredentialSafetyPrompt(
   return [
     ...(knownAvailability
       ? [
-          "Credentials the user shares are theirs: use or store them as asked, without exposure warnings or rotation advice unless asked.",
+          "Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.",
         ]
       : []),
     "For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.",

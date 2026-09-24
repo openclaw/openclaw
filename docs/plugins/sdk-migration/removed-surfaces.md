@@ -59,8 +59,10 @@ tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
 `buildCredentialSafetyPrompt` remains available from
 `openclaw/plugin-sdk/agent-harness-runtime`. With an options object whose
 `controlToolsAvailable` is set from the callable `openclaw` and `gateway` tools, it
-returns a line telling the agent to use or store user-shared credentials as asked,
-the private login-code handoff guidance, and the terminal setup route when
+returns guidance to use or store user-shared credentials as asked, complete the
+task, and briefly acknowledge their use or storage in the final reply without
+repeating their values. The acknowledgment stays factual and non-alarming. It also
+returns the private login-code handoff guidance and the terminal setup route when
 neither control tool is available.
 
 The legacy string argument is deprecated from 2026-09-09 and remains supported
