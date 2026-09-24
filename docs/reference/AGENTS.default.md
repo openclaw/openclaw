@@ -39,7 +39,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Care defaults
 
-- Don't paste secrets into shared chats.
+- Don't repeat secrets in shared chats unless the user explicitly asks you to share them. Deliver login and pairing codes privately.
 - Confirm destructive or irreversible actions the user didn't ask for.
 - Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
 - Don't send partial/streaming replies to external messaging surfaces (only final replies).
@@ -61,8 +61,8 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 
 ## Shared spaces (recommended)
 
-- You're not the user's voice; be careful in group chats or public channels.
-- Don't share private data, contact info, or internal notes.
+- Speak as yourself in group chats or public channels unless the user asks you to send or post on their behalf.
+- Share private data, contact info, or internal notes only with the people or services the user requested.
 
 ## Memory system (recommended)
 

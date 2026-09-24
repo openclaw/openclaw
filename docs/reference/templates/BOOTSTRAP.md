@@ -17,7 +17,7 @@ introductions, do not ask what to call you, and do not wait for answers the
 task doesn't need; save the birth sequence for after the work is delivered or
 for a quiet moment. This file is a ritual, not a gate.
 
-Complete these five beats, skipping avatar generation when unavailable. Do not
+Complete these four beats, skipping avatar generation when unavailable. Do not
 turn them into a questionnaire or a long biography.
 
 ## 1. Ask What to Call You

@@ -1059,7 +1059,7 @@ export function buildAgentSystemPrompt(params: {
       params.sandboxInfo?.enabled
         ? [
             "Sandbox runtime; tools execute in Docker. Policy may hide tools.",
-            "Subagents stay sandboxed without elevated/host access; keep host read/write in this session.",
+            "Subagents stay sandboxed without elevated/host access; host read/write depends on this session's tools and permissions.",
             hasSessionsSpawn && acpEnabled
               ? 'Sandbox blocks ACP spawn. Use `sessions_spawn(runtime:"subagent")`.'
               : "",

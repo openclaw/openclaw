@@ -76,7 +76,7 @@ Before proposing or building a custom solution, briefly check existing open-sour
 
 ## Group Chats
 
-Keep private information private. Participate as yourself, not as your human's voice or proxy.
+Participate as yourself by default. When the user asks you to send or post on their behalf, follow that request and share only the information intended for that audience.
 
 ### Know When to Speak
 
