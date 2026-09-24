@@ -1,9 +1,10 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.ts";
 import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
@@ -25,12 +26,24 @@ type InputBlock = {
 
 export type ChatInputOrderState = { keys: string[] };
 
+export type ChatInputPlacementProps = {
+  queue?: ChatQueueItem[];
+  initialTurnId?: string;
+  pendingInputs?: ChatPendingInputsPage["items"];
+  workspaceSyncPendingRunIds?: readonly string[];
+  workerSetupPending?: boolean;
+  searchOpen?: boolean;
+  searchQuery?: string;
+  messageRecovery?: ChatMessageRecovery;
+};
+
 /** Canonical history, accepted custody, then local delivery are representations of one input. */
 export function placeChatInputs(
   items: ChatItem[],
   history: readonly unknown[],
-  props: BuildChatItemsProps,
+  props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
+  currentRunId: string | null,
 ): {
   pendingKeys: Set<string>;
   historicalKeys: Set<string>;
@@ -38,6 +51,9 @@ export function placeChatInputs(
   activeInputKey?: string;
 } {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
+  const activeSubmission = currentRunId
+    ? orderedQueue.find((queued) => queued.sendRunId === currentRunId)
+    : undefined;
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
     orderedQueue,
@@ -76,6 +92,14 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
+      // Acceptance replaces the local bubble, not its presentation floor.
+      if (
+        activeSubmission?.sendRunId &&
+        input.runId === activeSubmission.sendRunId &&
+        !hiddenKeys.has(first.key)
+      ) {
+        activeInputKey = first.key;
+      }
       continue;
     }
     // A stopped input is historical. Its disposition travels with the message,
@@ -124,7 +148,7 @@ export function placeChatInputs(
     ) {
       activeInputKey = block.items[0]!.key;
     }
-    // Accepted rows keep the Gateway's order. A retained local neighbour provides
+    // Accepted rows keep the Gateway's order. A retained local neighbor provides
     // the insertion point without comparing the browser clock with the Gateway.
     const position = orderedQueue.indexOf(queued);
     const previousPosition = orderState.keys.indexOf(block.items[0]!.key);
@@ -183,7 +207,7 @@ export function placeChatInputs(
       block.initial || block.bypassesQueue ? insertionCeiling + block.items.length : index;
     pendingKeys.add(block.items[0]!.key);
   }
-  // Search hides presentation, not the neighbours that keep an input in place.
+  // Search hides presentation, not the neighbors that keep an input in place.
   orderState.keys = items
     .filter((item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message))
     .map((item) => item.key);

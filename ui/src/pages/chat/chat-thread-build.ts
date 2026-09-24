@@ -1,13 +1,11 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { readAssistantTextBlocksForPhase } from "../../../../src/shared/chat-message-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
-  type ChatQueueItem,
   type MessageGroup,
   accumulatedStreamText,
   advanceAccumulatedStreamText,
@@ -26,7 +24,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
-import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -39,7 +36,11 @@ import {
 } from "./chat-progress.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import { placeChatInputs, type ChatInputOrderState } from "./chat-thread-inputs.ts";
+import {
+  placeChatInputs,
+  type ChatInputOrderState,
+  type ChatInputPlacementProps,
+} from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageItems,
@@ -76,7 +77,7 @@ import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
-export type BuildChatItemsProps = {
+export type BuildChatItemsProps = ChatInputPlacementProps & {
   paneId: string;
   sessionKey: string;
   archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
@@ -90,11 +91,6 @@ export type BuildChatItemsProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
-  queue?: ChatQueueItem[];
-  initialTurnId?: string;
-  pendingInputs?: ChatPendingInputsPage["items"];
-  workspaceSyncPendingRunIds?: readonly string[];
-  workerSetupPending?: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
@@ -104,9 +100,6 @@ export type BuildChatItemsProps = {
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
-  searchOpen?: boolean;
-  searchQuery?: string;
-  messageRecovery?: ChatMessageRecovery;
 };
 
 function canvasAssistantItemKey(
@@ -306,6 +299,7 @@ export function buildChatItems(
     history,
     props,
     inputOrder,
+    currentRunId,
   );
   items = items.filter((item) => !hiddenHistoryKeys.has(item.key) && !hiddenKeys.has(item.key));
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
@@ -585,11 +579,8 @@ export function buildChatItems(
       : latestBoundaryRunId;
   const activeTurnRunId = activeBoundaryRunId ?? currentRunId;
   const activeTurnBounds = boundToPendingInputs(
-    activeTurnRunId
-      ? createRunTurnLookup(executionItems())(activeTurnRunId)
-      : activeInputKey
-        ? { afterKey: activeInputKey }
-        : null,
+    (activeTurnRunId ? createRunTurnLookup(executionItems())(activeTurnRunId) : null) ??
+      (activeInputKey ? { afterKey: activeInputKey } : null),
   );
   const appendActiveRunItem = (item: ChatItem) => {
     // Queued custody is a ceiling for the whole live response, not just its text.

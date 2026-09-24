@@ -57,6 +57,55 @@ function completed() {
 }
 
 describe("live terminal continuity with pending collaborators", () => {
+  it.each([null, "active"])(
+    "keeps local input before progress through custody with runId=%s",
+    (runId) => {
+      const local = {
+        id: "active-local",
+        sendRunId: "active",
+        text: "Current input",
+        createdAt: 10,
+        sendAttempts: 1,
+        sendState: "sending" as const,
+      };
+      const accepted = {
+        ...pending,
+        id: "active-input",
+        runId: "active",
+        acceptedAt: 20,
+        message: {
+          role: "user",
+          content: local.text,
+          timestamp: 20,
+          __openclaw: { id: "pending:active-input" },
+        },
+      };
+      for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
+        const rows = buildChatItems(
+          props({
+            messages: [],
+            queue: [local],
+            runId,
+            stream: "",
+            pendingInputs,
+          }),
+        );
+        expect(
+          rows.flatMap((item) =>
+            item.kind === "group"
+              ? item.messages.map(({ message }) => extractTextCached(message))
+              : item.kind === "reading-indicator"
+                ? ["Working"]
+                : [],
+          ),
+        ).toEqual([
+          "Current input",
+          "Working",
+          ...(pendingInputs.includes(pending) ? ["Peer follow-up"] : []),
+        ]);
+      }
+    },
+  );
   it.each([false, true])(
     "keeps the live reply and terminal before queued custody (system=%s)",
     (system) => {
