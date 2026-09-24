@@ -35,7 +35,6 @@ import {
   readActiveTranscriptEntryAnchor,
   readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
-  readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
   waitForSessionTranscriptProjection,
@@ -59,6 +58,10 @@ import {
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  groundRecentConversationRows,
+  selectRecentConversationRows,
+} from "./transcript-recent-grounding.js";
 import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
@@ -132,6 +135,11 @@ type ReadRecentSessionConversationTextOptions = {
   minTimestampMs?: number;
   role?: "user" | "assistant";
   preferUpstreamUserText?: boolean;
+  /**
+   * Channel replay only: clamp each entry to 32 KiB and the whole read to 128 KiB. Provenance
+   * readers such as session-upstream-monitor.ts compare complete text and leave this unset.
+   */
+  boundReplayBytes?: boolean;
 };
 
 type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
@@ -260,7 +268,6 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
   const limit = normalizeRecentTranscriptLimit(options.limit);
-  const pageSize = 250;
   try {
     const readScope = {
       agentId: scope.agentId,
@@ -268,27 +275,17 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
       storePath: scope.storePath,
     };
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-    return await readRestoredSessionTranscript(readScope, () => {
-      const recent: SessionRecentConversationText[] = [];
-      for (let offset = 0; recent.length < limit; offset += pageSize) {
-        const page = readSessionTranscriptMessageEventPage(readScope, {
-          maxMessages: pageSize,
-          offset,
-        });
-        if (page.events.length === 0) {
-          break;
-        }
-        for (const event of page.events.toReversed()) {
-          const entry = extractRecentConversationText(event.event, options);
-          if (entry && isWithinTranscriptWindow(entry.timestamp, options)) {
-            recent.push(entry);
-            if (recent.length >= limit) {
-              break;
-            }
-          }
-        }
-      }
-      return recent.toReversed();
+    // Selection stays synchronous so a cold-storage restore can retry it; grounding is async
+    // and runs after, on the rows plus the same-turn provenance gathered with them.
+    const rows = await readRestoredSessionTranscript(readScope, () =>
+      selectRecentConversationRows(readScope, limit, (event) => {
+        const entry = extractRecentConversationText(event, options);
+        return entry && isWithinTranscriptWindow(entry.timestamp, options) ? entry : undefined;
+      }),
+    );
+    return await groundRecentConversationRows(rows, {
+      limit,
+      boundReplayBytes: options.boundReplayBytes === true,
     });
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
