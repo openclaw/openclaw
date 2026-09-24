@@ -2,11 +2,9 @@
 import { describe, expect, it } from "vitest";
 import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
 
-const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
 const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathSegment);
-const TEST_URL_IMAGE = createTestUrl("img");
 const TEST_URL_PDF = createTestUrl("x.pdf");
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
@@ -264,10 +262,5 @@ describe("msteams attachment helpers", () => {
         "https://graph.microsoft.com/v1.0/teams/team%2Fid/channels/channel%20id/messages/root%20id/replies/reply%2Fid",
       );
     });
-  });
-
-  it("retains the expected sharepoint host fixture", () => {
-    expect(SHAREPOINT_HOST).toBe("contoso.sharepoint.com");
-    expect(TEST_URL_IMAGE).toContain(TEST_HOST);
   });
 });

@@ -1,6 +1,5 @@
 // Microsoft Teams tests cover durable claim ownership through inbound debounce.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   createInboundDebouncer,
@@ -81,7 +80,7 @@ function createHandler(cfg: OpenClawConfig) {
 
 describe("Microsoft Teams drain claim ownership", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
 
   it("changes batching timing without replacing the Microsoft Teams handler", async () => {
@@ -101,7 +100,7 @@ describe("Microsoft Teams drain claim ownership", () => {
       resolveInboundDebounceMs,
     });
     const handler = createMSTeamsMessageHandler(deps);
-    const dispatch = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
+    const dispatch = runtimeApiMockState.dispatchReplyFromConfig;
     const publish = (debounceMs: number) => {
       const current = { ...cfg, messages: { inbound: { debounceMs } } };
       setRuntimeConfigSnapshot(current, current);
@@ -155,15 +154,12 @@ describe("Microsoft Teams drain claim ownership", () => {
     expect(result).toEqual({ kind: "deferred" });
     await vi.waitFor(
       () => {
-        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-          1,
-        );
+        expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
         expect(lifecycle.adoptedCount()).toBe(1);
       },
       { timeout: 5_000 },
     );
-    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
-      .calls[0]?.[0] as
+    const dispatchParams = runtimeApiMockState.dispatchReplyFromConfig.mock.calls[0]?.[0] as
       | { replyOptions?: { turnAdoptionLifecycle?: { admission?: string } } }
       | undefined;
     expect(dispatchParams?.replyOptions?.turnAdoptionLifecycle).toMatchObject({
@@ -188,16 +184,15 @@ describe("Microsoft Teams drain claim ownership", () => {
     expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
     await vi.waitFor(
       () => {
-        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-          1,
-        );
+        expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
         expect(first.adoptedCount()).toBe(1);
         expect(second.adoptedCount()).toBe(1);
       },
       { timeout: 5_000 },
     );
-    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
-      .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
+    const dispatchParams = runtimeApiMockState.dispatchReplyFromConfig.mock.calls[0]?.[0] as
+      | { ctx?: { BodyForAgent?: string } }
+      | undefined;
     expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
     expect(first.abandonedCount()).toBe(0);
     expect(second.abandonedCount()).toBe(0);
@@ -222,9 +217,7 @@ describe("Microsoft Teams drain claim ownership", () => {
       lifecycle,
     );
 
-    expect(
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
-    ).toHaveBeenCalledExactlyOnceWith(
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
           BodyForAgent: expect.stringContaining("Use x < 5 ©; literal <at>Alice</at>"),
@@ -262,7 +255,7 @@ describe("Microsoft Teams drain claim ownership", () => {
 
     expect(result).toEqual({ kind: "deferred" });
     await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(lifecycle.abandonedCount()).toBe(0);
   });
 
@@ -270,7 +263,9 @@ describe("Microsoft Teams drain claim ownership", () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-abandon-"));
+    const created = await fs.mkdtemp(
+      path.join(process.env.OPENCLAW_TEST_HOME!, "openclaw-msteams-abandon-"),
+    );
     const stateDir = await fs.realpath(created);
     type Queue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
     type Payload = Parameters<Queue["enqueue"]>[1];
@@ -285,7 +280,7 @@ describe("Microsoft Teams drain claim ownership", () => {
       { version: 1, receivedAt: now - 2 * 24 * 60 * 60_000, rawActivity: JSON.stringify(incoming) },
       { laneKey: "dm-conversation", receivedAt: now - 2 * 24 * 60 * 60_000 },
     );
-    const dispatchMock = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
+    const dispatchMock = runtimeApiMockState.dispatchReplyFromConfig;
     const priorImplementation = dispatchMock.getMockImplementation();
     dispatchMock.mockRejectedValue(new Error("Microsoft Teams dispatch failed before adoption"));
 

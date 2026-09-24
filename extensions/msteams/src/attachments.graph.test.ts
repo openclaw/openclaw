@@ -3,7 +3,6 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 import { encodeGraphShareId, resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -19,7 +18,6 @@ const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const PNG_BUFFER = Buffer.from("png");
 
-const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
 const saveMediaBufferMock = vi.fn(
   async (
     _buffer: Buffer,
@@ -33,35 +31,6 @@ const saveMediaBufferMock = vi.fn(
     size: Buffer.byteLength(PNG_BUFFER),
     contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
   }),
-);
-const readRemoteMediaBufferMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchFn = params.fetchImpl ?? fetch;
-    const res = await fetchFn(params.url, { redirect: "manual" });
-    return readRemoteMediaResponse(res, params);
-  },
-);
-const saveRemoteMediaMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetched = await readRemoteMediaBufferMock(params);
-    return await saveMediaBufferMock(
-      fetched.buffer,
-      fetched.contentType,
-      "inbound",
-      params.maxBytes,
-      params.filePathHint,
-    );
-  },
 );
 const saveResponseMediaMock = vi.fn(
   async (
@@ -88,15 +57,9 @@ const saveResponseMediaMock = vi.fn(
 );
 
 const runtimeStub = {
-  media: {
-    detectMime: detectMimeMock,
-  },
   channel: {
     media: {
-      readRemoteMediaBuffer: readRemoteMediaBufferMock,
-      saveRemoteMedia: saveRemoteMediaMock,
       saveResponseMedia: saveResponseMediaMock,
-      saveMediaBuffer: saveMediaBufferMock,
     },
   },
 } as unknown as PluginRuntime;
@@ -109,7 +72,6 @@ type FetchFn = typeof fetch;
 type LabeledCase = { label: string };
 type GraphFetchMockOptions = {
   hostedContents?: unknown[];
-  attachments?: unknown[];
   messageAttachments?: unknown[];
   onShareRequest?: (url: string) => Response | Promise<Response>;
   onUnhandled?: (url: string) => Response | Promise<Response> | undefined;
@@ -177,7 +139,6 @@ const buildShareReferenceGraphFetchOptions = (params: {
   onShareRequest?: GraphFetchMockOptions["onShareRequest"];
   onUnhandled?: GraphFetchMockOptions["onUnhandled"];
 }) => ({
-  attachments: [params.referenceAttachment],
   messageAttachments: [params.referenceAttachment],
   ...(params.onShareRequest ? { onShareRequest: params.onShareRequest } : {}),
   ...(params.onUnhandled ? { onUnhandled: params.onUnhandled } : {}),
@@ -189,49 +150,13 @@ const buildDefaultShareReferenceGraphFetchOptions = (
     referenceAttachment: createReferenceAttachment(),
     ...params,
   });
-type GraphEndpointResponseHandler = {
-  suffix: string;
-  buildResponse: () => Response;
-};
-const createGraphEndpointResponseHandlers = (params: {
-  hostedContents: unknown[];
-  attachments: unknown[];
-  messageAttachments: unknown[];
-}): GraphEndpointResponseHandler[] => [
-  {
-    suffix: "/hostedContents",
-    buildResponse: () => createGraphCollectionResponse(params.hostedContents),
-  },
-  {
-    suffix: "/attachments",
-    buildResponse: () => createGraphCollectionResponse(params.attachments),
-  },
-  {
-    suffix: "/messages/123",
-    buildResponse: () => createJsonResponse({ attachments: params.messageAttachments }),
-  },
-];
-const resolveGraphEndpointResponse = (
-  url: string,
-  handlers: GraphEndpointResponseHandler[],
-): Response | undefined => {
-  const handler = handlers.find((entry) => url.endsWith(entry.suffix));
-  return handler ? handler.buildResponse() : undefined;
-};
-
-const createGraphFetchMock = (options: GraphFetchMockOptions = {}) => {
-  const hostedContents = options.hostedContents ?? [];
-  const attachments = options.attachments ?? [];
-  const messageAttachments = options.messageAttachments ?? [];
-  const endpointHandlers = createGraphEndpointResponseHandlers({
-    hostedContents,
-    attachments,
-    messageAttachments,
-  });
-  return vi.fn(async (url: string) => {
-    const endpointResponse = resolveGraphEndpointResponse(url, endpointHandlers);
-    if (endpointResponse) {
-      return endpointResponse;
+const createGraphFetchMock = (options: GraphFetchMockOptions = {}) =>
+  vi.fn(async (url: string) => {
+    if (url.endsWith("/hostedContents")) {
+      return createGraphCollectionResponse(options.hostedContents ?? []);
+    }
+    if (url.endsWith("/messages/123")) {
+      return createJsonResponse({ attachments: options.messageAttachments ?? [] });
     }
     if (url.startsWith(GRAPH_SHARES_URL_PREFIX) && options.onShareRequest) {
       return options.onShareRequest(url);
@@ -239,7 +164,6 @@ const createGraphFetchMock = (options: GraphFetchMockOptions = {}) => {
     const unhandled = options.onUnhandled ? await options.onUnhandled(url) : undefined;
     return unhandled ?? createNotFoundResponse();
   });
-};
 const downloadGraphMediaWithMockOptions = async (
   options: GraphFetchMockOptions = {},
   overrides: DownloadGraphMediaOverrides = {},
@@ -315,9 +239,6 @@ describe("msteams graph attachments", () => {
   beforeEach(() => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution();
-    detectMimeMock.mockClear();
-    readRemoteMediaBufferMock.mockClear();
-    saveRemoteMediaMock.mockClear();
     saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
@@ -366,9 +287,6 @@ describe("msteams graph attachments", () => {
       }
       if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
         return createGraphCollectionResponse([]);
-      }
-      if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
-        return createGraphCollectionResponse([referenceAttachment]);
       }
       if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
         return createRedirectResponse(escapedUrl);
@@ -425,6 +343,7 @@ describe("msteams graph attachments", () => {
       `${DEFAULT_MESSAGE_URL}/hostedContents`,
     ]);
     expect(calledUrls).not.toContain(escapedUrl);
+    expect(calledUrls).not.toContain(`${DEFAULT_MESSAGE_URL}/attachments`);
   });
 
   it("enforces maxBytes while streaming hosted content", async () => {

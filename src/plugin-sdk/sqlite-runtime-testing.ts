@@ -14,6 +14,7 @@ export async function appendSqliteSessionTranscriptEventForTest(
 }
 
 export { withSessionHistoryBudgetSweepsForTest } from "../config/sessions/session-history-budget.test-support.js";
+export { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 export { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
 export { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 export {

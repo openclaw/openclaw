@@ -1,7 +1,5 @@
 // Conversation allowlists authorize group threads without widening sender or DM access.
-import { once } from "node:events";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 // Preserve module setup before modules that consume it.
@@ -38,12 +36,6 @@ function createDeps(cfg: OpenClawConfig) {
   return createMessageHandlerDeps(cfg, {
     readAllowFromStore: vi.fn(async () => ["attacker-aad"]),
     upsertPairingRequest: vi.fn(async () => null),
-    recordInboundSession: vi.fn(async () => undefined),
-    resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-      sessionKey: `msteams:${peer.kind}:${peer.id}`,
-      agentId: "default",
-      accountId: "default",
-    })),
   });
 }
 
@@ -70,53 +62,6 @@ function createMessageActivity(params: {
     updateActivity: vi.fn(async () => undefined),
     deleteActivity: vi.fn(async () => undefined),
   } satisfies HandlerInput;
-}
-
-async function dispatchBotFrameworkActivityOverHttp(params: {
-  handler: ReturnType<typeof createMSTeamsMessageHandler>;
-  activity: HandlerInput["activity"];
-}): Promise<Response> {
-  const server = createServer((request, response) => {
-    void (async () => {
-      const chunks: Uint8Array[] = [];
-      for await (const chunk of request) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      }
-      const activity = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
-        | HandlerInput["activity"]
-        | undefined;
-      if (!activity) {
-        response.writeHead(400).end();
-        return;
-      }
-      const turnContext = {
-        activity,
-        sendActivity: vi.fn(async () => undefined),
-        sendActivities: vi.fn(async () => []),
-        updateActivity: vi.fn(async () => undefined),
-        deleteActivity: vi.fn(async () => undefined),
-      } satisfies HandlerInput;
-      await params.handler(turnContext);
-      response.writeHead(202).end();
-    })().catch(() => {
-      response.writeHead(500).end();
-    });
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-
-  try {
-    const { port } = server.address() as AddressInfo;
-    return await fetch(`http://127.0.0.1:${port}/api/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params.activity),
-    });
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
 }
 
 describe("msteams group conversation allowlist authorization", () => {
@@ -164,7 +109,7 @@ describe("msteams group conversation allowlist authorization", () => {
       conversationType: "groupChat" as const,
     },
   ])("authorizes $label by its group conversation allowlist", async (testCase) => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {
@@ -192,11 +137,11 @@ describe("msteams group conversation allowlist authorization", () => {
     );
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("authorizes a group conversation from the documented direct allowlist fallback", async () => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {
@@ -224,7 +169,7 @@ describe("msteams group conversation allowlist authorization", () => {
     );
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   const rejectedCases: ConversationCase[] = [
@@ -255,8 +200,8 @@ describe("msteams group conversation allowlist authorization", () => {
   it.each(rejectedCases)(
     "does not authorize $label by a group conversation allowlist",
     async (testCase) => {
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
-      const { conversationStore, deps } = createDeps({
+      runtimeApiMockState.dispatchReplyFromConfig.mockClear();
+      const { conversationStore, deps, resolveStorePath } = createDeps({
         channels: {
           msteams: {
             dmPolicy: "allowlist",
@@ -286,12 +231,15 @@ describe("msteams group conversation allowlist authorization", () => {
       );
 
       expect(conversationStore.upsert).not.toHaveBeenCalled();
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(
+        listSessionEntries({ agentId: "main", storePath: resolveStorePath(), readOnly: true }),
+      ).toEqual([]);
     },
   );
 
   it("drops a personal message with contradictory team scope before routing", async () => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps, enqueueSystemEvent, resolveAgentRoute } = createDeps({
       channels: {
         msteams: {
@@ -314,84 +262,6 @@ describe("msteams group conversation allowlist authorization", () => {
     expect(conversationStore.upsert).not.toHaveBeenCalled();
     expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
-
-  const httpCases: Array<ConversationCase & { expectedDispatches: number }> = [
-    {
-      label: "dispatches an allowlisted group",
-      conversationId: "19:group@thread.tacv2;messageid=1740123456789",
-      conversationType: "groupChat",
-      expectedDispatches: 1,
-    },
-    {
-      label: "blocks a personal conversation with the allowlisted group ID",
-      conversationId: "19:group@thread.tacv2",
-      conversationType: "personal",
-      expectedDispatches: 0,
-    },
-    {
-      label: "blocks a different group conversation",
-      conversationId: "19:other-group@thread.tacv2",
-      conversationType: "groupChat",
-      expectedDispatches: 0,
-    },
-    {
-      label: "blocks a case-colliding group conversation",
-      conversationId: "19:GROUP@thread.tacv2",
-      conversationType: "groupChat",
-      expectedDispatches: 0,
-    },
-    {
-      label: "blocks a display-name spoof of the allowlisted conversation",
-      conversationId: "19:another-group@thread.tacv2",
-      conversationType: "groupChat",
-      expectedDispatches: 0,
-      senderName: "19:group@thread.tacv2",
-      dangerouslyAllowNameMatching: true,
-    },
-  ];
-
-  it.each(httpCases)(
-    "$label over the loopback Bot Framework activity endpoint",
-    async (testCase) => {
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
-      const { conversationStore, deps } = createDeps({
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: [],
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["19:group@thread.tacv2"],
-            requireMention: false,
-            dangerouslyAllowNameMatching: testCase.dangerouslyAllowNameMatching ?? false,
-          },
-        },
-      } as OpenClawConfig);
-      const activity = createMessageActivity({
-        id: "loopback-conversation-allowlist-message",
-        text: "hello over Bot Framework HTTP",
-        from: {
-          id: "loopback-member-bot-framework-id",
-          aadObjectId: "loopback-member-aad",
-          name: testCase.senderName ?? "Loopback Member",
-        },
-        conversation: {
-          id: testCase.conversationId,
-          conversationType: testCase.conversationType,
-        },
-      }).activity;
-
-      const response = await dispatchBotFrameworkActivityOverHttp({
-        handler: createMSTeamsMessageHandler(deps),
-        activity,
-      });
-
-      expect(response.status).toBe(202);
-      expect(conversationStore.upsert).toHaveBeenCalledTimes(testCase.expectedDispatches);
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-        testCase.expectedDispatches,
-      );
-    },
-  );
 });

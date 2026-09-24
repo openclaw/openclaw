@@ -1,7 +1,5 @@
-import path from "node:path";
-import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -13,7 +11,7 @@ import {
   createMessageHandlerDeps,
 } from "./message-handler.test-support.js";
 
-const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const dispatch = getRuntimeApiMockState().dispatchReplyFromConfig;
 
 function message(params: {
   text: string;
@@ -45,21 +43,16 @@ function message(params: {
 }
 
 describe("Teams pending history", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let tempDir: string;
+  let resolveStorePath: () => string;
   let handler: ReturnType<typeof createMSTeamsMessageHandler>;
 
   beforeEach(() => {
     dispatch.mockClear();
-    tempDir = tempDirs.make("msteams-history-");
-    const { deps } = createMessageHandlerDeps(
-      { channels: { msteams: { groupPolicy: "open", requireMention: true, historyLimit: 10 } } },
-      {
-        runPrepared: runPreparedInboundReply,
-        resolveStorePath: () => path.join(tempDir, "sessions.json"),
-      },
-    );
-    handler = createMSTeamsMessageHandler(deps);
+    const fixture = createMessageHandlerDeps({
+      channels: { msteams: { groupPolicy: "open", requireMention: true, historyLimit: 10 } },
+    });
+    resolveStorePath = fixture.resolveStorePath;
+    handler = createMSTeamsMessageHandler(fixture.deps);
   });
 
   it.each(["conversation root", "replyToId"])(
@@ -86,7 +79,17 @@ describe("Teams pending history", () => {
       ] as const) {
         expect(inB?.[field]).not.toContain("note in A");
       }
-      expect(inB?.SessionKey).toContain("root-b");
+      const sessionKeyB = `agent:main:msteams:channel:${channelConversationId}:thread:root-b`;
+      expect(inB?.SessionKey).toBe(sessionKeyB);
+      expect(
+        getSessionEntry({
+          agentId: "main",
+          storePath: resolveStorePath(),
+          sessionKey: sessionKeyB,
+        }),
+      ).toMatchObject({
+        delivery: { origin: { provider: "msteams", accountId: "default", threadId: "root-b" } },
+      });
 
       // Consuming B must leave A pending, then consume A exactly once.
       await handler(

@@ -10,7 +10,6 @@ type MessageHandlerDepsOptions = {
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
-  recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
@@ -19,8 +18,6 @@ type MessageHandlerDepsOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   getTeamDetails?: ReturnType<typeof vi.fn>;
-  runPrepared?: NonNullable<Parameters<typeof installMSTeamsTestRuntime>[0]>["runPrepared"];
-  resolveStorePath?: () => string;
 };
 
 export function createMessageHandlerDeps(
@@ -30,8 +27,6 @@ export function createMessageHandlerDeps(
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
   const readAllowFromStore = options.readAllowFromStore ?? vi.fn(async () => []);
   const upsertPairingRequest = options.upsertPairingRequest ?? vi.fn(async () => null);
-  const recordInboundSession =
-    options.recordInboundSession ?? vi.fn(async (_params: { sessionKey: string }) => undefined);
   const resolveAgentRoute =
     options.resolveAgentRoute ??
     vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
@@ -45,11 +40,10 @@ export function createMessageHandlerDeps(
   const getTeamDetails =
     options.getTeamDetails ?? vi.fn(async () => ({ aadGroupId: "team-aad-group" }));
 
-  installMSTeamsTestRuntime({
+  const { resolveStorePath } = installMSTeamsTestRuntime({
     enqueueSystemEvent,
     readAllowFromStore,
     upsertPairingRequest,
-    recordInboundSession,
     resolveAgentRoute,
     hasControlCommand: options.hasControlCommand,
     isControlCommandMessage: options.isControlCommandMessage,
@@ -58,8 +52,6 @@ export function createMessageHandlerDeps(
     createInboundDebouncer: options.createInboundDebouncer,
     resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
-    runPrepared: options.runPrepared,
   });
 
   const conversationStore = {
@@ -97,9 +89,9 @@ export function createMessageHandlerDeps(
     enqueueSystemEvent,
     readAllowFromStore,
     upsertPairingRequest,
-    recordInboundSession,
     resolveAgentRoute,
     getTeamDetails,
+    resolveStorePath,
   };
 }
 

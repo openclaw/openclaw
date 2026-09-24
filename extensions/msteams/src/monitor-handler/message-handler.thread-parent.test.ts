@@ -82,7 +82,7 @@ describe("msteams thread parent context injection", () => {
     fetchThreadRepliesMock.mockImplementation(async () => []);
     resolveTeamGroupIdMock.mockReset();
     resolveTeamGroupIdMock.mockImplementation(async () => "group-1");
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
 
   const cfg: OpenClawConfig = {
@@ -121,9 +121,10 @@ describe("msteams thread parent context injection", () => {
         throw new Error("expected parent thread system event");
       }
       expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
-      expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
-      expect(parentCall[1]?.contextKey).toContain(threadRootId);
-      expect(parentCall[1]).toMatchObject({});
+      expect(parentCall[1]).toEqual({
+        sessionKey: `agent:main:msteams:channel:${channelConversationId}:thread:${threadRootId}`,
+        contextKey: `msteams:thread-parent:${channelConversationId}:${threadRootId}`,
+      });
       expect(fetchChannelMessageMock).toHaveBeenCalledWith(
         "token",
         "group-1",
@@ -235,7 +236,7 @@ describe("msteams thread parent context injection", () => {
 
     expect(fetchChannelMessageMock).not.toHaveBeenCalled();
     expect(fetchThreadRepliesMock).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("keeps inbound DM reply targets flat under threaded reply configuration", async () => {
@@ -275,8 +276,7 @@ describe("msteams thread parent context injection", () => {
       "a:dm-conversation",
       expect.objectContaining({ threadId: expect.any(String) }),
     );
-    const dispatchContext =
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx;
+    const dispatchContext = runtimeApiMockState.dispatchReplyFromConfig.mock.calls[0]?.[0].ctx;
     expect(dispatchContext).toMatchObject({
       To: "user:user-aad",
       OriginatingTo: "conversation:a:dm-conversation",

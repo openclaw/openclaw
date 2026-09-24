@@ -1,14 +1,22 @@
 // Msteams helper module supports monitor handler helpers behavior.
+import path from "node:path";
 import {
   buildChannelInboundEventContext,
-  type runPreparedInboundReply,
-  type PreparedInboundReply,
+  runChannelInboundEvent,
+  type ChannelInboundEventRunnerParams,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { vi } from "vitest";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, aroundAll, beforeEach, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
@@ -23,7 +31,6 @@ type MSTeamsTestRuntimeOptions = {
   enqueueSystemEvent?: ReturnType<typeof vi.fn>;
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
-  recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
@@ -32,93 +39,104 @@ type MSTeamsTestRuntimeOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
-  runPrepared?: typeof runPreparedInboundReply;
 };
 
-const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
-  async (
-    params: Parameters<
-      PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
-    >[0],
-  ) => {
-    await params.dispatcherOptions.onSettled?.();
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-  },
+const testHome = process.env.OPENCLAW_TEST_HOME;
+if (!testHome) {
+  throw new Error("MSTeams fixtures require the shared isolated test home.");
+}
+// Keep lock identity stable through metadata work and teardown, outside per-turn state.
+aroundAll((runSuite) =>
+  withStateDatabaseCoordinatorRuntimeDirectory(
+    path.join(testHome, ".runtime", "msteams-coordinators"),
+    runSuite,
+  ),
 );
+afterAll(async () => {
+  // Vitest unwinds this hook before shared setup removes the home. Agent leases
+  // can reopen shared state, so release them before closing the shared owner.
+  await closeOpenClawAgentDatabasesAsync(testHome);
+  await closeOpenClawStateDatabaseAsync();
+});
+useIsolatedStateGuard();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    // Metadata writes can retain maintenance workers beyond the recording promise.
+    await Promise.all([...tempDirs.dirs].map((dir) => closeOpenClawAgentDatabasesAsync(dir)));
+    cleanup();
+  });
+});
+const dispatchReplyFromConfig =
+  vi.fn<NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>>();
+const onFinalize =
+  vi.fn<
+    (
+      result: Parameters<
+        NonNullable<ChannelInboundEventRunnerParams<unknown>["adapter"]["onFinalize"]>
+      >[0],
+    ) => void
+  >();
+
+beforeEach(() => {
+  onFinalize.mockReset();
+  dispatchReplyFromConfig.mockReset().mockResolvedValue({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  });
+});
 
 export function getMSTeamsTestRuntimeState() {
-  return { dispatchReplyWithBufferedBlockDispatcher };
+  return { dispatchReplyFromConfig, onFinalize };
 }
 
-export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
-  const recordInboundSession = options.recordInboundSession ?? vi.fn(async () => undefined);
-  const resolveStorePath = options.resolveStorePath ?? (() => "/tmp/msteams-sessions.json");
-  const runPrepared = vi.fn(async (turn: PreparedInboundReply<unknown>) => {
-    await turn.recordInboundSession({
-      storePath: turn.storePath,
-      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-      ctx: turn.ctxPayload,
-      groupResolution: turn.record?.groupResolution,
-      createIfMissing: turn.record?.createIfMissing,
-      updateLastRoute: turn.record?.updateLastRoute,
-      onRecordError: turn.record?.onRecordError ?? (() => undefined),
-    });
-    const dispatchResult = await turn.runDispatch();
-    return {
-      admission: { kind: "dispatch" as const },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.routeSessionKey,
-      dispatchResult,
-    };
-  });
-  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
-    const input = await params.adapter.ingest(params.raw);
-    if (!input) {
-      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}) {
+  let storePath: string | undefined;
+  const resolveStorePath = () => {
+    if (!storePath) {
+      storePath = path.join(
+        tempDirs.make("msteams-turn-", process.env.OPENCLAW_TEST_HOME),
+        "sessions.json",
+      );
     }
-    const eventClass = (await params.adapter.classify?.(input)) ?? {
-      kind: "message" as const,
-      canStartAgentTurn: true,
-    };
-    const preflightResult = await params.adapter.preflight?.(input, eventClass);
-    const preflight =
-      preflightResult && "kind" in preflightResult
-        ? { admission: preflightResult }
-        : (preflightResult ?? {});
-    const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
-    if (!("route" in turn) || !("delivery" in turn)) {
-      throw new Error("expected assembled MSTeams channel turn plan");
-    }
-    const preparedTurn = {
-      channel: turn.channel,
-      accountId: turn.accountId,
-      routeSessionKey: turn.route.sessionKey,
-      storePath: resolveStorePath(),
-      ctxPayload: turn.ctxPayload,
-      recordInboundSession,
-      afterRecord: turn.afterRecord,
-      record: turn.record,
-      history: turn.history,
-      admission: turn.admission,
-      botLoopProtection: turn.botLoopProtection,
-      runDispatch: async () =>
-        await dispatchReplyWithBufferedBlockDispatcher({
-          ctx: turn.ctxPayload,
-          cfg: turn.cfg,
-          dispatcherOptions: {
-            ...turn.dispatcherOptions,
-            deliver: turn.delivery.deliver,
-            onError: turn.delivery.onError,
+    return storePath;
+  };
+  const run = async (params: ChannelInboundEventRunnerParams<unknown>) => {
+    const metadataTasks: Promise<unknown>[] = [];
+    try {
+      return await runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          onFinalize: (result) => {
+            // Observe core completion before the fixture joins detached metadata writes.
+            onFinalize(result);
+            return params.adapter.onFinalize?.(result);
           },
-          toolsAllow: turn.toolsAllow,
-          replyOptions: turn.replyOptions,
-          replyResolver: turn.replyResolver,
-        }),
-    } as PreparedInboundReply<unknown>;
-    return await (options.runPrepared ?? runPrepared)(preparedTurn);
-  });
+          resolveTurn: async (...args) => {
+            const turn = await params.adapter.resolveTurn(...args);
+            if (!("route" in turn) || !("delivery" in turn)) {
+              throw new Error("expected routed MSTeams channel turn plan");
+            }
+            return {
+              ...turn,
+              cfg: { ...turn.cfg, session: { ...turn.cfg.session, store: resolveStorePath() } },
+              dispatchReplyFromConfig,
+              record: {
+                ...turn.record,
+                trackSessionMetaTask: (task: Promise<unknown>) => {
+                  metadataTasks.push(task);
+                  turn.record?.trackSessionMetaTask?.(task);
+                },
+              },
+            };
+          },
+        },
+      });
+    } finally {
+      // The recorder detaches metadata writes; join them before assertions or fixture cleanup.
+      await Promise.all(metadataTasks);
+    }
+  };
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
     system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
@@ -166,26 +184,15 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveAgentRoute:
           options.resolveAgentRoute ??
           (({ peer }: RuntimeRoutePeer) => ({
-            sessionKey: `msteams:${peer.kind}:${peer.id}`,
-            agentId: "default",
+            sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
+            agentId: "main",
             accountId: "default",
           })),
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcher as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        createReplyDispatcherWithTyping: () => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-        }),
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
         resolveHumanDelayConfig: () => undefined,
-      },
-      session: {
-        recordInboundSession,
-        resolveStorePath,
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
@@ -194,6 +201,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       },
     },
   } as unknown as PluginRuntime);
+  return { resolveStorePath };
 }
 
 export function createActivityHandler(

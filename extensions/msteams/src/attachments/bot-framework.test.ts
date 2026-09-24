@@ -47,33 +47,8 @@ function installRuntime(): MockRuntime {
     savedContentType: "application/pdf",
   };
   setMSTeamsRuntime({
-    media: {
-      detectMime: async ({ headerMime }: { headerMime?: string }) =>
-        headerMime ?? "application/pdf",
-    },
     channel: {
       media: {
-        saveMediaBuffer: async (
-          buffer: Buffer,
-          contentType: string | undefined,
-          direction: string,
-          maxBytes: number,
-          originalFilename?: string,
-        ) => {
-          state.saveCalls.push({
-            buffer,
-            contentType,
-            direction,
-            maxBytes,
-            originalFilename,
-          });
-          return { path: state.savePath, contentType: state.savedContentType };
-        },
-        readRemoteMediaBuffer: async () => ({ buffer: Buffer.alloc(0), contentType: undefined }),
-        saveRemoteMedia: async () => ({
-          path: state.savePath,
-          contentType: state.savedContentType,
-        }),
         saveResponseMedia: async (
           response: Response,
           options: {

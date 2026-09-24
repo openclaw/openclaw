@@ -1,8 +1,7 @@
 // Msteams tests cover attachments plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
-import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
+import type { PluginRuntime } from "../runtime-api.js";
 import { downloadMSTeamsAttachments } from "./attachments/download.js";
 import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -43,16 +42,6 @@ const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_APPLICATION_ZIP = "application/zip";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
 const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
-const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
-const MAX_REDIRECT_HOPS = 5;
-type RemoteMediaFetchParams = {
-  url: string;
-  maxBytes?: number;
-  filePathHint?: string;
-  ssrfPolicy?: SsrFPolicy;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-};
-
 const detectMimeDefault = async () => CONTENT_TYPE_IMAGE_PNG;
 const saveMediaBufferDefault = async (
   _buffer: Buffer,
@@ -68,70 +57,12 @@ const saveMediaBufferDefault = async (
 });
 const detectMimeMock = vi.fn(detectMimeDefault);
 const saveMediaBufferMock = vi.fn(saveMediaBufferDefault);
-function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
-  if (pattern.startsWith("*.")) {
-    const suffix = pattern.slice(2);
-    return suffix.length > 0 && hostname !== suffix && hostname.endsWith(`.${suffix}`);
-  }
-  return hostname === pattern;
-}
-
-function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
-  if (!policy?.hostnameAllowlist || policy.hostnameAllowlist.length === 0) {
-    return true;
-  }
-  const hostname = new URL(url).hostname.toLowerCase();
-  return policy.hostnameAllowlist.some((pattern) =>
-    isHostnameAllowedByPattern(hostname, pattern.toLowerCase()),
-  );
-}
-
-async function readRemoteMediaBufferWithRedirects(
-  params: RemoteMediaFetchParams,
-  requestInit?: RequestInit,
-) {
-  const fetchFn = params.fetchImpl ?? fetch;
-  let currentUrl = params.url;
-  for (let i = 0; i <= MAX_REDIRECT_HOPS; i += 1) {
-    if (!isUrlAllowedBySsrfPolicy(currentUrl, params.ssrfPolicy)) {
-      throw new Error(`Blocked hostname (not in allowlist): ${currentUrl}`);
-    }
-    const res = await fetchFn(currentUrl, { redirect: "manual", ...requestInit });
-    if (REDIRECT_STATUS_CODES.has(res.status)) {
-      const location = res.headers.get("location");
-      if (!location) {
-        throw new Error("redirect missing location");
-      }
-      currentUrl = new URL(location, currentUrl).toString();
-      continue;
-    }
-    return readRemoteMediaResponse(res, params);
-  }
-  throw new Error("too many redirects");
-}
-
-const readRemoteMediaBufferMock = vi.fn(async (params: RemoteMediaFetchParams) => {
-  return await readRemoteMediaBufferWithRedirects(params);
-});
-const saveRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
-  const fetched = await readRemoteMediaBufferWithRedirects(params);
-  return await saveMediaBufferMock(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    params.maxBytes,
-    params.filePathHint,
-  );
-});
-
 const runtimeStub = {
   media: {
     detectMime: detectMimeMock,
   },
   channel: {
     media: {
-      readRemoteMediaBuffer: readRemoteMediaBufferMock,
-      saveRemoteMedia: saveRemoteMediaMock,
       saveResponseMedia: saveResponseMediaMock,
       saveMediaBuffer: saveMediaBufferMock,
     },
@@ -269,11 +200,6 @@ const expectSingleMedia = (media: DownloadedMedia, expected: DownloadedMediaExpe
   expectAttachmentMediaLength(media, 1);
   expectFirstMedia(media, expected);
 };
-const expectMediaBufferSaved = () => {
-  expect(
-    saveResponseMediaMock.mock.calls.length + saveMediaBufferMock.mock.calls.length,
-  ).toBeGreaterThan(0);
-};
 const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpectation) => {
   const first = media[0];
   if (expected.path !== undefined) {
@@ -286,7 +212,6 @@ const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpec
 type AttachmentDownloadSuccessCase = LabeledCase & {
   attachments: MSTeamsAttachments;
   buildFetchFn?: () => unknown;
-  beforeDownload?: () => void;
   assert?: (media: DownloadedMedia) => void;
 };
 type AttachmentAuthRetryScenario = {
@@ -305,7 +230,7 @@ const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
     attachments: asSingleItemArray(IMAGE_ATTACHMENT),
     assert: (media) => {
       expectFirstMedia(media, { path: SAVED_PNG_PATH });
-      expectMediaBufferSaved();
+      expect(saveResponseMediaMock).toHaveBeenCalledTimes(1);
     },
   }),
   withLabel("supports Teams file.download.info downloadUrl attachments", {
@@ -317,15 +242,6 @@ const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
   withLabel("downloads non-image file attachments (PDF)", {
     attachments: createPdfAttachments(TEST_URL_DOC_PDF),
     buildFetchFn: () => createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf"),
-    beforeDownload: () => {
-      detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
-      saveMediaBufferMock.mockResolvedValueOnce({
-        id: "saved.pdf",
-        path: SAVED_PDF_PATH,
-        size: Buffer.byteLength(PDF_BUFFER),
-        contentType: CONTENT_TYPE_APPLICATION_PDF,
-      });
-    },
     assert: (media) => {
       expectSingleMedia(media, {
         path: SAVED_PDF_PATH,
@@ -362,11 +278,9 @@ const ATTACHMENT_AUTH_RETRY_CASES: AttachmentAuthRetryCase[] = [
 const runAttachmentDownloadSuccessCase = async ({
   attachments,
   buildFetchFn,
-  beforeDownload,
   assert,
 }: AttachmentDownloadSuccessCase) => {
   const fetchFn = (buildFetchFn ?? (() => createOkFetchMock(CONTENT_TYPE_IMAGE_PNG)))();
-  beforeDownload?.();
   const media = await downloadAttachmentsWithFetch(attachments, fetchFn);
   expectSingleMedia(media);
   assert?.(media);
@@ -396,8 +310,6 @@ describe("msteams attachments", () => {
     detectMimeMock.mockImplementation(detectMimeDefault);
     saveMediaBufferMock.mockReset();
     saveMediaBufferMock.mockImplementation(saveMediaBufferDefault);
-    readRemoteMediaBufferMock.mockClear();
-    saveRemoteMediaMock.mockClear();
     saveResponseMediaMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
   });
@@ -821,13 +733,6 @@ describe("msteams attachments", () => {
       ])("routes $label through Graph shares endpoint", async ({ contentUrl }) => {
         const tokenProvider = createTokenProvider();
         const fetchMock = createGraphSharesFetchMock();
-        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
-        saveMediaBufferMock.mockResolvedValueOnce({
-          id: "saved.pdf",
-          path: SAVED_PDF_PATH,
-          size: Buffer.byteLength(PDF_PAYLOAD),
-          contentType: CONTENT_TYPE_APPLICATION_PDF,
-        });
 
         const media = await downloadMSTeamsAttachments(
           buildDownloadParams(
@@ -869,13 +774,6 @@ describe("msteams attachments", () => {
           return url.startsWith(GRAPH_SHARES_URL_PREFIX)
             ? createTextResponse("unauthorized", 401)
             : createBufferResponse(PDF_BUFFER, CONTENT_TYPE_APPLICATION_PDF);
-        });
-        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
-        saveMediaBufferMock.mockResolvedValueOnce({
-          id: "saved.pdf",
-          path: SAVED_PDF_PATH,
-          size: Buffer.byteLength(PDF_BUFFER),
-          contentType: CONTENT_TYPE_APPLICATION_PDF,
         });
 
         const media = await downloadMSTeamsAttachments(
