@@ -13,6 +13,7 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 }));
 
 import { getRuntimeConfig } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   GatewayDrainingError,
   markGatewayRestartDraining,
@@ -101,6 +102,28 @@ describe("dispatch Stop before provider allocation", () => {
       moveDestinationMocks.resolveSessionTarget.mockImplementation(
         targetOwner.resolveWorkerPlacementSessionTarget,
       );
+      const sourceEntry = moveDestinationMocks.resolveCanonicalSession();
+      const storePath = moveDestinationMocks.resolveGatewaySessionTarget().storePath;
+      await upsertSessionEntryCore(
+        { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey, storePath },
+        {
+          ...sourceEntry,
+          worktree: {
+            ...sourceEntry.worktree,
+            branch: "synthetic",
+            repoRoot: support.testState.root,
+          },
+        },
+      );
+      const sessionUtils =
+        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+      const sessionTarget = sessionUtils.resolveGatewaySessionStoreTargetWithStore({
+        cfg: { ...support.testState.config, session: { store: storePath } },
+        key: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+        exactRead: true,
+      });
+      moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(sessionTarget);
       runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
         actual.createWorkerPlacementDispatchService({
           ...options,
@@ -167,8 +190,6 @@ describe("dispatch Stop before provider allocation", () => {
         },
         revokeSessionAuthority: vi.fn(),
       });
-      const sessionTarget = moveDestinationMocks.resolveGatewaySessionTarget();
-      const sourceEntry = moveDestinationMocks.resolveCanonicalSession();
       const transitions: Array<{ state: string; generation: number }> = [];
       const moving = runtime.dispatchService
         .move(
@@ -766,6 +787,10 @@ describe("dispatch Stop before provider allocation", () => {
   it.each(["targeted", "sweep", "idle", "late-sweep", "timeout"] as const)(
     "Stop owns steady-state provisioning through %s recovery ordering",
     async (mode) => {
+      if (mode === "timeout") {
+        // Seed the durable provisioning state before expiring the held provider replay.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       const replayEntered = createDeferredCore();
       const childClosed = createDeferredCore();
       const stopPrepared = createDeferredCore();
@@ -870,6 +895,7 @@ describe("dispatch Stop before provider allocation", () => {
       if (mode === "timeout") {
         // Startup and sweep completion use the caller result, but Stop must still
         // reach the actual provider that outlives that timeout.
+        await vi.advanceTimersByTimeAsync(20);
         await recovery;
         expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
         expect(events).toEqual(["replay"]);

@@ -26,10 +26,7 @@ import {
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 import { hasCronCreatorGrantProvenance } from "./cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
-import {
-  resolveMessageActionTurnCapability,
-  type AgentRuntimeMessageActionContext,
-} from "./message-action-turn-capability.js";
+import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 import type { GatewayUiCommandTarget } from "./ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
@@ -143,6 +140,7 @@ const spawnModelAutoSelectionSchema = z.object({
 });
 const sessionSpawnContextSchema = z
   .object({
+    requesterProfileId: normalizedRequiredStringSchema.optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     resolvedModel: z
       .object({
@@ -158,6 +156,7 @@ const sessionSpawnContextSchema = z
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
+    ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
@@ -490,6 +489,9 @@ function prepareAgentRuntimeIdentityTokenPayload(
     throw new Error("worker delegated authority disagrees with the operational run");
   }
   const approvalAuthority = params.approvalAuthority ?? activeAuthority;
+  if (params.workerTurnClaim && approvalAuthority.claimId === activeAuthority.claimId) {
+    throw new Error("worker runtime identity requires its original claim approval authority");
+  }
   if (
     approvalAuthority.operationalRunInstance.instanceId !== operationalInstanceId ||
     approvalAuthority.operationalRunInstance.runId !== operationalRunId ||
@@ -685,49 +687,4 @@ function resolveAgentRuntimeIdentityPayload(
   return handoff
     ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)
     : identity;
-}
-
-export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;
-
-type WorkerTurnClaimValidator = {
-  validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
-};
-
-function validateAgentRuntimeDelegatedAuthority(
-  authority: AgentRuntimeDelegatedAuthority,
-  placements?: WorkerTurnClaimValidator,
-): boolean {
-  if (!validateAgentRunDelegatedAuthority(authority)) {
-    return false;
-  }
-  return authority.kind === "local"
-    ? true
-    : placements?.validateTurnClaim?.(authority.turnClaim) === true;
-}
-
-/** Builds the use-time approval gate from the run owner and canonical worker store. */
-export function createAgentRuntimeApprovalAuthorityValidator(
-  placements?: WorkerTurnClaimValidator,
-): AgentRuntimeApprovalAuthorityValidator {
-  return (identity) => {
-    if (!validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements)) {
-      return false;
-    }
-    const messageActionContext = identity.messageActionContext;
-    if (!messageActionContext) {
-      return true;
-    }
-    if (!messageActionContext.turnCapability) {
-      return false;
-    }
-    return Boolean(
-      resolveMessageActionTurnCapability({
-        token: messageActionContext.turnCapability,
-        agentId: identity.agentId,
-        runId: identity.operationalRunInstance.runId,
-        sessionKey: identity.sessionKey,
-        sessionId: messageActionContext.sessionId,
-      }),
-    );
-  };
 }

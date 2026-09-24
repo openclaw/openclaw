@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** Registry projections must agree with admitted execution and queue owners. */
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -34,7 +37,6 @@ import {
   reserveSwarmRun,
 } from "../swarm/swarm-scheduler.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
@@ -62,7 +64,10 @@ const fixture = useSubagentControlFixture();
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
-afterEach(() => resetCommandQueueStateForTest());
+afterEach(async () => {
+  await fixture.settle();
+  resetCommandQueueStateForTest();
+});
 
 async function register(id: string, collect = false, expectsCompletionMessage = false) {
   const childSessionKey = `agent:main:subagent:${id}`;

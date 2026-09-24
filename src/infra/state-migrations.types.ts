@@ -55,10 +55,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
   };
-  pluginStateSidecar: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
   pluginInstallIndex: {
     sourcePath: string;
     hasLegacy: boolean;
@@ -77,11 +73,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
-  };
-  taskStateSidecars: {
-    taskRunsPath: string;
-    flowRunsPath: string;
-    hasLegacy: boolean;
   };
   deliveryQueues: {
     outboundPath: string;
@@ -148,10 +139,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
   };
   nodeHost: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  subagentRegistry: {
     sourcePath: string;
     hasLegacy: boolean;
   };

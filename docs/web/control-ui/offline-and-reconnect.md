@@ -20,7 +20,8 @@ transcripts use the existing chat cache. On reload, the shell, sidebar, and cach
 conversation can appear while the Gateway is still connecting. Live state replaces
 the cached roster on connect, and chat requests changes from its saved transcript cursor.
 The first chat request waits up to 300 ms after connecting for the stored transcript,
-then falls back to live history if it is not ready.
+then falls back to live history if it is not ready. A stored transcript belongs to its selected
+agent; switching agents while it loads cannot display or save it under the new agent.
 
 Trusted-proxy and Tailscale identities always show the initial connection screen
 and save no warm boot or roster records. Password and one-time bootstrap-token
@@ -45,6 +46,11 @@ The current route and stored drafts survive the reload. If browser storage is un
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
 
+Unsaved file edits block automatic and in-app reloads, even after you close their
+previews or switch conversations. Reopen each edited file and save or discard its
+changes, then retry the reload. File edits stay in memory in the current page;
+an explicit browser reload or closing the browser tab discards them.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
@@ -61,8 +67,8 @@ the WebSocket close code for troubleshooting; specific Gateway errors keep their
 Open the account menu and use **Retry now** to request an immediate attempt when offered.
 Sign-in failures use the sign-in flow, and a required dashboard refresh uses its reload flow;
 retrying the connection does not replace either action. Live updates and realtime/session actions pause until the connection
-returns. Chat remains editable, with a conversation-specific outbox notice instead of another
-global connection warning.
+returns. Chat remains editable without a pre-queue helper. The conversation-specific outbox
+summary appears only after a message is queued, alongside the actual queued message.
 
 Ordinary text and attachment sends require successful admission to the current tab's
 Gateway/session-scoped browser outbox. Eligible messages resume automatically after connection
@@ -131,6 +137,9 @@ Check the connection, then use **Reload**. The same error can occur after an upd
 it does not by itself mean a new version was installed. If unsaved work blocks the
 reload, follow the displayed save or cancel guidance, then try again.
 
+A delayed history refresh preserves any newer run and its live output. A fresh idle
+response can clear a stale busy indicator after the run finishes.
+
 If chat history times out, its **Retry** action reloads the saved conversation and restores
 its live session subscription, including approval updates.
 
@@ -138,6 +147,14 @@ When the Gateway confirms that it holds the same pending input, the Control UI c
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
+If the Gateway is holding that input for a later turn, it appears in the queue
+above the composer. Canceling that row withdraws the exact queued message without
+stopping the active turn. Server-held messages cannot be edited or reordered.
+
+If automatic restart recovery is interrupted or cancelled before the agent resumes,
+the **System · restart recovery** notice shows that outcome and asks you to send a
+message to continue. It does not mean the agent resumed. Messages forwarded from
+other sessions keep their own delivery status next to each message.
 
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
 

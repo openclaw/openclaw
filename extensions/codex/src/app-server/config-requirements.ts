@@ -55,38 +55,28 @@ export function parseAllowedSandboxModesFromCodexRequirements(
   if (remoteSandboxModes !== undefined) {
     return remoteSandboxModes;
   }
-  const values = readRequirementsStringArray(requirements?.allowed_sandbox_modes);
-  return parseRequirementsSandboxModes(values);
+  return parseRequirementsValues(
+    requirements?.allowed_sandbox_modes,
+    normalizeRequirementsSandboxMode,
+  );
 }
 
 export function parseAllowedApprovalPoliciesFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerManagedApprovalPolicy> | undefined {
-  const values = readRequirementsStringArray(
+  return parseRequirementsValues(
     parseCodexRequirements(content)?.allowed_approval_policies,
+    normalizeRequirementsApprovalPolicy,
   );
-  if (values === undefined) {
-    return undefined;
-  }
-  const normalizedPolicies = values
-    .map((entry) => normalizeRequirementsApprovalPolicy(entry))
-    .filter((entry): entry is CodexAppServerManagedApprovalPolicy => entry !== undefined);
-  return normalizedPolicies.length > 0 ? new Set(normalizedPolicies) : undefined;
 }
 
 export function parseAllowedApprovalsReviewersFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerApprovalsReviewer> | undefined {
-  const values = readRequirementsStringArray(
+  return parseRequirementsValues(
     parseCodexRequirements(content)?.allowed_approvals_reviewers,
+    (value) => resolveApprovalsReviewer(value.trim().toLowerCase()),
   );
-  if (values === undefined) {
-    return undefined;
-  }
-  const normalizedReviewers = values
-    .map((entry) => normalizeRequirementsApprovalsReviewer(entry))
-    .filter((entry): entry is CodexAppServerApprovalsReviewer => entry !== undefined);
-  return normalizedReviewers.length > 0 ? new Set(normalizedReviewers) : undefined;
 }
 
 function parseMatchingRemoteSandboxModesFromCodexRequirements(
@@ -104,23 +94,21 @@ function parseMatchingRemoteSandboxModesFromCodexRequirements(
     if (!patterns || !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)) {
       continue;
     }
-    return parseRequirementsSandboxModes(
-      readRequirementsStringArray(config?.allowed_sandbox_modes),
-    );
+    return parseRequirementsValues(config?.allowed_sandbox_modes, normalizeRequirementsSandboxMode);
   }
   return undefined;
 }
 
-function parseRequirementsSandboxModes(
-  values: string[] | undefined,
-): Set<CodexAppServerSandboxMode> | undefined {
+function parseRequirementsValues<T>(
+  value: unknown,
+  normalize: (value: string) => T | undefined,
+): Set<T> | undefined {
+  const values = readRequirementsStringArray(value);
   if (values === undefined) {
     return undefined;
   }
-  const normalizedModes = values
-    .map((entry) => normalizeRequirementsSandboxMode(entry))
-    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
-  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+  const normalized = values.map(normalize).filter((entry): entry is T => entry !== undefined);
+  return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
 function parseCodexRequirements(content: string): TomlTable | undefined {
@@ -191,13 +179,6 @@ function normalizeRequirementsApprovalPolicy(
     return normalized;
   }
   return resolveApprovalPolicy(normalized);
-}
-
-function normalizeRequirementsApprovalsReviewer(
-  value: string,
-): CodexAppServerApprovalsReviewer | undefined {
-  const normalized = value.trim().toLowerCase();
-  return resolveApprovalsReviewer(normalized);
 }
 
 export function selectGuardianApprovalPolicy(

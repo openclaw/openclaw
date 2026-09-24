@@ -16,7 +16,10 @@ inherit macOS assets or appcast promotion.
 An explicit stable or full release request includes macOS publication unless
 the operator limits its scope. Continue through validation, signing,
 notarization, promotion, and verification without asking for separate macOS
-consent. Keep the exact release identity and all artifact checks.
+consent. Keep the exact release identity and all artifact checks. macOS
+publication runs in parallel with npm and never blocks it; a mac failure does
+not hold the npm/ClawHub release, GitHub release finalization, or main closeout.
+Fix it in parallel.
 
 Follow the current owner-configured environment policy. Do not invent an extra
 reviewer requirement or recreate an obsolete one. If GitHub still enforces an

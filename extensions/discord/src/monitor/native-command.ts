@@ -290,7 +290,6 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const useAccessGroups = true;
   const user = interaction.user;
   if (!user) {
     return { accepted: false };
@@ -343,9 +342,7 @@ async function dispatchDiscordCommandInteraction(params: {
     resolveDiscordNativeCommandChannelAccessContext({
       cfg,
       discordConfig,
-      accountId,
       sender,
-      isDirectMessage,
       isThreadChannel,
       guild: interaction.guild ?? null,
       rawChannelId,
@@ -394,7 +391,7 @@ async function dispatchDiscordCommandInteraction(params: {
     await respond("This channel is not allowed.");
     return { accepted: false };
   }
-  if (useAccessGroups && interaction.guild) {
+  if (interaction.guild) {
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
@@ -485,9 +482,7 @@ async function dispatchDiscordCommandInteraction(params: {
   if (!isDirectMessage) {
     commandAuthorized = await resolveDiscordGuildNativeCommandAuthorized({
       cfg,
-      accountId,
       discordConfig,
-      useAccessGroups,
       commandsAllowFromAccess,
       guildInfo,
       channelConfig,
@@ -629,22 +624,14 @@ async function dispatchDiscordCommandInteraction(params: {
       safeInteractionCall: safeDiscordInteractionCall,
       dispatchCommandInteraction: dispatchDiscordCommandInteraction,
     });
-    if (preferFollowUp) {
-      await safeDiscordInteractionCall("interaction follow-up", () =>
-        interaction.followUp({
+    await safeDiscordInteractionCall(
+      preferFollowUp ? "interaction follow-up" : "interaction reply",
+      () =>
+        interaction[preferFollowUp ? "followUp" : "reply"]({
           content: menuPayload.content,
           components: menuPayload.components,
           ephemeral: true,
         }),
-      );
-      return { accepted: true };
-    }
-    await safeDiscordInteractionCall("interaction reply", () =>
-      interaction.reply({
-        content: menuPayload.content,
-        components: menuPayload.components,
-        ephemeral: true,
-      }),
     );
     return { accepted: true };
   }

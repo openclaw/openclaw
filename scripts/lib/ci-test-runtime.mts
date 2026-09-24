@@ -34,6 +34,25 @@ export const BUN_UI_TEST_ENV = {
 } as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
+// TypeScript's synchronous native API uses Node child-process pipe handles.
+// Keep these compiler assertions on Node, including those in mixed runtime suites.
+const nativeCompilerTestFiles = [
+  "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
+  "src/agents/agent-model-discovery.imports.test.ts",
+  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/harness/native-hook-relay.imports.test.ts",
+  "src/cli/program/register.database.import-boundary.test.ts",
+  "src/plugin-sdk/provider-tools.test.ts",
+  "test/scripts/audit-control-ui-dead-css.test.ts",
+  "test/scripts/canvas-cli-import-closure.test.ts",
+  "test/scripts/check-session-accessor-boundary.test.ts",
+  "test/scripts/check-session-transcript-reader-boundary.test.ts",
+  "test/scripts/check-sqlite-transaction-boundary.test.ts",
+  "test/scripts/native-typescript.test.ts",
+  "test/scripts/nodes-cli-import-closure.test.ts",
+  "test/scripts/ts-topology.test.ts",
+  "test/test-helper-extension-import-boundary.test.ts",
+];
 // Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
@@ -45,6 +64,7 @@ const runtimePartitions = new Map<
     {
       files: unitFastFiles,
       nodeRequired: new Set([
+        ...nativeCompilerTestFiles,
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
@@ -68,7 +88,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit-fast-isolated.config.ts",
     {
       files: () => getUnitFastIsolatedTestFiles(),
-      nodeRequired: new Set(["src/proxy-capture/proxy-server.test.ts"]),
+      nodeRequired: new Set([...nativeCompilerTestFiles, "src/proxy-capture/proxy-server.test.ts"]),
     },
   ],
   [
@@ -108,8 +128,12 @@ function selectionVitestArgs(selection: TestSelection): string[] | undefined {
 
 function supportsRuntimePartition(args: string[]): boolean {
   // Native sharding, alternate roots/projects, filters and config overrides can
-  // change membership. Admit only resource/deadline flags with known semantics.
-  return args.every((arg) => /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg));
+  // change membership. Collection skips every body but preserves file imports.
+  return args.every(
+    (arg) =>
+      arg === "--testNamePattern=(?!)" ||
+      /^--(?:maxWorkers|testTimeout|hookTimeout)=\d+$/u.test(arg),
+  );
 }
 
 function supportsUiRuntime(args: string[]): boolean {
@@ -178,7 +202,6 @@ export function resolveCiTestRuntimeSelections(
     selection.configs?.length === 1 &&
     selection.configs[0] === "ui/vitest.config.ts" &&
     !selection.targets?.length &&
-    !selection.includePatterns &&
     supportsUiRuntime(args);
   if (!uiPartition && !supportsRuntimePartition(args)) {
     return node;
@@ -223,13 +246,19 @@ export function resolveCiTestRuntimeSelections(
   if (!partition || (partition.includeAfterShard && !uiPartition)) {
     return node;
   }
-  const files = partition
-    .files(cwd)
-    .filter(
-      (file) =>
-        !selection.includePatterns ||
-        selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern)),
-    );
+  const inventory = partition.files(cwd);
+  const requested = new Set(selection.includePatterns ?? []);
+  // Canonical file inventories should not reparse every file pair as a glob.
+  const exactFiles = selection.includePatterns?.every(
+    (pattern) => /^[\w./-]+$/u.test(pattern) && inventory.includes(pattern),
+  );
+  const files = inventory.filter(
+    (file) =>
+      !selection.includePatterns ||
+      (exactFiles
+        ? requested.has(file)
+        : selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern))),
+  );
   const bunFiles = files.filter((file) => !partition.nodeRequired.has(file));
   if (!bunFiles.length) {
     return node;

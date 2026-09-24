@@ -57,6 +57,7 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;
@@ -327,7 +328,6 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                 ? props.mentionMenu.activeId(props.mentionHost.paneId)
                 : null) ?? undefined)
             : activeOptionId,
-          expanded: mentionsOpen ? true : undefined,
           describedBy: mentionsOpen
             ? mentionAnnouncementId
             : hideSearch
@@ -413,6 +413,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                       class="cmd-palette__results"
                       ?hidden=${items.length === 0}
                       role="listbox"
+                      aria-label=${paletteLabel}
                       aria-busy=${props.searchDebouncing || props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
                     >
                       ${grouped.map(

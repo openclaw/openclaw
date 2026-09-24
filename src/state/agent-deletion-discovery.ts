@@ -1,20 +1,31 @@
 import fs from "node:fs";
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   readAgentDatabaseDeletionSnapshot,
   type AgentDeletionJournalDisposition,
+  type AgentDeletionJournalPurpose,
 } from "./agent-deletion-journal.read.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
-} from "./openclaw-agent-db-registry.js";
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type Target = { agentId: string; path: string };
+
+function hasSqliteFileFamily(pathname: string): boolean {
+  return resolveSqliteDatabaseFilePaths(pathname).some(
+    (file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined,
+  );
+}
 
 function hasSqliteArtifacts(directory: string): boolean {
   try {
@@ -38,31 +49,104 @@ export function createAgentDatabaseDeletionClassifier(params: {
   registeredAgentDatabases: readonly Target[];
   artifactDirectories?: readonly Target[];
 }) {
-  const entries = params.retainedDeletions;
+  const artifactDirectories = params.artifactDirectories;
+  const journal = params.retainedDeletions;
+  const known =
+    journal.status === "present"
+      ? journal
+      : journal.status === "unavailable"
+        ? journal.known
+        : undefined;
+  const entries = known?.entries ?? [];
+  const unknown = journal.status === "unavailable" ? "unavailable" : undefined;
   const samePath = createOpenClawAgentDatabasePathMatcher();
-  const recorded = params.artifactDirectories ?? [
+  const recorded = artifactDirectories ?? [
     ...params.configuredAgentDatabaseTargets,
     ...params.registeredAgentDatabases,
   ];
+  const heldPaths = !known
+    ? []
+    : artifactDirectories
+      ? known.held.flatMap((entry) => {
+          const defaultDirectory = path.dirname(
+            resolveOpenClawAgentSqlitePath({ agentId: entry.agentId, env: params.env }),
+          );
+          const recordedDirectory = path.dirname(entry.path);
+          const canonicalAgentFile = path.basename(entry.path) === "openclaw-agent.sqlite";
+          const directories = [
+            { agentId: entry.agentId, path: defaultDirectory },
+            ...artifactDirectories.filter(
+              (directory) =>
+                normalizeAgentId(directory.agentId) === entry.agentId ||
+                (canonicalAgentFile && samePath(directory.path, recordedDirectory)),
+            ),
+          ];
+          // Only directory bindings or the canonical agents tree identify adjacent artifacts.
+          const selectedByEnvironment =
+            canonicalAgentFile &&
+            [params.env.OPENCLAW_AGENT_DIR, params.env.PI_CODING_AGENT_DIR].some(
+              (directory) =>
+                directory?.trim() &&
+                samePath(resolveUserPath(directory, params.env), recordedDirectory),
+            );
+          if (
+            selectedByEnvironment ||
+            (canonicalAgentFile &&
+              path.basename(recordedDirectory) === "agent" &&
+              samePath(
+                path.dirname(path.dirname(recordedDirectory)),
+                path.dirname(path.dirname(defaultDirectory)),
+              ))
+          ) {
+            directories.push({ agentId: entry.agentId, path: recordedDirectory });
+          }
+          return directories;
+        })
+      : known.held;
   return (pathname: string, agentId?: string) => {
-    if (entries === "unavailable") {
-      return entries;
+    let logicalTargets: readonly Target[] = [];
+    if (!artifactDirectories && agentId !== undefined) {
+      const ownerId = normalizeAgentId(agentId);
+      logicalTargets = params.configuredAgentDatabaseTargets.filter(
+        (target) => normalizeAgentId(target.agentId) === ownerId,
+      );
+      if (logicalTargets.length === 0) {
+        logicalTargets = [
+          ...params.registeredAgentDatabases.filter(
+            (target) => normalizeAgentId(target.agentId) === ownerId,
+          ),
+          {
+            agentId: ownerId,
+            path: resolveUnsuffixedSqliteTargetFromSessionStorePath(pathname).path,
+          },
+        ];
+      }
+    }
+    if (
+      heldPaths.some(
+        (entry) =>
+          (artifactDirectories && entry.agentId === agentId) ||
+          samePath(entry.path, pathname) ||
+          logicalTargets.some((target) => samePath(target.path, entry.path)),
+      )
+    ) {
+      return "held";
     }
     const deletion = entries.find(
       (entry) =>
         entry.agentId === agentId ||
-        (params.artifactDirectories ? [entry.agentDir] : entry.databasePaths).some((file) =>
+        (artifactDirectories ? [entry.agentDir] : entry.databasePaths).some((file) =>
           samePath(file, pathname),
         ),
     );
     if (!deletion) {
-      return undefined;
+      return unknown;
     }
     const surviving = recorded.some(
       (target) =>
         !entries.some((entry) => entry.agentId === normalizeAgentId(target.agentId)) &&
         samePath(target.path, pathname) &&
-        (params.artifactDirectories !== undefined ||
+        (artifactDirectories !== undefined ||
           (isPersistentOpenClawAgentDatabasePath(target.path, params.env) &&
             (params.configuredAgentDatabaseTargets.includes(target) ||
               isPathInside(
@@ -70,7 +154,7 @@ export function createAgentDatabaseDeletionClassifier(params: {
                 fs.realpathSync.native(target.path),
               )))),
     );
-    return agentId === deletion.agentId || !surviving ? deletion : undefined;
+    return agentId === deletion.agentId || !surviving ? deletion : unknown;
   };
 }
 
@@ -79,28 +163,43 @@ export function createRetainedAgentDatabaseMatcher(
   readConfiguredTargets: () => readonly Target[],
   namespace:
     | "database"
-    | { kind: "agent-directory"; readDatabasePaths: () => readonly string[] } = "database",
+    | {
+        kind: "agent-directory" | "legacy-database";
+        readDatabasePaths: () => readonly string[];
+      } = "database",
+  purpose: AgentDeletionJournalPurpose = "maintenance",
 ) {
-  const snapshot = readAgentDatabaseDeletionSnapshot(env);
-  if (!snapshot && namespace !== "database") {
-    // Legacy credentials can predate SQLite; existing families still have unknown history.
+  const snapshot = readAgentDatabaseDeletionSnapshot(env, purpose);
+  const agentDirectories = namespace !== "database" && namespace.kind === "agent-directory";
+  if (!snapshot && namespace !== "database" && purpose === "maintenance") {
+    // Legacy inputs can predate SQLite; any surviving family still has unknown history.
     const unavailable =
-      [resolveOpenClawStateSqlitePath(env), ...namespace.readDatabasePaths()]
-        .flatMap(resolveSqliteDatabaseFilePaths)
-        .some((file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined) ||
-      readConfiguredTargets().some(({ path }) => hasSqliteArtifacts(path));
-    return (directory: string, _agentId?: string) => unavailable || hasSqliteArtifacts(directory);
+      [resolveOpenClawStateSqlitePath(env), ...namespace.readDatabasePaths()].some(
+        hasSqliteFileFamily,
+      ) ||
+      (agentDirectories &&
+        readConfiguredTargets().some((target) => hasSqliteArtifacts(target.path)));
+    return (pathname: string, _agentId?: string) =>
+      unavailable || (agentDirectories && hasSqliteArtifacts(pathname)) ? "unavailable" : undefined;
   }
-  const retainedDeletions = snapshot?.retainedDeletions ?? "unavailable";
-  if (retainedDeletions === "unavailable" || retainedDeletions.length === 0) {
-    return (_pathname: string, _agentId?: string) => retainedDeletions === "unavailable";
+  const retainedDeletions = snapshot?.retainedDeletions;
+  if (
+    !retainedDeletions ||
+    (retainedDeletions.status !== "present" &&
+      !(retainedDeletions.status === "unavailable" && retainedDeletions.known))
+  ) {
+    return (_pathname: string, _agentId?: string) =>
+      purpose === "maintenance" &&
+      (!retainedDeletions || retainedDeletions.status === "unavailable")
+        ? "unavailable"
+        : undefined;
   }
   const configured = readConfiguredTargets();
   return createAgentDatabaseDeletionClassifier({
     env,
     retainedDeletions,
     configuredAgentDatabaseTargets: configured,
-    artifactDirectories: namespace !== "database" ? configured : undefined,
+    artifactDirectories: agentDirectories ? configured : undefined,
     registeredAgentDatabases: snapshot?.registeredAgentDatabases ?? [],
   });
 }

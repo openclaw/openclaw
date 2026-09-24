@@ -2300,16 +2300,15 @@ describe("memory index", () => {
     }
   });
 
-  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
-    const cfg = createCfg({ vectorEnabled: true });
-    const manager = await getPersistentManager(cfg);
+  it("prepares the native vector connection after child retrieval and retires the legacy table", async () => {
+    const manager = await getPersistentManager(createCfg({ vectorEnabled: true }));
+    await manager.sync({ reason: "test", force: true });
+    await expect(manager.search("alpha")).resolves.not.toHaveLength(0);
+    expect(manager.status().vector?.storeAvailable).toBe(true);
     const db = Reflect.get(manager, "db") as DatabaseSync;
     db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const available = await manager.probeVectorStoreAvailability?.();
-    if (!available) {
-      return;
-    }
+    await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(true);
 
     expect(
       db

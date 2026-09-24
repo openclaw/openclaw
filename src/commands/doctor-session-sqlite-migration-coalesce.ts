@@ -1,3 +1,4 @@
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 /** Manifest-owned redirection of verified redundant archive references. */
 import {
   HISTORICAL_IMPORT_REASON,
@@ -8,8 +9,7 @@ import {
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
-} from "./doctor-session-sqlite-migration-run.js";
-import type { DoctorSessionSqliteIssue } from "./doctor-session-sqlite-types.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 
 /** Replace retired duplicate references without removing any run's rollback coverage. */
 export function coalesceSessionSqliteArchiveReferences(

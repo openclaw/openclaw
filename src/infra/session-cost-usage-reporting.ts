@@ -396,17 +396,6 @@ export async function loadSessionLogs(params: {
     }
   }
 
-  // Sort by timestamp and limit
-  if (boundedLimit) {
-    logs.sort((a, b) => a.timestamp - b.timestamp);
-    return logs.length > limit ? logs.slice(-limit) : logs;
-  }
-
-  // Return most recent logs
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
-  if (sortedLogs.length > limit) {
-    return sortedLogs.slice(-limit);
-  }
-
-  return sortedLogs;
+  logs.sort((a, b) => a.timestamp - b.timestamp);
+  return logs.length > limit ? logs.slice(-limit) : logs;
 }

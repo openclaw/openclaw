@@ -173,6 +173,8 @@ function config(url: string): OpenClawConfig {
     },
     tools: {
       profile: "coding",
+      codeMode: false,
+      toolSearch: false,
       allow: ["sessions_spawn", "exec"],
       exec: { security: "full", ask: "off" },
     },

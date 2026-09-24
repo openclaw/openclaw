@@ -108,6 +108,7 @@ type UsageCostPruneRow = {
 };
 
 export type UsageCostWorkerHostEffects = {
+  "refresh-session": { input: { sessionFile: string }; output: void };
   pricing: {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;

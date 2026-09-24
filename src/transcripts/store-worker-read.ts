@@ -12,6 +12,7 @@ import {
   TranscriptLibraryError,
 } from "./store-read.js";
 import {
+  readTranscriptCanonicalSessionRow,
   readTranscriptExportOwnership,
   readTranscriptExportPathCollisions,
   readTranscriptExportPathOwners,
@@ -42,6 +43,11 @@ export function executeTranscriptRead(
   const database = target.database.db;
   try {
     switch (command.type) {
+      case "transcripts.canonicalSessionRow":
+        return {
+          ok: true,
+          value: readTranscriptCanonicalSessionRow(database, command.input.params.selector),
+        };
       case "transcripts.readEntries":
         return {
           ok: true,

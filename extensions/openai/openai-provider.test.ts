@@ -1135,7 +1135,7 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
-  it.each(["gpt-5.4", "gpt-6-astra"])(
+  it.each(["gpt-5.4", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
     "maps discovered %s into a ChatGPT response model",
     async (modelId) => {
       const release = vi.fn(async () => undefined);
@@ -1325,7 +1325,7 @@ describe("buildOpenAIProvider", () => {
     });
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-6-astra");
+    expect(provider.models.filter((model) => model.id.startsWith("gpt-6-"))).toEqual([]);
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(release).toHaveBeenCalledOnce();
   });

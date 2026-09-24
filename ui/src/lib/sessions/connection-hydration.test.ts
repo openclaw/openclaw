@@ -280,10 +280,16 @@ describe("session connection hydration", () => {
         await sessions.refresh({ agentId, search: "selected", force: true });
         expect(sessions.state.agentId).toBe(agentId);
       }
-      snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
-      gatewayListener?.(snapshot);
-      resolveList(result);
-      await waitForFast(() => expect(listCalls).toBe(agentId === "work" ? 3 : 2));
+      vi.useFakeTimers();
+      try {
+        snapshot = { ...snapshot, selfUser: { id: "operator", name: "Operator" } };
+        gatewayListener?.(snapshot);
+        resolveList(result);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(listCalls).toBe(agentId === "work" ? 3 : 2);
+      } finally {
+        vi.useRealTimers();
+      }
 
       expect(
         request.mock.calls
@@ -440,7 +446,7 @@ describe("session connection hydration", () => {
       expect(sessions.state.error).toBeNull();
       expect(sessions.state.result).toBe(recoveredResult);
       expect(listCalls).toBe(2);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
         key: "agent:writer:linked",
         hasActiveRun: false,

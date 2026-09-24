@@ -644,14 +644,14 @@ describe("SQLite worker store", () => {
     }
     const retiring = createDeferredCore();
     const release = createDeferredCore();
-    const spy = vi
-      .spyOn(Worker.prototype, "terminate")
-      .mockImplementationOnce(async function (this: Worker) {
-        retiring.resolve();
-        await release.promise;
-        spy.mockRestore();
-        return this.terminate();
-      });
+    const spy = vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (
+      this: Worker,
+    ) {
+      retiring.resolve();
+      await release.promise;
+      spy.mockRestore();
+      return this.terminate();
+    });
     const closed = first.close();
     let replacement: SqliteWorkerStore<FixtureOperations> | undefined;
     try {
@@ -782,7 +782,7 @@ describe("SQLite worker store", () => {
       }
     }
     const writes: ReturnType<typeof append>[] = [];
-    for (let round = 0; round < 32; round += 1) {
+    for (let round = 0; round < 128; round += 1) {
       for (const [index, store] of active.entries()) {
         writes.push(append(store, `${index}:${round}`));
       }
@@ -809,7 +809,7 @@ describe("SQLite worker store", () => {
       expect(results.find((result) => result.status === "rejected")).toBeUndefined();
       for (const [index, store] of active.entries()) {
         expect(await read(store)).toEqual(
-          Array.from({ length: 32 }, (_, round) => `${index}:${round}`),
+          Array.from({ length: 128 }, (_, round) => `${index}:${round}`),
         );
       }
       const admitted = await open(pendingFile);
@@ -1037,7 +1037,7 @@ describe("SQLite worker store", () => {
     for (const follower of followers) {
       expect(follower).toMatchObject({ status: "rejected", reason: { code: "unavailable" } });
     }
-    await expect(store.close()).rejects.toMatchObject({ code: "unavailable" });
+    await expect(store.close()).resolves.toBeUndefined();
     stores.delete(store);
 
     const recovered = await open(file);

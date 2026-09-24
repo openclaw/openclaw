@@ -85,7 +85,8 @@ vi.mock("../screenshot.js", () => ({
   })),
 }));
 
-vi.mock("../../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   ensureMediaDir: vi.fn(async () => {}),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));

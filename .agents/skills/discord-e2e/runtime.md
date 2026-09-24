@@ -1,5 +1,9 @@
 # Discord runtime and recovery
 
+This page describes the existing QA Lab lane. The skill's separate
+[read-only readiness check](bot-api.md) starts no Gateway or event recorder and
+creates no Discord objects; it only needs to release its credential lease.
+
 ## Config and Gateway control
 
 The shared suite is the only Gateway/process and lease owner. A custom flow uses

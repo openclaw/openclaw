@@ -3,6 +3,79 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  agentTools: {
+    pluginSource: "Plugin",
+    channelSource: "Channel: {id}",
+    channel: "Channel",
+    builtIn: "Built-In",
+    plugin: "Plugin: {id}",
+    optional: "Optional",
+    inPreview: "Included in preview",
+    disabledByOverride: "Disabled by agent override.",
+    enabledByProfile: "Enabled by the current profile.",
+    enabledByOverride: "Enabled by agent override.",
+    notIncluded: "Not included in the current profile.",
+    overrideOff: "Override Off",
+    enabled: "Enabled",
+    overrideOn: "Override On",
+    profileOff: "Profile Off",
+    notListed: "Not listed",
+    otherAgent: "Other Agent",
+    title: "Tool access",
+    subtitle:
+      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+    enabledSummary: "{enabled}/{total} enabled.",
+    enableAll: "Enable All",
+    disableAll: "Disable All",
+    loadConfig: "Load the gateway config to adjust tool profiles.",
+    explicitAllowlist:
+      "This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.",
+    globalAllowlist:
+      "Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.",
+    loadingCatalog: "Loading runtime tool catalog…",
+    catalogFallback: "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    previewTitle: "Tool preview",
+    previewSubtitle:
+      "Based on saved session settings and discovered tools. Availability is checked when a run starts, and additional tools may become available then. Changes may take time to appear here; unsaved edits are not included. Session:",
+    noSession: "no session",
+    switchAgent: "Switch chat to this agent to view its tool preview.",
+    previewLoading: "Loading…",
+    previewUnavailable: "Unavailable",
+    previewNotLoaded: "Not loaded",
+    loadingPreview: "Loading tool preview…",
+    previewError: "Could not load the tool preview for this session.",
+    emptyPreview:
+      "No tools are listed in this preview. Run-specific tools may still become available.",
+    morePreviewTitle: "{count} more tools are listed in the groups below.",
+    morePreview: "+{count} more listed tools",
+    quickPresets: "Tool Presets",
+    catalogTitle: "Tool Catalog",
+    inherit: "Inherit",
+    profile: "Tool profile",
+    source: "Source",
+    listed: "Listed in preview",
+    status: "Status",
+    profileSourceAgent: "agent override",
+    profileSourceGlobal: "global default",
+    profileSourceDefault: "default",
+    statusSaving: "saving…",
+    statusUnsaved: "unsaved",
+    statusSaved: "saved",
+    toolPreview: "Tool preview",
+    more: "+{count} more",
+    toolsOne: "{count} Tool",
+    tools: "{count} Tools",
+    enabledToolsOne: "{count} Enabled Tool",
+    enabledTools: "{count} Enabled Tools",
+    listedToolsOne: "{count} Listed Tool",
+    listedTools: "{count} Listed Tools",
+    access: "Agent setting",
+    disableNamed: "Disable {name}",
+    enableNamed: "Enable {name}",
+    defaultPresets: "Default Presets",
+    previewVia: "Listed in preview via {source}.",
+    linkTool: "Link to This Tool",
+  },
   searchPage: {
     enabled: "Web search",
     advanced: "Advanced search settings",
@@ -672,15 +745,16 @@ const enSettings = {
       failedStep: "Failure details",
       viewDetails: "View details",
       recoveryActions: "Recovery",
+      diagnoseFailure: "Diagnose update",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
       reportOwnerRequired:
-        "Reporting requires a connected Gateway owner with administrator access.",
+        "Reporting requires a connected, identified user with administrator access.",
       reportResult: "Failure report",
       reportSubmitting: "Submitting report…",
       reportCreated: "GitHub issue created",
-      reportFallback: "GitHub CLI submission was unavailable. Use the prefilled issue link.",
+      reportFallback: "Review and submit the prefilled issue in your browser.",
       reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
       reportRetryable: "No GitHub issue submission was started. This report can be retried.",
       reportDuplicate: "This update attempt was already reported.",
@@ -778,33 +852,47 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
-      chromeExtensionOnMac: "Chrome on this Mac",
       chromeExtensionDetected: "Installed",
       chromeExtensionNotInstalled: "Not installed",
       chromeExtensionUnknown: "Status unavailable",
-      chromeExtensionChecking: "Checking installation…",
-      chromeExtensionCheckAgain: "Check again",
-      chromeExtensionRepair: "Repair Mac connection",
-      chromeExtensionRepairHint:
-        "The extension is installed. Repair the Mac connection to enable automatic pairing.",
       chromeExtensionEnableHint:
         "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
-      chromeExtensionStatusFailed:
-        "Could not check Chrome installation automatically. You can still run setup. Make sure the OpenClaw Mac app and CLI are up to date.",
       chromeExtensionStatusUnsupported:
         "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
-      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionStatusFailed:
+        "Could not check Chrome installation automatically. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
+      chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
-        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
-      chromeExtensionPreparing: "Preparing Chrome…",
-      chromeExtensionPending:
-        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
-      chromeExtensionStoreRequired:
-        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
-      chromeExtensionInstalled:
-        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+        "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Working on this device…",
+      chromeExtensionRefresh: "Refresh setup status",
+      chromeExtensionVerify: "Verify connection",
+      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTabsHint:
+        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+      chromeExtensionPhases: {
+        inspection_required: "Setup required on this device.",
+        preparing: "Preparing Chrome on this device.",
+        needs_browser_action: "Chrome needs your attention on this device.",
+        waiting_for_connection: "Connection has not been verified on this device.",
+        ready: "Extension connected on this device.",
+        blocked: "Setup is blocked on this device.",
+      },
+      chromeExtensionNextActions: {
+        none: "",
+        install: "Choose Set up Chrome on this device to prepare the native host.",
+        open_chrome:
+          "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
+        approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
+        install_from_store:
+          "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
+        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        repair_native_host: "Check the local CLI installation, then run setup again.",
+        unsupported:
+          "Automatic setup is unavailable on this host. Follow the extension documentation.",
+      },
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -1476,6 +1564,7 @@ const enSettings = {
 
 export const registerSettingsEnglish = Object.assign(
   () => {
+    Object.assign(en.agentTools, enSettings.agentTools);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;

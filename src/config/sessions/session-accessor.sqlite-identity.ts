@@ -10,7 +10,10 @@ import type { SessionEntry } from "./types.js";
 
 type SessionIdentityDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
 
-function toSessionIdentityTarget(entry: SessionEntry | undefined, sessionKeys: readonly string[]) {
+function toSessionIdentityTarget(
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
+  sessionKeys: readonly string[],
+) {
   const sessionId = normalizeOptionalString(entry?.sessionId);
   return { ...(sessionId ? { sessionId } : {}), sessionKeys };
 }
@@ -37,8 +40,8 @@ export function prepareCommittedSessionEntryRemovals(
 
 export function publishCommittedSessionIdentity(
   agentId: string,
-  previous: ReadonlyMap<string, SessionEntry>,
-  current: ReadonlyMap<string, SessionEntry>,
+  previous: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
+  current: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
 ): void {
   const currentKeysBySessionId = new Map<string, string[]>();
   for (const [sessionKey, entry] of current) {
@@ -89,10 +92,17 @@ export function publishCommittedSessionIdentity(
     const previousTarget = toSessionIdentityTarget(previousEntry, [sessionKey]);
     if (currentEntry) {
       const currentTarget = toSessionIdentityTarget(currentEntry, [sessionKey]);
-      if (previousTarget.sessionId !== currentTarget.sessionId) {
+      // Same-ID resets replace lifecycle ownership while retaining transcript identity.
+      const kind =
+        previousTarget.sessionId !== currentTarget.sessionId
+          ? "replace"
+          : previousEntry.lifecycleRevision !== currentEntry.lifecycleRevision
+            ? "reset"
+            : undefined;
+      if (kind) {
         emitSessionIdentityMutation({
           agentId,
-          kind: "replace",
+          kind,
           previous: previousTarget,
           current: currentTarget,
         });

@@ -280,7 +280,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) draft?: string;
   @property({ attribute: false }) focusComposer = false;
   @property({ attribute: false }) dashboardExpanded = false;
-  @property({ attribute: false }) routeFace: BoardFace = "chat";
+  @property({ attribute: false }) routeFace?: BoardFace;
   @property({ attribute: false }) onFaceChange?: (
     paneId: string,
     sessionKey: string,
@@ -345,7 +345,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
   );
-  protected readonly transcript = new ChatTranscriptController(this, {
+  protected readonly transcript = new ChatTranscriptController(this, () => this.paneId, {
+    visuallyPresented: () => this.visuallyPresented,
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && !this.state.chatFollowLocked,
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),

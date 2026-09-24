@@ -1,5 +1,28 @@
+diff --git a/dist/chunks/chunk.64OG2H45.js b/dist/chunks/chunk.64OG2H45.js
+index d73ee076101feff0950dd4abb2b3244ff5461992..16931b36519a72e082d903c837f394380bf30e2d 100644
+--- a/dist/chunks/chunk.64OG2H45.js
++++ b/dist/chunks/chunk.64OG2H45.js
+@@ -169,10 +169,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
 diff --git a/dist/chunks/chunk.BCXHEFKE.js b/dist/chunks/chunk.BCXHEFKE.js
-index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf4156ff4d920 100644
+index 01d9b3366bda44776cc7db51481c9b81be72d228..8d10dcf7075b76e9c0b06ff3fa83aff74aa6f371 100644
 --- a/dist/chunks/chunk.BCXHEFKE.js
 +++ b/dist/chunks/chunk.BCXHEFKE.js
 @@ -25,9 +25,6 @@ import {
@@ -125,7 +148,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
    }
    connectedCallback() {
      super.connectedCallback();
-@@ -148,43 +107,32 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -148,43 +107,33 @@ var WaTooltip = class extends WebAwesomeElement {
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -157,7 +180,9 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
 -    document.removeEventListener("keydown", this.handleDocumentKeyDown);
 -    document.removeEventListener("click", this.handleDocumentClick);
      unregisterDismissible(this);
-     this.eventController.abort();
+-    this.eventController.abort();
++    // Avoid retaining detached anchors in the default abort reason's stack.
++    this.eventController.abort(null);
 +    clearTimeout(this.hoverTimeout);
 +    this.openTransition = { open: false, promise: this.openTransition.promise };
 +    this.popup?.popup?.classList.remove("show-with-scale", "hide-with-scale");
@@ -178,7 +203,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
      clearTimeout(this.hoverTimeout);
-@@ -216,41 +164,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -216,41 +165,47 @@ var WaTooltip = class extends WebAwesomeElement {
      }
    }
    async handleOpenChange() {
@@ -259,7 +284,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -264,23 +218,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -264,23 +219,19 @@ var WaTooltip = class extends WebAwesomeElement {
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -296,7 +321,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
      }
      this.anchor = newAnchor;
    }
-@@ -290,26 +240,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -290,26 +241,19 @@ var WaTooltip = class extends WebAwesomeElement {
        this.popup.reposition();
      }
    }
@@ -332,7 +357,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
    }
    render() {
      return html`
-@@ -332,7 +275,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -332,7 +276,7 @@ var WaTooltip = class extends WebAwesomeElement {
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -341,7 +366,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
            <slot></slot>
          </div>
        </wa-popup>
-@@ -384,7 +327,7 @@ __decorateClass([
+@@ -384,7 +328,7 @@ __decorateClass([
    state()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -350,7 +375,7 @@ index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf415
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -392,9 +335,6 @@ __decorateClass([
+@@ -392,9 +336,6 @@ __decorateClass([
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -2007,7 +2032,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..45902a28071c6a90dfeb29b8667f0ac3
        Object.assign(item.submenuElement.style, {
          left: `${x2}px`,
 diff --git a/dist-cdn/chunks/chunk.A73F6EP3.js b/dist-cdn/chunks/chunk.A73F6EP3.js
-index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb05738657020 100644
+index 598039ac639bfa2343778fbe65212a4ce2a54845..fd09cf9c4434da4ac43450ca63304ae85244ef91 100644
 --- a/dist-cdn/chunks/chunk.A73F6EP3.js
 +++ b/dist-cdn/chunks/chunk.A73F6EP3.js
 @@ -25,9 +25,6 @@ import {
@@ -2133,7 +2158,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
    }
    connectedCallback() {
      super.connectedCallback();
-@@ -155,43 +114,32 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -155,43 +114,33 @@ var WaTooltip = class extends WebAwesomeElement {
        if (this.eventController.signal.aborted) {
          this.eventController = new AbortController();
        }
@@ -2165,7 +2190,9 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
 -    document.removeEventListener("keydown", this.handleDocumentKeyDown);
 -    document.removeEventListener("click", this.handleDocumentClick);
      unregisterDismissible(this);
-     this.eventController.abort();
+-    this.eventController.abort();
++    // Avoid retaining detached anchors in the default abort reason's stack.
++    this.eventController.abort(null);
 +    clearTimeout(this.hoverTimeout);
 +    this.openTransition = { open: false, promise: this.openTransition.promise };
 +    this.popup?.popup?.classList.remove("show-with-scale", "hide-with-scale");
@@ -2186,7 +2213,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
    /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
    lightDismiss() {
      clearTimeout(this.hoverTimeout);
-@@ -223,41 +171,47 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -223,41 +172,47 @@ var WaTooltip = class extends WebAwesomeElement {
      }
    }
    async handleOpenChange() {
@@ -2267,7 +2294,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
    }
    handleForChange() {
      const rootNode = this.getRootNode?.();
-@@ -271,23 +225,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -271,23 +226,19 @@ var WaTooltip = class extends WebAwesomeElement {
      }
      this.dismissedByPress = false;
      const { signal } = this.eventController;
@@ -2304,7 +2331,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
      }
      this.anchor = newAnchor;
    }
-@@ -297,26 +247,19 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -297,26 +248,19 @@ var WaTooltip = class extends WebAwesomeElement {
        this.popup.reposition();
      }
    }
@@ -2340,7 +2367,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
    }
    render() {
      return x`
-@@ -339,7 +282,7 @@ var WaTooltip = class extends WebAwesomeElement {
+@@ -339,7 +283,7 @@ var WaTooltip = class extends WebAwesomeElement {
          hover-bridge
          .anchor=${this.anchor}
        >
@@ -2349,7 +2376,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
            <slot></slot>
          </div>
        </wa-popup>
-@@ -391,7 +334,7 @@ __decorateClass([
+@@ -391,7 +335,7 @@ __decorateClass([
    r()
  ], WaTooltip.prototype, "anchor", 2);
  __decorateClass([
@@ -2358,7 +2385,7 @@ index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb057
  ], WaTooltip.prototype, "handleOpenChange", 1);
  __decorateClass([
    watch("for")
-@@ -399,9 +342,6 @@ __decorateClass([
+@@ -399,9 +343,6 @@ __decorateClass([
  __decorateClass([
    watch(["distance", "placement", "skidding"])
  ], WaTooltip.prototype, "handleOptionsChange", 1);
@@ -2418,6 +2445,29 @@ index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc059
  }
  function parseDuration(duration) {
    duration = duration.toString().toLowerCase();
+diff --git a/dist-cdn/chunks/chunk.QERYKBRG.js b/dist-cdn/chunks/chunk.QERYKBRG.js
+index dce611cc655099d3adf42274a8dbeb4ba883b575..4d75dae5218a5cdaa4be57233bcb261ed268f8e2 100644
+--- a/dist-cdn/chunks/chunk.QERYKBRG.js
++++ b/dist-cdn/chunks/chunk.QERYKBRG.js
+@@ -1643,10 +1643,17 @@ var WaPopup = class extends WebAwesomeElement {
+     if (!this.anchorEl || !this.active || !this.isConnected) {
+       return;
+     }
++    this.cleanup?.();
++    this.cleanup = void 0;
+     this.popup?.showPopover?.();
+-    this.cleanup = autoUpdate(this.anchorEl, this.popup, () => {
++    const cleanup = autoUpdate(this.anchorEl, this.popup, () => {
+       this.reposition();
+     });
++    if (!this.active || !this.isConnected) {
++      cleanup();
++      return;
++    }
++    this.cleanup = cleanup;
+   }
+   async stop() {
+     return new Promise((resolve) => {
 diff --git a/dist-cdn/chunks/chunk.VVUBGO75.js b/dist-cdn/chunks/chunk.VVUBGO75.js
 index 79243983dd4273713e7d1cc5d7e9a7b103cb787c..b7007d1129565982cac88ea9878d78e47072e340 100644
 --- a/dist-cdn/chunks/chunk.VVUBGO75.js

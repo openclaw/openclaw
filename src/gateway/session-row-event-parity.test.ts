@@ -12,6 +12,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -178,9 +179,42 @@ it("delivers nested event rows identical to the full list for each viewer and cl
             label: null,
           });
           expect(frame.payload.session).toEqual(expected[index]);
+          expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
           expect(frame.payload.message).toEqual(source.message);
         }
         if (event === "session.message") {
+          for (const publisher of ["non-enumerable", "absent proxy"]) {
+            const envelope = { ...source };
+            Object.defineProperty(envelope, "childSessions", {
+              enumerable: false,
+              configurable: true,
+              value: [childKey],
+            });
+            const payload =
+              publisher === "non-enumerable"
+                ? envelope
+                : new Proxy(envelope, {
+                    ownKeys(target) {
+                      return Reflect.ownKeys(target).filter(
+                        (property) => property !== "childSessions",
+                      );
+                    },
+                    getOwnPropertyDescriptor(target, property) {
+                      if (property === "childSessions") {
+                        throw new Error("unexpected source field probe");
+                      }
+                      return Reflect.getOwnPropertyDescriptor(target, property);
+                    },
+                  });
+            const previousDeliveries = peers.map((peer) => peer.send.mock.calls.length);
+            connection.broadcast(event, payload);
+            for (const [index, peer] of peers.entries()) {
+              expect(peer.send).toHaveBeenCalledTimes(previousDeliveries[index]! + 1);
+              expect(JSON.parse(peer.send.mock.lastCall![0]).payload).not.toHaveProperty(
+                "childSessions",
+              );
+            }
+          }
           connection.broadcast(event, {
             ...source,
             toJSON(property: string) {
@@ -254,6 +288,20 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       }
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
+      prepares.mockRestore();
+      exec.mockRestore();
+      for (const { client } of peers) {
+        connection.sessionEventSubscribers.subscribe(client.connId);
+      }
+      await createLifecycleEventBroadcastHandler(connection)({
+        sessionKey: key,
+        agentId: "main",
+        reason: "update",
+      });
+      for (const [index, peer] of peers.entries()) {
+        const frame = JSON.parse(peer.send.mock.lastCall![0]);
+        expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
+      }
     } finally {
       detach();
       connection.mentionInbox.dispose();

@@ -13,6 +13,7 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 /** Composes retained discovery with current configured metadata and runtime capabilities. */
 export function createPreparedModelCatalogProjection(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
+  normalizeProvider: (provider: string) => string;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
@@ -35,6 +36,16 @@ export function createPreparedModelCatalogProjection(params: {
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
     );
+    // Native discovery cannot replace the authentication facts of an API provider.
+    const apiProviders = new Set(
+      projected.providerOutcomes?.map(({ provider }) => params.normalizeProvider(provider)),
+    );
+    const nativeOutcomes = Object.values(catalog.nativeProviderOutcomes ?? {})
+      .flat()
+      .filter(({ provider }) => !apiProviders.has(params.normalizeProvider(provider)));
+    if (nativeOutcomes.length) {
+      projected.providerOutcomes = [...(projected.providerOutcomes ?? []), ...nativeOutcomes];
+    }
     const keyOf = createModelCatalogIdentityKeyResolver();
     projected.entries = dedupeByKey([...projected.entries, ...current.entries], keyOf);
     projected.routeVariants = dedupeByKey(

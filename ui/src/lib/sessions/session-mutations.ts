@@ -241,6 +241,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
       patchParams.archived !== undefined ||
+      patchParams.boardFace !== undefined ||
       patchParams.boardPresentation !== undefined
         ? resolvePendingConversation(patchSnapshot, normalizedKey, options.agentId)
         : null;

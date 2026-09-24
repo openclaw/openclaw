@@ -42,6 +42,7 @@ import {
 import { settleNodeWorkerSupervisorClose } from "./node-worker-supervisor-close.js";
 import {
   createNodeWorkerObservedTerminal,
+  launchWithNodeWorkerPreparedWorkspace,
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
@@ -210,17 +211,14 @@ class NodeWorkerSupervisor {
     }
     const abort = new AbortController();
     const admissionSignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
-    const workspace = this.workspace.acquirePreparedWorkspace({
-      ...binding,
-      sessionKey: input.sessionKey,
+    const done = launchWithNodeWorkerPreparedWorkspace({
+      workspace: this.workspace,
+      request: { ...binding, sessionKey: input.sessionKey },
+      signal: admissionSignal,
+      isCurrent: () => !this.closed && !this.stoppingEnvironments.has(key),
+      launch: (homeDir) =>
+        this.launchAdmitted(input, descriptor, claimInput, admissionSignal, homeDir),
     });
-    const done = this.launchAdmitted(
-      input,
-      descriptor,
-      claimInput,
-      admissionSignal,
-      workspace?.homeDir,
-    ).finally(() => workspace?.release());
     const pending = {
       binding,
       launchId: input.launchId,

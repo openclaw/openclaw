@@ -368,6 +368,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
+    // LanceDB's serializer and plugin schemas must share Arrow's CJS type identity.
+    "apache-arrow",
     "jimp",
     "matrix-js-sdk",
     "prism-media",
@@ -387,10 +389,10 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  // Arrow's relative module augmentations must stay beside their package modules.
+  // Keep dependency declarations beside their package modules.
   return (
     shouldNeverBundleDependency(id) ||
-    ["zod", "apache-arrow", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
+    ["zod", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
   );
 }
 
@@ -720,6 +722,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
+    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }

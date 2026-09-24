@@ -33,7 +33,19 @@ Hidden retained chats defer command and model metadata refreshes until you retur
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
+
+While an agent works, completed commentary or preambles appear inline in the
+conversation when the model and runtime provide them. Narration keeps its
+formatting and position alongside tool activity; the working indicator remains
+a separate status for execution, startup, or approval. **Keep commentary** in
+the chat view menu controls whether commentary stays visible after the run,
+not whether the active run’s narration survives a history refresh. Completed
+dashboard turns collapse their narration and tool activity under **Worked for …**
+above the answer. Expanding it restores the sequence with the existing tool-call
+groups. When no run duration is available, the heading reads **Worked**.
 
 Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
 and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
@@ -173,9 +185,11 @@ an emoji or generated face appears only when no image is configured or the image
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events
-and Gateway reconnects. Continuous events share a paced follow-up refresh: after
-an automatic read, the next waits three times its duration, bounded between one
-and 15 seconds. Reconnects and explicit refreshes bypass that delay. When both are visible, they share one activity window and
+and Gateway reconnects. Reusing cached ancestry for the selected session does not
+trigger another list read. Events collect in a fixed five-second window before an
+automatic refresh. After an automatic read, the next waits three times its duration,
+bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
+bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.

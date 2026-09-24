@@ -81,7 +81,7 @@ describe("Code Mode configuration", () => {
   });
 
   it("resolves object config defaults", () => {
-    expect(resolveCodeModeConfig().executor).toBe("node");
+    expect(resolveCodeModeConfig()).toMatchObject({ enabled: "auto", executor: "node" });
     expect(resolveCodeModeConfig({ tools: { codeMode: true } })).toMatchObject({
       enabled: true,
       executor: "node",
@@ -190,7 +190,7 @@ describe("Code Mode configuration", () => {
       } as never,
       "ops",
     );
-    expect(configuredAgent.enabled).toBe(false);
+    expect(configuredAgent.enabled).toBe("auto");
     expect(configuredAgent.timeoutMs).toBe(2345);
   });
 });

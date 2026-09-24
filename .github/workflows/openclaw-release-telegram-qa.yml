@@ -2165,16 +2165,11 @@ jobs:
             exit 1
           fi
 
-          for attempt in 1 2; do
-            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
-              exit 0
-            fi
-            terminate_sut_uid
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-          done
+          if run_qa_attempt "attempt-1" "${remaining_scenarios[@]}"; then
+            exit 0
+          fi
+          terminate_sut_uid
+          exit 1
 
       - name: Terminate isolated Telegram SUT
         id: terminate_sut

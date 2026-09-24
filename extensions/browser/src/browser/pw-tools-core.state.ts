@@ -51,7 +51,12 @@ async function withPageEmulationCdpClient<T>(params: {
   return await params.run(session.send.bind(session), session);
 }
 
-export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {
+export async function setViewportSizeOnPage(
+  page: Page,
+  state: PageState,
+  viewport: DeviceSize,
+  assertCurrent?: InteractionTargetOptions["assertCurrent"],
+) {
   const emulation = state.emulation;
   if (
     emulation?.metricsOwner &&
@@ -62,6 +67,11 @@ export async function setViewportSizeOnPage(page: Page, state: PageState, viewpo
     // Playwright writes, or reapplying the same device silently skips its DPR/screen.
     await emulation.metricsOwner.session.send("Emulation.clearDeviceMetricsOverride");
     delete emulation.metricsOwner;
+  }
+  // Clearing an earlier metrics owner can yield; recheck before the next native effect.
+  const assertion = assertInteractionCurrent({ assertCurrent });
+  if (assertion) {
+    await assertion;
   }
   await page.setViewportSize(viewport);
 }

@@ -1,4 +1,3 @@
-// Telegram polling restart policy stays shared by the session and focused tests.
 import { computeBackoff } from "openclaw/plugin-sdk/runtime-env";
 
 const TELEGRAM_POLL_RESTART_POLICY = {

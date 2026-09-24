@@ -368,6 +368,18 @@ async function runWorkboardDispatch(
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
     let persistWorkspaceAccess: boolean;
+    const assertRestrictedTarget = (root: string) =>
+      assertRestrictedWorkboardTarget({
+        root,
+        agentId: card.agentId,
+        sessionKey,
+        modelProvider: params.options?.provider,
+        modelId: params.options?.model,
+        resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
+        worktrees: params.worktrees,
+      });
+    // Preflight failures leave the card unclaimed; keep them outside the
+    // claim and launch compensation boundary below.
     try {
       ({ workspaceAccess, targetWorkspace, persistWorkspaceAccess } =
         await resolveDispatchWorkspaceAccess({
@@ -375,47 +387,21 @@ async function runWorkboardDispatch(
           currentAccess: params.options?.workspaceAccess,
           resolveAgentWorkspace: params.options?.resolveAgentWorkspace,
         }));
-    } catch (error) {
-      startFailures.push({
-        cardId: card.id,
-        title: card.title,
-        error: formatErrorMessage(error),
-      });
-      continue;
-    }
-    if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
-      if (!workspaceAccess.unrestricted) {
-        if (!targetWorkspace) {
-          startFailures.push({
-            cardId: card.id,
-            title: card.title,
-            error: "target agent workspace is unavailable for restricted dispatch",
-          });
-          continue;
-        }
-        try {
+      if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
+        if (!workspaceAccess.unrestricted) {
+          if (!targetWorkspace) {
+            startFailures.push({
+              cardId: card.id,
+              title: card.title,
+              error: "target agent workspace is unavailable for restricted dispatch",
+            });
+            continue;
+          }
           implicitWorkspaceCwd = targetWorkspace;
           await assertCanonicalWorkboardRootAccess(implicitWorkspaceCwd, workspaceAccess);
-          await assertRestrictedWorkboardTarget({
-            root: implicitWorkspaceCwd,
-            agentId: card.agentId,
-            sessionKey,
-            modelProvider: params.options?.provider,
-            modelId: params.options?.model,
-            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-            worktrees: params.worktrees,
-          });
-        } catch (error) {
-          startFailures.push({
-            cardId: card.id,
-            title: card.title,
-            error: formatErrorMessage(error),
-          });
-          continue;
+          await assertRestrictedTarget(implicitWorkspaceCwd);
         }
-      }
-    } else {
-      try {
+      } else {
         const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
           requestedWorkspace,
           workspaceAccess,
@@ -429,24 +415,16 @@ async function runWorkboardDispatch(
         }
         if (canonicalSourcePath && !workspaceAccess.unrestricted) {
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
-          await assertRestrictedWorkboardTarget({
-            root: canonicalSourcePath,
-            agentId: card.agentId,
-            sessionKey,
-            modelProvider: params.options?.provider,
-            modelId: params.options?.model,
-            resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-            worktrees: params.worktrees,
-          });
+          await assertRestrictedTarget(canonicalSourcePath);
         }
-      } catch (error) {
-        startFailures.push({
-          cardId: card.id,
-          title: card.title,
-          error: formatErrorMessage(error),
-        });
-        continue;
       }
+    } catch (error) {
+      startFailures.push({
+        cardId: card.id,
+        title: card.title,
+        error: formatErrorMessage(error),
+      });
+      continue;
     }
     try {
       const claimed = await params.store.claim(
@@ -478,15 +456,7 @@ async function runWorkboardDispatch(
       });
       const runCwd = materialized.cwd ?? implicitWorkspaceCwd;
       if (runCwd && !workspaceAccess.unrestricted) {
-        await assertRestrictedWorkboardTarget({
-          root: runCwd,
-          agentId: card.agentId,
-          sessionKey,
-          modelProvider: params.options?.provider,
-          modelId: params.options?.model,
-          resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-          worktrees: params.worktrees,
-        });
+        await assertRestrictedTarget(runCwd);
       }
       materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {

@@ -15,10 +15,36 @@ import { expect, it } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { formatShimResult, withShimFixture } from "./direct-run-entrypoints.test-support.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+const preparedRunnerModules = [
+  [
+    new URL("../../scripts/run-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode),
+  ],
+  [
+    new URL("../../scripts/watch-node.mts", import.meta.url),
+    resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode),
+  ],
+] as const;
+
+function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []) {
+  const modules: Array<readonly [URL, URL]> = [...preparedRunnerModules];
+  for (const implementation of implementations) {
+    // These generated fixtures are already JavaScript; prepare their bytes before the guard.
+    const prepared = `${implementation}.mjs`;
+    copyFileSync(implementation, prepared);
+    modules.push([pathToFileURL(implementation), pathToFileURL(prepared)]);
+  }
+  return preparedScriptWrapperEnv(modules, env);
+}
 
 it.runIf(process.platform !== "win32")(
   "stops gateway watch when a compile-cache respawn child dies from a signal",
@@ -113,6 +139,13 @@ else process.exit(outcome);
       delete env.NODE_OPTIONS;
       delete env.NODE_DISABLE_COMPILE_CACHE;
       delete env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED;
+      Object.assign(
+        env,
+        prepareRunnerEnv(env, [
+          implementationPath,
+          path.join(checkoutRoot, "scripts/watch-node.mts"),
+        ]),
+      );
       let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const command = runNodeScript([...nodeArgs, watchWrapper, "gateway"], env, 10_000, {
         cwd: checkoutRoot,
@@ -193,7 +226,7 @@ it.runIf(process.platform !== "win32").each(["runner", "watch"] as const)(
       mode === "watch" ? "watch-node.mjs" : "run-node.mjs",
     );
     let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-    const command = runNodeScript([entrypoint, "gateway"], env, 10_000, {
+    const command = runNodeScript([entrypoint, "gateway"], prepareRunnerEnv(env), 10_000, {
       cwd: checkout,
       onReady(child) {
         child.once("exit", (code, signal) => {
@@ -206,7 +239,14 @@ it.runIf(process.platform !== "win32").each(["runner", "watch"] as const)(
     );
     await runQaGatewayFixture(
       async () => {
-        const worker = await waitForPidFile(path.join(root, "worker.pid"), 5_000);
+        const worker = await Promise.race([
+          waitForPidFile(path.join(root, "worker.pid"), 5_000),
+          command.then((result) => {
+            throw new Error(
+              `Native ${mode} exited before its worker started: ${formatShimResult(result)}`,
+            );
+          }),
+        ]);
         expect(isProcessAlive(worker)).toBe(true);
         writeFileSync(path.join(root, "terminate"), "terminate");
         const result = await command;
@@ -289,7 +329,11 @@ else process.exit(outcome);
         ),
       };
       delete env.NODE_OPTIONS;
-      const command = runNode([wrapperPath], env, checkoutRoot);
+      const command = runNode(
+        [wrapperPath],
+        prepareRunnerEnv(env, [implementationPath]),
+        checkoutRoot,
+      );
       try {
         const childPid = await waitForPidFile(childPidPath, 5_000);
         const wrapperPid = await waitForPidFile(wrapperPidPath, 5_000);

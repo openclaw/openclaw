@@ -6,6 +6,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import {
+  assertWorkshopLegacyImported,
+  assertWorkshopLegacyWarning,
+  captureWorkshopLegacyState,
+  seedWorkshopLegacyProposals,
+} from "./workshop-legacy-proposals.mjs";
 
 const INDEX = "idx_skill_workshop_collection_reviews_workspace_time";
 const INDEX_SQL = `CREATE INDEX ${INDEX} ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)`;
@@ -205,17 +211,81 @@ function observeProcess() {
   } catch {
     // Missing identity rejects the evidence without changing the observed CLI.
   }
+  const legacyFixture = process.env.OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE;
+  const doctorResultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+  let malformedAtStart;
+  let legacySeed;
+  let legacyAtStart;
+  let startupCaptureError;
+  try {
+    malformedAtStart = hasMalformedWorkshopIndex(databasePath(stateDir));
+    if (legacyFixture && fs.existsSync(legacyFixture)) {
+      legacySeed = readJson(legacyFixture);
+      if (!malformedAtStart) {
+        legacyAtStart = captureWorkshopLegacyState(stateDir, legacySeed);
+      }
+    }
+  } catch (error) {
+    startupCaptureError = String(error);
+  }
   const evidence = {
     role,
     pid: process.pid,
     parentPid: process.ppid,
     identity,
     updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1",
-    malformedAtStart: hasMalformedWorkshopIndex(databasePath(stateDir)),
+    malformedAtStart,
+    ...(legacyAtStart ? { legacyAtStart } : {}),
+    ...(startupCaptureError !== undefined ? { startupCaptureError } : {}),
   };
   const filename = path.join(observations, `workshop-process-${process.pid}.json`);
-  writeJson(filename, evidence);
-  process.once("exit", (exitCode) => writeJson(filename, { ...evidence, exitCode }));
+  try {
+    writeJson(filename, evidence);
+  } catch {
+    // The exit observer can still persist the captured facts if artifact storage recovers.
+  }
+  process.once("exit", (exitCode) => {
+    let legacyExit;
+    if (role === "doctor" && legacySeed) {
+      try {
+        legacyExit = {
+          legacyAtExit: captureWorkshopLegacyState(stateDir, legacySeed),
+          ...(doctorResultPath
+            ? { doctorResultAtExit: readWorkshopDoctorResult(doctorResultPath) }
+            : {}),
+        };
+      } catch (error) {
+        legacyExit = { legacyExitCaptureError: String(error) };
+      }
+    }
+    try {
+      writeJson(filename, { ...evidence, exitCode, ...legacyExit });
+    } catch {
+      // Missing exit evidence rejects qualification without changing the observed CLI exit.
+    }
+  });
+}
+
+function readWorkshopDoctorResult(filename) {
+  assert(path.isAbsolute(filename), "Doctor IPC path must be absolute");
+  assert.match(
+    path.basename(filename),
+    /^openclaw-update-doctor-\d+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/iu,
+  );
+  const stat = fs.lstatSync(filename);
+  assert(stat.isFile() && stat.size <= 256 * 1024, "Invalid Doctor IPC file");
+  const bytes = fs.readFileSync(filename);
+  assert(bytes.length <= 256 * 1024, "Doctor IPC exceeds observation limit");
+  const result = JSON.parse(bytes.toString("utf8"));
+  assert(["ok", "advisory"].includes(result.status), "Doctor IPC did not report success");
+  const warnings = result.warnings ?? [];
+  assert(
+    Array.isArray(warnings) &&
+      warnings.length <= 32 &&
+      warnings.every((warning) => typeof warning === "string" && warning.length <= 500),
+    "Invalid Doctor IPC warnings",
+  );
+  return { path: filename, sha256: sha256(bytes), status: result.status, warnings };
 }
 
 function processWitness(observations, identity, expected) {
@@ -232,6 +302,7 @@ function processWitness(observations, identity, expected) {
     (entry) =>
       entry.identity?.version === identity.version &&
       entry.identity?.buildInfoSha256 === identity.buildInfoSha256 &&
+      entry.startupCaptureError === undefined &&
       Object.entries(expected).every(([key, value]) => entry[key] === value) &&
       receipts.some(
         (receipt) =>
@@ -332,7 +403,34 @@ export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations,
     malformedAtStart: true,
     updateInProgress: false,
   });
-  const repair = { status: "explicit-doctor-repaired", doctor };
+  let legacy;
+  let legacyWarning;
+  if (
+    stage === "candidate" &&
+    fs.existsSync(path.join(artifactRoot, "workshop-legacy-seeded.json"))
+  ) {
+    const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
+    assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
+    legacy = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
+    assert.deepEqual(
+      legacy,
+      readJson(path.join(artifactRoot, "workshop-recovered-upgrade.json")).legacy.after,
+      "Second candidate Doctor changed imported or recoverable Workshop state",
+    );
+    assert.deepEqual(
+      captureWorkshopLegacyState(stateDir, seeded),
+      legacy,
+      "Workshop state changed after second Doctor exit",
+    );
+    legacyWarning = assertWorkshopLegacyWarning(seeded, [
+      fs.readFileSync(path.join(artifactRoot, "doctor.log"), "utf8"),
+    ]);
+  }
+  const repair = {
+    status: "explicit-doctor-repaired",
+    doctor,
+    ...(legacy ? { legacy, legacyWarning } : {}),
+  };
   writeJson(path.join(artifactRoot, `workshop-${stage}-doctor.json`), repair);
   return repair;
 }
@@ -357,7 +455,27 @@ export function assertWorkshopRecoveredUpgrade(stateDir, artifactRoot, observati
     malformedAtStart: false,
     updateInProgress: true,
   });
-  const upgraded = { status: "upgraded-after-explicit-repair", updater, doctor };
+  const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
+  assert.deepEqual(
+    updater.legacyAtStart,
+    seeded.before,
+    "Published updater did not receive original legacy sidecars",
+  );
+  assert.deepEqual(
+    doctor.legacyAtStart,
+    seeded.before,
+    "Candidate Doctor did not receive original legacy sidecars",
+  );
+  assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
+  const after = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
+  assert.deepEqual(
+    captureWorkshopLegacyState(stateDir, seeded),
+    after,
+    "Workshop state changed after candidate Doctor exit",
+  );
+  const warning = assertWorkshopLegacyWarning(seeded, doctor.doctorResultAtExit?.warnings);
+  const legacy = { seeded, after, warning };
+  const upgraded = { status: "upgraded-after-explicit-repair", updater, doctor, legacy };
   writeJson(path.join(artifactRoot, "workshop-recovered-upgrade.json"), upgraded);
   return upgraded;
 }
@@ -373,6 +491,12 @@ export function completeWorkshopRecovery(stateDir, artifactRoot) {
   assert.equal(baselineDoctor.status, "explicit-doctor-repaired");
   assert.equal(upgrade.status, "upgraded-after-explicit-repair");
   assert.equal(candidateDoctor.status, "explicit-doctor-repaired");
+  assert.deepEqual(
+    candidateDoctor.legacy,
+    upgrade.legacy.after,
+    "Missing candidate Doctor idempotence evidence for the imported legacy proposals",
+  );
+  assert.equal(candidateDoctor.legacyWarning.warning, upgrade.legacy.warning.warning);
   const result = { firstAttempt, baselineDoctor, upgrade, candidateDoctor };
   writeJson(path.join(artifactRoot, "workshop-doctor-recovery.json"), result);
   return result;
@@ -406,6 +530,8 @@ if (direct) {
     captureWorkshopCandidate(first, artifacts, second);
   } else if (mode === "seed") {
     seedWorkshopIndex(stateDir, artifacts, first);
+  } else if (mode === "seed-legacy") {
+    seedWorkshopLegacyProposals(stateDir, artifacts);
   } else if (mode === "refusal") {
     assertWorkshopUpdateRefusal(stateDir, artifacts, first, second, Number(third));
   } else if (mode === "doctor") {

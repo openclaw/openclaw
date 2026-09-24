@@ -1,5 +1,6 @@
 /** Command for removing one saved model auth profile. */
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -33,19 +34,6 @@ import { resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 const MISSING_CONFIG_VALUE = Symbol("missing-config-value");
 
-function asConfigRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    value === MISSING_CONFIG_VALUE ||
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value)
-  ) {
-    return undefined;
-  }
-  // SAFETY: The branch proves this is a non-null, non-array object.
-  return value as Record<string, unknown>;
-}
-
 function restoreConfigMutationValue(current: unknown, before: unknown, after: unknown): unknown {
   // Restore only cleanup-owned values that no later config writer changed.
   if (isDeepStrictEqual(before, after)) {
@@ -54,9 +42,9 @@ function restoreConfigMutationValue(current: unknown, before: unknown, after: un
   if (isDeepStrictEqual(current, after)) {
     return before;
   }
-  const currentRecord = asConfigRecord(current);
-  const beforeRecord = asConfigRecord(before);
-  const afterRecord = asConfigRecord(after);
+  const currentRecord = asOptionalRecord(current);
+  const beforeRecord = asOptionalRecord(before);
+  const afterRecord = asOptionalRecord(after);
   if (!currentRecord || !beforeRecord || !afterRecord) {
     return current;
   }

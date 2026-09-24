@@ -208,6 +208,8 @@ describe("registerPreActionHooks", () => {
   });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
+    // A reused worker may already have the CLI title, which needs no setter call.
+    observedProcessTitle = "node";
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
@@ -218,7 +220,8 @@ describe("registerPreActionHooks", () => {
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw");
+    expect(processTitleSetSpy).not.toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({

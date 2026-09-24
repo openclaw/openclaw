@@ -1,14 +1,23 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { projectSessionResultRows, reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
+import {
+  projectSessionResultRows,
+  readSessionChangedEvent,
+  reconcileSessionHistory,
+} from "../../lib/sessions/reconcile.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
+import { replayPendingChatAbort } from "./run-lifecycle.ts";
 
 function applyObservedChatSessionRow(
   state: ChatPageHost,
@@ -85,10 +94,17 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
+
   private sessionObservation: {
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
+
+  protected resourceSessionObservation(): SessionRowObservation | null {
+    const binding = this.sessionObservation;
+    return binding?.matchesPane() && binding.observation?.isCurrent() ? binding.observation : null;
+  }
 
   protected retireSessionObservation() {
     const previous = this.sessionObservation;
@@ -114,6 +130,13 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (previous?.matchesPane() && previous.observation?.isCurrent()) {
       return;
     }
+    // Unidentified live content keeps its observed incarnation across metadata rebinding.
+    const retainedTranscriptSessionId =
+      state.chatRunId ||
+      state.chatStream != null ||
+      getChatSessionProjection(state).entries.some((entry) => !entry.pending)
+        ? previous?.observation?.sessionId
+        : null;
     this.retireSessionObservation();
     const binding: NonNullable<ChatPaneSessionObservation["sessionObservation"]> = {
       matchesPane: () =>
@@ -124,38 +147,116 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         sessions.isConnectionScopeCurrent(scope),
       observation: null,
     };
-    const ownsPane = () =>
-      this.sessionObservation === binding && state.connected && binding.matchesPane();
+    const ownsPaneScope = () => state.connected && binding.matchesPane();
+    const ownsPane = () => this.sessionObservation === binding && ownsPaneScope();
     this.sessionObservation = binding;
     binding.observation = sessions.observeRow(
       { key, agentId },
-      (row) => {
-        if (
-          ownsPane() &&
-          (row !== null || binding.observation?.hasObserved) &&
-          applyObservedChatSessionRow(state, row, binding.observation?.sessionId)
-        ) {
-          this.requestUpdate();
+      (row, notification) => {
+        if (ownsPane() && (row !== null || binding.observation?.hasObserved)) {
+          const pending = state.pendingAbort;
+          // A resolved absence retires this target; a row still loading keeps its intent.
+          if (
+            !row &&
+            pending &&
+            uiConversationMatches(state, pending.sessionKey, key, agentId, pending.agentId)
+          ) {
+            state.pendingAbort = null;
+          }
+          if (applyObservedChatSessionRow(state, row, binding.observation?.sessionId)) {
+            this.requestUpdate();
+          }
+          if (state.pendingAbort) {
+            void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+          }
         }
-        if (ownsPane() && binding.observation && !binding.observation.isCurrent()) {
+        // Apply the retired row first so deletion cannot survive the replacement binding.
+        if (
+          !notification?.eventPending &&
+          ownsPane() &&
+          binding.observation &&
+          !binding.observation.isCurrent()
+        ) {
           this.synchronizeSessionObservation();
         }
       },
       {
+        onInvalidate: (reason) => {
+          if (ownsPane()) {
+            if (reason === "runner-availability") {
+              this.activeSessionResources.invalidate();
+              this.requestUpdate();
+              return;
+            }
+            this.activeSessionResources.reconcileObservation({
+              requestUpdate: () => this.requestUpdate(),
+              updated: () => this.updateComplete,
+            });
+          }
+        },
         onEvent: (event, result) => {
           if (!ownsPane()) {
             return;
           }
-          if (binding.observation && !binding.observation.isCurrent()) {
+          if (result.generationRejected) {
             this.synchronizeSessionObservation();
+            if (ownsPaneScope()) {
+              void resumeStoredChatOutboxes(state, event);
+            }
+            return;
           }
-          if (!ownsPane()) {
+          let eventResult = result;
+          let predecessorSessionId = retainedTranscriptSessionId;
+          const incoming = readSessionChangedEvent(event.payload);
+          if (binding.observation && !binding.observation.isCurrent()) {
+            const previousSessionId = binding.observation.sessionId;
+            predecessorSessionId = previousSessionId;
+            this.synchronizeSessionObservation();
+            const replacement = this.sessionObservation;
+            if (
+              !ownsPaneScope() ||
+              !replacement?.matchesPane() ||
+              !replacement.observation?.isCurrent()
+            ) {
+              return;
+            }
+            if (
+              !incoming?.sessionId ||
+              incoming.sessionId === previousSessionId ||
+              incoming.sessionId !== replacement.observation.sessionId ||
+              incoming.sessionId !== replacement.observation.row?.sessionId ||
+              !chatScopedEventSessionMatches(state, incoming.key, incoming.agentId ?? undefined)
+            ) {
+              void resumeStoredChatOutboxes(state, event);
+              return;
+            }
+            // The captured recipient can finish its frame; its retired row receipt cannot transfer.
+            eventResult = { applied: false };
+          }
+          const observation = this.sessionObservation?.observation;
+          const transcriptSessionId = state.currentSessionId ?? predecessorSessionId;
+          if (
+            incoming?.sessionId &&
+            observation?.isCurrent() &&
+            incoming.sessionId === observation.sessionId &&
+            incoming.sessionId === observation.row?.sessionId &&
+            chatScopedEventSessionMatches(state, incoming.key, incoming.agentId ?? undefined) &&
+            transcriptSessionId &&
+            transcriptSessionId !== incoming.sessionId &&
+            (state.currentSessionId ||
+              state.chatRunId ||
+              state.chatStream != null ||
+              getChatSessionProjection(state).entries.some((entry) => !entry.pending))
+          ) {
+            // Row rebinding cannot transfer a predecessor's transcript or live work.
+            this.refreshHistory();
+            void resumeStoredChatOutboxes(state, event);
             return;
           }
           if (event.event === "session.message") {
             this.clearTypingActorForSessionMessage(event.payload);
           }
-          handlePageGatewayEvent(state, event, () => this.presented, result);
+          handlePageGatewayEvent(state, event, () => this.presented, eventResult);
         },
       },
     );

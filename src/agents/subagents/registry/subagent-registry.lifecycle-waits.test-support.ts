@@ -2,10 +2,7 @@ import { vi } from "vitest";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 export function createLifecycleWaits(requesterSessionKey: string) {
-  const flushAsync = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  };
+  const flushAsync = () => vi.dynamicImportSettled();
 
   const waitForCleanupHandledFalse = async (runId: string) => {
     // Cleanup can be released asynchronously after announce failure; poll fake

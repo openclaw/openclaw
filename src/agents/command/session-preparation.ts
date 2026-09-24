@@ -1,17 +1,90 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import {
+  buildCurrentRunRestartRecoveryClaim,
+  prepareCommandHarnessCompletionRecovery,
+} from "../agent-command-restart-recovery.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts } from "./types.js";
+
+const log = createSubsystemLogger("agents/agent-command");
+
+export function prepareCommandSessionRecoveryEntry(
+  params: Omit<
+    Parameters<typeof prepareCommandHarnessCompletionRecovery>[0],
+    "hasDeliveryContext"
+  > & {
+    deliveryContext?: DeliveryContext;
+    now: number;
+    isSessionRollover: boolean;
+  },
+) {
+  const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
+  const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
+    prepareCommandHarnessCompletionRecovery({
+      ...params,
+      hasDeliveryContext: Boolean(params.deliveryContext),
+    });
+  return {
+    guardedHarnessCompletion,
+    isCompletionCurrent,
+    nextEntry: {
+      ...entry,
+      sessionId,
+      updatedAt: now,
+      sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
+      lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
+      ...buildCurrentRunRestartRecoveryClaim({
+        deliveryContext: params.deliveryContext,
+        deliveryMediaUrls: opts.internalDeliveryMediaUrls,
+        disableMessageTool: opts.disableMessageTool,
+        entry,
+        forceRestartSafeTools: opts.forceRestartSafeTools,
+        runId,
+        harnessCompletion,
+        ...sourceOptions,
+        suppressTextDelivery: opts.internalDeliverySuppressText,
+      }),
+    },
+  };
+}
+
+export async function prepareCommandSessionDiffBaseline(
+  params: Parameters<typeof ensureSessionDiffBaseline>[0] & {
+    sessionStore?: Record<string, InternalSessionEntry>;
+  },
+): Promise<InternalSessionEntry> {
+  try {
+    const entry = await ensureSessionDiffBaseline(params);
+    if (params.sessionStore) {
+      params.sessionStore[params.sessionKey] = entry;
+    }
+    return entry;
+  } catch (error) {
+    if (isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
+    log.warn(
+      `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
+    );
+    return params.entry;
+  }
+}
 
 export async function prepareEmbeddedSessionState(params: {
   cfg: OpenClawConfig;
@@ -118,6 +191,7 @@ export async function prepareEmbeddedSessionState(params: {
       skillsSnapshot,
     };
     sessionEntry = await persistAgentSession({
+      agentId: params.sessionAgentId,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -149,6 +223,7 @@ export async function prepareEmbeddedSessionState(params: {
     };
     applyVerboseOverride(next, params.verboseOverride);
     sessionEntry = await persistAgentSession({
+      agentId: params.sessionAgentId,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -157,14 +232,26 @@ export async function prepareEmbeddedSessionState(params: {
     });
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
-    recordSessionHumanDirectMessage({
-      sessionKey: params.sessionKey,
-      entry: sessionEntry,
-      agentId: params.sessionAgentId,
-      actor: params.sessionStateActor,
-      channel: params.opts.channel,
-      runId: params.runId,
-    });
+    const assertSignalCurrent = () => {
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      params.opts.abortSignal?.throwIfAborted();
+      params.opts.assertSourceCurrent?.();
+      params.opts.operatorAuthority?.assertCurrent();
+    };
+    await recordSessionHumanDirectMessage(
+      {
+        sessionKey: params.sessionKey,
+        entry: sessionEntry,
+        agentId: params.sessionAgentId,
+        actor: params.sessionStateActor,
+        channel: params.opts.channel,
+        runId: params.runId,
+      },
+      {
+        assertCurrent: assertSignalCurrent,
+      },
+    );
+    assertSignalCurrent();
   }
 
   return {

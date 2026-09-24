@@ -46,40 +46,14 @@ const logNames = [
   "legacy-operator-candidate-turn.err",
   "gateway.log",
   "gateway.log.doctor",
+  "missing-load-path/baseline-gateway.log",
+  "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
   "systemctl-shim-gateway.log",
   "systemctl-shim-gateway.log.bootstrap.log",
   "gateway-restart.log",
 ];
-// Candidate observations select one declared RPC pair, never an arbitrary private path.
-const rpcLogNames = new Set([
-  "channels-status-before",
-  "wizard-start",
-  "wizard-status",
-  "wizard-next",
-  "wizard-duplicate-start",
-  "wizard-cancel",
-  "wizard-cancelled-status",
-  "wizard-replacement-start",
-  "wizard-replacement-cancel",
-  "wizard-replacement-status",
-  "update-rpc",
-  "update-status.candidate",
-  "target-wizard-status-start",
-  "target-wizard-status",
-  "target-wizard-status-retained",
-  "target-wizard-status-cancel",
-  "target-wizard-status-purged",
-  "target-wizard-active-start",
-  "target-wizard-next",
-  "target-wizard-duplicate-start",
-  "target-wizard-cancel",
-  "target-wizard-replacement-start",
-  "target-wizard-replacement-cancel",
-  "target-wizard-purged-status",
-  "channels-status",
-]);
 const reasons = [
   "missing or unsafe file",
   "input exceeds cap; omitted whole",
@@ -1292,20 +1266,6 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
         ? readOwned(process.env.OPENCLAW_STATE_DIR, "logs/gateway-restart.log", name)
         : readOwned(artifactRoot, name, name);
   }
-  const rpcName = readOwned(artifactRoot, "diagnostics/last-rpc", "last RPC")?.trim();
-  if (rpcLogNames.has(rpcName)) {
-    report.lastRpc = {
-      name: rpcName,
-      stdout: readOwned(artifactRoot, `${rpcName}.json`, "RPC stdout"),
-      stderr: readOwned(
-        artifactRoot,
-        `${rpcName === "update-status.candidate" ? "update-status" : rpcName}.err`,
-        "RPC stderr",
-      ),
-    };
-  } else if (rpcName) {
-    omissions["last RPC"] = reasons[3];
-  }
   const stateRoot = process.env.OPENCLAW_STATE_DIR;
   report.pluginIdentity = await pluginIdentities(stateRoot, artifactRoot);
   report.migration = captureMigrationEvidence(stateRoot, artifactRoot, observationRoot);
@@ -1739,9 +1699,6 @@ export function publishDiagnostics(
   // arbitrary omission text. Redact every permitted free-text field on the host.
   for (const label of [
     ...logNames,
-    "last RPC",
-    "RPC stdout",
-    "RPC stderr",
     "config",
     "service unit",
     "service environment",
@@ -1778,17 +1735,6 @@ export function publishDiagnostics(
   }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);
-  }
-  if (snapshot.lastRpc !== undefined) {
-    if (rpcLogNames.has(snapshot.lastRpc?.name)) {
-      report.lastRpc = {
-        name: snapshot.lastRpc.name,
-        stdout: sanitize(snapshot.lastRpc.stdout, "RPC stdout"),
-        stderr: sanitize(snapshot.lastRpc.stderr, "RPC stderr"),
-      };
-    } else {
-      omissions["last RPC"] = reasons[3];
-    }
   }
   for (const field of ["ExecStart", "WorkingDirectory", "supervisorWorkingDirectory"]) {
     report.service[field] = sanitize(snapshot.service?.[field], field);

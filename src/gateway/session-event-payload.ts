@@ -1,5 +1,6 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -153,7 +154,7 @@ export function buildGatewaySessionSnapshot(params: {
   agentId?: string;
   includeSession?: boolean;
   lifecycle?: boolean;
-  event?: AgentEventPayload;
+  event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
   displayName?: string;
@@ -181,6 +182,9 @@ export function buildGatewaySessionSnapshot(params: {
       ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
       : {};
   const sessionRow = { ...storedRow, ...patch };
+  if (Object.hasOwn(patch, "lastActivityAt")) {
+    sessionRow.unread = deriveSessionUnread(sessionRow);
+  }
   for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
     delete sessionRow[key];
   }

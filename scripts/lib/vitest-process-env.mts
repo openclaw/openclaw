@@ -2,6 +2,7 @@
 import path from "node:path";
 import { embeddedAgentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { parsePermissiveBooleanToken } from "./arg-utils.mts";
+import { resolveRepoRoot } from "./repo-root.mjs";
 import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 import { resolveLocalVitestEnv } from "./vitest-local-scheduling.mts";
 
@@ -173,6 +174,11 @@ export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): str
       : ["--no-maglev"]),
     "--no-concurrent-sparkplug",
   ];
+}
+
+/** Keep Bun's source resolver consistent in the Vitest host and fresh fork processes. */
+export function resolveVitestBunSourceArgs(): string[] {
+  return ["--tsconfig-override", path.join(resolveRepoRoot(import.meta.url), "tsconfig.json")];
 }
 
 /**

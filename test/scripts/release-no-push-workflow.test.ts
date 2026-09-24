@@ -49,10 +49,14 @@ beforeAll(() => {
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/update-compat-inventory.json",
+    "scripts/lib/update-first-hop-lanes.mjs",
     "scripts/lib/upgrade-survivor-policy.mjs",
     "scripts/lib/upgrade-survivor-scenarios.json",
     "scripts/lib/release-version.mjs",
     "scripts/lib/frozen-target-compat.sh",
+    "scripts/lib/trusted-native-typescript.mjs",
+    "scripts/lib/native-typescript.mts",
     "scripts/resolve-frozen-codex-live-suite.mjs",
     "scripts/resolve-fs-safe-native-contract.mjs",
     "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -386,6 +390,22 @@ function executeParentFilterValidation(
   }
 }
 
+// Minimal GitHub expression sandbox for runner selectors; reserved runner groups stay unset.
+function runnerSandbox(context: Record<string, unknown>) {
+  return {
+    fromJSON: JSON.parse,
+    toJSON: JSON.stringify,
+    format: (template: string, ...args: unknown[]) =>
+      template
+        .replaceAll(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)]))
+        .replaceAll("{{", "{")
+        .replaceAll("}}", "}"),
+    ...context,
+    vars: { OPENCLAW_RELEASE_RUNNER_GROUP: "", ...(context.vars as object | undefined) },
+    inputs: { runner_group: "", ...(context.inputs as object | undefined) },
+  };
+}
+
 describe("release validation no-push transport", () => {
   it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
     const live = readWorkflow(LIVE_E2E);
@@ -432,9 +452,10 @@ describe("release validation no-push transport", () => {
         for (const phase of ["build", "test"]) {
           const runner = job(repo, phase)["runs-on"]!;
           expect(
-            runInNewContext(runner.slice(3, -2), {
-              inputs: { use_github_hosted_runners: resolved },
-            }),
+            runInNewContext(
+              runner.slice(3, -2),
+              runnerSandbox({ inputs: { use_github_hosted_runners: resolved } }),
+            ),
           ).toBe(expected ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404");
         }
       }
@@ -465,11 +486,14 @@ describe("release validation no-push transport", () => {
         }
         const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
         const actual = expression.startsWith("${{")
-          ? runInNewContext(expression.slice(3, -2), {
-              github: { repository },
-              inputs: { use_github_hosted_runners: hosted },
-              vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
-            })
+          ? runInNewContext(
+              expression.slice(3, -2),
+              runnerSandbox({
+                github: { repository },
+                inputs: { use_github_hosted_runners: hosted },
+                vars: { OPENCLAW_CI_RUNNER_BACKEND: backend },
+              }),
+            )
           : expression;
         expect(actual, `${workflowPath}:${name}`).toBe(runner);
       }
@@ -916,7 +940,7 @@ describe("release validation no-push transport", () => {
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
     ["cross-os", "", " Windows/Packaged-Upgrade "],
-    ["all", "", " Ubuntu,macOS "],
+    ["all", "", " Ubuntu,Windows,macOS "],
   ])(
     "parent accepts rerun_group=%s with its owned selector",
     (group, liveSuiteFilter, crossOsSuiteFilter) => {
@@ -1029,8 +1053,8 @@ describe("release validation no-push transport", () => {
 
   it.each([
     ["cross-os", "windows/packaged-upgrade"],
-    ["all", "ubuntu,macos"],
-    ["all", "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade"],
+    ["all", "ubuntu,windows,macos"],
+    ["all", "packaged-fresh,installer-fresh,packaged-upgrade"],
   ])("accepts cross-OS selection %s/%s without changing scheduled groups", (group, filter) => {
     const outputs = runReleaseGroupCapture(group, false, "", filter);
     const unfiltered = runReleaseGroupCapture(group);
@@ -1038,15 +1062,21 @@ describe("release validation no-push transport", () => {
     expect(outputs.cross_os_scheduled).toBe("true");
   });
 
-  it.each(["windows,macos", "packaged-fresh", "ubuntu/packaged-upgrade"])(
-    "rejects all-group selection %s that omits required Linux suites at either entry point",
+  it.each([
+    "windows,macos",
+    "ubuntu,macos",
+    "packaged-fresh",
+    "ubuntu/packaged-upgrade",
+    "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade",
+  ])(
+    "rejects all-group selection %s that omits an OS Gateway suite at either entry point",
     (filter) => {
       for (const { result } of [
         executeParentFilterValidation("all", "", filter),
         executeReleaseGroupCapture("all", false, "", filter),
       ]) {
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("requires all Linux cross-OS suites");
+        expect(result.stderr).toContain("requires all Linux, Windows, and macOS cross-OS suites");
       }
     },
   );

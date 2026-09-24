@@ -29,11 +29,7 @@ import {
   resetSessionBackfillIngestionState,
   rewindSessionBackfillIngestionState,
 } from "./session-backfill-lifecycle.js";
-import {
-  executeSessionBackfill,
-  executeSessionBackfillBatch,
-  runSessionBackfill,
-} from "./session-backfill.js";
+import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backfill.js";
 import { writeSessionIngestionState } from "./session-ingestion.js";
 import {
   readShortTermRecallEntries,
@@ -133,10 +129,6 @@ afterEach(() => {
 });
 
 describe("runSessionBackfill", () => {
-  it("keeps CLI draining separate from the single-batch executor", () => {
-    expect(runSessionBackfill).not.toBe(executeSessionBackfill);
-  });
-
   it("keeps REM preview mode mutually exclusive with apply", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-apply-");
 

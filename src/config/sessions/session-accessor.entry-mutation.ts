@@ -1,22 +1,33 @@
 import { isDeepStrictEqual } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
   patchSessionEntryCore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
-import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
+import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
+import { createSessionEntryWithTranscriptInWorker } from "./session-accessor.sqlite-creation-worker.js";
+import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import "./session-accessor.sqlite-entry.js";
 import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
 import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteScope,
+  prepareSqliteScope,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -32,6 +43,7 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   recordInboundSessionMeta,
@@ -62,18 +74,37 @@ export async function createSessionEntryWithTranscript<TError = string>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const storePath = resolveAccessStorePath(scope);
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const storePath = resolveAccessStorePath(captured);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
-  const storeScope = { agentId, env: scope.env, storePath };
-  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshot({
-    ...storeScope,
-    sessionKey: scope.sessionKey,
-  });
-  const created = await createEntry(context);
+  const target = { ...captured, agentId, storePath };
+  const resolved = captureLifecycleDatabaseScope(
+    isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target),
+  );
+  if (
+    isMainThread &&
+    supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(resolved)) &&
+    !hasPreparedNativeSessionDeletion()
+  ) {
+    return createSessionEntryWithTranscriptInWorker(resolved, createEntry, options);
+  }
+  // Process-held, already executing, maintenance, and native rollback scopes keep their kernels.
+  const storeScope = { agentId, env: resolved.env, storePath: resolved.path };
+  // The resolved path is a physical locator, not the original logical store selector.
+  // Re-resolving a missing custom-agent suffix as a shared store would assign it to main.
+  const creationDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const { normalizedKey, legacyKeys, labels, ...context } = readSessionCreationSnapshotInDatabase(
+    creationDatabase,
+    scope.sessionKey,
+  );
+  const created = await createEntry({ ...context, isLabelInUse: (label) => labels.has(label) });
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
+  const ownerAssignment = options.resolveOwnerAssignment?.();
   const { cwd, commitGuard, withCommit, onLifecycleCommitted } = options;
 
   const initializeTranscript = async (assertSourceCurrent?: () => void) => {
@@ -122,7 +153,19 @@ export async function createSessionEntryWithTranscript<TError = string>(
     skipMaintenance: true,
     ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
     ...(withCommit ? { withCommit } : {}),
+    ...(ownerAssignment
+      ? {
+          afterFreshUpsertsInTransaction: (database) => {
+            if (!replaceSessionOwnerInTransaction(database, normalizedKey, ownerAssignment)) {
+              throw new Error(`Session owner assignment lost its target: ${normalizedKey}`);
+            }
+          },
+        }
+      : {}),
     ...(onLifecycleCommitted ? { onLifecycleCommitted: () => onLifecycleCommitted(entry) } : {}),
+    ...(options.afterCommitted
+      ? { afterCommitted: (source) => options.afterCommitted!(entry, source) }
+      : {}),
   });
   return { ok: true, entry, sessionFile: normalizedKey };
 }
@@ -139,34 +182,15 @@ function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof Sessio
   return [...new Set(entries.flatMap((entry) => Object.keys(entry) as Array<keyof SessionEntry>))];
 }
 
-function sessionEntryFieldEqual(
-  left: SessionEntry[keyof SessionEntry],
-  right: SessionEntry[keyof SessionEntry],
+function sessionEntryFieldUnchanged(
+  left: SessionEntry,
+  right: SessionEntry,
+  key: keyof SessionEntry,
 ): boolean {
-  return Object.is(left, right) || isDeepStrictEqual(left, right);
-}
-
-function sessionEntryFieldUnset(
-  hasValue: boolean,
-  value: SessionEntry[keyof SessionEntry],
-): boolean {
-  return !hasValue || value === undefined;
-}
-
-function sessionEntryFieldUnchanged(params: {
-  leftHasValue: boolean;
-  leftValue: SessionEntry[keyof SessionEntry];
-  rightHasValue: boolean;
-  rightValue: SessionEntry[keyof SessionEntry];
-}): boolean {
-  const { leftHasValue, leftValue, rightHasValue, rightValue } = params;
-  if (
-    sessionEntryFieldUnset(leftHasValue, leftValue) &&
-    sessionEntryFieldUnset(rightHasValue, rightValue)
-  ) {
-    return true;
-  }
-  return leftHasValue === rightHasValue && sessionEntryFieldEqual(leftValue, rightValue);
+  return isDeepStrictEqual(
+    Object.hasOwn(left, key) ? left[key] : undefined,
+    Object.hasOwn(right, key) ? right[key] : undefined,
+  );
 }
 
 // Background activity can mutate non-identity fields after the initialization
@@ -188,27 +212,11 @@ export function mergeConcurrentReplySessionMetadata(params: {
     Record<keyof SessionEntry, SessionEntry[keyof SessionEntry]>
   >;
   for (const key of collectSessionEntryKeys(currentEntry, preparedEntry, snapshotEntry)) {
-    const currentHasValue = Object.hasOwn(currentEntry, key);
-    const snapshotHasValue = Object.hasOwn(snapshotEntry, key);
-    const preparedHasValue = Object.hasOwn(preparedEntry, key);
-    const currentValue = currentEntry[key];
-    const snapshotValue = snapshotEntry[key];
-    const preparedValue = preparedEntry[key];
-    const currentChanged = !sessionEntryFieldUnchanged({
-      leftHasValue: currentHasValue,
-      leftValue: currentValue,
-      rightHasValue: snapshotHasValue,
-      rightValue: snapshotValue,
-    });
-    const preparedKeptSnapshot = sessionEntryFieldUnchanged({
-      leftHasValue: preparedHasValue,
-      leftValue: preparedValue,
-      rightHasValue: snapshotHasValue,
-      rightValue: snapshotValue,
-    });
+    const currentChanged = !sessionEntryFieldUnchanged(currentEntry, snapshotEntry, key);
+    const preparedKeptSnapshot = sessionEntryFieldUnchanged(preparedEntry, snapshotEntry, key);
     if (currentChanged && preparedKeptSnapshot) {
-      if (currentHasValue) {
-        mergedFields[key] = currentValue;
+      if (Object.hasOwn(currentEntry, key)) {
+        mergedFields[key] = currentEntry[key];
       } else {
         delete mergedFields[key];
       }

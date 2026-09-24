@@ -241,22 +241,14 @@ class BaseInteraction {
   private async performReplyEdit(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
-    const result = query
-      ? await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-          query,
-        )
-      : await editWebhookMessage(
-          this.client.rest,
-          this.client.options.clientId,
-          this.token,
-          "@original",
-          { body },
-        );
+    const result = await editWebhookMessage(
+      this.client.rest,
+      this.client.options.clientId,
+      this.token,
+      "@original",
+      { body },
+      query,
+    );
     this.response.recordReplyEdit();
     return result;
   }

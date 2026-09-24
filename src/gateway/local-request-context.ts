@@ -195,6 +195,7 @@ function createLocalGatewayRequestContext(
         release: async () => {
           await initializing?.catch(() => {});
           projection?.dispose();
+          await projection?.ensureMaterialized();
         },
       });
       initializing = import("./session-row-projection.js").then(

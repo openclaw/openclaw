@@ -1,6 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
+import type {
+  MockOpenAiCodeModeExecSurface,
+  ResponsesInputItem,
+  StreamEvent,
+} from "./mock-openai-contracts.js";
 import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
 import {
@@ -54,11 +58,9 @@ function decodeCodeModeTarget(code: string | undefined) {
   }
 }
 
-type CodeModeExecSurface = "native" | "guest";
-
 export function resolveCodeModeExecSurface(
   body: Record<string, unknown>,
-): CodeModeExecSurface | null {
+): MockOpenAiCodeModeExecSurface | null {
   const tools = [
     ...(Array.isArray(body.tools) ? body.tools : []),
     ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),

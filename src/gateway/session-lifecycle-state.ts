@@ -12,6 +12,7 @@ import {
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -34,6 +35,8 @@ const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery"
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  controlUiVisible?: boolean;
+  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -46,6 +49,7 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     aborted?: unknown;
     stopReason?: unknown;
     error?: unknown;
+    errorKind?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
@@ -63,6 +67,7 @@ type LifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
+  | "lastActivityAt"
   | "abortedLastRun"
 >;
 
@@ -75,6 +80,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
+  | "lastActivityAt"
   | "abortedLastRun"
   | "restartRecoveryRuns"
   | "restartRecoveryForceSafeTools"
@@ -212,12 +218,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   return {
     updatedAt,
     status,
-    lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
+    lastRunError: terminal
+      ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
+      : undefined,
     startedAt,
     endedAt: interruptedForRestart ? undefined : endedAt,
     runtimeMs: interruptedForRestart
       ? undefined
       : resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
+    ...(terminal &&
+    !interruptedForRestart &&
+    params.event.controlUiVisible === true &&
+    params.event.isHeartbeat !== true &&
+    endedAt !== undefined
+      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
+      : {}),
     abortedLastRun: interruptedForRestart || status === "killed",
   };
 }
@@ -402,7 +417,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown } | undefined;
+  let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -460,13 +475,31 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // their async persistence can settle out of order.
         return null;
       }
-      const patch: Partial<PersistedLifecycleSessionShape> & Pick<SessionEntry, "providerReview"> =
-        derivePersistedSessionLifecyclePatch({
-          entry,
-          event: params.event,
-        });
+      const patch: Partial<PersistedLifecycleSessionShape> &
+        Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
+        entry,
+        event: params.event,
+      });
       if (providerReview && Object.keys(patch).length > 0) {
         patch.providerReview = providerReview.review;
+      }
+      const endedAt = patch.endedAt ?? params.event.ts;
+      if (
+        (patch.status === "failed" || patch.status === "timeout") &&
+        entry.goal?.status === "active" &&
+        entry.goal.updatedAt <= endedAt
+      ) {
+        // The terminal owner has exhausted retries. Commit the pause with the run
+        // failure so every client sees the same stopped goal and frozen timer.
+        // A delayed failure must not undo a newer resume or replacement goal.
+        patch.goal = buildUpdatedSessionGoalStatus(
+          entry,
+          {
+            status: "paused",
+            note: `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
+          },
+          endedAt,
+        );
       }
       if (
         (phase === "error" || phase === "end") &&
@@ -475,6 +508,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         failedRun = {
           runId: eventRunId,
+          errorKind:
+            params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
           error:
             resolveTerminalOutcome(params.event).error ??
             (patch.status === "timeout" ? "Run timed out" : undefined),
@@ -522,7 +557,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   if (persisted && failedRun) {
-    const { runId, error } = failedRun;
+    const { runId, error, errorKind } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     await recordGatewaySessionRunFailure({
@@ -535,6 +570,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       },
       runId,
       error,
+      errorKind,
       assertCommitAllowed: params.assertCommitAllowed,
     });
   }

@@ -21,7 +21,10 @@ import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-sc
 import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
-import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+} from "./lib/vitest-runtime-selection.mts";
 import {
   createShardTimingSample,
   readShardTimings,
@@ -31,7 +34,7 @@ import { getVitestWorkerDescriptor } from "./lib/vitest-worker-bootstrap.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
-  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
@@ -48,11 +51,9 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
-  shouldRetryVitestNoOutputTimeout,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
   type VitestCacheAssignment,
-  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mts";
 
@@ -193,16 +194,9 @@ function applyDefaultParallelVitestWorkerBudget(specs: VitestRunSpec[], env: Nod
 async function runLoggedVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  let result = await runVitestSpec(spec, reports);
-  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
-    assertCacheLeaseJoined(spec, result);
-    console.error(`[test] retrying ${spec.config} after no-output timeout`);
-    const firstJoined = result.groupJoined;
-    result = await runVitestSpec(withRetryNoOutputTimeout(spec), reports);
-    result = { ...result, groupJoined: firstJoined && result.groupJoined };
-  }
+  const result = await runVitestSpec(spec, reports);
   const durationMs = performance.now() - startedAt;
-  if (result.noOutputTimedOut && result.signal) {
+  if (result.noOutputTimedOut) {
     console.error(`[test] ${spec.config} exceeded no-output timeout`);
     return {
       ...result,
@@ -359,7 +353,7 @@ export async function runTestProjects(
       spec.timingIncludePatterns = inheritedIncludePatterns;
     }
   }
-  const runSpecs: VitestRunSpec[] = applyDefaultMultiSpecVitestCachePaths(
+  const runSpecs: VitestRunSpec[] = applyDefaultVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {
@@ -422,12 +416,17 @@ export async function runTestProjects(
     process.cwd(),
   );
   const termination: { signal: NodeJS.Signals | null } = { signal: null };
+  let preparingWorkers = false;
+  let workers: VitestWorkerRun | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     termination.signal ??= signal;
+    if (preparingWorkers) {
+      // An upstream preparation request must also settle before this group exits.
+      void workers?.dispose().catch(() => {});
+    }
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
-  let workers: VitestWorkerRun | undefined;
   let reportFailure: string | undefined;
   let printCompletedSummary: (() => void) | undefined;
   try {
@@ -468,6 +467,9 @@ export async function runTestProjects(
       }
     }
 
+    if (termination.signal) {
+      return;
+    }
     const compiled = runnable.filter(
       ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
     );
@@ -476,6 +478,27 @@ export async function runTestProjects(
       for (const { spec } of compiled) {
         spec.workerRun = workers;
       }
+      if (
+        compiled.some(
+          ({ spec, cliArgs, execution }) =>
+            execution &&
+            execution.options.root === undefined &&
+            execution.options.dir === undefined &&
+            execution.options.project === undefined &&
+            execution.options.run !== false &&
+            shouldPrepareVitestCoreWorkers(spec.config, cliArgs, spec.env, spec.includePatterns),
+        )
+      ) {
+        preparingWorkers = true;
+        try {
+          await workers.prepare();
+        } finally {
+          preparingWorkers = false;
+        }
+      }
+    }
+    if (termination.signal) {
+      return;
     }
     const isFullSuiteRun =
       targetArgs.length === 0 &&

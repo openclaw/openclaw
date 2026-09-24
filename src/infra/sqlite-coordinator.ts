@@ -136,6 +136,8 @@ const coordinatorPool = resolveGlobalSingleton(
     exitCloseRegistered: false,
     closeOnExit: closeIdleCoordinatorsOnExit,
   }),
+  () => closeIdleCoordinatorPool(),
+  "close-only",
 );
 const { runInCoordinatorPoolContext, idleCoordinators, failedIdleCloses } = coordinatorPool;
 
@@ -175,30 +177,17 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) 
 }
 
 function closeIdleCoordinatorsOnExit() {
-  const databases = new Map(failedIdleCloses);
-  for (const [location] of idleCoordinators) {
-    const idle = takeIdleCoordinator(location);
-    if (idle) {
-      databases.set(idle.database, location);
-    }
-  }
-  for (const [database, location] of databases) {
-    try {
-      closeIdleCoordinatorDatabase(database, location);
-    } catch {
-      // Process exit is the last cleanup opportunity for a failed native close.
-    }
+  try {
+    closeIdleCoordinatorPool();
+  } catch {
+    // Process exit is the last cleanup opportunity for a failed native close.
   }
 }
 
-/** Dispose a removed runtime's idle connections after its active owners have settled. */
-export function closeIdleSqliteCoordinators(rootPath: string): void {
-  const root = path.resolve(rootPath);
-  const databases = new Map(
-    [...failedIdleCloses].filter(([, location]) => isPathInside(root, location)),
-  );
+function closeIdleCoordinatorPool(include: (location: string) => boolean = () => true): void {
+  const databases = new Map([...failedIdleCloses].filter(([, location]) => include(location)));
   for (const [location] of idleCoordinators) {
-    if (!isPathInside(root, location)) {
+    if (!include(location)) {
       continue;
     }
     const idle = takeIdleCoordinator(location);
@@ -215,6 +204,12 @@ export function closeIdleSqliteCoordinators(rootPath: string): void {
     }
   }
   throwSqliteLifecycleErrors(errors, "Idle SQLite coordinator cleanup failed");
+}
+
+/** Dispose a removed runtime's idle connections after its active owners have settled. */
+export function closeIdleSqliteCoordinators(rootPath: string): void {
+  const root = path.resolve(rootPath);
+  closeIdleCoordinatorPool((location) => isPathInside(root, location));
 }
 
 function readCoordinatorIdentity(location: string): fs.BigIntStats | undefined {

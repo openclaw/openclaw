@@ -1,5 +1,4 @@
 /** Owns replay-safe Control UI execution around the lazy report consent flow. */
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -9,10 +8,10 @@ import type { SubmittedUpdateReport } from "./update-failure-report.ts";
 type ReportResult = SubmittedUpdateReport | { message: string; status: "error" };
 
 export function canReportUpdateFailure(snapshot: ApplicationGatewaySnapshot): boolean {
-  // Browser clients use their authenticated owner profile; internal system
-  // callers remain authorized only by the Gateway's server-side guard.
+  // The Gateway selects browser handoff versus host publication; eligibility
+  // here never grants access to the host's GitHub account.
   return (
-    snapshot.selfUser?.id === GATEWAY_OWNER_PROFILE_ID &&
+    Boolean(snapshot.selfUser?.id?.trim()) &&
     canCallGatewayMethod(snapshot, "update.report", "operator.admin", {
       requireAdvertisement: false,
     })

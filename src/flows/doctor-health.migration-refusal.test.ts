@@ -8,8 +8,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   collectUpdateDoctorFailureFacts,
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
   UpdateDoctorError,
 } from "../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -248,10 +252,64 @@ describe("Doctor refused-migration maintenance outcome", () => {
 
 describe("Doctor maintenance admission", () => {
   afterEach(() => vi.restoreAllMocks());
-  it.each(["gateway", "state", "agent"] as const)(
-    "refuses the live %s owner before spawning a database snapshot",
-    async (owner) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+
+  it.each(["explicit", "unreadable"] as const)(
+    "serializes unsafe maintenance refusal from the %s owner",
+    async (kind) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      const env = {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
+      };
+      await withOpenClawTestState({ scenario: "minimal", env }, async (state) => {
+        const refusal = {
+          kind: "data-at-risk" as const,
+          reason:
+            kind === "explicit" ? ("incomplete-migration" as const) : ("unreadable-state" as const),
+        };
+        const error =
+          kind === "explicit"
+            ? new DoctorMaintenanceRefusalError("An admitted migration is incomplete.", refusal)
+            : new DoctorUnreadableStateDatabaseError(
+                state.statePath("state/openclaw.sqlite"),
+                "malformed schema",
+              );
+        mocks.packageRoot.mockReturnValue(undefined);
+        mocks.runContributions.mockClear();
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockRejectedValueOnce(error);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const failure = await runDoctorHealthFlow(
+          runtime,
+          { repair: true, nonInteractive: true },
+          undefined,
+          { incompatible: [], indeterminate: [] },
+        ).catch((cause: unknown) => cause);
+        const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+        expect(failure).toBe(error);
+        expect(result).toMatchObject({
+          status: "error",
+          configHash: "unchanged",
+          maintenanceRefusal: refusal,
+        });
+        expect(mocks.runContributions).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(
+    (["gateway", "state", "agent"] as const).flatMap((owner) =>
+      [false, true].map((updating) => ({ owner, updating })),
+    ),
+  )(
+    "preserves the live $owner owner before snapshots (updating=$updating)",
+    async ({ owner, updating }) => {
+      const resultPath = updating ? createUpdatePostInstallDoctorResultPath() : undefined;
+      const env = {
+        OPENCLAW_UPDATE_IN_PROGRESS: updating ? "1" : undefined,
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
+      };
+      await withOpenClawTestState({ scenario: "minimal", env }, async (state) => {
         mocks.config.mockReturnValue({});
         mocks.packageRoot.mockReturnValue(undefined);
         const database = openOpenClawStateDatabase({ env: state.env });
@@ -280,19 +338,41 @@ describe("Doctor maintenance admission", () => {
         }
         await import("../commands/doctor-maintenance.js");
         snapshotProcesses.execFile.mockClear();
+        mocks.runContributions.mockClear();
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         const started = performance.now();
-        const failure = await runDoctorHealthFlow(runtime, {
-          repair: true,
-          nonInteractive: true,
-        }).catch((error: unknown) => error);
+        const failure = await runDoctorHealthFlow(
+          runtime,
+          {
+            repair: true,
+            nonInteractive: true,
+          },
+          undefined,
+          { incompatible: [], indeterminate: [] },
+        ).catch((error: unknown) => error);
+        const result = resultPath
+          ? await consumeUpdatePostInstallDoctorResult(resultPath)
+          : undefined;
         expect(
           snapshotProcesses.execFile.mock.calls.filter(
             (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
           ),
         ).toEqual([]);
-        expect(failure).toBeInstanceOf(Error);
-        if (owner === "agent") {
+        if (updating) {
+          expect(failure).toBeUndefined();
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+          expect(result).toMatchObject({
+            status: "ok",
+            configHash: "unchanged",
+            maintenanceRefusal: {
+              kind: "deferred",
+              reason: owner === "agent" ? "agent-database-in-use" : "coordinator-contention",
+            },
+            warnings: [expect.stringContaining("Doctor could not enter maintenance")],
+          });
+          expect(runtime.exit).toHaveBeenCalledWith(0);
+        } else if (owner === "agent") {
+          expect(failure).toBeInstanceOf(Error);
           expect(failure).toBeInstanceOf(UpdateDoctorError);
           expect(collectUpdateDoctorFailureFacts(failure)).toEqual([
             {
@@ -303,6 +383,7 @@ describe("Doctor maintenance admission", () => {
             },
           ]);
         } else {
+          expect(failure).toBeInstanceOf(Error);
           expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
         }
         expect(performance.now() - started).toBeLessThan(1_000);

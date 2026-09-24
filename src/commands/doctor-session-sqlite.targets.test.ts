@@ -7,11 +7,18 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -19,32 +26,199 @@ import {
   importLegacyStore,
   readMigrationManifest,
   useDoctorSessionSqliteTestFixture,
+  type TestStore,
 } from "./doctor-session-sqlite.test-support.js";
 
 const { autoCleanupTempDirs, createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
+function seedUnreadableSiblingDeletion(store: TestStore): void {
+  const agentId = "malformed-sibling";
+  const operationId = "retained-malformed-sibling";
+  beginAgentDeletionJournal(
+    {
+      agentId,
+      operationId,
+      agentDir: path.join(store.stateDir, "agents", agentId, "agent"),
+      workspaceDir: path.join(store.stateDir, `workspace-${agentId}`),
+      sessionsDir: path.join(store.stateDir, "agents", agentId, "sessions"),
+      deleteFiles: false,
+    },
+    { env: store.env },
+  );
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      completeAgentDeletionJournalInDatabase(database, agentId, operationId);
+      database.db
+        .prepare("UPDATE agent_deletion_journal SET database_paths_json = ? WHERE agent_id = ?")
+        .run("{}", agentId);
+    },
+    { env: store.env },
+  );
+}
+
 describe("runDoctorSessionSqlite", () => {
-  it("imports explicit stores into the agent database owned by the path", async () => {
-    const store = createLegacyStore({ agentDirName: "codex-proof" });
+  it.each(["destination", "shared-state"])(
+    "holds a top-level legacy import with %s orphaned WAL history",
+    async (location) => {
+      const stateDir = fs.realpathSync.native(
+        autoCleanupTempDirs.make("doctor-held-legacy-store-"),
+      );
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sqlitePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      const walPath =
+        location === "destination"
+          ? `${sqlitePath}-wal`
+          : path.join(stateDir, "state", "openclaw.sqlite-wal");
+      const legacy = JSON.stringify({ "agent:main:main": { sessionId: "held", updatedAt: 1 } });
+      const wal = Buffer.from("unverified orphaned WAL bytes");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+      fs.mkdirSync(path.dirname(walPath), { recursive: true });
+      fs.writeFileSync(storePath, legacy);
+      fs.writeFileSync(walPath, wal);
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+      };
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 
-    const report = await importLegacyStore(store);
+      const imported = runDoctorSessionSqlite({
+        allAgents: true,
+        cfg,
+        env,
+        mode: "import",
+      });
 
-    expect(report.targets[0]?.agentId).toBe("codex-proof");
-    expect(report.totals).toMatchObject({
-      importedEntries: 1,
-      importedTranscriptEvents: 2,
-      issues: 0,
-      sqliteEntries: 1,
-    });
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "codex-proof",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        storePath: store.storePath,
-      }),
-    ).toHaveLength(2);
-  });
+      if (location === "shared-state") {
+        await expect(imported).rejects.toThrow("is unavailable");
+      } else {
+        expect((await imported).targets).toEqual([]);
+        expect(() =>
+          assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" }),
+        ).toThrow("Legacy session store requires migration");
+        const agentStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        fs.mkdirSync(path.dirname(agentStorePath), { recursive: true });
+        fs.writeFileSync(agentStorePath, legacy);
+        for (const selection of [{ agent: "main" }, { store: agentStorePath }]) {
+          const explicit = await runDoctorSessionSqlite({
+            ...selection,
+            cfg,
+            env,
+            mode: "import",
+          });
+          expect(explicit.totals.importedEntries).toBe(0);
+          expect(explicit.targets.flatMap((target) => target.issues)).toContainEqual({
+            code: "plugin_migration_source_retained",
+            message: expect.stringContaining(`store held for agent main database ${sqlitePath}`),
+          });
+          expect(fs.readFileSync(agentStorePath, "utf8")).toBe(legacy);
+        }
+      }
+      expect(fs.readFileSync(storePath, "utf8")).toBe(legacy);
+      expect(fs.readFileSync(walPath)).toEqual(wal);
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+    },
+  );
+
+  it.each(["intact", "malformed-own-paths", "malformed-sibling-paths"] as const)(
+    "holds deleted legacy files when the retained agent database is absent (journal: %s)",
+    async (history) => {
+      const store = createLegacyStore({ agentDirName: "retired" });
+      const sqlitePath = resolveTargetSqlitePath(
+        { agentId: "retired", storePath: store.storePath },
+        store.env,
+      );
+      const before = [store.storePath, store.transcriptPath].map((file) => fs.readFileSync(file));
+      beginAgentDeletionJournal(
+        {
+          agentId: "retired",
+          operationId: "retained-legacy-only",
+          agentDir: path.dirname(sqlitePath),
+          workspaceDir: path.join(store.stateDir, "workspace-retired"),
+          sessionsDir: store.sessionDir,
+          deleteFiles: false,
+        },
+        { env: store.env },
+      );
+      runOpenClawStateWriteTransaction(
+        (database) =>
+          completeAgentDeletionJournalInDatabase(database, "retired", "retained-legacy-only"),
+        { env: store.env },
+      );
+      if (history === "malformed-own-paths") {
+        runOpenClawStateWriteTransaction(
+          (database) => {
+            database.db
+              .prepare(
+                "UPDATE agent_deletion_journal SET database_paths_json = ? WHERE agent_id = ?",
+              )
+              .run("{}", "retired");
+          },
+          { env: store.env },
+        );
+      } else if (history === "malformed-sibling-paths") {
+        seedUnreadableSiblingDeletion(store);
+      }
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+
+      const report = await runDoctorSessionSqlite({
+        allAgents: true,
+        cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+        env: store.env,
+        mode: "import",
+      });
+
+      expect(report.targets).toEqual([]);
+      expect([store.storePath, store.transcriptPath].map((file) => fs.readFileSync(file))).toEqual(
+        before,
+      );
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+      for (const selection of [{ agent: "retired" }, { store: store.storePath }]) {
+        const explicit = await runDoctorSessionSqlite({
+          ...selection,
+          cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+          env: store.env,
+          mode: "import",
+        });
+        expect(explicit.totals.importedEntries).toBe(0);
+        expect(explicit.targets.flatMap((target) => target.issues)).toContainEqual({
+          code: "plugin_migration_source_retained",
+          message: expect.stringContaining(`store held for agent retired database ${sqlitePath}`),
+        });
+        expect(
+          [store.storePath, store.transcriptPath].map((file) => fs.readFileSync(file)),
+        ).toEqual(before);
+        expect(fs.existsSync(sqlitePath)).toBe(false);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "imports explicit stores into the agent database owned by the path (unreadable sibling: %s)",
+    async (unreadableSibling) => {
+      const store = createLegacyStore({ agentDirName: "codex-proof" });
+      if (unreadableSibling) {
+        seedUnreadableSiblingDeletion(store);
+      }
+
+      const report = await importLegacyStore(store);
+
+      expect(report.targets[0]?.agentId).toBe("codex-proof");
+      expect(report.totals).toMatchObject({
+        importedEntries: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+        sqliteEntries: 1,
+      });
+      expect(
+        loadTranscriptEventsSync({
+          agentId: "codex-proof",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: store.storePath,
+        }),
+      ).toHaveLength(2);
+    },
+  );
 
   it("imports legacy entries even when their transcript sidecar is missing", async () => {
     const store = createLegacyStore();
@@ -131,18 +305,19 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(storePath)).toBe(true);
       expect(fs.existsSync(mainTranscriptPath)).toBe(true);
       expect(fs.existsSync(workTranscriptPath)).toBe(true);
+      const readScope = { env, storePath };
       expect(
         loadExactSessionEntry({
+          ...readScope,
           agentId: "main",
           sessionKey: "agent:main:main",
-          storePath,
         })?.entry.sessionId,
       ).toBe("main-session");
       expect(
         loadExactSessionEntry({
+          ...readScope,
           agentId: "work",
           sessionKey: "agent:work:main",
-          storePath,
         }),
       ).toBeUndefined();
     } finally {
@@ -207,18 +382,17 @@ describe("runDoctorSessionSqlite", () => {
       ["ops", "ops-session"],
     ] as const) {
       const agentStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      const readScope = { agentId, env, storePath: agentStorePath };
       expect(
         loadExactSessionEntry({
-          agentId,
+          ...readScope,
           sessionKey: `agent:${agentId}:main`,
-          storePath: agentStorePath,
         })?.entry.sessionId,
       ).toBe(sessionId);
       expect(
         loadExactSessionEntry({
-          agentId,
+          ...readScope,
           sessionKey: "voice:ambiguous",
-          storePath: agentStorePath,
         }),
       ).toBeUndefined();
     }
@@ -302,22 +476,22 @@ describe("runDoctorSessionSqlite", () => {
           sqliteEntries: 2,
         });
         expect(report.totals).toHaveProperty("reclaimedBytes");
-        const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-        for (const target of manifest.targets) {
+        for (const target of readMigrationManifest(report.migrationRun?.manifestPath).targets) {
           expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);
         }
+        const readScope = { env, storePath };
         expect(
           loadExactSessionEntry({
+            ...readScope,
             agentId: "main",
             sessionKey: "agent:main:main",
-            storePath,
           })?.entry.sessionId,
         ).toBe("main-session");
         expect(
           loadExactSessionEntry({
+            ...readScope,
             agentId: "work",
             sessionKey: "agent:work:main",
-            storePath,
           })?.entry.sessionId,
         ).toBe("work-session");
         expect(fs.existsSync(mainTranscriptPath)).toBe(false);
