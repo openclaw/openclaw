@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -99,7 +100,7 @@ describe("session companion embedded invocation", () => {
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
     loadEntry.mockReturnValue({ entry: { ...preparedTarget.sessionEntry } });
     removeSession.mockResolvedValue(undefined);
-    runEmbeddedAgent.mockResolvedValue({
+    runEmbeddedAgent.mockReset().mockResolvedValue({
       meta: { durationMs: 1, finalAssistantVisibleText: "The session is reading a file." },
     });
   });
@@ -143,8 +144,64 @@ describe("session companion embedded invocation", () => {
     },
   );
 
+  it.each(["catalog-only", "dynamic-discovery"])(
+    "uses the already prepared image model for %s without an extra resolution",
+    async (route) => {
+      const model = resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        cfg: { plugins: { entries: { mistral: { enabled: true } } } },
+        includeRuntimeDiscovery: true,
+      });
+      expect(model?.input).toContain("image");
+      if (!model) {
+        throw new Error("Expected the real bundled Mistral catalog row");
+      }
+      if (route === "catalog-only") {
+        resolveModelAsync.mockResolvedValue({ error: "Unknown model without bundled fallback" });
+      } else {
+        resolveModelAsync.mockRejectedValue(new Error("Unexpected additional dynamic discovery"));
+      }
+      const modelIo = vi.fn();
+      runEmbeddedAgent.mockImplementationOnce(async (params) => {
+        params.assertModelInput?.(model);
+        modelIo();
+        return { meta: { durationMs: 1, finalAssistantVisibleText: "The image is visible." } };
+      });
+      const companion = createCompanion();
+      const respond = vi.fn();
+      try {
+        await sessionCompanionHandlers["sessions.companion.ask"]!({
+          params: {
+            sessionKey: question.sessionKey,
+            question: "What does this show?",
+            attachments: [{ mimeType: "image/png", content: imageBase64 }],
+          },
+          client: { connId: "catalog-image-connection" },
+          context: { sessionCompanion: companion, getRuntimeConfig: () => ({}) },
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ answer: "The image is visible." }),
+        );
+        expect(modelIo).toHaveBeenCalledOnce();
+        expect(resolveModelAsync).not.toHaveBeenCalled();
+      } finally {
+        companion.dispose();
+      }
+    },
+  );
+
   it("rejects an image before model I/O when the selected Side chat model is text-only", async () => {
-    resolveModelAsync.mockResolvedValue({ model: { input: ["text"] } });
+    const modelIo = vi.fn();
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      params.assertModelInput?.({ input: ["text"] });
+      modelIo();
+      return {
+        meta: { durationMs: 1, finalAssistantVisibleText: "Must not answer an unseen image." },
+      };
+    });
     const companion = createCompanion();
     const respond = vi.fn();
     try {
@@ -165,17 +222,13 @@ describe("session companion embedded invocation", () => {
           message: expect.stringContaining("does not support image input"),
         }),
       );
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(resolveModelAsync).toHaveBeenCalledWith(
-        "test",
-        "model-a",
-        undefined,
-        {},
-        expect.objectContaining({ agentId: "main" }),
-      );
-      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+      expect(modelIo).not.toHaveBeenCalled();
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(resolveModelAsync).toHaveBeenCalledOnce();
+      expect(resolveModelAsync).not.toHaveBeenCalled();
+      await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
+      expect(resolveModelAsync).not.toHaveBeenCalled();
     } finally {
       companion.dispose();
     }

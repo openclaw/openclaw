@@ -20,10 +20,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import {
   buildSessionCompanionSystemPrompt,
   resolveSessionCompanionModel,
-  resolveSessionCompanionImageInputError,
+  assertSessionCompanionImageInput,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
 import {
@@ -97,25 +98,6 @@ type SessionCompanionActiveAsk = {
   controller: AbortController;
 };
 
-type SessionCompanionAskErrorReason =
-  | "busy"
-  | "context-unavailable"
-  | "rate-limited"
-  | "session-missing"
-  | "utility-model-unavailable"
-  | "unavailable";
-
-export class SessionCompanionAskError extends Error {
-  constructor(
-    readonly reason: SessionCompanionAskErrorReason,
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = "SessionCompanionAskError";
-  }
-}
-
 const EMPTY_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -152,12 +134,6 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     modelRef: params.modelRef,
     operatorAuthority: params.operatorAuthority,
   });
-  if (params.images?.length) {
-    const imageError = await resolveSessionCompanionImageInputError(params, selectedModel);
-    if (imageError) {
-      throw new SessionCompanionAskError("utility-model-unavailable", imageError);
-    }
-  }
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
@@ -246,6 +222,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       codeModeOverride: false,
       prompt: current.content,
       images: params.images,
+      assertModelInput: params.images?.length ? assertSessionCompanionImageInput : undefined,
       provider: selectedModel.runtimeProvider ?? selectedModel.provider,
       model: selectedModel.modelId,
       modelFallbacksOverride: [],
