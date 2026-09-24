@@ -289,7 +289,7 @@ describe("UsagePage cache convergence", () => {
       focusDocument();
       let snapshot = cacheSnapshot("stale");
       const provider = deferred<{ updatedAt: number; providers: never[] }>();
-      const usageStarted = deferred<void>();
+      const usageStarted = deferred();
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.usage") {
           usageStarted.resolve();
