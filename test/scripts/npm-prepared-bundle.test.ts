@@ -1,9 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,7 +21,6 @@ import {
 } from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
@@ -54,7 +51,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repository = "openclaw/openclaw";
-const require = createRequire(import.meta.url);
 const sourceSha = "a".repeat(40);
 const toolingSha = "b".repeat(40);
 const workflowPath = ".github/workflows/full-release-validation.yml";
@@ -663,26 +659,26 @@ describe("prepared npm bundle", () => {
     expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
   });
 
-  it("loads the declaration sanitizer compiler from the frozen candidate", () => {
+  it("does not load the declaration parser from the frozen candidate", () => {
     const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
     const marker = join(fixture.sourceDir, "candidate-typescript-loaded");
     const distRoot = join(fixture.sourceDir, "dist");
-    mkdirSync(join(fixture.sourceDir, "scripts"));
-    materializeNativeCompiler(fixture.sourceDir);
+    const candidateCompilerDir = join(fixture.sourceDir, "node_modules/typescript");
+    mkdirSync(candidateCompilerDir, { recursive: true });
     mkdirSync(distRoot);
     writeFileSync(
-      join(fixture.sourceDir, "scripts/tsx.mjs"),
-      `await import(${JSON.stringify(pathToFileURL(require.resolve("tsx/esm")).href)});\n`,
-    );
-    const candidateCompilerResolver = join(
-      fixture.sourceDir,
-      "node_modules/typescript/lib/getExePath.js",
+      join(candidateCompilerDir, "package.json"),
+      JSON.stringify({
+        name: "typescript",
+        type: "module",
+        exports: { "./unstable/*": "./forbidden.mjs" },
+      }),
     );
     writeFileSync(
-      candidateCompilerResolver,
+      join(candidateCompilerDir, "forbidden.mjs"),
       [
         `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        readFileSync(candidateCompilerResolver, "utf8"),
+        `throw new Error("loaded frozen candidate compiler");`,
       ].join("\n"),
     );
     writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
@@ -696,16 +692,8 @@ describe("prepared npm bundle", () => {
       pnpmPack.impl = undefined;
     }
 
-    expect(readFileSync(marker, "utf8")).toBe("loaded");
+    expect(existsSync(marker)).toBe(false);
     expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
-    expect(
-      existsSync(
-        join(fixture.sourceDir, ".release-harness/sanitize-bundler-helper-dts-exports.mts"),
-      ),
-    ).toBe(false);
-    expect(existsSync(join(fixture.sourceDir, ".release-harness/native-typescript.mts"))).toBe(
-      false,
-    );
   });
 
   it.each([true, false])(

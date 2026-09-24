@@ -12,7 +12,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -702,31 +701,19 @@ export function prepareNpmPackageBundle({
   npmDistTag,
   producer,
   sanitizeRootDeclarations = (distRoot) => {
-    const harnessDir = join(sourceDir, ".release-harness");
-    const toolingLibDir = join(dirname(fileURLToPath(import.meta.url)), "lib");
-    const harnessFiles = ["sanitize-bundler-helper-dts-exports.mts", "native-typescript.mts"];
-    mkdirSync(harnessDir, { recursive: true });
-    // Stage the sanitizer's complete runtime closure so its compiler resolves
-    // from the frozen candidate instead of the current tooling checkout.
-    for (const file of harnessFiles) {
-      copyFileSync(join(toolingLibDir, file), join(harnessDir, file));
-    }
-    try {
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          join(sourceDir, "scripts/tsx.mjs"),
-          join(harnessDir, harnessFiles[0]),
-          distRoot,
-        ],
-        { cwd: sourceDir, stdio: "inherit" },
-      );
-    } finally {
-      for (const file of harnessFiles) {
-        rmSync(join(harnessDir, file), { force: true });
-      }
-    }
+    const toolingScriptsDir = dirname(fileURLToPath(import.meta.url));
+    // Frozen candidates can own an older compiler API. The release tooling
+    // parses candidate text with its pinned parser, matching other frozen-target checks.
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(toolingScriptsDir, "tsx.mjs"),
+        join(toolingScriptsDir, "lib/sanitize-bundler-helper-dts-exports.mts"),
+        distRoot,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
   },
   refreshRootDistInventory = (directory) => {
     execFileSync(
