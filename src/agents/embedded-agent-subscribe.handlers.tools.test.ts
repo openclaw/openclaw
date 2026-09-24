@@ -4092,6 +4092,57 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("commits internal-ui source replies from successful message sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
+    });
+
+    const startEvt: ToolExecutionStartEvent = {
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    };
+    await startTool(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          idempotencyKey: "stable-source-reply",
+          sourceReply: {
+            text: "visible in tui",
+            mediaUrls: ["file:///tmp/reply.png"],
+            channelData: { source: "tui" },
+          },
+        },
+      },
+    };
+    await endTool(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible in tui",
+        mediaUrls: ["file:///tmp/reply.png"],
+        channelData: { source: "tui" },
+        idempotencyKey: "stable-source-reply",
+        sourceReplyFinal: true,
+      },
+    ]);
+  });
+
   it("commits trusted core current-channel widgets as message-tool-only source replies", async () => {
     const { ctx } = createTestContext();
     const onDeliveredMessageToolOnlySourceReply = vi.fn();
