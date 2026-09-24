@@ -80,6 +80,11 @@ Omitting `runtimes` retains the existing `openclaw` and `codex` scope. To target
 `agentsapi`, include it explicitly in both the registration's `runtimes` and
 the manifest's `contracts.agentToolResultMiddleware`.
 
+Use `normalizeAgentToolResultMiddlewareRuntimeIds` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` to register the runtime ids
+from your manifest directly. It applies the host's supported-runtime validation
+and removes duplicates, keeping the manifest as the single declaration.
+
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API. The

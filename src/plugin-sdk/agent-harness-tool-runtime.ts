@@ -2,6 +2,7 @@
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 
 export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+export { normalizeAgentToolResultMiddlewareRuntimeIds } from "../plugins/agent-tool-result-middleware.js";
 export {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
