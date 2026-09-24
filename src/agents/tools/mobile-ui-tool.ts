@@ -8,12 +8,13 @@
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
+import { isStringOption } from "../../utils/string-readers.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
@@ -26,7 +27,6 @@ const MOBILE_UI_CAPABILITY = "mobileUI";
 const MAX_WAIT_MS = 100_000;
 const MAX_SWIPE_DURATION_MS = 60_000;
 const GLOBAL_ACTION_NAMES = ["back", "home", "recents", "notifications"] as const;
-type GlobalActionName = (typeof GLOBAL_ACTION_NAMES)[number];
 
 const MobileUiActionSchema = Type.Union(
   [
@@ -87,14 +87,7 @@ const MobileUiToolSchema = Type.Object({
   ),
 });
 
-type MobileUiAction =
-  | { type: "activate"; ref: string }
-  | { type: "set_text"; ref: string; text: string }
-  | { type: "scroll"; ref: string; direction: "forward" | "backward" }
-  | { type: "tap"; x: number; y: number }
-  | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }
-  | { type: "global_action"; name: GlobalActionName }
-  | { type: "wait"; ms: number };
+type MobileUiAction = Static<typeof MobileUiActionSchema>;
 
 type MobileUiNode = {
   ref: string;
@@ -192,10 +185,10 @@ function readMobileUiAction(input: Record<string, unknown>): MobileUiAction {
       };
     case "global_action": {
       const name = readToolStringParam(action, "name", { required: true });
-      if (!(GLOBAL_ACTION_NAMES as readonly string[]).includes(name)) {
+      if (!isStringOption(name, GLOBAL_ACTION_NAMES)) {
         throw new ToolInputError("name must be back, home, recents, or notifications");
       }
-      return { type, name: name as GlobalActionName };
+      return { type, name };
     }
     case "wait":
       return { type, ms: readInteger(action, "ms", { minimum: 0, maximum: MAX_WAIT_MS }) };
@@ -416,39 +409,26 @@ function targetLabel(node: MobileUiNode): string {
   );
 }
 
-const STATE_CHANGING_ACTIONS = new Set<MobileUiAction["type"]>([
-  "activate",
-  "set_text",
-  "tap",
-  "swipe",
-]);
-type StateChangingMobileUiAction = Extract<
-  MobileUiAction,
-  { type: "activate" | "set_text" | "tap" | "swipe" }
->;
-
-function isStateChangingAction(action: MobileUiAction): action is StateChangingMobileUiAction {
-  return STATE_CHANGING_ACTIONS.has(action.type);
-}
-
 function stateChangingTarget(
   snapshot: MobileUiSnapshot,
   action: MobileUiAction,
 ): { node: MobileUiNode | null; label: string } | null {
-  if (!isStateChangingAction(action)) {
-    return null;
+  switch (action.type) {
+    case "tap":
+      return { node: null, label: `coordinates (${action.x}, ${action.y})` };
+    case "swipe":
+      return {
+        node: null,
+        label: `coordinates (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`,
+      };
+    case "activate":
+    case "set_text": {
+      const node = snapshot.nodes.find((candidate) => candidate.ref === action.ref) ?? null;
+      return { node, label: node ? targetLabel(node) : `node ${action.ref}` };
+    }
+    default:
+      return null;
   }
-  if (action.type === "tap") {
-    return { node: null, label: `coordinates (${action.x}, ${action.y})` };
-  }
-  if (action.type === "swipe") {
-    return {
-      node: null,
-      label: `coordinates (${action.x1}, ${action.y1}) to (${action.x2}, ${action.y2})`,
-    };
-  }
-  const node = snapshot.nodes.find((candidate) => candidate.ref === action.ref) ?? null;
-  return { node, label: node ? targetLabel(node) : `node ${action.ref}` };
 }
 
 function enrichStateChangingEffect(

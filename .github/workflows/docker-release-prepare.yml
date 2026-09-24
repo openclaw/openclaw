@@ -166,6 +166,7 @@ jobs:
           for attempt in 1 2 3 4; do
             if docker pull "${BUILDKIT_IMAGE}"; then break; fi
             if [[ "${attempt}" == 4 ]]; then exit 1; fi
+            echo "::warning::BuildKit image acquisition failed; retrying Docker registry transport (${attempt}/4)."
             sleep "$((attempt * 10))"
           done
       - name: Set up Docker Buildx

@@ -144,11 +144,7 @@ export function lookupInboundMessageMetaForTarget(
   if (exact) {
     return {
       remoteJid: targetJid,
-      participant: exact.participant,
-      participantE164: exact.participantE164,
-      body: exact.body,
-      media: exact.media,
-      fromMe: exact.fromMe,
+      ...exact,
     };
   }
   const prefix = `${accountId}:`;

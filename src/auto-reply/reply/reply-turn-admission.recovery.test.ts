@@ -252,6 +252,7 @@ describe("reply turn recovery admission", () => {
         expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(entry);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         if (failed) {
+          await admission;
           expect(failure).toMatchObject({
             message: expect.stringMatching(/restart recovery failed/i),
           });

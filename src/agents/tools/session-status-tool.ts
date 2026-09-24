@@ -4,7 +4,7 @@
  * Reports and updates session runtime state, model overrides, visibility, task status, and delivery context.
  */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -24,8 +24,7 @@ import {
   getSessionStateVersion,
   listSessionStateEventsSince,
 } from "../../sessions/session-state-events.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { BuildStatusTextParams } from "../../status/status-text.types.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import {
   formatTaskStatus,
@@ -208,32 +207,12 @@ function compactSessionStateChanges(stateChanges: SessionStatusStateChanges) {
   };
 }
 
-type CommandsStatusRuntimeModule = {
-  buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
-};
-
-const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntimeModule>(
-  () => import("../../status/status-text.js") as Promise<CommandsStatusRuntimeModule>,
-);
-
-function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
-  return commandsStatusRuntimeLoader.load();
-}
+const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
 
 type ActiveStatusModelIdentity = { provider?: string; model: string };
 
-type SessionStatusOriginDetails = {
-  provider?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-type SessionStatusDeliveryContextDetails = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+type SessionStatusOriginDetails = Static<typeof SessionStatusOriginSchema>;
+type SessionStatusDeliveryContextDetails = Static<typeof SessionStatusDeliveryContextSchema>;
 
 type SessionStatusRouteDetails = {
   origin?: SessionStatusOriginDetails;
@@ -253,11 +232,9 @@ function readRouteThreadId(value: unknown): string | number | undefined {
   return undefined;
 }
 
-function compactOriginDetails(params: {
-  provider?: string;
-  accountId?: string;
-  threadId?: string | number;
-}): SessionStatusOriginDetails | undefined {
+function compactOriginDetails(
+  params: SessionStatusOriginDetails,
+): SessionStatusOriginDetails | undefined {
   const threadId = readRouteThreadId(params.threadId);
   const details: SessionStatusOriginDetails = {
     ...(params.provider ? { provider: params.provider } : {}),
@@ -267,12 +244,9 @@ function compactOriginDetails(params: {
   return Object.keys(details).length ? details : undefined;
 }
 
-function compactDeliveryContextDetails(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-}): SessionStatusDeliveryContextDetails | undefined {
+function compactDeliveryContextDetails(
+  params: SessionStatusDeliveryContextDetails,
+): SessionStatusDeliveryContextDetails | undefined {
   const threadId = readRouteThreadId(params.threadId);
   const details: SessionStatusDeliveryContextDetails = {
     ...(params.channel ? { channel: params.channel } : {}),
@@ -424,12 +398,7 @@ function formatSessionTaskLine(params: {
   callerAgentId: string;
   config: OpenClawConfig;
 }): string | undefined {
-  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner({
-    relatedSessionKey: params.relatedSessionKey,
-    callerOwnerKey: params.callerOwnerKey,
-    callerAgentId: params.callerAgentId,
-    config: params.config,
-  });
+  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params);
   const task = snapshot.focus;
   if (!task) {
     return undefined;
@@ -492,7 +461,6 @@ export function createSessionStatusTool(opts?: {
         sessionKey: opts?.agentSessionKey ?? effectiveRequesterKey,
         agentId: opts?.requesterAgentIdOverride,
       }).sessionAgentId;
-      const configuredDefaultAgentId = requesterAgentId;
       const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
       const isLegacyMainVisibilityKey = (sessionKey: string) => {
@@ -502,7 +470,7 @@ export function createSessionStatusTool(opts?: {
       const resolveVisibilityMainSessionKey = (sessionAgentId: string) => {
         const requesterParsed = parseAgentSessionKey(visibilityRequesterKey);
         if (
-          resolveAgentIdFromSessionKey(visibilityRequesterKey, configuredDefaultAgentId) ===
+          resolveAgentIdFromSessionKey(visibilityRequesterKey, requesterAgentId) ===
             sessionAgentId &&
           (requesterParsed?.rest === mainKey || isLegacyMainVisibilityKey(visibilityRequesterKey))
         ) {
@@ -547,14 +515,11 @@ export function createSessionStatusTool(opts?: {
           return cached;
         }
         const access = await resolveSessionToolAccess({
+          ...target,
           action: "status",
           requesterAgentId,
           requesterSessionKey: visibilityRequesterKey,
           mainSessionKey,
-          authorizationTargetSessionKey: target.authorizationTargetSessionKey,
-          targetAgentId: target.targetAgentId,
-          targetSessionKey: target.targetSessionKey,
-          requesterOwned: target.requesterOwned,
           visibility: sessionVisibility,
           a2aPolicy,
           callGateway: gatewayCall,

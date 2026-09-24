@@ -13,12 +13,14 @@ import {
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import * as agentDatabasePaths from "../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -169,6 +171,8 @@ test.runIf(process.platform !== "win32")(
         },
       });
     } finally {
+      await disposeSessionReadContexts();
+      await releaseGatewaySessionStoreFixture(aliasStateDir);
       fsSync.rmSync(aliasStateDir, { force: true });
     }
   },
@@ -194,7 +198,7 @@ test("configured-only multi-store target preparation is reused across distinct l
     }
 
     expect((await directSessionReq("sessions.list", { configuredAgentsOnly: true })).ok).toBe(true);
-    const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
+    const matcher = vi.spyOn(agentDatabasePaths, "createOpenClawAgentDatabasePathMatcher");
     const lstat = vi.spyOn(fsSync, "lstatSync");
     const readlink = vi.spyOn(fsSync, "readlinkSync");
     const realpath = vi.spyOn(fsSync.realpathSync, "native");

@@ -320,7 +320,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 
   it.each([
     {
-      name: "hands off live and pending webhook accounts while preserving a manual stop",
+      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
       teardownFails: false,
     },
     {

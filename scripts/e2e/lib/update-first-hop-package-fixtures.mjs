@@ -37,7 +37,7 @@ function readFirstHopReleases(packageRoot) {
   return releases;
 }
 
-export function listFirstHopSourceVersions(packageRoot) {
+export function listFirstHopSourceVersions(packageRoot, filter = "") {
   const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
   if (
     versions.length === 0 ||
@@ -49,7 +49,14 @@ export function listFirstHopSourceVersions(packageRoot) {
   ) {
     throw new Error("first-hop defaults require recorded release versions in the candidate");
   }
-  return versions;
+  const selected = filter.split(/[\s,]+/u).filter(Boolean);
+  const unrecorded = selected.filter((version) => !versions.includes(version));
+  if (unrecorded.length > 0) {
+    throw new Error(
+      `first-hop sources are not recorded in the candidate: ${unrecorded.join(", ")}`,
+    );
+  }
+  return selected.length > 0 ? versions.filter((version) => selected.includes(version)) : versions;
 }
 
 export function inspectFirstHopSource(packageRoot, tarball, options = {}) {
@@ -353,7 +360,7 @@ function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0)
 function main() {
   const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
   if (mode === "sources" && packageRoot) {
-    process.stdout.write(`${listFirstHopSourceVersions(packageRoot).join("\n")}\n`);
+    process.stdout.write(`${listFirstHopSourceVersions(packageRoot, outputTarball).join("\n")}\n`);
     return;
   }
   if (mode === "source" && packageRoot && outputTarball) {

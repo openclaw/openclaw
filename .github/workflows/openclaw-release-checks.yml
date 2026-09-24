@@ -1391,7 +1391,6 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
-      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       target_context_ref: ${{ inputs.target_context_ref }}
       previous_version: ${{ needs.prepare_release_package.outputs.upgrade_baseline }}
@@ -1431,13 +1430,8 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
-      # Live-provider suites depend on third-party model deployments; beta
-      # treats only those as advisory while repo E2E stays blocking and
-      # stable/full keep everything blocking.
-      live_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
       gateway_repo_e2e_use_github_hosted_runners: false
@@ -1508,7 +1502,6 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1556,7 +1549,6 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
-      advisory: false
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
       source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}
@@ -1578,7 +1570,6 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.prepare_release_package.outputs.upgrade_survivor_scenarios }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}
-      telegram_advisory: true
       shared_image_artifact_namespace: release-package
       candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
@@ -1653,7 +1644,6 @@ jobs:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1822,7 +1812,6 @@ jobs:
     name: Run QA Lab parity report
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -1949,7 +1938,6 @@ jobs:
     name: Run QA Lab runtime-pair lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    continue-on-error: true
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
@@ -1991,7 +1979,6 @@ jobs:
 
       - name: Run runtime-pair lane
         id: candidate_runtime_pair
-        continue-on-error: true
         env:
           RUNTIME_PAIR_LANE: ${{ matrix.lane }}
         run: |
@@ -2053,9 +2040,6 @@ jobs:
             validator_args+=(--require-explicit-gap)
           fi
           node --import tsx trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"
-          if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
-            echo "::notice::Trusted workflow validation accepted frozen-candidate runtime-pair evidence after its suite failed."
-          fi
 
       - name: Run OpenClaw core restart proof
         id: runtime_core_restart
@@ -2165,7 +2149,6 @@ jobs:
     name: Verify QA Lab runtime-pair lanes
     needs: [resolve_target, qa_lab_runtime_pair_lane_release_checks]
     if: always() && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.qa_parity_scheduled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -2426,12 +2409,11 @@ jobs:
       OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   # The child owns Telegram evidence/status artifacts. Preserve its actual outcome
-  # while release policy treats this pool-dependent test attempt as advisory.
+  # and the parent preserves its actual failure conclusion.
   qa_live_telegram_release_checks:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
-    continue-on-error: true
     outputs:
       conclusion: ${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}
       identity_verified: ${{ steps.dispatch.outputs.identity_verified }}
@@ -2541,14 +2523,14 @@ jobs:
               conclusion="$(jq -r .conclusion <<<"$run_json")"
               echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
               if [[ "$conclusion" != "success" ]]; then
-                echo "::warning::Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
+                echo "::error::Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
                 exit 1
               fi
               exit 0
             fi
             sleep 10
           done
-          echo "::warning::Timed out awaiting trusted Telegram QA: ${child_url}" >&2
+          echo "::error::Timed out awaiting trusted Telegram QA: ${child_url}" >&2
           exit 1
 
       - name: Summarize Telegram attempt
@@ -2560,20 +2542,19 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "## Telegram release QA (advisory)"
+            echo "## Telegram release QA"
             echo
             echo "- Telegram attempt: ${CONCLUSION}"
             [[ -z "$CHILD_URL" ]] || echo "- Child evidence: ${CHILD_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$CONCLUSION" != "success" ]]; then
-            echo "::warning::Telegram attempt: ${CONCLUSION}; release testing is best effort."
+            echo "::error::Telegram attempt: ${CONCLUSION}"
           fi
 
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -2636,25 +2617,15 @@ jobs:
           output_dir=".artifacts/qa-e2e/discord-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa discord \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --model mock-openai/gpt-5.6-luna \
-              --alt-model mock-openai/gpt-5.6-luna-alt \
-              --fast \
-              --credential-source convex \
-              --credential-role ci; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Discord live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
+          pnpm openclaw qa discord \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --model mock-openai/gpt-5.6-luna \
+            --alt-model mock-openai/gpt-5.6-luna-alt \
+            --fast \
+            --credential-source convex \
+            --credential-role ci
 
       - name: Upload Discord QA artifacts
         id: upload_discord_qa_artifacts
@@ -2689,7 +2660,6 @@ jobs:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -2736,25 +2706,15 @@ jobs:
           output_dir=".artifacts/qa-e2e/whatsapp-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa whatsapp \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --model mock-openai/gpt-5.6-luna \
-              --alt-model mock-openai/gpt-5.6-luna-alt \
-              --fast \
-              --credential-source convex \
-              --credential-role ci; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "WhatsApp live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
+          pnpm openclaw qa whatsapp \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --model mock-openai/gpt-5.6-luna \
+            --alt-model mock-openai/gpt-5.6-luna-alt \
+            --fast \
+            --credential-source convex \
+            --credential-role ci
 
       - name: Upload WhatsApp QA artifacts
         id: upload_whatsapp_qa_artifacts
@@ -2789,7 +2749,6 @@ jobs:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
     if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
-    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -2833,25 +2792,15 @@ jobs:
           output_dir=".artifacts/qa-e2e/slack-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa slack \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --model mock-openai/gpt-5.6-luna \
-              --alt-model mock-openai/gpt-5.6-luna-alt \
-              --fast \
-              --credential-source convex \
-              --credential-role ci; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Slack live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
+          pnpm openclaw qa slack \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --model mock-openai/gpt-5.6-luna \
+            --alt-model mock-openai/gpt-5.6-luna-alt \
+            --fast \
+            --credential-source convex \
+            --credential-role ci
 
       - name: Upload Slack QA artifacts
         id: upload_slack_qa_artifacts
@@ -3033,7 +2982,6 @@ jobs:
           RELEASE_CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           RELEASE_PHASE: ${{ needs.resolve_target.outputs.phase }}
-          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           failed=0
@@ -3063,20 +3011,12 @@ jobs:
               "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
             )
           fi
-          tideclaw_alpha=false
-          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            tideclaw_alpha=true
-          fi
           validated_status_file=".artifacts/release-check-selection/advisory-evidence-validated.json"
           if [[ "$RESOLVE_ADVISORY_EVIDENCE_OUTCOME" != "success" ||
                 "$VALIDATE_ADVISORY_STATUSES_OUTCOME" != "success" ]]; then
             status_resolution_message="Advisory evidence resolution or validation failed for run ${RELEASE_CHECK_RUN_ID} through attempt ${RELEASE_CHECK_RUN_ATTEMPT}."
-            if [[ "$tideclaw_alpha" == "true" ]]; then
-              echo "::warning::${status_resolution_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
-            else
-              echo "::error::${status_resolution_message}"
-              failed=1
-            fi
+            echo "::error::${status_resolution_message}"
+            failed=1
           fi
           validated_status() {
             local expected_job="$1"
@@ -3160,27 +3100,19 @@ jobs:
               result="$raw_result"
             fi
             if [[ "$name" == "qa_live_telegram_release_checks" ]]; then
-              # Only an identified child execution is advisory; dispatch provenance remains a gate.
+              # Preserve child provenance and require a selected child to succeed.
               if [[ "$result" != "skipped" && "$QA_LIVE_TELEGRAM_IDENTITY_VERIFIED" != "true" ]]; then
                 echo "::error::Telegram dispatch identity was not verified"
                 failed=1
                 continue
               fi
               if [[ "$result" != "success" && "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
-                echo "::warning::${name} ended with ${result}; Telegram release testing is best effort and does not block release validation."
+                echo "::error::${name} ended with ${result}"
+                failed=1
               fi
               continue
             fi
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              if [[ "$tideclaw_alpha" == "true" ]]; then
-                case "$name" in
-                  resolve_target|prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
-                  *)
-                    echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
-                    continue
-                    ;;
-                esac
-              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi

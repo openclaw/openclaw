@@ -381,6 +381,7 @@ wait_for_run() {
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
   local approved_environment="${6:-}"
+  local wait_for_terminal="${7:-false}"
   local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -399,8 +400,10 @@ wait_for_run() {
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
-      print_failed_run_summary "${run_id}"
-      return 1
+      if [[ "$wait_for_terminal" != "true" ]]; then
+        print_failed_run_summary "${run_id}"
+        return 1
+      fi
     fi
     if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
       started_jobs="$(jq -c --arg name "${started_job}" '[.[] | select(.name == $name)]' <<< "${jobs_json}")" || return 1

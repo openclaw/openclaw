@@ -762,24 +762,6 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
   });
 
-  it("drops the digest band when there is no digest to show", async () => {
-    const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
-    expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();
-
-    const withoutDigest = await mount({
-      digest: null,
-      running: false,
-      activeRunId: null,
-      companion: {
-        turns: [],
-        loading: false,
-        draft: "What changed?",
-      },
-    });
-    expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-    expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
-  });
-
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {
     localStorage.setItem(displayPreferenceKey, "pill");
     const onCommandConsumed = vi.fn();

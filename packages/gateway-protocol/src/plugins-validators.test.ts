@@ -65,6 +65,7 @@ describe("plugin lifecycle protocol validators", () => {
     const runtime = { operationId: "reload", generation: 2, pluginIds: ["alpha", "beta"] };
     const batch = { ok: true, pluginIds: ["alpha", "beta"], restartRequired: false, runtime };
     expect(Value.Check(PluginsReloadResultSchema, batch)).toBe(true);
+    expect(Value.Check(PluginsReloadResultSchema, { ...batch, restartRequired: true })).toBe(true);
     expect(
       Value.Check(PluginsReloadResultSchema, {
         ...batch,
@@ -81,7 +82,7 @@ describe("plugin lifecycle protocol validators", () => {
     const { runtime: _runtime, ...withoutReceipt } = batch;
     for (const result of [
       withoutReceipt,
-      { ...batch, restartRequired: true },
+      { ...batch, restartRequired: "true" },
       { ...batch, pluginIds: [] },
       { ...batch, warnings: "cleanup failed" },
     ]) {
