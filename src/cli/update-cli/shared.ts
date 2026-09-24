@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -69,6 +69,8 @@ export type UpdateCommandOptions = {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
+    /** Candidate-reported admission checks; execution authority remains installed-owned. */
+    candidateAdmissionChecks?: readonly string[];
     /** Completion routing only; mutation authority remains with the live executor. */
     completionOwner?: "gateway-restart";
     /** The handoff helper acknowledged the foreground Gateway's closure. */
@@ -79,6 +81,7 @@ export type UpdateCommandOptions = {
     executorFence?: UpdateRecoveryFence;
   };
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
   dryRun?: boolean;
@@ -92,6 +95,14 @@ export type UpdateStatusOptions = {
   json?: boolean;
   timeout?: string;
 };
+
+/** Only package updates hand admission to a privately staged candidate. */
+export function usesCandidateUpdateAdmission(
+  opts: Pick<UpdateCommandOptions, "admission" | "dryRun">,
+  installKind: "git" | "package" | "unknown",
+): boolean {
+  return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
+}
 
 export type UpdateFinalizeOptions = {
   acceptCapabilities?: boolean;
@@ -111,6 +122,8 @@ export type UpdateWizardOptions = {
 };
 
 export class UpdatePreMutationError extends Error {
+  readonly origin?: "candidate-admission";
+  readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
 
@@ -120,10 +133,14 @@ export class UpdatePreMutationError extends Error {
     options?: ErrorOptions & {
       failureFacts?: readonly UpdateFailureFact[];
       recoverySteps?: readonly UpdateRecoveryStep[];
+      origin?: "candidate-admission";
+      nextAction?: string;
     },
   ) {
     super(message, options);
     this.name = "UpdatePreMutationError";
+    this.origin = options?.origin;
+    this.nextAction = options?.nextAction;
     this.recoverySteps = options?.recoverySteps;
     this.failureFacts = normalizeUpdateFailureFacts(
       options?.failureFacts ?? [{ check: reason, code: reason, message }],
@@ -132,19 +149,17 @@ export class UpdatePreMutationError extends Error {
 }
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
-const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
 /** Parse the shared timeout contract without exiting an owning operation. */
 export function parseUpdateTimeoutMs(timeout?: string): number | undefined {
   if (timeout === undefined) {
     return undefined;
   }
-  const trimmed = timeout.trim();
-  const seconds = parseStrictPositiveInteger(trimmed);
-  if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
+  const milliseconds = positiveSecondsToSafeMilliseconds(timeout.trim());
+  if (milliseconds === undefined) {
     throw new Error(INVALID_TIMEOUT_ERROR);
   }
-  return seconds * 1000;
+  return milliseconds;
 }
 
 /** Parse a CLI timeout in seconds, exiting through the runtime on invalid input. */
@@ -240,10 +255,6 @@ export function resolveGitInstallDir(): string {
   if (override) {
     return path.resolve(override);
   }
-  return resolveDefaultGitDir();
-}
-
-function resolveDefaultGitDir(): string {
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
@@ -251,16 +262,11 @@ function resolveDefaultGitDir(): string {
   return path.join(home, "openclaw");
 }
 
-export function tryResolveInvocationCwd(): string | undefined {
-  try {
-    return process.cwd();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Locate the installed OpenClaw package root that should receive update operations. */
-export async function resolveUpdateRoot(): Promise<string> {
+export async function resolveUpdateRoot(context?: { root: string }): Promise<string> {
+  if (context) {
+    return path.resolve(context.root);
+  }
   // Preserve the lexical package path from the invoking shim. pnpm 11 package
   // modules realpath into a shared store, which is not the install owner.
   const invocationRoot = process.argv[1]
@@ -490,25 +496,13 @@ export async function ensureGitCheckout(params: {
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
-  if (!dirExists) {
-    return await cloneGitCheckoutTransactionally({
-      dir: params.dir,
-      env: gitEnv,
-      timeoutMs: params.timeoutMs,
-      progress: params.progress,
-      useStagedCheckout: params.useStagedCheckout,
-    });
-  }
-
-  if (!(await isGitCheckout(params.dir))) {
-    const empty = await isEmptyDir(params.dir);
-    if (!empty) {
+  if (!dirExists || !(await isGitCheckout(params.dir))) {
+    if (dirExists && !(await isEmptyDir(params.dir))) {
       throw new UpdatePreMutationError(
         "invalid-git-directory",
         `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
       );
     }
-
     return await cloneGitCheckoutTransactionally({
       dir: params.dir,
       env: gitEnv,

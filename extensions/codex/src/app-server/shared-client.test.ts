@@ -14,6 +14,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { registerSharedClientConnectionArtifactTests } from "./shared-client-connection-artifact.test-support.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
 import { createClientHarness } from "./test-support.js";
@@ -483,25 +484,6 @@ describe("shared Codex app-server client", () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 
-  it("bounds isolated transport startup and closes a client returned after its deadline", async () => {
-    vi.useFakeTimers();
-    const harness = createClientHarness();
-    let finishStart!: (client: CodexAppServerClient) => void;
-    const starting = new Promise<CodexAppServerClient>((resolve) => {
-      finishStart = resolve;
-    });
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(starting);
-    const acquire = createIsolatedCodexAppServerClient({ timeoutMs: 50 });
-    const rejected = expect(acquire).rejects.toThrow("codex app-server initialize timed out");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(startSpy).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(50);
-    await rejected;
-    finishStart(harness.client);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(harness.stdinDestroyed).toBe(true);
-  });
-
   it.each(["implicit", "explicit"] as const)(
     "revalidates %s auth before reusing a warm client after account replacement",
     async (selector) => {
@@ -659,13 +641,16 @@ describe("shared Codex app-server client", () => {
     }
   });
 
-  registerSharedClientLifetimeTests(() => {
-    mocks.bridgeCodexAppServerStartOptions.mockImplementationOnce(async ({ startOptions }) => ({
-      ...startOptions,
-      transport: "websocket",
-      url: "ws://127.0.0.1:8123",
-    }));
-  });
+  registerSharedClientLifetimeTests(
+    () => {
+      mocks.bridgeCodexAppServerStartOptions.mockImplementationOnce(async ({ startOptions }) => ({
+        ...startOptions,
+        transport: "websocket",
+        url: "ws://127.0.0.1:8123",
+      }));
+    },
+    (error) => mocks.applyCodexAppServerAuthProfile.mockRejectedValue(error),
+  );
 
   it.each(["fails", "succeeds"])(
     "preserves a co-lease when selection replacement acquisition %s",
@@ -975,25 +960,7 @@ describe("shared Codex app-server client", () => {
     });
   });
 
-  it("fails capture-mode WebSocket startup before opening a client", async () => {
-    const startSpy = vi.spyOn(CodexAppServerClient, "start");
-    const startOptions: CodexAppServerStartOptions = {
-      transport: "websocket",
-      command: "codex",
-      commandSource: "config",
-      args: ["app-server"],
-      url: "ws://127.0.0.1:1234",
-      headers: {},
-    };
-
-    await expect(
-      getLeasedSharedCodexAppServerClient({
-        startOptions,
-        runtimeArtifactMode: "capture",
-      }),
-    ).rejects.toThrow("WebSocket attestation is unsupported");
-    expect(startSpy).not.toHaveBeenCalled();
-  });
+  registerSharedClientConnectionArtifactTests();
 
   it("detects persisted Computer Use enabled after managed client startup", async () => {
     await withTempDir("openclaw-codex-managed-selection-", async (root) => {
@@ -1240,6 +1207,7 @@ describe("shared Codex app-server client", () => {
     );
     await firstStarted;
     await vi.advanceTimersByTimeAsync(5);
+    first.emitExit();
     await firstRejection;
     expect(first.process.stdin.destroyed).toBe(true);
 
@@ -1357,6 +1325,7 @@ describe("shared Codex app-server client", () => {
     const rejection = expect(client).rejects.toThrow("codex app-server initialize timed out");
     await started;
     await vi.advanceTimersByTimeAsync(5);
+    harness.emitExit();
     await rejection;
     expect(harness.process.stdin.destroyed).toBe(true);
   });

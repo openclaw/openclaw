@@ -119,16 +119,6 @@ on:
         required: false
         default: false
         type: boolean
-      advisory:
-        description: Treat failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
-      live_advisory:
-        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
-        required: false
-        default: false
-        type: boolean
       allow_unreleased_changelog:
         description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
@@ -212,16 +202,11 @@ on:
         description: Docker image archive SHA-256
         value: ${{ jobs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
     inputs:
-      advisory:
-        description: Treat failures as advisory for the caller
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
         required: false
-        default: false
-        type: boolean
-      live_advisory:
-        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
-        required: false
-        default: false
-        type: boolean
+        default: ""
+        type: string
       allow_unreleased_changelog:
         description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
@@ -587,7 +572,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 30
     outputs:
       fs_safe_native_contract: ${{ steps.frozen_admission.outputs.fs_safe_native_contract }}
@@ -1101,7 +1086,7 @@ jobs:
 
   plan_release_workflow_matrices:
     needs: validate_selected_ref
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 10
     outputs:
       live_docker_count: ${{ steps.plan.outputs.live_docker_count }}
@@ -1168,8 +1153,7 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1205,16 +1189,7 @@ jobs:
       - name: Verify live prompt cache floors
         run: |
           set -euo pipefail
-          for attempt in 1 2; do
-            echo "live-cache attempt ${attempt}/2"
-            if timeout --foreground --kill-after=30s 8m pnpm test:live:cache; then
-              exit 0
-            fi
-            if [[ "$attempt" == "2" ]]; then
-              exit 1
-            fi
-            sleep $((attempt * 15))
-          done
+          timeout --foreground --kill-after=30s 8m pnpm test:live:cache
 
   validate_repo_e2e_gateway:
     name: Gateway E2E
@@ -1222,6 +1197,7 @@ jobs:
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
       workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -1232,7 +1208,6 @@ jobs:
          {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
          {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
       use_github_hosted_runners: ${{ inputs.use_github_hosted_runners && inputs.gateway_repo_e2e_use_github_hosted_runners }}
-      advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
@@ -1242,6 +1217,7 @@ jobs:
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && inputs.live_suite_filter == ''
     uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
     with:
+      runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
       workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -1253,15 +1229,13 @@ jobs:
          {"name":"UI 4/4","command":"pnpm test:ui:e2e --shard=4/4"},
          {"name":"Agent plugin Gateway","command":"pnpm test:e2e:agent-plugin-gateway","target_script":"test:e2e:agent-plugin-gateway"}]
       use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
-      advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1553,8 +1527,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1913,8 +1886,7 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.docker_lanes != ''
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
@@ -1965,8 +1937,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: (!inputs.prepare_only) && inputs.docker_lanes != '' && needs.plan_docker_lane_groups.outputs.groups_json != '[]'
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -2266,8 +2237,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: (!inputs.prepare_only) && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2414,8 +2384,7 @@ jobs:
     name: Prepare shared Docker E2E image
     needs: validate_selected_ref
     if: inputs.prepare_only || inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    # Image preparation stays blocking even when validation suites are advisory.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
@@ -3285,7 +3254,7 @@ jobs:
     name: Bind full release candidate evidence
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.emit_candidate_evidence && needs.prepare_docker_e2e_image.result == 'success'
-    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -3666,6 +3635,8 @@ jobs:
               echo "Full release candidate evidence metadata is unavailable." >&2
               exit 1
             fi
+            # A newly uploaded artifact may precede its metadata projection; no tests run here.
+            echo "::warning::Full release candidate artifact metadata returned 404; retrying acquisition ($attempt/3)."
             sleep "$((attempt * 2))"
           done
           artifact_expires_at="$(
@@ -3697,8 +3668,7 @@ jobs:
   prepare_live_test_image:
     needs: [validate_selected_ref, plan_release_workflow_matrices]
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    # Image preparation stays blocking even when validation suites are advisory.
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -3849,8 +3819,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -4031,8 +4000,7 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: (!inputs.prepare_only) && inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4236,8 +4204,7 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -4274,7 +4241,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
@@ -4282,7 +4248,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
@@ -4319,14 +4284,12 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4334,7 +4297,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4342,7 +4304,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4350,7 +4311,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
             suite_group: native-live-src-gateway-profiles-opencode-go
@@ -4358,7 +4318,6 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
@@ -4372,21 +4331,18 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
@@ -4411,14 +4367,12 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-moonshot
             label: Native live Moonshot plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
@@ -4431,14 +4385,12 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4590,28 +4542,14 @@ jobs:
         if: steps.selection.outputs.run == 'true'
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
         shell: bash
-        run: |
-          set +e
-          bash .release-harness/scripts/ci-live-command-retry.sh
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: (!inputs.prepare_only) && needs.plan_release_workflow_matrices.outputs.live_docker_count != '0'
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -4793,29 +4731,14 @@ jobs:
         if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
-          LIVE_SUITE_ID: ${{ matrix.suite_id }}
         shell: bash
-        run: |
-          set +e
-          bash .release-harness/scripts/ci-live-command-retry.sh
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: $LIVE_SUITE_ID"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:
@@ -4831,28 +4754,24 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-audio
             label: Native live media audio plugins
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-google
             label: Native live media music Google
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-minimax
             label: Native live media music MiniMax
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-a
             suite_group: native-live-extensions-media-video
@@ -4860,7 +4779,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-b
             suite_group: native-live-extensions-media-video
@@ -4868,7 +4786,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
@@ -4876,7 +4793,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-d
             suite_group: native-live-extensions-media-video
@@ -4884,7 +4800,6 @@ jobs:
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 30
             profile_env_only: false
-            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -4970,6 +4885,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Setup trusted release harness
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -4986,18 +4907,6 @@ jobs:
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
-          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
-        run: |
-          set +e
-          ${{ matrix.command }}
-          status=$?
-          set -e
-          if [[ "$status" -eq 0 ]]; then
-            exit 0
-          fi
-          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
-            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
-            exit 0
-          fi
-          exit "$status"
+        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"

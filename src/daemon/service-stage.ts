@@ -101,7 +101,7 @@ export async function publishServiceFile(params: {
   await hooks?.fileWritten(params.filePath, params.contents);
 }
 
-/** Read one stable regular file; publication owners compare it to retained write facts. */
+/** Read one regular file; publication owners compare it to retained write facts. */
 export async function readServiceFileState(file: string): Promise<GatewayServiceFileState | null> {
   const before = await fs.lstat(file).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -118,24 +118,23 @@ export async function readServiceFileState(file: string): Promise<GatewayService
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const opened = await handle.stat();
-    const keys = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode"] as const;
+    const keys = ["dev", "ino", "mode"] as const;
     if (!opened.isFile() || keys.some((key) => before[key] !== opened[key])) {
       throw new Error("Managed service artifact changed before inspection.");
     }
     const contents = await handle.readFile();
-    const after = await handle.stat();
     const current = await fs.lstat(file);
-    if (keys.some((key) => before[key] !== after[key] || after[key] !== current[key])) {
+    if (keys.some((key) => opened[key] !== current[key])) {
       throw new Error("Managed service artifact changed during inspection.");
     }
     return {
       sha256: createHash("sha256").update(contents).digest("hex"),
-      mode: after.mode & 0o7777,
-      dev: after.dev,
-      ino: after.ino,
-      size: after.size,
-      mtimeMs: after.mtimeMs,
-      ctimeMs: after.ctimeMs,
+      mode: opened.mode & 0o7777,
+      dev: opened.dev,
+      ino: opened.ino,
+      size: contents.byteLength,
+      mtimeMs: opened.mtimeMs,
+      ctimeMs: opened.ctimeMs,
     };
   } finally {
     await handle.close();

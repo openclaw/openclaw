@@ -35,6 +35,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
         readSessionMethodAccess(context.gateway.snapshot, {
           method: "sessions.create",
           params: {},
+          sessionScope: true,
         }).allowed
       ) {
         host.openNewSession(agentId, target);

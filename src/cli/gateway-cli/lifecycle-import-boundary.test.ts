@@ -103,6 +103,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             requestGatewayRestartWithSignalAdmission:
               vi.fn<LifecycleRuntime["requestGatewayRestartWithSignalAdmission"]>(),
             captureForegroundUpdateHandoffStop: () => undefined,
+            waitForSystemServiceUpdateHandoffs: () => undefined,
             isGatewayRestartExternallyAllowed: () => false,
             scheduleGatewayRestart: vi.fn<LifecycleRuntime["scheduleGatewayRestart"]>(),
             abortEmbeddedAgentRun: () => false,

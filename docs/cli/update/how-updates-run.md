@@ -681,6 +681,13 @@ A different Gateway owner, lost update authority, or unresolved contention stops
 maintenance with recovery guidance. Ordinary Doctor commands and older update
 drivers without delegated Doctor authority retain their immediate refusal.
 
+An active Gateway suspension keeps installation changes under its host operation’s
+control. The installation watcher does not independently restart the Gateway
+while suspension is preparing, draining, or prepared. After resume or lease
+expiry, its next check reads the current installation again; a pointer restored
+during rollback does not leave a stale replacement verdict. Explicit stop and
+restart requests retain their existing behavior.
+
 Published 2026.9.5 Gateways do not have an installation-replacement watcher.
 Installing a newer candidate cannot add that behavior to the process already
 running. For that first foreground update, stop the Gateway through its foreground

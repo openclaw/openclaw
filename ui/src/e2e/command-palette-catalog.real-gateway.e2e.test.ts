@@ -583,7 +583,14 @@ suite.define(() => {
           }
 
           rejectCatalogReplies = true;
-          await publish("palette-held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          providerModel = "read-failure-fixture:latest";
+          const refreshParams = { agentId: "main", view: "configured", refresh: true };
+          commands.push({
+            method: "models.list",
+            params: refreshParams,
+            result: await readback.request("models.list", refreshParams),
+          });
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });
@@ -593,6 +600,7 @@ suite.define(() => {
             await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
           }
           rejectCatalogReplies = false;
+          await publish("palette-held");
           await input.fill("palette-held");
           const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
           await recovered.waitFor({ state: "visible" });

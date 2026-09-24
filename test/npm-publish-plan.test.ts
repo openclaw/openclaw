@@ -6,6 +6,7 @@ import {
   fetchNpmRegistryTarballWithRetry,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
+  resolveNpmVersionPublicationDecision,
   resolvePublishedNpmVersionRoute,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
@@ -482,9 +483,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
   );
 
   it.each([
-    ["ahead beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.4" }],
-    ["ahead alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.4" }],
-    ["ahead latest", "2026.7.1", { latest: "2026.8.1" }],
     ["incomparable beta", "2026.7.1-beta.3", { beta: "not-a-version" }],
     ["conflicting beta", "2026.7.1-beta.3", { beta: " 2026.7.1-beta.3 " }],
   ])("rejects an unsafe primary %s selector", (_label, version, distTags) => {
@@ -495,6 +493,59 @@ describe("resolvePublishedNpmVersionRoute", () => {
         distTags,
       }),
     ).toThrow("cannot be safely moved");
+  });
+
+  it.each([
+    ["beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.4" }],
+    ["alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.4" }],
+    ["latest", "2026.9.6", { latest: "2026.9.7", beta: "2026.9.7" }],
+  ])(
+    "skips a published version superseded on %s without touching mirrors",
+    (tag, version, distTags) => {
+      expect(
+        resolveNpmVersionPublicationDecision({
+          packageVersion: version,
+          publishPlan: { ...resolveNpmPublishPlan(version), mirrorDistTags: ["beta"] },
+          distTags,
+          published: true,
+        }),
+      ).toEqual({ route: "npm-readback", supersededBy: distTags[tag as keyof typeof distTags] });
+      expect(
+        resolvePublishedNpmVersionRoute({
+          packageVersion: version,
+          publishPlan: resolveNpmPublishPlan(version),
+          distTags,
+        }),
+      ).toBe("npm-readback");
+    },
+  );
+
+  it("still rejects publishing an unpublished version behind an ahead selector", () => {
+    expect(() =>
+      resolveNpmVersionPublicationDecision({
+        packageVersion: "2026.9.6",
+        publishPlan: resolveNpmPublishPlan("2026.9.6"),
+        distTags: { latest: "2026.9.7" },
+        published: false,
+      }),
+    ).toThrow(
+      'npm dist-tag "latest" points to "2026.9.7" and cannot be safely moved to "2026.9.6" (ahead)',
+    );
+  });
+
+  it.each([
+    ["lagging", { latest: "2026.9.5" }],
+    ["placeholder", { latest: "0.0.0" }],
+    ["missing", {}],
+  ])("plans publication for an unpublished version behind a %s selector", (_label, distTags) => {
+    expect(
+      resolveNpmVersionPublicationDecision({
+        packageVersion: "2026.9.6",
+        publishPlan: resolveNpmPublishPlan("2026.9.6"),
+        distTags,
+        published: false,
+      }),
+    ).toEqual({ route: null, supersededBy: null });
   });
 
   it("requires mirror repair only after the primary selector matches", () => {

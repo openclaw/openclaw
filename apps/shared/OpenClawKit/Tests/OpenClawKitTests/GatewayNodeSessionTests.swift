@@ -1125,7 +1125,10 @@ struct GatewayNodeSessionTests {
             .event(EventFrame(
                 type: "event",
                 event: "node.invoke.cancel",
-                payload: AnyCodable(["invokeId": AnyCodable("terminal-1")]),
+                payload: AnyCodable([
+                    "invokeId": AnyCodable("terminal-1"),
+                    "nodeId": AnyCodable("test-node"),
+                ]),
                 seq: nil,
                 stateversion: nil)),
             socketGeneration: 1)
@@ -1642,7 +1645,10 @@ struct GatewayNodeSessionTests {
                 .event(EventFrame(
                     type: "event",
                     event: "node.invoke.cancel",
-                    payload: AnyCodable(["invokeId": AnyCodable("cancel-before-admission")]),
+                    payload: AnyCodable([
+                        "invokeId": AnyCodable("cancel-before-admission"),
+                        "nodeId": AnyCodable("test-node"),
+                    ]),
                     seq: nil,
                     stateversion: nil)),
                 socketGeneration: 1)

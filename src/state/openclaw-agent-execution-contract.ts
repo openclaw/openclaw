@@ -1,5 +1,9 @@
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+} from "../config/sessions/session-accessor.sqlite-archive-types.js";
+import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
 } from "../config/sessions/session-accessor.sqlite-replacement-state.js";
@@ -13,6 +17,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
@@ -33,11 +38,26 @@ export type AgentDatabaseExecutionOpen = {
   agentId: string;
   databasePath: string;
   stateDatabasePath: string;
-  environment: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: "external" };
+  environment: SqliteWorkerStateContext["environment"];
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
 };
 
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
+  "session.archives.preparePublication": {
+    input: {
+      archiveDirectory: string;
+      requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
+    };
+    output: TranscriptArchivePublishPlan[];
+  };
+  "session.archives.recordPublication": {
+    input: { results: readonly TranscriptArchivePublishResult[]; nowMs: number };
+    output: void;
+  };
+  "session.transcript.initialize": {
+    input: { sessionKey: string; sessionId: string; cwd?: string };
+    output: void;
+  };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;

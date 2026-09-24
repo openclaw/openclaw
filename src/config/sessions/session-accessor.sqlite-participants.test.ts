@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -37,7 +37,10 @@ const remote = (id: string, domain = "workspace"): SessionParticipantIdentity =>
   id,
 });
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  vi.useRealTimers();
+});
 
 describe("SQLite session participants", () => {
   it("commits a prepared node patch without newly decoding invalid participant rows", async () => {
@@ -87,6 +90,9 @@ describe("SQLite session participants", () => {
     "keeps a reentrant observer's newer cached state after an outer %s write",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        if (kind === "external-entry") {
+          vi.useFakeTimers({ toFake: ["setImmediate"] });
+        }
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:reentrant" };
         await upsertSessionEntryCore(scope, {
           sessionId: "reentrant",
@@ -113,6 +119,7 @@ describe("SQLite session participants", () => {
             } finally {
               database.close();
             }
+            vi.runOnlyPendingTimers();
           } else {
             runOpenClawAgentWriteTransaction((database) => {
               writeSessionEntry(database, scope.sessionKey, {
@@ -185,6 +192,9 @@ describe("SQLite session participants", () => {
     "does not hide an untracked sibling change during participant publication: $mutation, $write",
     async ({ mutation, write }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        if (mutation === "external-participant") {
+          vi.useFakeTimers({ toFake: ["setImmediate"] });
+        }
         const scope = { agentId: "main", env: state.env };
         const target = { ...scope, sessionKey: "agent:main:target" };
         const sibling = { ...scope, sessionKey: "agent:main:sibling" };
@@ -216,6 +226,7 @@ describe("SQLite session participants", () => {
           } finally {
             external.close();
           }
+          vi.runOnlyPendingTimers();
         }
         runOpenClawAgentWriteTransaction((db) => {
           if (mutation.endsWith("before")) {

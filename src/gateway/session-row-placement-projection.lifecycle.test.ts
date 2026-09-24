@@ -2,7 +2,36 @@ import { expect, it } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
+
+function placementReadView() {
+  const projection: SessionRowReadView & { isCurrent(): boolean } = {
+    state: {
+      cfg: {},
+      policyConfig: {},
+      rowContext: buildSessionListRowMetadataContext({ now: 1 }),
+    },
+    describe: () => undefined,
+    readSource: () => undefined,
+    selectEntries: () => [],
+    present: () => {
+      throw new Error("Placement lifecycle does not present session rows");
+    },
+    isCurrent: () => true,
+  };
+  const query = (id: string): Lookup => ({ agentId: "main", key: id });
+  const lookup = (target: Lookup) => {
+    const entry = { sessionId: target.key, updatedAt: 1 };
+    return {
+      ...createSessionRow({ ...target, storeTarget: { agentId: "main", storePath: "" } }, entry),
+      entry,
+    };
+  };
+  return { projection, query, lookup };
+}
 
 function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlacementProjection {
   return {
@@ -14,6 +43,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
 }
 
 it("refreshes placement facts invalidated after the read settles but before consumption", async () => {
+  const { projection, query, lookup } = placementReadView();
   const sessionId = "completed-placement-read";
   const factsEntered = createDeferredCore();
   const releaseFacts = createDeferredCore();
@@ -41,14 +71,17 @@ it("refreshes placement facts invalidated after the read settles but before cons
     },
   );
   const consumed: Array<boolean | undefined> = [];
-  const reading = owner.withPrepared(
-    () => [sessionId],
+  const reading = owner.withPreparedRows(
+    projection,
+    () => true,
+    lookup,
+    () => [query(sessionId)],
+    () => undefined,
     () => {
       const value = owner.getProjectionFacts(sessionId)?.workspaceResultReconciling;
       consumed.push(value);
       return value;
     },
-    () => undefined,
   );
   const settled = Promise.allSettled([reading]);
   try {
@@ -59,7 +92,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
     releaseFacts.resolve();
     expect(
       await withTestTimeout(reading, 2_000, "Invalidated placement facts did not refresh"),
-    ).toBe(true);
+    ).toEqual({ kind: "complete", value: true });
     expect(consumed).toEqual([true]);
   } finally {
     owner.dispose();
@@ -69,6 +102,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
 });
 
 it("settles queued placement preparation on disposal without dispatching it", async () => {
+  const { projection, query, lookup } = placementReadView();
   const firstEntered = createDeferredCore();
   const secondEntered = createDeferredCore();
   const queuedSelected = createDeferredCore();
@@ -105,30 +139,39 @@ it("settles queued placement preparation on disposal without dispatching it", as
     return value;
   };
   try {
-    const first = owner.withPrepared(
-      () => ["first"],
-      () => consume("first"),
+    const first = owner.withPreparedRows(
+      projection,
+      () => true,
+      lookup,
+      () => [query("first")],
       () => undefined,
+      () => consume("first"),
     );
     active.push(Promise.allSettled([first]));
     await withTestTimeout(firstEntered.promise, 2_000, "First placement read did not enter");
-    const second = owner.withPrepared(
-      () => ["second"],
-      () => consume("second"),
+    const second = owner.withPreparedRows(
+      projection,
+      () => true,
+      lookup,
+      () => [query("second")],
       () => undefined,
+      () => consume("second"),
     );
     active.push(Promise.allSettled([second]));
     await withTestTimeout(secondEntered.promise, 2_000, "Second placement read did not enter");
     const queued = queuedIds.map((id) =>
-      owner.withPrepared(
+      owner.withPreparedRows(
+        projection,
+        () => true,
+        lookup,
         () => {
           if (++selectedCount === queuedIds.length) {
             queuedSelected.resolve();
           }
-          return [id];
+          return [query(id)];
         },
-        () => consume(id),
         () => undefined,
+        () => consume(id),
       ),
     );
     const queuedOutcome = Promise.allSettled(queued);
@@ -163,6 +206,7 @@ it("settles queued placement preparation on disposal without dispatching it", as
 });
 
 it("keeps resident preparation ahead of later exact demand in the accepted FIFO", async () => {
+  const { projection, query, lookup } = placementReadView();
   const createStep = (id: string) => ({
     id,
     entered: createDeferredCore(),
@@ -192,10 +236,13 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
   );
   const accepted: Promise<unknown>[] = [];
   const exact = (id: string) => {
-    const result = owner.withPrepared(
-      () => [id],
-      () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
+    const result = owner.withPreparedRows(
+      projection,
+      () => true,
+      lookup,
+      () => [query(id)],
       () => undefined,
+      () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
     );
     accepted.push(Promise.allSettled([result]));
     return result;
@@ -220,9 +267,9 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
     await withTestTimeout(newer.entered.promise, 2_000, "Newer queued read did not enter");
     expect(dispatched).toEqual([["first"], ["second"], ["older"], ["resident"], ["newer"]]);
     newer.release.resolve();
-    await expect(olderRead).resolves.toBe(true);
+    await expect(olderRead).resolves.toEqual({ kind: "complete", value: true });
     await preparing;
-    await expect(newerRead).resolves.toBe(true);
+    await expect(newerRead).resolves.toEqual({ kind: "complete", value: true });
   } finally {
     owner.dispose();
     for (const step of steps) {

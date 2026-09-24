@@ -346,7 +346,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   counts and predicted longest jobs separately; fewer test-seconds do not prove
   a workflow wall-time saving.
   CI's plugin flag stays false even on dispatch because Plugin Prerelease owns
-  that separate sweep. Do not infer release inclusion from a shard name or
+  that separate sweep. Plugin-sensitive PR changes override that exclusion in
+  both precise and fallback plans, including bundled metadata coverage. Do not infer release inclusion from a shard name or
   conflate regular full-campaign publication with approved preflight-only beta
   exceptions. Product security, migration, storage, protocol, SDK and
   update-correctness tests are outside this move.

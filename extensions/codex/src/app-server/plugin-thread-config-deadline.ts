@@ -30,9 +30,8 @@ import {
 } from "./plugin-thread-config.js";
 import {
   intersectCodexPluginThreadConfigWithScheduledAuthority,
-  readCurrentCodexScheduledAppPolicy as readCurrentCodexScheduledAppPolicyShared,
+  readCurrentCodexScheduledAppPolicy,
 } from "./scheduled-app-authority.js";
-import type { CurrentCodexScheduledAppPolicy } from "./scheduled-app-authority.js";
 import { withAbortableTimeout } from "./timeout.js";
 
 const CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS = 60_000;
@@ -215,11 +214,11 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
               intersectCodexPluginThreadConfigWithScheduledAuthority(
                 builtConfig,
                 params.scheduledRuntimeAuthority,
-                await readCurrentCodexScheduledAppPolicy(
+                await readCurrentCodexScheduledAppPolicy({
                   request,
-                  params.configCwd,
-                  buildOptions?.threadId,
-                ),
+                  configCwd: params.configCwd,
+                  threadId: buildOptions?.threadId,
+                }),
               )
           : undefined,
         request: (method, requestParams, options) => client.request(method, requestParams, options),
@@ -229,18 +228,6 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
         : config;
     },
   };
-}
-
-async function readCurrentCodexScheduledAppPolicy(
-  request: CodexPluginRuntimeRequest,
-  cwd: string | undefined,
-  threadId: string | undefined,
-): Promise<CurrentCodexScheduledAppPolicy> {
-  return await readCurrentCodexScheduledAppPolicyShared({
-    request,
-    configCwd: cwd,
-    threadId,
-  });
 }
 
 function resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs: number): number {

@@ -119,6 +119,11 @@ export function storeDeviceAuthTokenInDatabase(
 ): DeviceAuthEntry | null {
   const entry = createDeviceAuthEntry(params);
   const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
+  const values = {
+    token: entry.token,
+    scopes_json: JSON.stringify(entry.scopes),
+    updated_at_ms: entry.updatedAtMs,
+  };
   // A comparison replaces only its observed token or inserts only its observed
   // absence; it cannot overwrite a row that another request rotated or created.
   const result =
@@ -130,29 +135,19 @@ export function storeDeviceAuthTokenInDatabase(
             .values({
               device_id: params.deviceId,
               role: entry.role,
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
+              ...values,
             })
             .onConflict((conflict) =>
               params.expectedToken === null
                 ? conflict.columns(["device_id", "role"]).doNothing()
-                : conflict.columns(["device_id", "role"]).doUpdateSet({
-                    token: entry.token,
-                    scopes_json: JSON.stringify(entry.scopes),
-                    updated_at_ms: entry.updatedAtMs,
-                  }),
+                : conflict.columns(["device_id", "role"]).doUpdateSet(values),
             ),
         )
       : executeSqliteQuerySync(
           db,
           kysely
             .updateTable("device_auth_tokens")
-            .set({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
+            .set(values)
             .where("device_id", "=", params.deviceId)
             .where("role", "=", entry.role)
             .where("token", "=", params.expectedToken),
@@ -191,6 +186,11 @@ export function storeOriginDeviceTokenInDatabase(
 ): DeviceAuthEntry | null {
   const entry = createDeviceAuthEntry(params);
   const kysely = getNodeSqliteKysely<DeviceAuthDatabase>(db);
+  const values = {
+    token: entry.token,
+    scopes_json: JSON.stringify(entry.scopes),
+    updated_at_ms: entry.updatedAtMs,
+  };
   const result =
     params.expectedToken == null
       ? executeSqliteQuerySync(
@@ -201,29 +201,19 @@ export function storeOriginDeviceTokenInDatabase(
               gateway_scope: params.gatewayScope,
               device_id: params.deviceId,
               role: entry.role,
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
+              ...values,
             })
             .onConflict((conflict) =>
               params.expectedToken === null
                 ? conflict.columns(["gateway_scope", "device_id", "role"]).doNothing()
-                : conflict.columns(["gateway_scope", "device_id", "role"]).doUpdateSet({
-                    token: entry.token,
-                    scopes_json: JSON.stringify(entry.scopes),
-                    updated_at_ms: entry.updatedAtMs,
-                  }),
+                : conflict.columns(["gateway_scope", "device_id", "role"]).doUpdateSet(values),
             ),
         )
       : executeSqliteQuerySync(
           db,
           kysely
             .updateTable("gateway_origin_device_tokens")
-            .set({
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
+            .set(values)
             .where("gateway_scope", "=", params.gatewayScope)
             .where("device_id", "=", params.deviceId)
             .where("role", "=", entry.role)

@@ -4,7 +4,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -31,6 +32,8 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const testNodeExecPath = resolveTestNodeExecPath();
 import {
   previousReleaseInventory,
@@ -409,52 +412,37 @@ describe("runtime postbuild static assets", () => {
 
   it("writes every phase beneath the cwd-only caller root", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
-    const sentinelDest = path.join(
-      "dist",
-      `runtime-postbuild-cwd-only-${path.basename(rootDir)}.js`,
-    );
-    const moduleSentinelPath = path.join(MODULE_ROOT, sentinelDest);
     await writeExportHtmlBuildFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
-    await expectPathMissing(moduleSentinelPath);
+    runRuntimePostBuild({
+      cwd: rootDir,
+      env: {
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+        OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
+      },
+      timings: false,
+    });
 
-    try {
-      const params = {
-        chunks: [{ dest: sentinelDest, contents: "selected root only\n" }],
-        cwd: rootDir,
-        env: {
-          OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
-          OPENCLAW_CONTROL_UI_BUILD_ID: "source-runtime-build",
-        },
-        timings: false,
-      };
-      runRuntimePostBuild(params);
-
-      expect(
-        readBuildIdFromBuildInfoForModuleUrl(
-          pathToFileURL(path.join(rootDir, "dist/entry.js")).href,
-        ),
-      ).toBe("source-runtime-build");
-      await expect(
-        fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
-      ).resolves.toBe("<html></html>\n");
-      const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
-      const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
-      const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
-      expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
-      expect(markedAsset).toContain("alternate-root-marked");
-      expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
-      expect(highlightAsset).toContain("alternate-root-highlight");
-      await expect(
-        fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
-      ).resolves.toContain('"entries"');
-      await expect(fs.readFile(path.join(rootDir, sentinelDest), "utf8")).resolves.toBe(
-        "selected root only\n",
-      );
-      await expectPathMissing(moduleSentinelPath);
-    } finally {
-      await fs.rm(moduleSentinelPath, { force: true });
-    }
+    expect(
+      readBuildIdFromBuildInfoForModuleUrl(pathToFileURL(path.join(rootDir, "dist/entry.js")).href),
+    ).toBe("source-runtime-build");
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+    ).resolves.toBe("<html></html>\n");
+    const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
+    const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
+    const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
+    expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
+    expect(markedAsset).toContain("alternate-root-marked");
+    expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
+    expect(highlightAsset).toContain("alternate-root-highlight");
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
+    ).resolves.toContain('"entries"');
+    const bridge = await import(
+      pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
+    );
+    expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
   });
 
   it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
@@ -1113,23 +1101,6 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it("writes the June text-transform runtime compatibility alias", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(
-      path.join(distDir, "text-transforms.runtime.js"),
-      'export * from "./text-transforms.runtime-NewHash.mjs";\n',
-      "utf8",
-    );
-
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
-
-    expect(
-      await fs.readFile(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js"), "utf8"),
-    ).toBe('export * from "./text-transforms.runtime.js";\n');
-  });
-
   it("keeps every recorded previous-release lazy import loadable after replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-update-compat-");
     writeUpdateCompatibilityBuildFixture(rootDir);
@@ -1307,7 +1278,10 @@ describe("previous release update compatibility", () => {
     (variant) => {
       const facade =
         'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
-      const alias = buildUpdateConfigRuntimeAlias("io.runtime-abcdefgh.mjs", facade);
+      const alias = buildUpdateConfigRuntimeAlias(
+        "io.runtime-abcdefgh.mjs",
+        parser.parseSourceFile("facade.mjs", facade),
+      );
       const record = () =>
         recordImportedFixture('(await import("./io.runtime.js"))', {
           "io.runtime.js":
@@ -1364,6 +1338,79 @@ describe("previous release update compatibility", () => {
             : "src/cli/update-cli/update-command-runtime.ts",
         );
       if (variant !== "source scripts") {
+        expect(record).toThrow("Nonliteral post-swap import");
+        return;
+      }
+      expect(record().inventory.releases[0]?.chunks.map((chunk) => chunk.path)).toEqual([
+        "surface-abcdefgh.js",
+      ]);
+    },
+  );
+
+  it.each([
+    { name: "published bootstrap" },
+    { name: "different owner", owner: "src/cli/update-cli/update-command-runtime.ts" },
+    {
+      name: "mutable root",
+      binding: "let driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
+    },
+    { name: "unknown root", binding: "" },
+    { name: "target root", binding: "const driverRoot = root;" },
+    {
+      name: "cwd root",
+      binding: "const driverRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });",
+    },
+    {
+      name: "different module",
+      binding: "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: targetUrl });",
+    },
+    {
+      name: "extra root options",
+      binding:
+        "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url, cwd: root });",
+    },
+    { name: "extra path", target: 'path.join(driverRoot, "node-runtime-recovery.mjs", "extra")' },
+    { name: "dist path", target: 'path.join(driverRoot, "dist", "node-runtime-recovery.mjs")' },
+    { name: "traversal", target: 'path.join(driverRoot, "../node-runtime-recovery.mjs")' },
+    { name: "dynamic path", target: "path.join(driverRoot, entry)" },
+    {
+      name: "different URL form",
+      url: 'new URL("node-runtime-recovery.mjs", import.meta.url).href',
+    },
+    { name: "import options", suffix: ", { with: options }" },
+    { name: "for-of shadow", prefix: "for (const driverRoot of roots) ", declaration: "" },
+    {
+      name: "for initializer shadow",
+      prefix: "for (const driverRoot = root; driverRoot;) ",
+      declaration: "",
+    },
+    { name: "arrow shadow", prefix: "const load = async (driverRoot) => ", declaration: "" },
+  ])(
+    "records dist edges while qualifying the package bootstrap ($name)",
+    ({
+      name,
+      owner = "src/cli/update-cli/update-command-node-runtime-resolution.ts",
+      binding = "const driverRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });",
+      target = 'path.join(driverRoot, "node-runtime-recovery.mjs")',
+      url = `pathToFileURL(${target}).href`,
+      suffix = "",
+      prefix = "",
+      declaration = "const { findUsableNodeRuntime } = ",
+    }) => {
+      const expression = `await (async () => {
+        ${binding}
+        if (!driverRoot) return;
+        ${prefix}${declaration}await import(${url}${suffix});
+        return (await import("./surface-abcdefgh.js")).x;
+      })()`;
+      const record = () =>
+        recordImportedFixture(
+          expression,
+          { "surface-abcdefgh.js": "//#region src/infra/value.ts\nexport const x = 1;\n" },
+          undefined,
+          owner,
+        );
+      if (name !== "published bootstrap") {
         expect(record).toThrow("Nonliteral post-swap import");
         return;
       }
@@ -1900,14 +1947,19 @@ describe("previous release update compatibility", () => {
     expect(loaded.runner).toBe(current.x);
   });
 
-  it.each(["present", "missing"])(
-    "excludes the isolated config-doctor graph when the runtime binding is %s",
-    async (runtime) => {
+  it.each([
+    ["config-doctor", "present"],
+    ["config-doctor", "missing"],
+    ["native-hook-relay", "present"],
+    ["native-hook-relay", "missing"],
+  ])(
+    "excludes the isolated %s graph when the runtime binding is %s",
+    async (directory, runtime) => {
       const inventory = recordFixture();
       const root = createTempDir("update-compat-isolated-graph-");
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
-      write(root, "dist/config-doctor/inspect.mjs", fsSync.readFileSync(current, "utf8"));
+      write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);

@@ -57,11 +57,11 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
-import { parsePort } from "../shared/parse-port.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
@@ -248,7 +248,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   let cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
-  const portOverride = parsePort(opts.port);
+  const portOverride = parseTcpPort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail(formatInvalidPortOption("--port"));
     return;

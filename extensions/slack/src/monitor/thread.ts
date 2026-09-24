@@ -1,4 +1,4 @@
-import type { WebClient as SlackWebClient } from "@slack/web-api";
+import type { ConversationsRepliesResponse, WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -156,22 +156,12 @@ export async function resolveSlackThreadStarter(params: {
     THREAD_STARTER_CACHE.delete(cacheKey);
   }
   try {
-    const response = (await params.client.conversations.replies({
+    const response = await params.client.conversations.replies({
       channel: params.channelId,
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as {
-      messages?: Array<{
-        text?: string;
-        user?: string;
-        bot_id?: string;
-        ts?: string;
-        files?: SlackFile[];
-        blocks?: unknown[];
-        attachments?: SlackAttachment[];
-      }>;
-    };
+    });
     const message = response?.messages?.[0];
     const text = message ? resolveSlackMessageText(message) : undefined;
     const files = message?.files?.length ? message.files : undefined;
@@ -207,21 +197,7 @@ export async function resolveSlackThreadStarter(params: {
 
 type SlackThreadMessage = SlackThreadStarter;
 
-type SlackRepliesPageMessage = {
-  text?: string;
-  user?: string;
-  bot_id?: string;
-  ts?: string;
-  files?: SlackFile[];
-  blocks?: unknown[];
-  attachments?: SlackAttachment[];
-};
-
-type SlackRepliesPage = {
-  messages?: SlackRepliesPageMessage[];
-  response_metadata?: { next_cursor?: string };
-  has_more?: boolean;
-};
+type SlackRepliesPageMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
 const SLACK_THREAD_HISTORY_MAX_PAGES = 3;
 
@@ -258,7 +234,7 @@ export async function resolveSlackThreadHistory(params: {
     do {
       pagesFetched += 1;
       params.assertCurrent?.();
-      const response = (await params.client.conversations.replies({
+      const response = await params.client.conversations.replies({
         channel: params.channelId,
         ts: params.threadTs,
         limit: fetchLimit,
@@ -266,7 +242,7 @@ export async function resolveSlackThreadHistory(params: {
         ...(params.currentMessageTs ? { latest: params.currentMessageTs } : {}),
         ...(params.oldest ? { oldest: params.oldest } : {}),
         ...(cursor ? { cursor } : {}),
-      })) as SlackRepliesPage;
+      });
       params.assertCurrent?.();
 
       for (const msg of response.messages ?? []) {

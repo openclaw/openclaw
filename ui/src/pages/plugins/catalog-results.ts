@@ -34,6 +34,9 @@ export type PluginCatalogResultsProps = {
   error: string | null;
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
+  categoriesLoading: boolean;
+  categoriesError: string | null;
+  onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
   featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
@@ -61,6 +64,9 @@ export type PluginCatalogResultsProps = {
 };
 
 const SECTION_SIZE = 8;
+// Estimate the current registry footprint without duplicating its taxonomy.
+// The actual labels, ordering, and count still come only from ClawHub.
+const CATEGORY_SKELETON_COUNT = 22;
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
@@ -353,6 +359,18 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
     >
       <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
     </button>
+    ${
+      props.categoriesLoading
+        ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
+            ${Array.from(
+              { length: CATEGORY_SKELETON_COUNT },
+              () => html`<span
+                class="skeleton plugin-catalog-chip--skeleton"
+                aria-hidden="true"
+              ></span>`,
+            )} `
+        : nothing
+    }
     ${repeat(
       props.categories.toSorted((left, right) => left.order - right.order),
       (item) => item.slug,
@@ -529,6 +547,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
       />
     </label>
     ${renderCategoryChips(props)}
+    ${props.categoriesError ? renderError(props.categoriesError, props.onRetryCategories) : nothing}
     ${
       props.remoteError
         ? html`<div class="callout warning oc-banner" role="status">

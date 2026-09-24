@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real timeout and
@@ -609,6 +610,55 @@ it("keeps exactly one byte-identical generated CI owner", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(source);
+  }
+});
+
+it("launches the Windows checkout owner below the native command-line limit", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-owner-windows-argv "));
+  const bin = join(root, "bin");
+  const runnerTemp = join(root, "runner temp");
+  mkdirSync(bin);
+  mkdirSync(runnerTemp);
+  const python = join(bin, "python");
+  writeFileSync(python, "#!/usr/bin/env bash\nprintf '%s\\0' \"$@\"\n");
+  chmodSync(python, 0o755);
+  try {
+    const checkout = readCiCheckoutStep("checks-windows").run;
+    const owner =
+      renderGitTestClock(readFileSync(".github/actions/git-owner/owner.py", "utf8")) +
+      `\n#${"x".repeat(32_768)}\n`;
+    const source = checkout.replace(
+      /^run_owner '[\s\S]*?'\n# End generated CI Git owner\.$/mu,
+      () => `run_owner '${owner.replaceAll("'", "'\\''")}'\n# End generated CI Git owner.`,
+    );
+    expect(source).not.toBe(checkout);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e"], {
+      // Git for Windows prepends its tools; restore the Python probe boundary inside Bash.
+      input:
+        (process.platform === "win32"
+          ? 'export PATH="$(cygpath -u "$OWNER_PROBE_BIN"):$PATH"\n'
+          : "") + source,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+        OWNER_PROBE_BIN: bin,
+        RUNNER_OS: "Windows",
+        RUNNER_TEMP: runnerTemp.replaceAll("\\", "/"),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const args = result.stdout.split("\0").slice(0, -1);
+    expect(args).toEqual(["-I", "-S", `${runnerTemp.replaceAll("\\", "/")}/ci-git-owner.py`]);
+    expect(args.join(" ").length).toBeLessThan(1_024);
+    const materialized = readFileSync(join(runnerTemp, "ci-git-owner.py"), "utf8");
+    expect(materialized).toBe(owner);
+    // Fixed padding keeps the oversized-source regression meaningful if the owner shrinks.
+    expect(materialized.length + (materialized.match(/"/gu)?.length ?? 0) + 2).toBeGreaterThan(
+      32_767,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

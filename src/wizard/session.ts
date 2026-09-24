@@ -444,6 +444,14 @@ export class WizardSession {
     this.cancellationLocked = true;
   }
 
+  /** A retained write callback cannot outlive the runner that owns setup. */
+  assertPersistentEffectCurrent(): void {
+    this.signal.throwIfAborted();
+    if (this.status !== "running" || this.settled) {
+      throw new Error("Setup session is no longer active");
+    }
+  }
+
   /** Protect preparation until the next client checkpoint or final commit. */
   lockCancellationForPreparation() {
     this.signal.throwIfAborted();

@@ -1,5 +1,9 @@
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+
 // Plugin integration tests retain Gateway runtime setup outside core source.
 export const gatewayPluginTestFiles = [
+  "test/plugins/browser-session-authority.gateway.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
@@ -148,7 +152,10 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
   "src/gateway/session-activity-summaries.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
+  "src/gateway/session-create-atomic-initialization.test.ts",
+  "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
+  "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",
   "src/gateway/session-history-cold.benchmark.test.ts",
   "src/gateway/session-history-lookup.worker.test.ts",
@@ -157,14 +164,17 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-lifecycle-run-failure.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
+  "src/gateway/session-message-events.history-worker.test.ts",
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.membership.test.ts",
+  "src/gateway/session-row-projection.search-facts.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",
   "src/gateway/session-startup-migration.test.ts",
+  "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-transcript-preview.hydration.test.ts",
   "src/gateway/session-transcript-title-reader.test.ts",
@@ -203,6 +213,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-change-snapshot.test.ts",
   "src/gateway/worker-environments/placement-dispatch-cleanup.test.ts",
   "src/gateway/worker-environments/placement-dispatch-continuity.test.ts",
+  "src/gateway/worker-environments/placement-dispatch-move-recovery.test.ts",
   "src/gateway/worker-environments/placement-dispatch-prepared.test.ts",
   "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
   "src/gateway/worker-environments/placement-dispatch-shutdown.test.ts",
@@ -270,6 +281,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-launcher.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.computer.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-publication.test.ts",
+  "src/gateway/worker-environments/worker-turn-rpc.live-ack.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.portal.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.transcript.test.ts",
@@ -277,8 +289,45 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-finalize.test.ts",
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
+  "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
+  "test/plugins/browser-session-authority.gateway.test.ts",
+  "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
+];
+
+export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
+export const gatewayCoreTestExclude = [
+  ...gatewayDatabaseWorkerTestFiles,
+  "src/gateway/server-methods/**/*.test.ts",
+  "packages/gateway-protocol/src/**/*.test.ts",
+  "src/gateway/**/*client*.test.ts",
+  "src/gateway/**/*reconnect*.test.ts",
+  "src/gateway/**/*android-node*.test.ts",
+  "src/gateway/**/*gateway-cli-backend*.test.ts",
+  "src/gateway/**/*server*.test.ts",
+  "src/gateway/gateway.test.ts",
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+];
+
+export const gatewayClientTestInclude = [
+  "packages/gateway-client/src/**/*.test.ts",
+  "packages/gateway-protocol/src/**/*.test.ts",
+  "src/gateway/**/*client*.test.ts",
+  "src/gateway/**/*reconnect*.test.ts",
+  "src/gateway/**/*android-node*.test.ts",
+  "src/gateway/**/*gateway-cli-backend*.test.ts",
+];
+export const gatewayClientTestExclude = [
+  ...gatewayDatabaseWorkerTestFiles,
+  "src/gateway/**/*server*.test.ts",
+  "src/gateway/server-methods/**/*.test.ts",
 ];
 
 // Native Vitest subprocesses cold-import the real Gateway; keep their collection
@@ -321,6 +370,16 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
+];
+
+export const gatewayMethodsTestInclude = [
+  "src/gateway/server-methods/**/*.test.ts",
+  ...gatewayPluginTestFiles,
+];
+export const gatewayMethodsTestExclude = [
+  ...gatewayDatabaseWorkerTestFiles,
+  ...gatewayMethodsIsolatedTestFiles,
+  ...databaseWorkerCoreTestFiles,
 ];
 
 // Gateway server tests that need a private module graph and the plain Vitest runner.

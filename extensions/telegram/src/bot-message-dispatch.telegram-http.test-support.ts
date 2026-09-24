@@ -255,7 +255,11 @@ export function createTelegramDispatchHttpFixture() {
       }
     });
     holdNextCall = undefined;
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // SQLite workers share native hrtime deadlines with the dispatching thread.
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     calls.length = 0;
     visibleMessages.clear();
     visibleMarkup.clear();

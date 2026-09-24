@@ -20,12 +20,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import {
-  invalidateChatMetadataForSessionEvent,
-  invalidateChatMetadataStore,
-} from "../lib/chat/chat-metadata-cache.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -395,14 +390,9 @@ class OpenClawShell
         () => this.context?.overlays,
         (overlays, notify) => overlays.subscribe(notify),
       )
-      .watch(
+      .effect(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
-        (sessions) => {
-          this.observeDeletedSessions(sessions.state);
-          this.recoverDeletedActiveSession(sessions.state);
-        },
-        () => this.performUpdate(),
+        (sessions) => this.shellGateway.observeSessions(sessions, () => this.syncDocumentTitle()),
       )
       .watch(
         () => this.context?.placementStartup,
@@ -542,20 +532,6 @@ class OpenClawShell
     this.shellNavigation.selectChatSession(sessionKey, agentId);
   }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
-    const context = this.context;
-    const client = context?.gateway?.snapshot.client;
-    if (client && event.event === "sessions.changed") {
-      invalidateChatMetadataForSessionEvent(client, event.payload, {
-        hello: context?.gateway.snapshot.hello,
-        agentsList: context?.agents.state.agentsList,
-      });
-    }
-    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
-      if (client) {
-        invalidateModelAuthStatusRequests(client);
-        invalidateChatMetadataStore(client);
-      }
-    }
     this.shellGateway.handleGatewayEvent(event);
   };
 
@@ -662,9 +638,8 @@ class OpenClawShell
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
   readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
   readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;
-  /** Keep the tab/window title on the active destination. Runs after every
-   * render so route changes and locale switches both refresh it; before the
-   * first committed route the static boot title from index.html stays. */
+  /** Session publications update the title directly; renders capture route and
+   * locale changes. Preserve the static boot title before the first route. */
   private syncDocumentTitle() {
     const routeId = this.routeState.routeId;
     const context = this.context;

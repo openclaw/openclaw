@@ -4,8 +4,7 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler } from "./monitor-handler.js";
-import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import type { createMSTeamsActivityHandler as CreateMSTeamsActivityHandler } from "./monitor-handler.js";
 import {
   getMSTeamsIngressMockState,
   gateIngressAcceptThenDispatch,
@@ -33,11 +32,6 @@ type ResolveMSTeamsUserAllowlistMock = (params: {
   entries: string[];
 }) => Promise<MSTeamsUserResolution[]>;
 
-type RegisterMSTeamsHandlersMock = (
-  handler: MSTeamsActivityHandler,
-  deps: MSTeamsMessageHandlerDeps,
-) => MSTeamsActivityHandler;
-
 const keepHttpServerTaskAliveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../runtime-api.js", async (importOriginal) => {
@@ -49,8 +43,8 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   };
 });
 
-const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
+const createMSTeamsActivityHandler = vi.hoisted(() =>
+  vi.fn<typeof CreateMSTeamsActivityHandler>(() => vi.fn(async () => undefined)),
 );
 const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
@@ -100,7 +94,7 @@ vi.mock("@microsoft/teams.apps", () => ({
 vi.mock("./monitor-handler.js", () => ({
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
-  registerMSTeamsHandlers,
+  createMSTeamsActivityHandler,
 }));
 
 vi.mock("./file-consent-invoke.js", () => ({
@@ -234,7 +228,7 @@ function resolveServerUrl(server: Server, path: string): string {
 }
 
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
+  const registered = createMSTeamsActivityHandler.mock.calls[0]?.[0] as
     | { cfg?: OpenClawConfig }
     | undefined;
   if (!registered?.cfg) {
@@ -244,7 +238,7 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
 }
 
 function requireRegisteredMSTeamsMediaMaxBytes(): number {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1];
+  const registered = createMSTeamsActivityHandler.mock.calls[0]?.[0];
   if (!registered) {
     throw new Error("expected registered MSTeams handler dependencies");
   }
@@ -314,7 +308,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalledTimes(1);
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
     });
     expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(12 * 1024 * 1024);
 
@@ -335,7 +329,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalledTimes(1);
+      expect(createMSTeamsActivityHandler).toHaveBeenCalledTimes(1);
     });
     expect(requireRegisteredMSTeamsMediaMaxBytes()).toBe(3 * 1024 * 1024);
 
@@ -479,7 +473,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
@@ -568,7 +562,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -618,7 +612,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -657,7 +651,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -684,11 +678,11 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await messageSubmitHandler({ activity, next });
     expect(next).toHaveBeenCalledTimes(1);
 
-    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    const registeredHandler = createMSTeamsActivityHandler.mock.results[0]?.value;
     if (!registeredHandler) {
       throw new Error("expected registered Teams handler");
     }
-    const run = vi.spyOn(registeredHandler, "run");
+    const run = vi.mocked(registeredHandler);
     const getTeamDetails = vi.fn(async () => ({ aadGroupId: "activity-aad-group" }));
     await activityHandler({
       activity,
@@ -725,7 +719,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -762,7 +756,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -776,12 +770,12 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (typeof cardActionHandler !== "function") {
       throw new Error("expected card.action handler");
     }
-    const registeredHandler = registerMSTeamsHandlers.mock.calls[0]?.[0];
+    const registeredHandler = createMSTeamsActivityHandler.mock.results[0]?.value;
     if (!registeredHandler) {
       throw new Error("expected registered Teams handler");
     }
     const dispatchWork = new Promise<void>(() => {});
-    const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
+    const run = vi.mocked(registeredHandler).mockReturnValueOnce(dispatchWork);
 
     const ingress = getMSTeamsIngressMockState().instances[0];
     if (!ingress) {
@@ -847,7 +841,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -907,7 +901,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
@@ -976,7 +970,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
@@ -1033,7 +1027,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
@@ -1086,7 +1080,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      expect(createMSTeamsActivityHandler).toHaveBeenCalled();
     });
 
     expect(requireRegisteredMSTeamsConfig().channels?.msteams?.allowFrom).toEqual([

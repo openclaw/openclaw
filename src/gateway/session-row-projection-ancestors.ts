@@ -212,11 +212,11 @@ export function createSessionRowAncestorReads(owner: {
               }
               return owner.prepareExactRows(targets);
             },
-            (read) => {
-              if (owner.membership.needsPreparation(selected)) {
+            (read, targets) => {
+              if (owner.membership.needsPreparation(() => targets)) {
                 return membershipPending;
               }
-              owner.assertExactRowsPrepared(selected(read.state.cfg));
+              owner.assertExactRowsPrepared(targets);
               return consume(read);
             },
           );

@@ -1,5 +1,7 @@
 import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
+import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
 type OAuthLoopbackCallbackResult =
   | { type: "authorization_code"; code: string; state: string }
@@ -102,7 +104,7 @@ function prepareResponse(
   resolveCorsOrigin?: CorsOriginResolver,
 ): void {
   response.setHeader("Cache-Control", "no-store");
-  response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  response.setHeader("Content-Security-Policy", OAUTH_PAGE_CSP);
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   const origin = resolveCorsOrigin?.(request.headers.origin);
@@ -226,14 +228,18 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const renderSuccess =
     params.renderSuccess ??
     (() => ({
-      body: "Authorization received; return to the terminal while OpenClaw finishes.",
-      contentType: "text/plain; charset=utf-8",
+      body: renderOAuthPage({
+        title: "Authorization received",
+        heading: "Authorization received",
+        message: "Return to the terminal while OpenClaw finishes.",
+      }),
+      contentType: "text/html; charset=utf-8",
     }));
   const renderError =
     params.renderError ??
     ((message: string) => ({
-      body: message,
-      contentType: "text/plain; charset=utf-8",
+      body: oauthErrorHtml(message),
+      contentType: "text/html; charset=utf-8",
     }));
   const respond = (response: ServerResponse, status: number, rendered: RenderedResponse) => {
     response.writeHead(status, { "Content-Type": rendered.contentType });

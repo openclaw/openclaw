@@ -1042,6 +1042,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
+      "test/plugins/browser-session-authority.gateway.test.ts",
+      "test/plugins/chat-abort-codex.gateway.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
       "test/plugins/crabbox-allocation-authority.gateway.test.ts",
       "test/plugins/team-reports-http.gateway.test.ts",
@@ -1313,11 +1315,29 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
-  it("normalizes plugins include patterns relative to the scoped dir", () => {
+  it("keeps plugin source forks and native-loader forks on their own loaders", async () => {
     const testConfig = requireTestConfig(defaultPluginsConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
+    const resolved = await resolveConfig({ config: false }, defaultPluginsConfig);
+    const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
+    expect(
+      projects.map((project) => ({
+        name: project.name,
+        pool: project.pool,
+        execArgv: project.execArgv,
+      })),
+    ).toEqual([
+      {
+        name: "plugins",
+        pool: "forks",
+        execArgv: process.versions.bun
+          ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
+          : ["--import", expect.any(String)],
+      },
+      { name: "plugins-native-loader", pool: "forks", execArgv: [] },
+    ]);
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

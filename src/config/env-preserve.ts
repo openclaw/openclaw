@@ -8,7 +8,7 @@ import {
   containsUnaccountedActiveEscapedEnvRef,
   preservesAuthoredEscapedEnvRefs,
 } from "./env-preserve-authored.js";
-import { resolveConfigEnvVars } from "./env-substitution.js";
+import { resolveConfigEnvVars, scanEnvTemplateTokens } from "./env-substitution.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -26,8 +26,6 @@ import { resolveConfigEnvVars } from "./env-substitution.js";
  * resolves to), the new value is kept as-is.
  */
 
-const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
-
 class EnvRefArrayMutationError extends Error {
   constructor() {
     super("Config write would reorder or modify an array containing environment references.");
@@ -36,10 +34,13 @@ class EnvRefArrayMutationError extends Error {
 }
 
 /**
- * Check if a string contains any `${VAR}` env var references.
+ * Check if a string contains any `${VAR}` env var references, escaped or not.
+ *
+ * Escaped `$${VAR}` counts: it still changes under substitution, so the authored text
+ * must be restored on write-back the same way an active reference is.
  */
 function hasEnvVarRef(value: string): boolean {
-  return ENV_VAR_PATTERN.test(value);
+  return scanEnvTemplateTokens(value).length > 0;
 }
 
 type ArrayIdentityPath = string[];

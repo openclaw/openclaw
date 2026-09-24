@@ -128,6 +128,10 @@ pnpm ios:screenshots
 
 The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
+The lane builds the UI-test products once, boots each selected simulator once, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. This avoids repeated Fastlane build-settings discovery and simulator reboots between captures. Xcode command logs and result bundles stay in `apps/ios/build/SnapshotTestResults`.
+
+Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
+
 Upload to App Store Connect:
 
 ```bash
@@ -206,7 +210,7 @@ the uploader's concurrency group and revalidates the live actor, original run
 attempt, trusted workflow lineage, and unchanged candidate before credential
 access and again before retaining observations.
 
-Only the trusted workflow-SHA checkout executes Node, Fastlane 2.239.0, and
+Only the trusted workflow-SHA checkout executes Node, Fastlane 2.240.1, and
 locked dependencies. The candidate checkout supplies version/changelog data;
 none of its scripts, Fastfile, Gemfile, or actions execute. The canonical planner
 runs against this data without a forced revision/build override. Its `plan.json`

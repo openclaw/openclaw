@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
@@ -8,9 +9,10 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
+  payload: { modelSelectionChanged?: boolean } = {},
 ): void {
   try {
-    context.broadcast("chat.metadata.changed", {}, { dropIfSlow: true });
+    context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });
   } catch {
     context.logGateway.warn("chat metadata change notification failed");
   }
@@ -136,10 +138,17 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ) => {
       context = next;
       const unregister = await registerRefreshListeners();
+      const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
+        if (change.kind === "config" && change.context === next && context === next) {
+          // Retire choices at committed config publication, before replacement catalogs can yield.
+          broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+        }
+      });
       // Minimal Gateways still own read-triggered preparation. Every lifetime
       // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
+          unregisterRolePolicy();
           unregister?.();
           await runtime.stop();
         },

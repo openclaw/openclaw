@@ -319,7 +319,6 @@ function renderTextStep(props: WizardStepControlsProps) {
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
-  const selected = multiple ? (Array.isArray(props.value) ? props.value : []) : [props.value];
   if (!multiple && props.presentation !== "channels") {
     return html`
       ${renderMessage(props)}
@@ -360,11 +359,8 @@ function renderOptionsStep(props: WizardStepControlsProps) {
       }
     `;
   }
-  const answer = multiple
-    ? props.presentation === "channels"
-      ? [...selected]
-      : selected
-    : props.value;
+  const selected = Array.isArray(props.value) ? props.value : [];
+  const answer = props.presentation === "channels" ? [...selected] : selected;
   return html`
     ${renderMessage(props)}
     <div
@@ -379,7 +375,7 @@ function renderOptionsStep(props: WizardStepControlsProps) {
       props,
       t("modelSetup.wizard.continue"),
       () => props.onAnswer(answer),
-      props.busy || (!multiple && props.value === undefined),
+      props.busy,
     )}
   `;
 }

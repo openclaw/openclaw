@@ -9,11 +9,9 @@ export function executeDeliveryQueueAck(
   writeOptions: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
 ): string[] {
   const { id, stateDir, options } = input;
-  return options && "expectedPlatformSendAttemptId" in options
-    ? runOpenClawStateWriteTransaction(
-        (writer) => ackDeliveryInDatabase(writer, id, stateDir, options),
-        writeOptions,
-        { operationLabel: `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send` },
-      )
-    : ackDeliveryInDatabase(writeOptions.database, id, stateDir, options);
+  return runOpenClawStateWriteTransaction(
+    (writer) => ackDeliveryInDatabase(writer, id, stateDir, options),
+    writeOptions,
+    { operationLabel: `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send` },
+  );
 }
