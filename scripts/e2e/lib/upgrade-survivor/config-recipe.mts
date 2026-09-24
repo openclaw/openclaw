@@ -260,9 +260,6 @@ export function resolveUpgradeSurvivorConfigSteps(
         !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),
     )
     .map((step) => {
-      if (scenario === "msteams-polls" && step.id === "plugins") {
-        return Object.assign({}, step, { prepublishPluginPackages: ["@openclaw/msteams"] });
-      }
       if (scenario === "mobile-pairing-reconnect" && step.id === "gateway") {
         return configSetJsonFile("gateway", "gateway", "gateway", "gateway-password.json");
       }

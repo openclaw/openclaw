@@ -6,6 +6,7 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
+import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,
   markPackagePostInstallDoctorAdvisory,
@@ -413,8 +414,10 @@ export type PackageInstallUpdateParams = {
   invocationCwd?: string;
   honorPackageRoot?: boolean;
   nodeRunner?: string;
+  resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
+  beforeVerifyCandidate?: (root: string) => Promise<void>;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
@@ -428,7 +431,7 @@ export async function stagePackageInstallUpdate(
   params: Omit<
     PackageInstallUpdateParams,
     "validateCandidate" | "beforeActivate" | "onTransaction" | "onConfigSnapshot"
-  >,
+  > & { pauseBeforeVerification?: boolean },
 ) {
   const staged = createDeferredCore<string>();
   const continuation = createDeferredCore<PackageInstallUpdateParams | undefined>();
@@ -440,22 +443,42 @@ export async function stagePackageInstallUpdate(
     }
     return active;
   };
+  const retainCandidate = async (root: string) => {
+    staged.resolve(root);
+    active = await continuation.promise;
+    if (!active) {
+      throw new Error("Staged update stopped before package activation.");
+    }
+  };
   const completed = runPackageInstallUpdate(
     {
       ...params,
       requirePackageReplacement: true,
+      beforeVerifyCandidate:
+        params.pauseBeforeVerification || params.beforeVerifyCandidate
+          ? async (root) => {
+              try {
+                await params.beforeVerifyCandidate?.(root);
+              } catch (error) {
+                throw new PackageUpdateActivationError(error);
+              }
+              if (params.pauseBeforeVerification) {
+                await retainCandidate(root);
+              }
+            }
+          : undefined,
+      resolveLifecycleNodeRunner: () =>
+        active?.nodeRunner ?? params.resolveLifecycleNodeRunner?.() ?? params.nodeRunner,
       progress: {
         onStepStart: (step) => (active?.progress ?? params.progress)?.onStepStart?.(step),
         onStepComplete: (step) => (active?.progress ?? params.progress)?.onStepComplete?.(step),
         onHeartbeat: () => (active?.progress ?? params.progress)?.onHeartbeat?.(),
       },
       validateCandidate: async (root) => {
-        staged.resolve(root);
-        active = await continuation.promise;
-        if (!active) {
-          throw new Error("Fresh-state initialization stopped before package activation.");
+        if (!params.pauseBeforeVerification) {
+          await retainCandidate(root);
         }
-        return await active.validateCandidate(root);
+        return await requireActive().validateCandidate(root);
       },
       beforeActivate: () => requireActive().beforeActivate(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
@@ -539,6 +562,8 @@ export async function runPackageInstallUpdate(
       }),
     },
     validateCandidate: params.validateCandidate,
+    beforeVerifyCandidate: params.beforeVerifyCandidate,
+    resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,
     assertCurrent: params.assertCurrent,
     onTransaction: params.onTransaction,

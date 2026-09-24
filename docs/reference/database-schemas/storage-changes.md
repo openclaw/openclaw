@@ -171,8 +171,10 @@ preparation, before native execution, and at the existing transaction and commit
 grants. Cancellation before native execution joins coordinator cleanup without
 replaying the command.
 
-The broker admits up to 128 outstanding requests. Count-only overflow waits in
-FIFO order for up to 10 seconds; queued input still shares the 64 MiB byte budget.
+The broker admits up to 128 outstanding requests per worker. A busy worker does
+not consume another worker's request capacity. Count-only overflow waits in
+FIFO order for up to 10 seconds; queued and retained input across all workers
+shares a 256 MiB byte budget.
 Byte, message, and store limits continue to refuse immediately. Oversized streamed
 inputs still require immediately available admission instead of retaining the
 complete input in the waiting queue. Admission timeout
@@ -1333,11 +1335,12 @@ during shutdown. Framing does not paginate or repeat the database query, truncat
 results, or change request and queue budgets. Callers still materialize their
 complete result in memory.
 
-Worker execute inputs also use bounded frames when necessary. Queued commands
-retain their full serialized-byte charge, up to the existing 64 MiB aggregate
-budget. Larger commands require immediate admission to an idle worker and reserve
-a 32 MiB transport window through settlement. Otherwise, admission returns the
-existing overload error without queuing the value or executing any part of it.
+Worker execute inputs also use bounded frames when necessary. Commands up to
+64 MiB can queue and retain their full serialized-byte charge within the shared
+256 MiB aggregate budget. Larger commands require immediate admission to an idle
+worker and reserve a 32 MiB transport window through settlement. Otherwise,
+admission returns the existing overload error without queuing the value or
+executing any part of it.
 Only complete validated input reaches the backend. The transport queue remains
 bounded; an active complete input or result still requires its materialized memory.
 
@@ -1469,6 +1472,32 @@ pre-send best-effort fallback therefore cannot authorize a provider send after
 an unacknowledged settlement. Media stays available for existing orphan cleanup.
 Other outbound queue operations and media custody remain separate migration work.
 Schemas, retained receipts, update behavior, and cleanup policy are unchanged.
+
+Completed same-session `sessions_send` replies use the existing outbound queue
+table under `outbound-session-generation-v1`. Each result retains its original
+route and exact agent, session store, session key, physical session ID, and
+nullable lifecycle revision. Ordinary subsequent turns do not supersede these
+rows. Live delivery and recovery prepare generation facts through the session
+owner and check them immediately before dispatch; reset, deletion, or replacement
+rejects an undispatched result. Already-dispatched sends keep the existing
+confirmed or uncertain settlement rules. This queue does not preserve unfinished
+model execution or an in-memory completion observer across restart.
+
+The namespace isolates these rows from older readers without changing database
+schema versions or disabling ordinary queues. Its media uses `g1-`-prefixed names
+under the existing spool owner, limits, and cleanup policy. Older readers leave
+those files alone, including unfinished stage files; their cleanup resumes on a
+supporting version. A full state backup includes these artifacts, while a
+database-only backup still excludes media. Existing snapshot sanitization removes
+pending delivery rows, so backup restoration does not resume these replies and
+unreferenced media remains subject to orphan cleanup. An in-place restart or
+downgrade/reopen retains queue custody. The recorded store and media paths remain
+exact; moving raw state does not rewrite delivery bindings.
+
+Outbound lookup, attempt reservation, failure transitions, and restoration run
+through the existing shared-state worker alongside enqueue, producer claims, and
+ACK. Executable namespaces share stable-intent conflict checks and pending-order
+inventory; each mutation retains the entry's namespace and exact attempt owner.
 
 Outbound producer claims and lease renewals run in the shared-state worker. The
 existing write transaction rereads the pending row, exact owner, and expiry on
@@ -1949,6 +1978,13 @@ conversation. A full transcript replacement retires that read path by creating a
 new canonical generation.
 
 ### Keep engine-specific capabilities owned
+
+The WAL checkpoint owner executes checkpoints for runtime maintenance, idle-reader
+inspection, Doctor compaction, and duplicate-agent recovery. Runtime maintenance
+retains its health observations and partial-checkpoint reporting; offline
+maintenance still refuses busy truncation before compaction or recovery proceeds.
+The read cache's version-gated `NOOP` probe remains a freshness observation.
+This ownership cut changes no schema, stored bytes, admission, or update behavior.
 
 SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
 databases, WAL maintenance, integrity checks, and backup operations remain
