@@ -38,6 +38,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
+  "Doctor index-corruption repair: REINDEX/integrity primitives with no Kysely equivalent; runs only in the repair path, never on the runtime hot path":
+    ["src/infra/sqlite-index-corruption.ts"],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     "src/infra/node-sqlite.ts",
     "src/infra/sqlite-index-schema.ts",
