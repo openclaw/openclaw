@@ -121,20 +121,18 @@ type NodeRegistryPrivateState = {
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
-  invokeCore: (
-    params: NodeInvokeParams,
-    allowPrivateCommand: boolean,
-    isCompletionAuthorized?: () => boolean,
-  ) => Promise<NodeInvokeResult>;
-  updateRunnerInventory: (params: {
-    nodeId: string;
-    connId: string | undefined;
-    declaration: NodeRunnerInventoryDeclaration;
-  }) => NodeRunnerInventoryUpdateResult | null;
   workerSupervisorTransport: NodeWorkerSupervisorTransport;
 };
 
 const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
+
+function requireNodeRegistryPrivateState(nodeRegistry: object): NodeRegistryPrivateState {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  return state;
+}
 
 function updateWorkerRunnerInventory(
   state: NodeRegistryPrivateState,
@@ -429,9 +427,6 @@ export function registerNodeRegistryPrivateRuntime(
   state.bundleStatusByConn = new Map();
   state.runnerState = createNodeRunnerStatePublisher(context.getNode, state.runnerInventoryByConn);
   state.generationBoundInvokes = new WeakMap();
-  state.invokeCore = async (params, allowPrivateCommand, isCompletionAuthorized) =>
-    await invokeNodeRegistryCore(state, params, allowPrivateCommand, isCompletionAuthorized);
-  state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
   state.workerSupervisorTransport = {
     getCurrentNode: async (nodeId) => {
       const node = await context.getCurrentConnected(nodeId);
@@ -535,7 +530,8 @@ export function registerNodeRegistryPrivateRuntime(
           },
         };
       }
-      return await state.invokeCore(
+      return await invokeNodeRegistryCore(
+        state,
         {
           nodeId: params.node.nodeId,
           expectedConnId: params.node.connId,
@@ -577,11 +573,7 @@ export function setNodeRunnerStateChangedListener(
   nodeRegistry: object,
   listener: (nodeId: string, change: NodeRunnerStateChange) => void,
 ): void {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized");
-  }
-  state.runnerState.setListener(listener);
+  requireNodeRegistryPrivateState(nodeRegistry).runnerState.setListener(listener);
 }
 
 export function waitForNodeWorkerSupervisor(
@@ -589,10 +581,7 @@ export function waitForNodeWorkerSupervisor(
   nodeId: string,
   options: Parameters<typeof waitForNodeRunnerAvailability>[3],
 ): Promise<void> {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized");
-  }
+  const state = requireNodeRegistryPrivateState(nodeRegistry);
   return waitForNodeRunnerAvailability(
     state.runnerState,
     state.workerSupervisorTransport,
@@ -602,33 +591,26 @@ export function waitForNodeWorkerSupervisor(
 }
 
 export function reconcileNodeRunnerAvailability(nodeRegistry: object, nodeId: string): void {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized");
-  }
-  state.runnerState.reconcile(nodeId, false);
+  requireNodeRegistryPrivateState(nodeRegistry).runnerState.reconcile(nodeId, false);
 }
 
 export function invokePublicNodeRegistry(
   nodeRegistry: object,
   params: NodeInvokeParams,
 ): Promise<NodeInvokeResult> {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized");
-  }
-  return state.invokeCore(params, false);
+  return invokeNodeRegistryCore(requireNodeRegistryPrivateState(nodeRegistry), params, false);
 }
 
 export function invokeLifecycleNodeRegistry(
   nodeRegistry: object,
   params: NodeInvokeParams & { isDispatchAuthorized: () => boolean },
 ): Promise<NodeInvokeResult> {
-  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
-  if (!state) {
-    throw new Error("node registry private runtime was not initialized");
-  }
-  return state.invokeCore(params, false, params.isDispatchAuthorized);
+  return invokeNodeRegistryCore(
+    requireNodeRegistryPrivateState(nodeRegistry),
+    params,
+    false,
+    params.isDispatchAuthorized,
+  );
 }
 
 export function updateNodeRunnerInventory(params: {
@@ -637,13 +619,8 @@ export function updateNodeRunnerInventory(params: {
   connId: string | undefined;
   declaration: NodeRunnerInventoryDeclaration;
 }): NodeRunnerInventoryUpdateResult | null {
-  return (
-    NODE_REGISTRY_PRIVATE_STATES.get(params.registry)?.updateRunnerInventory({
-      nodeId: params.nodeId,
-      connId: params.connId,
-      declaration: params.declaration,
-    }) ?? null
-  );
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
+  return state ? updateWorkerRunnerInventory(state, params) : null;
 }
 
 export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string): void {

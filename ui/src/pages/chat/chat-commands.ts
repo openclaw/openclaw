@@ -111,6 +111,16 @@ export function requireChatSessionAction(
   const access = readChatSessionActionAccess(
     currentSessionAccessSnapshot(host),
     Boolean(host.chatRunId),
+    {
+      session: host.sessionsResult?.sessions.find((row) =>
+        visibleSessionMatches(
+          host,
+          row.key,
+          row.agentId ?? host.sessionsResultAgentId ?? undefined,
+        ),
+      ),
+      sessionAbortable: host.chatRunSessionAbortable === true,
+    },
   )[action];
   if (access.allowed) {
     return true;

@@ -614,13 +614,7 @@ function normalizeEvent(value: unknown): WorkboardEvent | null {
 }
 
 export function normalizeEvents(value: unknown): WorkboardEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(normalizeEvent)
-    .filter((event): event is WorkboardEvent => event !== null)
-    .slice(-MAX_CARD_EVENTS);
+  return normalizeList(value, normalizeEvent, MAX_CARD_EVENTS) ?? [];
 }
 
 function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {

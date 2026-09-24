@@ -696,7 +696,7 @@ describe("prepared worker reserve lifecycle", () => {
         }
       };
       const owner = fixture.pool({
-        prepareRetention: async () => ({ assertCurrent }),
+        prepareRetention: async () => ({ isCurrent: () => !intentChanged }),
         assertIntentCurrent: assertCurrent,
         reconcile: async (record, signal, beforeReconcile) => {
           await lifecycle.resumePrepared(record, signal, beforeReconcile);

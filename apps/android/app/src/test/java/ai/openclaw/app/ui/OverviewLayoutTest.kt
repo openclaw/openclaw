@@ -181,7 +181,7 @@ class OverviewLayoutTest {
     composeRule.onNodeWithContentDescription("Talk settings").performScrollTo().performClick()
     composeRule.onNodeWithText("Configure wake words, talk, and playback.").assertIsDisplayed()
     composeRule.onNodeWithContentDescription("Back").performClick()
-    composeRule.onNodeWithText("Overview").assertIsDisplayed()
+    composeRule.onNode(hasScrollToIndexAction() and hasAnyDescendant(hasText("Overview"))).assertIsDisplayed()
   }
 
   @Test

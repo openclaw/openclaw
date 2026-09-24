@@ -18,6 +18,7 @@ export async function handleAcpDispatchTailAfterReset(
   if (!tailDispatchResult?.handled) {
     return undefined;
   }
+  state.commitInboundDedupeIfClaimed();
   state.recordAgentDispatchCompleted("completed");
   state.completeDispatchReplyOperation();
   return {

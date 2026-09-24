@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
@@ -194,7 +195,7 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
         let entry: ClaudeCliProjectEntry | null;
         if (oversized) {
           if (!worker || worker.threadId === -1) {
-            worker = new Worker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
+            worker = createCpuTrackedWorker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
             // Isolate failures between records remain local to this history import.
             worker.on("error", () => {});
           }

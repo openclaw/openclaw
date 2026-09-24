@@ -11,12 +11,16 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
@@ -267,6 +271,10 @@ describe("gateway agent auth refresh dispatch", () => {
     const subsequentRunId = "idem-agent-auth-subsequent";
     const before = await prepareAuthDispatchAgents(affectedAgentId);
     const activeWorkBefore = getActiveGatewayRootWorkCount();
+    const siblingExecution = await observeGatewayRunExecution({
+      method: "agent",
+      runId: siblingRunId,
+    });
     const publicationGate = createDeferred<{ agentDir: string; wrote: false }>();
     const modelsConfig = await import("../agents/models-config.js");
     const ensureOpenClawModelsJson = modelsConfig.ensureOpenClawModelsJson;
@@ -312,10 +320,13 @@ describe("gateway agent auth refresh dispatch", () => {
         payload: { status: "accepted" },
       });
       await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
+      await siblingExecution.waitForCompletion();
       expect(agentCommandCallsFor(siblingRunId)).toHaveLength(1);
       expect(agentCommandCallsFor(abortedRunId)).toHaveLength(0);
       expect(agentCommandCallsFor(waitingRunId)).toHaveLength(0);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(activeWorkBefore + 2));
+      expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+        activeWorkBefore + 2,
+      );
 
       const abort = await rpcReq(gatewaySuite.ws, "chat.abort", {
         sessionKey: `agent:${affectedAgentId}:main`,
@@ -372,6 +383,7 @@ describe("gateway agent auth refresh dispatch", () => {
       publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
       unregister();
       ensureSpy.mockRestore();
+      await siblingExecution.restore();
     }
   });
 

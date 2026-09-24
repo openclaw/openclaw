@@ -2,7 +2,10 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isSafeToRetrySendError, isTelegramBadRequestError } from "./network-errors.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -18,13 +21,31 @@ export function mergeTelegramPartialDeliveryError(
   priorDeliveryResult: PartialDeliveryResult,
 ): ReturnType<typeof createChannelPartialDeliveryError> {
   if (!isChannelPartialDeliveryError(error)) {
-    return createChannelPartialDeliveryError(error, priorDeliveryResult);
+    return createChannelPartialDeliveryError(error, {
+      ...priorDeliveryResult,
+      ...(priorDeliveryResult.receipt
+        ? {
+            messageIds: [
+              ...new Set([
+                ...(priorDeliveryResult.messageIds ?? []),
+                ...listMessageReceiptPlatformIds(priorDeliveryResult.receipt),
+              ]),
+            ],
+          }
+        : {}),
+    });
   }
   const currentDeliveryResult = error.deliveryResult;
   const messageIds = [
     ...new Set([
       ...(priorDeliveryResult.messageIds ?? []),
+      ...(priorDeliveryResult.receipt
+        ? listMessageReceiptPlatformIds(priorDeliveryResult.receipt)
+        : []),
       ...(currentDeliveryResult.messageIds ?? []),
+      ...(currentDeliveryResult.receipt
+        ? listMessageReceiptPlatformIds(currentDeliveryResult.receipt)
+        : []),
     ]),
   ];
   let receipt = currentDeliveryResult.receipt ?? priorDeliveryResult.receipt;

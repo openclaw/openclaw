@@ -238,7 +238,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -380,7 +380,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return undefined;
   }
   const accountId = resolveChatgptAccountId(profileId, credential);
@@ -883,7 +883,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
       formatCodexAuthProfileUnavailableMessage(profileId),
     );
   }
-  if (!isCodexAppServerAuthProfileCredential(credential)) {
+  if (!isCodexAppServerAuthProvider(credential.provider)) {
     throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
@@ -1241,10 +1241,7 @@ function assertCodexOAuthRefreshWorkspace(
     return;
   }
   const loginParams = buildChatgptAuthTokensParams(profileId, credential, credential.access.trim());
-  if (
-    loginParams.type !== "chatgptAuthTokens" ||
-    loginParams.chatgptAccountId !== expectedAccountId
-  ) {
+  if (loginParams.chatgptAccountId !== expectedAccountId) {
     throw new Error(
       "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
     );
@@ -1254,10 +1251,6 @@ function assertCodexOAuthRefreshWorkspace(
 // Runtime consumes canonical auth state; doctor owns retired profile-id migration.
 function isCodexAppServerAuthProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === CODEX_APP_SERVER_AUTH_PROVIDER;
-}
-
-function isCodexAppServerAuthProfileCredential(credential: AuthProfileCredential): boolean {
-  return isCodexAppServerAuthProvider(credential.provider);
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
@@ -1282,7 +1275,7 @@ function buildChatgptAuthTokensParams(
   profileId: string,
   credential: AuthProfileCredential,
   accessToken: string,
-): CodexLoginAccountParams {
+): Extract<CodexLoginAccountParams, { type: "chatgptAuthTokens" }> {
   const storedAccountId = resolveExplicitChatgptAccountId(credential);
   const tokenAccountId = resolveOpenAICodexAuthIdentity({ access: accessToken }).accountId;
   if (storedAccountId && tokenAccountId && storedAccountId !== tokenAccountId) {

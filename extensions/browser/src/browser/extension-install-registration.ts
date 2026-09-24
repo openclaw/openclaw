@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -25,6 +26,7 @@ import {
   pathInfo,
   stableChromeExtensionDir,
 } from "./extension-install-layout.js";
+import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import {
   BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
   BROWSER_NATIVE_HOST_NAME,
@@ -111,10 +113,6 @@ function isSafeOriginMigration(existingIds: string[], desiredPathIds: string[]):
   );
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
 function parseOwnedLauncher(params: {
   content: string;
   manifestPath: string;
@@ -158,21 +156,6 @@ function parseOwnedLauncher(params: {
     },
     ...(browserProfile === undefined ? {} : { browserProfile }),
   };
-}
-
-async function assertPrivateNativeHostFile(
-  target: string,
-  executable: boolean,
-  platform: NodeJS.Platform,
-): Promise<void> {
-  await assertOwnedPath(target, "file");
-  if (platform === "win32") {
-    return;
-  }
-  const mode = (await fs.lstat(target)).mode & 0o777;
-  if ((mode & 0o077) !== 0 || (executable && (mode & 0o100) === 0)) {
-    throw new Error("native host file has unsafe mode");
-  }
 }
 
 async function assertNativeHostTarget(target: string, accessMode: number): Promise<void> {
@@ -252,8 +235,8 @@ export async function inspectRegistration(
     };
   }
   try {
-    await assertPrivateNativeHostFile(manifestPath, false, deps.platform ?? process.platform);
-    const manifest = asNullableRecord(JSON.parse(await fs.readFile(manifestPath, "utf8")));
+    const manifestFile = await readPrivateNativeHostFile(manifestPath, false);
+    const manifest = asNullableRecord(JSON.parse(manifestFile.buffer.toString("utf8")));
     if (!manifest) {
       throw new Error("manifest is not an object");
     }
@@ -302,8 +285,8 @@ export async function inspectRegistration(
     ) {
       throw new Error("native host manifest does not contain exact allowed origins");
     }
-    await assertPrivateNativeHostFile(expectedLauncher, true, deps.platform ?? process.platform);
-    const launcherContent = await fs.readFile(expectedLauncher, "utf8");
+    const launcherFile = await readPrivateNativeHostFile(expectedLauncher, true);
+    const launcherContent = launcherFile.buffer.toString("utf8");
     const canonicalContent = launcherContent.replace(
       ` '--launcher' ${shellQuote(expectedLauncher)}`,
       () => ` '--launcher' ${shellQuote(baseLauncher)}`,
@@ -491,7 +474,7 @@ export async function installRegistration(params: {
         asNullableRecord(readError)?.code === "ENOENT" ? undefined : null,
       );
     if (createdLauncher && observedManifest === previousManifest) {
-      await assertPrivateNativeHostFile(launcherPath, true, deps.platform ?? process.platform);
+      await readPrivateNativeHostFile(launcherPath, true);
       await fs.unlink(launcherPath);
     }
     throw error;
@@ -502,11 +485,7 @@ export async function installRegistration(params: {
     (await fs.readFile(manifestPath, "utf8")) === manifestContent &&
     (await fs.readFile(previousLauncher.path, "utf8")) === previousLauncher.content
   ) {
-    await assertPrivateNativeHostFile(
-      previousLauncher.path,
-      true,
-      deps.platform ?? process.platform,
-    );
+    await readPrivateNativeHostFile(previousLauncher.path, true);
     await fs.unlink(previousLauncher.path);
   }
   return await inspectRegistration(root, deps, extensionIds);

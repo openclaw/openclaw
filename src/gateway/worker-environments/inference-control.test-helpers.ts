@@ -1,3 +1,4 @@
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 
 export function createWorkerInferenceDrainService(
@@ -9,11 +10,11 @@ export function createWorkerInferenceDrainService(
     ...service,
     cancelInferenceForSession: () => [],
     hasInferenceForSession: () => false,
-    resolveInferenceSessionForRunId: () => undefined,
   };
   registerWorkerInferenceSessionControl(registered, {
     beginDrain,
     captureCancel: () => ({ runIds: [], cancel: () => [] }),
+    resolveTarget: () => undefined,
   });
   return registered;
 }
@@ -23,15 +24,15 @@ export function createWorkerInferenceCancellationService(
   sessionId: string,
   runIds: string[],
   cancel: (params: { sessionId: string; runId?: string }) => string[],
+  target?: BoundAgentRunSessionTarget,
 ) {
   const service = {
     cancelInferenceForSession: cancel,
     hasInferenceForSession: (candidate: string, runId?: string) =>
       candidate === sessionId && (runId === undefined ? runIds.length > 0 : runIds.includes(runId)),
-    resolveInferenceSessionForRunId: (runId: string) =>
-      runIds.includes(runId) ? sessionId : undefined,
   };
   registerWorkerInferenceSessionControl(service, {
+    resolveTarget: (runId) => (runIds.includes(runId) ? target : undefined),
     beginDrain: () => {
       throw new Error("unexpected drain in cancellation fixture");
     },

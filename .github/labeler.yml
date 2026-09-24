@@ -635,6 +635,10 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: agentsapi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agentsapi/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:

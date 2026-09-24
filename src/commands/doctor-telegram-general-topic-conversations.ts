@@ -13,6 +13,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
@@ -20,7 +21,6 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
-import { projectExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;

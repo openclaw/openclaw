@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
-import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -15,6 +15,7 @@ import {
 } from "./plugin-auto-enable.js";
 import {
   createPluginMetadataSnapshot,
+  makeBundledChannelCandidate,
   makeIsolatedEnv,
   makeRegistry,
   resetPluginAutoEnableTestState,
@@ -27,6 +28,13 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
     await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
   return {
     ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) => {
+      const channelIds = actual.listBundledChannelIdsForPackageState(...args);
+      // Declare the synthetic checker; discovery still controls its candidacy.
+      return args[0] === "configuredState" ? [...channelIds, "cache-channel"] : channelIds;
+    },
     hasBundledChannelPackageState: (
       params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
     ) => {
@@ -84,22 +92,6 @@ const nativeCatalogRegistry = makeRegistry([
     configSchema: codexManifest.configSchema,
   },
 ]);
-
-function makeBundledChannelCandidate(params: {
-  pluginId: string;
-  channelId: string;
-}): PluginCandidate {
-  return {
-    idHint: params.pluginId,
-    source: `/fake/${params.pluginId}/index.js`,
-    rootDir: `/fake/${params.pluginId}`,
-    origin: "bundled",
-    packageManifest: {
-      plugin: { id: params.pluginId },
-      channel: { id: params.channelId },
-    },
-  };
-}
 
 afterAll(() => {
   resetPluginAutoEnableTestState();

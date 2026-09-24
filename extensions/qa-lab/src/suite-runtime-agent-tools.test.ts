@@ -23,21 +23,17 @@ const stdioTransportMock = vi.hoisted(() =>
 );
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi
-    .fn()
-    .mockImplementation(
-      function Client(this: {
-        connect?: typeof connectMock;
-        listTools?: typeof listToolsMock;
-        callTool?: typeof callToolMock;
-        close?: typeof closeMock;
-      }) {
-        this.connect = connectMock;
-        this.listTools = listToolsMock;
-        this.callTool = callToolMock;
-        this.close = closeMock;
-      },
-    ),
+  Client: vi.fn().mockImplementation(function Client(this: {
+    connect?: typeof connectMock;
+    listTools?: typeof listToolsMock;
+    callTool?: typeof callToolMock;
+    close?: typeof closeMock;
+  }) {
+    this.connect = connectMock;
+    this.listTools = listToolsMock;
+    this.callTool = callToolMock;
+    this.close = closeMock;
+  }),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({

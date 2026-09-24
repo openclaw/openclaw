@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -15,7 +16,6 @@ import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
-import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
@@ -23,7 +23,7 @@ import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker environment service", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
 
   it("admits an npm-installed worker from canonical bundle identity without registry access", async () => {
     const environmentId = "worker-npm-admission";
@@ -152,7 +152,7 @@ describe("worker environment service", () => {
     });
     const operationalRun = createOperationalRunInstanceRef(claim.runId);
     const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRun);
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       store,
       claim,
       createExecutionIdentityAdmissionToken(claim.runId, {
@@ -161,7 +161,12 @@ describe("worker environment service", () => {
         now: 100,
       }),
       operationalRun,
-      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath: path.join(support.testState.root, "sessions.json"),
+      },
       () => {},
     );
     const gate = createWorkerSessionPlacementGate(store);
@@ -228,7 +233,7 @@ describe("worker environment service", () => {
     });
     const firstOperationalRun = createOperationalRunInstanceRef(first.runId);
     const firstAuthority = claimAgentRunDelegatedAuthority(firstOperationalRun);
-    bindWorkerTurnOwner(
+    await bindWorkerTurnOwner(
       store,
       first,
       createExecutionIdentityAdmissionToken(first.runId, {
@@ -237,7 +242,12 @@ describe("worker environment service", () => {
         now: 100,
       }),
       firstOperationalRun,
-      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath: path.join(support.testState.root, "sessions.json"),
+      },
       () => {},
     );
     const installation = createDeferredCore<typeof support.BUNDLE_ARTIFACT>();
@@ -279,7 +289,7 @@ describe("worker environment service", () => {
       });
       const secondOperationalRun = createOperationalRunInstanceRef(second.runId);
       secondAuthority = claimAgentRunDelegatedAuthority(secondOperationalRun);
-      bindWorkerTurnOwner(
+      await bindWorkerTurnOwner(
         store,
         second,
         createExecutionIdentityAdmissionToken(second.runId, {
@@ -288,7 +298,12 @@ describe("worker environment service", () => {
           now: 101,
         }),
         secondOperationalRun,
-        { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+          storePath: path.join(support.testState.root, "sessions.json"),
+        },
         () => {},
       );
       installation.resolve(support.BUNDLE_ARTIFACT);
@@ -486,6 +501,31 @@ describe("worker environment service", () => {
       workerCredentialTtlMs: 20,
     });
     const admitClaim = async (claim: WorkerSessionTurnClaim) => {
+      const instance = createOperationalRunInstanceRef(claim.runId);
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      support.testState.releaseTurnOwners.push(() => {
+        if (store.validateTurnClaim(claim)) {
+          store.releaseTurn(claim);
+        }
+        releaseAgentRunDelegatedAuthority(authority);
+      });
+      await bindWorkerTurnOwner(
+        store,
+        claim,
+        undefined,
+        instance,
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+          storePath: path.join(support.testState.root, "sessions.json"),
+        },
+        () => {
+          if (!store.validateTurnClaim(claim)) {
+            throw new Error("inference fixture claim is no longer current");
+          }
+        },
+      );
       const credential = await workerService.acquireTurnCredential(claim);
       const admitted = await workerService.admitWorker({
         environmentId,
@@ -555,7 +595,7 @@ describe("worker environment service", () => {
     expect(
       captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
     ).toEqual([first.runId]);
-    signalWorkerTurnClaimClosed(support.testState.stateDb.path, first);
+    expect(() => store.releaseTurn(first)).toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
     store.releaseTurn(second);
     expect(signals[1]?.aborted).toBe(true);

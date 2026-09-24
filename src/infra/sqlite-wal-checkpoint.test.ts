@@ -19,11 +19,84 @@ import {
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
+import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", () => {
+  it("backs off once per interval, warns in health early, and throttles contention logs", async () => {
+    vi.useFakeTimers();
+    const databasePath = path.join(
+      tempDirs.make("openclaw-wal-coordinator-retry-"),
+      "state.sqlite",
+    );
+    const writer = openNodeSqliteDatabase(databasePath);
+    const onCheckpointError = vi.fn();
+    let blocked = true;
+    const runMaintenance = vi.fn((operation: () => boolean) => {
+      if (blocked) {
+        throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+      }
+      return operation();
+    });
+    const interval = 30 * 60 * 1000;
+    const maintenance = configureSqliteWalMaintenance(writer, {
+      databasePath,
+      checkpointIntervalMs: interval,
+      runMaintenance,
+      onCheckpointError,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(1);
+      expect(onCheckpointError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runMaintenance).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runMaintenance).toHaveBeenCalledTimes(2);
+      expect(maintenance.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 2,
+        warning: true,
+      });
+      expect(onCheckpointError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(interval - 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(5);
+      expect(onCheckpointError).toHaveBeenCalledTimes(1);
+      expect(maintenance.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 5,
+        warning: true,
+      });
+      await vi.advanceTimersByTimeAsync(2 * interval + 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(10);
+      expect(onCheckpointError).toHaveBeenCalledTimes(2);
+      blocked = false;
+      await vi.advanceTimersByTimeAsync(interval - 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(11);
+      expect(maintenance.health).toMatchObject({
+        state: "complete",
+        consecutiveBlocked: 0,
+        warning: false,
+      });
+      expect(onCheckpointError).toHaveBeenCalledTimes(2);
+      blocked = true;
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(maintenance.health?.consecutiveBlocked).toBe(1);
+      maintenance.close();
+      const callsAtClose = runMaintenance.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(callsAtClose);
+    } finally {
+      maintenance.close();
+      writer.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
@@ -46,7 +119,7 @@ describe("SQLite WAL checkpoint observations", () => {
       }
       const oversized = fs.statSync(`${databasePath}-wal`).size;
       expect(oversized).toBeGreaterThan(64 * 1024 * 1024);
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
       reader = new DatabaseSync(databasePath, { readOnly: true });
       reader.exec("BEGIN");
@@ -55,12 +128,13 @@ describe("SQLite WAL checkpoint observations", () => {
       );
       admitted = true;
       const started = performance.now();
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(performance.now() - started).toBeLessThan(1_000);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
+      expect(maintenance.health?.state).toBe("blocked");
       expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
       reader.exec("ROLLBACK");
-      vi.advanceTimersByTime(100);
+      await vi.advanceTimersByTimeAsync(100);
       expect(fs.statSync(`${databasePath}-wal`).size).toBeLessThanOrEqual(64 * 1024 * 1024);
       expect(maintenance.health?.state).toBe("complete");
       expect(writer.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(

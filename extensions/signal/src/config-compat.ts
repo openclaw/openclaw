@@ -51,35 +51,21 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   if (!isRecord(value)) {
     return false;
   }
-  if (value.kind === "managed-native") {
-    try {
+  try {
+    if (value.kind === "managed-native") {
       assertSignalSocketTransport(value);
-    } catch {
+      if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+        return false;
+      }
+      if (value.url === undefined) {
+        return true;
+      }
+    } else if (value.kind !== "external-native" && value.kind !== "container") {
       return false;
-    }
-    if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
-      return false;
-    }
-    if (value.url === undefined) {
-      return true;
     }
     if (typeof value.url !== "string") {
       return false;
     }
-    try {
-      normalizeSignalTransportUrl(value.url);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  if (
-    (value.kind !== "external-native" && value.kind !== "container") ||
-    typeof value.url !== "string"
-  ) {
-    return false;
-  }
-  try {
     normalizeSignalTransportUrl(value.url);
     return true;
   } catch {

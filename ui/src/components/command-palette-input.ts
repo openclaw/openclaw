@@ -4,6 +4,7 @@ import { directive, type ElementPart } from "lit/directive.js";
 import { ref } from "lit/directives/ref.js";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
+const measuredInputValues = new WeakMap<HTMLTextAreaElement, string>();
 
 type CommandPaletteInputProps = {
   value: string;
@@ -21,7 +22,6 @@ type CommandPaletteInputProps = {
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-  expanded?: boolean;
 };
 
 function updatePaletteInputOverflow(textarea: HTMLTextAreaElement) {
@@ -64,6 +64,7 @@ function updatePaletteInputLayout(textarea: HTMLTextAreaElement, editing = false
   textarea.style.overflowY = overflowing ? "auto" : "hidden";
   textarea.scrollTop = overflowing ? (followCaret ? textarea.scrollHeight : previousScroll) : 0;
   updatePaletteInputOverflow(textarea);
+  measuredInputValues.set(textarea, textarea.value);
 }
 
 function handlePaletteInputScroll(event: Event) {
@@ -75,16 +76,28 @@ function handlePaletteInputScroll(event: Event) {
 
 class PaletteInputLayoutDirective extends AsyncDirective {
   #textarea: HTMLTextAreaElement | undefined;
+  #placeholder: string | undefined;
   #observer: ResizeObserver | undefined;
   #frame: number | undefined;
 
-  render(_value: string) {
+  render(_value: string, _placeholder: string) {
     return nothing;
   }
 
-  override update(part: ElementPart, [_value]: [string]) {
-    this.#textarea = part.element instanceof HTMLTextAreaElement ? part.element : undefined;
-    this.#scheduleLayout();
+  override update(part: ElementPart, [value, placeholder]: [string, string]) {
+    const textarea = part.element instanceof HTMLTextAreaElement ? part.element : undefined;
+    // Input events already measure the edited value. Result navigation and
+    // background updates retain that layout; controlled values still resize.
+    const needsLayout =
+      textarea &&
+      (this.#textarea !== textarea ||
+        this.#placeholder !== placeholder ||
+        measuredInputValues.get(textarea) !== value);
+    this.#textarea = textarea;
+    this.#placeholder = placeholder;
+    if (needsLayout) {
+      this.#scheduleLayout();
+    }
     return nothing;
   }
 
@@ -136,17 +149,17 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
     <div class="cmd-palette__entry">
       <div class="cmd-palette__input-scroll">
         <textarea
-          ${paletteInputLayout(props.value)}
+          ${paletteInputLayout(props.value, props.placeholder)}
           autofocus
           rows="1"
           id=${COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label=${props.placeholder}
           aria-autocomplete=${props.controls ? "list" : nothing}
+          aria-haspopup=${props.controls ? "listbox" : nothing}
           aria-controls=${props.controls ?? nothing}
           aria-activedescendant=${props.activeDescendant ?? nothing}
           aria-describedby=${props.describedBy ?? nothing}
-          aria-expanded=${props.expanded === undefined ? nothing : String(props.expanded)}
           placeholder=${props.placeholder}
           .value=${props.value}
           ?disabled=${props.disabled}

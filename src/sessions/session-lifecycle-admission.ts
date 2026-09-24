@@ -530,7 +530,7 @@ export async function beginSessionWorkAdmission(params: {
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
   resolveGatewayContext?: GatewayContextResolver;
-  assertAllowed: () => Promise<void> | void;
+  assertAllowed: (signal: AbortSignal) => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
   onInterrupt?: SessionWorkAdmissionInterrupt;
@@ -644,7 +644,7 @@ export async function beginSessionWorkAdmission(params: {
       run: async () => {
         const current = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
         current.add(admission);
-        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed);
+        await CURRENT_SESSION_WORK_ADMISSIONS.run(current, params.assertAllowed, signal);
         if (isGatewaySubordinateWorkAdmissionClosed()) {
           throw new GatewayDrainingError();
         }
@@ -655,7 +655,8 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             signal.throwIfAborted();
-            await lease.run(async () => await (params.revalidateAllowed ?? params.assertAllowed)());
+            const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
+            await lease.run(async () => await revalidate());
           },
           { reentrant: true },
         );

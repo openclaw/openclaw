@@ -65,7 +65,7 @@ describe("plugins cli Doctor output", () => {
         ],
         diagnostics: [
           {
-            level: "warn",
+            level: "info",
             pluginId: "broken",
             source: `${sourceDir}/plugins/shadowed/index.ts`,
             message:

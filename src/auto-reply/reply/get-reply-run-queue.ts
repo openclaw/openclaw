@@ -17,8 +17,6 @@ export async function resolvePreparedReplyQueueState(params: {
   activeRunQueueAction: ActiveRunQueueAction;
   activeSessionId: string | undefined;
   queueMode: QueueSettings["mode"];
-  sessionKey: string | undefined;
-  sessionId: string;
   interruptActiveRun: () => Promise<boolean>;
   waitForActiveRunEnd: (sessionId: string) => Promise<unknown>;
   refreshPreparedState: () => Promise<void>;

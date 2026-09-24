@@ -378,12 +378,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     delivery: normalizeSessionDeliveryState({ context: { channel, to } }),
   });
 
-  it("resolves target variants across route and allowlist rules", () => {
+  it("resolves target variants across route and allowlist rules", async () => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
       entry: typeof baseEntry & { delivery?: ReturnType<typeof normalizeSessionDeliveryState> };
-      expected: ReturnType<typeof resolveHeartbeatDeliveryTarget>;
+      expected: Awaited<ReturnType<typeof resolveHeartbeatDeliveryTarget>>;
     }> = [
       {
         name: "target none",
@@ -536,7 +536,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
     ];
     for (const { cfg, entry, name, expected } of cases) {
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toMatchObject(expected);
+      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toMatchObject(expected);
     }
   });
 
@@ -590,7 +590,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     },
   ] as const)(
     "handles explicit heartbeat accountId allow/deny: $name",
-    ({ accountId, expected }) => {
+    async ({ accountId, expected }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -599,17 +599,17 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
         channels: { telegram: { accounts: { work: { botToken: "token" } } } },
       };
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
+      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
     },
   );
 
-  it("prefers per-agent heartbeat overrides when provided", () => {
+  it("prefers per-agent heartbeat overrides when provided", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "-100123" } } },
     };
     const heartbeat = { target: "whatsapp", to: "120363401234567890@g.us" } as const;
     expect(
-      resolveHeartbeatDeliveryTarget({
+      await resolveHeartbeatDeliveryTarget({
         cfg,
         entry: {
           ...baseEntry,

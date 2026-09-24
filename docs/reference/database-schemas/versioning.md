@@ -21,6 +21,20 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+Admitted agent and cached shared-state handles retain their schema version and
+table facts. The handle owner revokes these facts after local DDL or transaction
+rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next
+unpinned read, even within the same event-loop turn. On a foreign commit, the owner
+compares `schema_version` and `user_version` in one pinned snapshot and retains
+facts and their revision when both are unchanged. Data-only commits therefore
+avoid table and column scans while version-only changes still trigger refusal
+when the stored version is newer than the running build. Actual
+SQLite read snapshots retain their view until they end; the next read then observes
+committed changes. Canonical session validation uses the same schema revision.
+Unchanged versions reuse parsed schema facts and prepared statements without
+repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
+This changes no stored schema, migration, durability, or update behavior.
+
 The nullable requester-authority columns on GitHub publication lifecycle and
 repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
 Shipped readers validate these optional tables exactly and reject additional

@@ -27,7 +27,6 @@ import {
   canonicalizeSessionStore,
   distinctSessionStoreAliasWarning,
   isAmbiguousSharedStoreKey,
-  isLegacyDefaultMainAliasKey,
   selectNewerSessionEntry,
   normalizeSessionEntry,
   pickLatestLegacyDirectEntry,
@@ -36,7 +35,10 @@ import {
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
-import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
+import {
+  isLegacyDefaultMainAliasKey,
+  type PreparedLegacySessionSurfaces,
+} from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
@@ -175,11 +177,17 @@ export async function migrateLegacySessions(
       ],
     };
   }
-  ensureMigrationDir(detected.sessions.targetDir);
-
   const legacyParsed = migrationFileExists(detected.sessions.legacyStorePath)
     ? readSessionStoreJson5(detected.sessions.legacyStorePath)
     : { store: {}, ok: true };
+  if (!legacyParsed.ok) {
+    warnings.push(
+      `Legacy sessions store unreadable; left in place at ${detected.sessions.legacyStorePath}`,
+    );
+    return { changes, warnings };
+  }
+
+  ensureMigrationDir(detected.sessions.targetDir);
   const targetParsed = migrationFileExists(detected.sessions.targetStorePath)
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
@@ -292,12 +300,6 @@ export async function migrateLegacySessions(
     }
   }
 
-  if (!legacyParsed.ok) {
-    warnings.push(
-      `Legacy sessions store unreadable; left in place at ${detected.sessions.legacyStorePath}`,
-    );
-  }
-
   const targetExists = migrationFileExists(detected.sessions.targetStorePath);
   let targetReadable = !targetExists || targetParsed.ok;
   if (!targetReadable) {
@@ -321,7 +323,6 @@ export async function migrateLegacySessions(
 
   if (
     targetReadable &&
-    (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
     const normalized = normalizeMergedSessionStore(merged, targetKeys);
@@ -375,14 +376,12 @@ export async function migrateLegacySessions(
     }
   }
 
-  if (legacyParsed.ok && targetReadable) {
-    try {
-      if (migrationFileExists(detected.sessions.legacyStorePath)) {
-        fs.rmSync(detected.sessions.legacyStorePath, { force: true });
-      }
-    } catch {
-      // ignore
+  try {
+    if (migrationFileExists(detected.sessions.legacyStorePath)) {
+      fs.rmSync(detected.sessions.legacyStorePath, { force: true });
     }
+  } catch {
+    // ignore
   }
 
   removeDirIfEmpty(detected.sessions.legacyDir);

@@ -411,6 +411,12 @@
       "qwen-token-plan": "refreshable"
     }
   },
+  "modelPricing": {
+    "providers": {
+      "qwen": { "modelsDev": { "provider": "alibaba" } },
+      "qwen-token-plan": { "modelsDev": { "provider": "alibaba" } }
+    }
+  },
   "contracts": {
     "mediaUnderstandingProviders": ["qwen"],
     "videoGenerationProviders": ["qwen"]
