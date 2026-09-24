@@ -27,14 +27,25 @@ export default definePluginEntry({
         if (!context.sessionId) {
           return;
         }
-        const response = await fetch(sessionObserverUrl, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ sessionId: context.sessionId }),
+        const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+          await import("openclaw/plugin-sdk/ssrf-runtime");
+        const { response, release } = await fetchWithSsrFGuard({
+          url: sessionObserverUrl,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(sessionObserverUrl),
+          auditContext: "qa-lab-session-observer",
+          init: {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ sessionId: context.sessionId }),
+          },
         });
-        await response.text();
-        if (!response.ok) {
-          throw new Error(`QA mock session observation failed: HTTP ${response.status}`);
+        try {
+          await response.text();
+          if (!response.ok) {
+            throw new Error(`QA mock session observation failed: HTTP ${response.status}`);
+          }
+        } finally {
+          await release();
         }
       });
     }
