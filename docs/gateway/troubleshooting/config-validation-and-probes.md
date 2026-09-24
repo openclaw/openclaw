@@ -10,7 +10,7 @@ read_when:
 
 ## Gateway rejected invalid config
 
-Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit.
+Use when Gateway startup fails with `Invalid config` or hot reload logs say it skipped an invalid edit. Unknown nonessential properties can be ignored during startup and reload while remaining in the saved file. `config validate` still reports them; malformed known values and essential contracts still require repair.
 
 Startup automatically migrates deterministic legacy keys in eligible single-file
 configs and continues only if the entire result validates, including plugins. It

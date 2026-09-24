@@ -21,6 +21,7 @@ export function createConfigFileSnapshot(params: {
   sourceConfig: OpenClawConfig;
   valid: boolean;
   runtimeConfig: OpenClawConfig;
+  runtimeIgnoredPaths?: ConfigFileSnapshot["runtimeIgnoredPaths"];
   hash?: string;
   readError?: { code: string | null };
   issues: ConfigFileSnapshot["issues"];
@@ -67,6 +68,9 @@ export function createConfigFileSnapshot(params: {
     resolved: sourceConfig,
     valid: params.valid,
     runtimeConfig,
+    ...(params.runtimeIgnoredPaths?.length
+      ? { runtimeIgnoredPaths: params.runtimeIgnoredPaths.map((segments) => [...segments]) }
+      : {}),
     config: runtimeConfig,
     hash: params.hash,
     ...(params.readError ? { readError: params.readError } : {}),

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { omitRuntimeConfigPaths } from "../config/validation-runtime.js";
 import { requestActiveCronJobCancellationByDeclarationKeyPrefix } from "../cron/active-jobs.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { isRecord } from "../utils.js";
@@ -34,8 +35,14 @@ function projectCanonicalSecretRefsOntoRuntime(
 export function restoreCanonicalSecretRefs(
   runtimeConfig: OpenClawConfig,
   sourceConfig: OpenClawConfig,
+  ignoredPaths?: ReadonlyArray<ReadonlyArray<string | number>>,
 ): OpenClawConfig {
-  return projectCanonicalSecretRefsOntoRuntime(sourceConfig, runtimeConfig) as OpenClawConfig;
+  // Source-only settings still belong to secret snapshot custody. Omit only
+  // paths rejected by runtime validation before restoring canonical refs.
+  const acceptedSource = ignoredPaths?.length
+    ? omitRuntimeConfigPaths(sourceConfig, ignoredPaths)
+    : sourceConfig;
+  return projectCanonicalSecretRefsOntoRuntime(acceptedSource, runtimeConfig) as OpenClawConfig;
 }
 
 export function revokeActiveSkillReviewsBeforeConfigPublication(config: OpenClawConfig): void {

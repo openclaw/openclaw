@@ -206,6 +206,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   initialConfig: OpenClawConfig;
   initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
   initialCompareConfig?: OpenClawConfig;
+  initialRuntimeIgnoredPaths?: ConfigFileSnapshot["runtimeIgnoredPaths"];
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
   initialIncludedPaths?: readonly string[];

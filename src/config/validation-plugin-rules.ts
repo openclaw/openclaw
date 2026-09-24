@@ -52,6 +52,8 @@ export type ValidateConfigWithPluginsParams = {
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
+  /** Runtime reads omit unsupported properties without changing authored input. */
+  schemaValidation?: "runtime" | "strict";
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -127,6 +129,7 @@ export function validatePreparedConfigWithPlugins(
   }
 
   const issues: ConfigValidationIssue[] = [];
+  const ignoredPaths: (string | number)[][] = [];
   const warnings: ConfigValidationIssue[] = [];
   const preserveUnavailableConfig = (path: string): boolean => {
     const diagnostic = findUninspectedPluginDiagnostic(
@@ -517,6 +520,7 @@ export function validatePreparedConfigWithPlugins(
           schema: channelSchema.schema,
           cacheKey: `channel:${trimmed}`,
           value: config.channels[trimmed],
+          ignoreUnknownProperties: opts.schemaValidation === "runtime",
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },
@@ -534,6 +538,9 @@ export function validatePreparedConfigWithPlugins(
         }
       } else {
         replaceChannelConfig(trimmed, result.value);
+        for (const segments of result.ignoredPaths ?? []) {
+          ignoredPaths.push(["channels", trimmed, ...segments]);
+        }
       }
     }
   }
@@ -597,6 +604,8 @@ export function validatePreparedConfigWithPlugins(
       env: opts.env,
       applyDefaults: opts.applyDefaults,
       schemaValidations: opts.schemaValidations,
+      schemaValidation: opts.schemaValidation,
+      ignoredPaths,
       registry,
       knownIds: ensureKnownIds(),
       normalizedPlugins: ensureNormalizedPlugins(),
@@ -623,5 +632,10 @@ export function validatePreparedConfigWithPlugins(
 
   return issues.length > 0
     ? { ok: false, issues, warnings }
-    : { ok: true, config: mutatedConfig, warnings };
+    : {
+        ok: true,
+        config: mutatedConfig,
+        warnings,
+        ...(ignoredPaths.length ? { ignoredPaths } : {}),
+      };
 }

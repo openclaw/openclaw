@@ -59,6 +59,15 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import {
+  asPluginInstallConfig,
+  ignoredConfigValuesChanged,
+  prepareReloadCompareConfig,
+  isConfigReloadSuperseded,
+  type PreparedGatewayConfigCandidate,
+  type InProcessConfigCandidate,
+  type GatewayConfigReloadTransactionOwnership,
+} from "./config-reload-source.js";
 import type {
   GatewayConfigReloader,
   GatewayHotReloadApplication,
@@ -69,68 +78,16 @@ import {
 } from "./server-reload-contracts.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
+export type { GatewayConfigReloadTransactionOwnership } from "./config-reload-source.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
-type InProcessConfigCandidate = {
-  config: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  persistedHash: string;
-  afterWrite?: ConfigWriteNotification["afterWrite"];
-  preparedCandidate?: ConfigWriteNotification["preparedCandidate"];
-  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-  application?: RuntimeConfigWriteApplicationClaim;
-  epoch: number;
-  snapshot: ConfigFileSnapshot;
-};
-
-export type GatewayConfigReloadTransactionOwnership = {
-  isCurrent: () => boolean;
-  checkpoint: () => Promise<void>;
-  withRestartPreparation: <T>(
-    run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
-  ) => Promise<T>;
-  assertInvokerOwned?: () => void;
-  markRuntimeCommitted: (runtimeConfig: OpenClawConfig, plan: GatewayReloadPlan) => void;
-  commitRuntimeEnv: () => void;
-  publishRuntimeEnv: () => void;
-  rollbackRuntimeEnv: () => void;
-  reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-};
-
-type PreparedGatewayConfigCandidate = {
-  runtimeConfig: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-};
-
-function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
-  return {
-    plugins: {
-      installs: records,
-    },
-  };
-}
-
-function isConfigReloadSuperseded(error: unknown): boolean {
-  // Only completed rollback preserves the direct cause. Cleanup failures and
-  // published replacements must settle instead of transferring the write.
-  const cause =
-    error instanceof PluginRuntimeApplicationError && !error.details.committed
-      ? error.cause
-      : error;
-  return cause instanceof GatewayConfigReloadSupersededError;
-}
-
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
+  initialRuntimeIgnoredPaths?: ConfigFileSnapshot["runtimeIgnoredPaths"];
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
   initialIncludedPaths?: readonly string[];
@@ -224,6 +181,7 @@ export function startGatewayConfigReloader(opts: {
   const initialSourceConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let currentConfig = opts.initialConfig;
   let currentCompareConfig = initialSourceConfig;
+  let currentIgnoredPaths = opts.initialRuntimeIgnoredPaths;
   let currentSourceConfig = initialSourceConfig;
   let currentRawHash = opts.initialSnapshotRawHash;
   let lastObservedRawHash = opts.initialSnapshotRawHash;
@@ -556,7 +514,11 @@ export function startGatewayConfigReloader(opts: {
     // checkpoint reconciles watcher echoes against the captured install records.
     assertInvokerOwned();
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
-    const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
+    const nextCompareConfig = prepareReloadCompareConfig(
+      preparedCandidate?.compareConfig ?? nextSourceConfig,
+      sourceSnapshot.runtimeIgnoredPaths,
+      preparedCandidate?.reapplyCompareOverlays,
+    );
     const nextConfigRevisionHash = hashRuntimeConfigValue(nextSourceConfig);
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
     let runtimeEnvCommitted = false;
@@ -572,6 +534,7 @@ export function startGatewayConfigReloader(opts: {
       withRestartPreparation: (run) => withRestartPreparation(ownership, checkpointOwned, run),
       assertInvokerOwned,
       reapplyRuntimeOverlays: preparedCandidate?.reapplyRuntimeOverlays ?? ((config) => config),
+      runtimeIgnoredPaths: sourceSnapshot.runtimeIgnoredPaths,
       ...(preparedCandidate?.runtimeEnv ? { runtimeEnv: preparedCandidate.runtimeEnv } : {}),
       ...(runtimeRefresh ? { runtimeRefresh } : {}),
       publishRuntimeEnv: () => {
@@ -601,6 +564,7 @@ export function startGatewayConfigReloader(opts: {
         acceptedSourceSnapshot = undefined;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
+        currentIgnoredPaths = sourceSnapshot.runtimeIgnoredPaths;
         currentSourceConfig = nextSourceConfig;
         currentRuntimeEnvSourceConfig = nextSourceConfig;
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
@@ -632,6 +596,16 @@ export function startGatewayConfigReloader(opts: {
       nextPluginInstallConfig,
     );
     const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const prepareIgnoredSourceChange = ignoredConfigValuesChanged(
+      currentSourceConfig,
+      nextSourceConfig,
+      currentIgnoredPaths,
+      sourceSnapshot.runtimeIgnoredPaths,
+    );
+    const committedChangedPaths =
+      changedPaths.length > 0
+        ? changedPaths
+        : diffConfigPaths(currentSourceConfig, nextSourceConfig);
     // Publication can be superseded after its runtime commit but before its
     // lifecycle owner is applied. Finish that owner before the next candidate
     // prepares state that acceptance or restart policy may discard.
@@ -705,7 +679,10 @@ export function startGatewayConfigReloader(opts: {
     }
     let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
     const publishSource =
-      changedPaths.length === 0 && !pluginLifecycle && opts.onEffectiveConfigUnchanged
+      changedPaths.length === 0 &&
+      !pluginLifecycle &&
+      !prepareIgnoredSourceChange &&
+      opts.onEffectiveConfigUnchanged
         ? async () => {
             publishedSource ??= await opts.onEffectiveConfigUnchanged!(
               nextConfig,
@@ -730,11 +707,11 @@ export function startGatewayConfigReloader(opts: {
           `config source revision ${initialEpoch} accepted (${candidate ? "write" : "file"})`,
         );
         opts.onReloadEnabledChange?.(nextSettings.mode !== "off");
-        if (changedPaths.length > 0) {
+        if (committedChangedPaths.length > 0) {
           opts.onConfigCandidateCommitted?.({
             path: opts.watchPath,
             persistedHash: persistedHash ?? null,
-            changedPaths,
+            changedPaths: committedChangedPaths,
           });
         }
       };
@@ -783,6 +760,7 @@ export function startGatewayConfigReloader(opts: {
         }
         currentConfig = committedRuntimeConfig ?? nextConfig;
         currentCompareConfig = nextCompareConfig;
+        currentIgnoredPaths = sourceSnapshot.runtimeIgnoredPaths;
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
@@ -795,7 +773,7 @@ export function startGatewayConfigReloader(opts: {
       }
       notifyCommitted();
     };
-    if (changedPaths.length === 0 && !pluginLifecycle) {
+    if (changedPaths.length === 0 && !pluginLifecycle && !prepareIgnoredSourceChange) {
       await commitReloadBaseline();
       publishedSource?.commit?.();
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
@@ -816,7 +794,9 @@ export function startGatewayConfigReloader(opts: {
     opts.log.info(
       changedPaths.length > 0
         ? `config change detected; evaluating reload (${changedPaths.join(", ")})`
-        : "plugin metadata changed with identical config; applying plugin lifecycle",
+        : pluginLifecycle
+          ? "plugin metadata changed with identical config; applying plugin lifecycle"
+          : "config source changed; preparing unchanged runtime values",
     );
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
@@ -940,6 +920,7 @@ export function startGatewayConfigReloader(opts: {
       checkpoint: () => checkpointOwned(assertLeaseOwned),
       withRestartPreparation: (run) => withRestartPreparation(ownership, checkpointOwned, run),
       reapplyRuntimeOverlays: sourceOnly?.reapplyRuntimeOverlays ?? currentReapplyRuntimeOverlays,
+      runtimeIgnoredPaths: snapshot.runtimeIgnoredPaths,
       publishRuntimeEnv: () => {},
       rollbackRuntimeEnv: () => {},
       commitRuntimeEnv: () => {},
@@ -1439,7 +1420,11 @@ export function startGatewayConfigReloader(opts: {
       throw new GatewayConfigReloadSupersededError();
     }
     currentConfig = initialCandidate?.runtimeConfig ?? opts.initialConfig;
-    currentCompareConfig = initialCandidate?.compareConfig ?? initialSourceConfig;
+    currentCompareConfig = prepareReloadCompareConfig(
+      initialCandidate?.compareConfig ?? initialSourceConfig,
+      opts.initialRuntimeIgnoredPaths,
+      initialCandidate?.reapplyCompareOverlays,
+    );
     currentReapplyRuntimeOverlays =
       initialCandidate?.reapplyRuntimeOverlays ?? ((config) => config);
     settings = resolveSettings(currentConfig);

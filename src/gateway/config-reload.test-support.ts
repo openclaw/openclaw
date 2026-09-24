@@ -135,6 +135,7 @@ export function createReloaderHarness(
   options: {
     initialConfig?: OpenClawConfig;
     initialCompareConfig?: OpenClawConfig;
+    initialRuntimeIgnoredPaths?: ConfigFileSnapshot["runtimeIgnoredPaths"];
     initialSnapshotRawHash?: string | null;
     initialAuthoredConfig?: unknown;
     initialIncludedPaths?: readonly string[];
@@ -212,6 +213,7 @@ export function createReloaderHarness(
     testDebounceMs: 0,
     initialConfig,
     initialCompareConfig: options.initialCompareConfig,
+    initialRuntimeIgnoredPaths: options.initialRuntimeIgnoredPaths,
     initialSnapshotRawHash:
       options.initialSnapshotRawHash === undefined
         ? hashConfigRaw(JSON.stringify(options.initialAuthoredConfig ?? initialConfig))

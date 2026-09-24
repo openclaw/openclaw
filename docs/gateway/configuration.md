@@ -78,7 +78,9 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Gateway startup first applies safe legacy-key migrations to eligible single-file configs. Unknown keys, malformed types, or invalid values that remain cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+Gateway startup and reload ignore unknown nonessential properties in otherwise valid settings. They omit those properties from the runtime view without changing the saved file, includes, or plugin-owned source data, and without routine warnings. Explicit validation and settings writes still report unsupported properties.
+
+Known invalid values, malformed structures, known migration marker values, and authority or isolation settings remain strict. Unknown fields in tool policy or directly in agent execution records also remain errors, so a misspelled sandbox or access setting cannot silently select a permissive default. Unknown migration marker properties are preserved on disk and ignored at runtime; known marker semantics stay unchanged. An unknown property inside an ambiguous schema branch is not treated as harmless. Gateway startup first applies safe legacy-key migrations to eligible single-file configs; remaining essential validation failures cause the Gateway to **refuse to start**.
 </Warning>
 
 `openclaw config schema` prints the canonical JSON Schema used by Control UI

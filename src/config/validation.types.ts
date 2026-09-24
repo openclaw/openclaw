@@ -7,6 +7,7 @@ export type ValidateConfigWithPluginsResult =
       config: OpenClawConfig;
       warnings: ConfigValidationIssue[];
       strictIssues?: ConfigValidationIssue[];
+      ignoredPaths?: (string | number)[][];
     }
   | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] };
 

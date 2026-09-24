@@ -92,6 +92,8 @@ export function validateExplicitPluginConfig(params: {
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
   schemaValidations?: PreparedPluginSchemaValidations;
+  schemaValidation?: "runtime" | "strict";
+  ignoredPaths?: (string | number)[][];
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
@@ -381,6 +383,7 @@ export function validateExplicitPluginConfig(params: {
             schema: record.configSchema,
             cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
             value: entry?.config ?? {},
+            ignoreUnknownProperties: params.schemaValidation === "runtime",
             applyDefaults: true, // Always apply defaults for AJV schema validation;
             // writeConfigFile persists persistCandidate, not validated.config (#61841)
           },
@@ -397,6 +400,9 @@ export function validateExplicitPluginConfig(params: {
             });
           }
         } else if (shouldReplacePluginConfig) {
+          for (const segments of result.ignoredPaths ?? []) {
+            params.ignoredPaths?.push(["plugins", "entries", pluginId, "config", ...segments]);
+          }
           let nextValue = result.value as Record<string, unknown>;
           const nativeCatalog =
             record.setup?.nativeSessionCatalog ??

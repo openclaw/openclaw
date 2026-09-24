@@ -16,6 +16,7 @@ describe("redactConfigSnapshot", () => {
         },
       }),
       valid,
+      runtimeIgnoredPaths: [["private-validation-receipt"]],
       authoredConfig: { gateway: { auth: { token: authoredToken } } },
       sourceConfigBeforeMigrations: makeSnapshot({
         gateway: { auth: { token: preMigrationToken } },
@@ -45,6 +46,8 @@ describe("redactConfigSnapshot", () => {
     expect("sourceConfigBeforeMigrations" in result).toBe(false);
     expect("authoredConfig" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
+    expect(result).not.toHaveProperty("runtimeIgnoredPaths");
+    expect(serialized).not.toContain("private-validation-receipt");
     expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
     const expectedConfig = valid
       ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }

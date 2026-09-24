@@ -209,6 +209,7 @@ function* loadConfigWithEffects(
       env: deps.env,
     });
     const validationParams = {
+      schemaValidation: "runtime" as const,
       ...pathResolution,
       pluginValidation: context.options.pluginValidation,
       sourceRaw: snapshotParsed,
@@ -317,6 +318,7 @@ function* loadConfigWithEffects(
       sourceConfig: coerceConfig(effectiveConfigRaw),
       valid: true,
       runtimeConfig: cfg,
+      runtimeIgnoredPaths: validated.ignoredPaths,
       deferredPluginMigrations,
       hash,
       issues: [],

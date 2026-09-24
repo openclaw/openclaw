@@ -328,6 +328,8 @@ export type ConfigFileSnapshot = {
   valid: boolean;
   /** Runtime-shaped config used by in-process readers. */
   runtimeConfig: RuntimeConfig;
+  /** Internal validation receipt; these source paths are omitted only from runtime use. */
+  runtimeIgnoredPaths?: ReadonlyArray<ReadonlyArray<string | number>>;
   /** @deprecated Prefer runtimeConfig. */
   config: RuntimeConfig;
   hash?: string;

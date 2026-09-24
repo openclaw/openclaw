@@ -69,7 +69,14 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     return prepared.result;
   }
   if (validationParams.pluginValidation === "core-only") {
-    return finishConfigObjectWithPlugins(prepared, validationParams, true);
+    const result = finishConfigObjectWithPlugins(prepared, validationParams, true);
+    if (!prepareStrictValidation || !result.ok) {
+      return result;
+    }
+    const strict = prepared.ignoredPaths?.length
+      ? prepareConfigObjectWithPlugins(raw, { ...validationParams, schemaValidation: "strict" })
+      : prepared;
+    return { ...result, strictIssues: strict.ok ? [] : strict.result.issues };
   }
   // Raw-reference checks and parsed defaults must describe the same input after the await.
   const pending: PreparedConfigWithPlugins = {
@@ -79,12 +86,21 @@ async function validateConfigObjectWithPluginsAsyncInternal(
       cloneConfigWithResolutionFacts(prepared.migrated),
     ),
     parsedConfig: prepared.parsedConfig,
+    ignoredPaths: prepared.ignoredPaths,
   };
   const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
-  const strictConfig = prepareStrictValidation
+  const strictPrepared = prepareStrictValidation
+    ? pending.ignoredPaths?.length
+      ? prepareConfigObjectWithPlugins(pending.migrated, {
+          ...validationParams,
+          schemaValidation: "strict",
+        })
+      : pending
+    : undefined;
+  const strictConfig = strictPrepared?.ok
     ? inheritLegacyDefaultAgentId(
-        pending.parsedConfig,
-        cloneConfigWithResolutionFacts(pending.parsedConfig),
+        strictPrepared.parsedConfig,
+        cloneConfigWithResolutionFacts(strictPrepared.parsedConfig),
       )
     : undefined;
   const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
@@ -98,7 +114,16 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     metadata.installedPluginRecordIds,
     schemaValidations,
   );
-  if (!result.ok || !strictConfig) {
+  if (!result.ok || !strictPrepared) {
+    return result;
+  }
+  if (!strictPrepared.ok) {
+    return {
+      ...result,
+      strictIssues: strictPrepared.result.issues,
+    };
+  }
+  if (!strictConfig) {
     return result;
   }
   const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
@@ -106,6 +131,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     applyDefaults: false,
     pluginValidation: "full",
     semanticValidation: "strict",
+    schemaValidation: "strict",
     installedPluginRecordIds: metadata.installedPluginRecordIds,
     schemaValidations,
   });
@@ -134,12 +160,15 @@ type PreparedConfigWithPlugins = {
   ok: true;
   migrated: OpenClawConfig;
   parsedConfig: OpenClawConfig;
+  ignoredPaths?: (string | number)[][];
 };
 
 function prepareConfigObjectWithPlugins(
   raw: unknown,
   params: ValidateConfigWithPluginsParams | undefined,
-): PreparedConfigWithPlugins | { ok: false; result: ValidateConfigWithPluginsResult } {
+):
+  | PreparedConfigWithPlugins
+  | { ok: false; result: Extract<ValidateConfigWithPluginsResult, { ok: false }> } {
   const copilotConfig = removeLegacyCopilotDiscovery(
     omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
   );
@@ -150,6 +179,7 @@ function prepareConfigObjectWithPlugins(
   }).config as OpenClawConfig;
   const base = validateConfigObjectRaw(migrated, {
     sourceRaw: params?.sourceRaw,
+    schemaValidation: params?.schemaValidation,
     preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
     env: params?.env,
     homedir: params?.homedir,
@@ -164,11 +194,11 @@ function prepareConfigObjectWithPlugins(
     migrated,
     attachAgentListProjection(cloneConfigWithResolutionFacts(base.config)),
   );
-  return { ok: true, migrated, parsedConfig };
+  return { ok: true, migrated, parsedConfig, ignoredPaths: base.ignoredPaths };
 }
 
 function finishConfigObjectWithPlugins(
-  { migrated, parsedConfig }: PreparedConfigWithPlugins,
+  { migrated, parsedConfig, ignoredPaths }: PreparedConfigWithPlugins,
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
@@ -186,6 +216,9 @@ function finishConfigObjectWithPlugins(
       manifestRegistry = registry;
     },
   });
+  if (result.ok && ignoredPaths?.length) {
+    result.ignoredPaths = [...ignoredPaths, ...(result.ignoredPaths ?? [])];
+  }
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
   // Core roster normalization already ran; ambient channel ownership belongs to Gateway discovery.
   if (!result.ok || !legacyDefaultAgentId || params?.pluginValidation === "core-only") {

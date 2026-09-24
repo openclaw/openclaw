@@ -1,5 +1,5 @@
 export const META_FIELD_HELP: Record<string, string> = {
-  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
+  meta: "Compatibility metadata retained in the saved config. Runtime uses recognized fields and ignores unknown metadata.",
   "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
   "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":

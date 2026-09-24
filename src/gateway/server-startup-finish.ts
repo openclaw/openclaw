@@ -449,6 +449,7 @@ export async function finishGatewayStartup(params: {
     initialConfig: cfgAtStart,
     initialPluginInstallRecords: pluginMetadataSnapshot?.index.installRecords,
     initialCompareConfig: configSnapshot.sourceConfig,
+    initialRuntimeIgnoredPaths: configSnapshot.runtimeIgnoredPaths,
     initialSnapshotRawHash: configSnapshot.exists ? hashConfigRaw(configSnapshot.raw) : null,
     initialAuthoredConfig: configSnapshot.parsed,
     initialIncludedPaths: configSnapshot.includedPaths ?? [],

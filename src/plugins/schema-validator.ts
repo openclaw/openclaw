@@ -7,8 +7,13 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Settings } from "typebox/system";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import {
+  isRuntimeConfigUnknownPath,
+  omitRuntimeConfigPaths,
+} from "../config/validation-runtime.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   applyJsonSchemaDefaults,
@@ -149,15 +154,52 @@ function withPluginFormatSemantics<T>(callback: () => T): T {
   }
 }
 
+function countValidationInputNodes(value: unknown): number {
+  const pending = [value];
+  const seen = new WeakSet<object>();
+  let count = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    count += 1;
+    if (current === null || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    for (const entry of Object.values(current)) {
+      pending.push(entry);
+    }
+  }
+  return count;
+}
+
 function checkSchemaWithCurrentFormats(
   validate: TypeBoxValidator,
   value: unknown,
-): TypeBoxValidationError[] | null {
+  runtimePreparation = false,
+): { errors: TypeBoxValidationError[] | null; complete: boolean } {
   if (validate.Check(value)) {
-    return null;
+    return { errors: null, complete: true };
   }
-  // The schema-only compiler returns [valid, errors], without loading value codecs.
-  return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
+  const previousLimit = Settings.Get().maxErrors;
+  // Recovery needs the whole failing batch, not TypeBox's eight-error display
+  // window. Bound collection by input size; complex/truncated batches stay invalid.
+  const limit = runtimePreparation
+    ? Math.max(previousLimit, (countValidationInputNodes(value) + 1) * 8)
+    : previousLimit;
+  try {
+    if (runtimePreparation) {
+      Settings.Set({ maxErrors: limit });
+    }
+    const errors = validate.Errors(value)[1];
+    return {
+      errors: normalizeTypeBoxValidationErrors(errors),
+      complete: errors.length < limit,
+    };
+  } finally {
+    if (runtimePreparation) {
+      Settings.Set({ maxErrors: previousLimit });
+    }
+  }
 }
 
 function isDefaultActivatedConditionalFailure(params: {
@@ -169,10 +211,10 @@ function isDefaultActivatedConditionalFailure(params: {
   const relaxedConditionalValidator = compileSchema(
     relaxConditionalRequiredKeywords(params.schema),
   );
-  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
+  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue).errors) {
     return false;
   }
-  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(params.validate, params.originalValue).errors === null;
 }
 
 /**
@@ -351,6 +393,120 @@ function formatValidationErrors(
   });
 }
 
+// TypeBox emits raw keys in instance paths, not escaped JSON pointers. Resolve
+// against actual own keys and refuse ambiguous paths rather than deleting a sibling.
+function resolveTypeBoxInstancePath(value: unknown, path: string): (string | number)[] | undefined {
+  const matches: (string | number)[][] = [];
+  const visit = (current: unknown, remaining: string, segments: (string | number)[]): void => {
+    if (matches.length > 1) {
+      return;
+    }
+    if (remaining === "") {
+      matches.push(segments);
+      return;
+    }
+    if (current === null || typeof current !== "object") {
+      return;
+    }
+    // Test possible raw path segments rather than scanning every map entry for
+    // every error. Slash-containing keys still participate in ambiguity checks.
+    let end = remaining.indexOf("/", 1);
+    for (;;) {
+      const key = remaining.slice(1, end < 0 ? undefined : end);
+      if (Object.hasOwn(current, key)) {
+        visit(Reflect.get(current, key), end < 0 ? "" : remaining.slice(end), [
+          ...segments,
+          Array.isArray(current) ? Number(key) : key,
+        ]);
+      }
+      if (end < 0) {
+        break;
+      }
+      end = remaining.indexOf("/", end + 1);
+    }
+  };
+  visit(value, path, []);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+// Schema-map entry names belong to the schema vocabulary, not to user record IDs.
+const schemaMapKeywords = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "dependencies",
+]);
+
+const semanticSchemaKeywords = [
+  "$ref",
+  "$dynamicRef",
+  "$recursiveRef",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "dependentSchemas",
+  "dependentRequired",
+  "dependencies",
+  "contains",
+  "prefixItems",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+] as const;
+
+function runtimeSchemaPropertyNames(
+  schema: unknown,
+  path: readonly (string | number)[],
+): string[] | undefined {
+  const names: string[] = [];
+  let current = schema;
+  for (let index = 0; index <= path.length; index += 1) {
+    if (current === null || typeof current !== "object") {
+      return undefined;
+    }
+    // Other branches can declare or depend on a property rejected here. Removing
+    // it can satisfy the schema by changing its meaning, even when revalidation passes.
+    if (semanticSchemaKeywords.some((keyword) => Object.hasOwn(current, keyword))) {
+      return undefined;
+    }
+    const patterns = asOptionalObjectRecord(Reflect.get(current, "patternProperties"));
+    const properties = asOptionalObjectRecord(Reflect.get(current, "properties"));
+    // One pattern with no named properties is a record. Multiple independently
+    // applied shapes can disagree about whether a member's property is declared.
+    if (
+      patterns &&
+      (Object.keys(patterns).length > 1 || (properties && Object.keys(properties).length > 0))
+    ) {
+      return undefined;
+    }
+    if (index === path.length) {
+      return names;
+    }
+    const keyword = path[index];
+    if (keyword === undefined) {
+      return undefined;
+    }
+    current = Reflect.get(current, keyword);
+    if (typeof keyword !== "string" || !schemaMapKeywords.has(keyword)) {
+      continue;
+    }
+    const name = path[++index];
+    if (current === null || typeof current !== "object" || name === undefined) {
+      return undefined;
+    }
+    current = Reflect.get(current, name);
+    if (keyword === "properties" && typeof name === "string") {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
 /**
  * Result of validating manifest-sourced input. `schemaError` on the failure branch tells
  * callers whether the schema itself is unusable (true) versus the value failing a
@@ -359,7 +515,7 @@ function formatValidationErrors(
  * value could ever satisfy.
  */
 type PluginSchemaValidationResult =
-  | { ok: true; value: unknown }
+  | { ok: true; value: unknown; ignoredPaths?: (string | number)[][] }
   | { ok: false; errors: JsonSchemaValidationError[]; schemaError: boolean };
 
 /**
@@ -369,15 +525,18 @@ type PluginSchemaValidationResult =
  * repository-owned schema is a programming error and must stay loud.
  */
 export function validatePluginSchemaValue(
-  params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
+  params: Parameters<typeof validateJsonSchemaValue>[0] & {
+    origin: PluginOrigin;
+    ignoreUnknownProperties?: boolean;
+  },
 ): PluginSchemaValidationResult {
-  const { origin, ...validationParams } = params;
+  const { origin, ignoreUnknownProperties, ...validationParams } = params;
   if (origin === "bundled") {
-    const result = validateJsonSchemaValue(validationParams);
+    const result = validateJsonSchemaValueInternal(validationParams, ignoreUnknownProperties);
     return result.ok ? result : { ...result, schemaError: false };
   }
   try {
-    const result = validateJsonSchemaValue(validationParams);
+    const result = validateJsonSchemaValueInternal(validationParams, ignoreUnknownProperties);
     return result.ok ? result : { ...result, schemaError: false };
   } catch (error) {
     // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
@@ -400,6 +559,15 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
+  return validateJsonSchemaValueInternal(params);
+}
+
+function validateJsonSchemaValueInternal(
+  params: Parameters<typeof validateJsonSchemaValue>[0],
+  ignoreUnknownProperties = false,
+):
+  | { ok: true; value: unknown; ignoredPaths?: (string | number)[][] }
+  | { ok: false; errors: JsonSchemaValidationError[] } {
   const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
   const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
@@ -431,11 +599,53 @@ export function validateJsonSchemaValue(params: {
 
   return withPluginFormatSemantics(() => {
     const originalValue = params.sourceValue === undefined ? params.value : params.sourceValue;
-    const value =
+    let value =
       params.applyDefaults && cached.hasDefaults
         ? applyJsonSchemaDefaults(params.schema, structuredClone(originalValue))
         : originalValue;
-    const errors = checkSchemaWithCurrentFormats(cached.validate, value);
+    let ignoredPaths: (string | number)[][] = [];
+    const checked = checkSchemaWithCurrentFormats(cached.validate, value, ignoreUnknownProperties);
+    let errors = checked.errors;
+    if (
+      ignoreUnknownProperties &&
+      checked.complete &&
+      params.sourceValue === undefined &&
+      errors?.length &&
+      errors.every((error) => error.keyword === "additionalProperties")
+    ) {
+      // Do not reinterpret union/conditional/required failures as harmless extras.
+      const schema = normalizeJsonSchemaForTypeBox(cached.schema);
+      const paths = errors.flatMap((error) => {
+        const schemaPath = resolveTypeBoxInstancePath(schema, (error.schemaPath ?? "#").slice(1));
+        const propertyNames = schemaPath && runtimeSchemaPropertyNames(schema, schemaPath);
+        const owner = schemaPath?.reduce<unknown>(
+          (current, key) =>
+            current !== null && typeof current === "object" ? Reflect.get(current, key) : undefined,
+          schema,
+        );
+        // A schema-valued additionalProperties reports failing record entries too.
+        // Only false marks extras; never omit an entire configured owner as recovery.
+        if (
+          !schemaPath ||
+          !propertyNames ||
+          asOptionalObjectRecord(owner)?.additionalProperties !== false ||
+          !isRuntimeConfigUnknownPath(propertyNames)
+        ) {
+          return [];
+        }
+        const parent = resolveTypeBoxInstancePath(value, error.instancePath ?? "");
+        return parent ? resolveAdditionalProperties(error).map((key) => parent.concat(key)) : [];
+      });
+      if (paths.length > 0) {
+        ignoredPaths = paths;
+        const projected = omitRuntimeConfigPaths(originalValue, paths);
+        value =
+          params.applyDefaults && cached.hasDefaults
+            ? applyJsonSchemaDefaults(params.schema, projected)
+            : projected;
+        errors = checkSchemaWithCurrentFormats(cached.validate, value).errors;
+      }
+    }
     // Defaults may activate a required-only conditional failure in otherwise valid source.
     if (
       errors &&
@@ -453,7 +663,7 @@ export function validateJsonSchemaValue(params: {
       return { ok: false, errors: formatValidationErrors(errors) };
     }
     if (originalValue === params.value) {
-      return { ok: true, value };
+      return { ok: true, value, ...(ignoredPaths.length ? { ignoredPaths } : {}) };
     }
     return {
       ok: true,

@@ -8,6 +8,7 @@ import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createConfigIoContext } from "./io.context.js";
+import { loadConfigFromContextAsync } from "./io.load.js";
 import {
   readConfigFileSnapshotFromContext,
   readConfigFileSnapshotWithPluginMetadataFromContext,
@@ -46,6 +47,61 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
+  it("loads unknown properties without rewriting authored includes or runtime secrets", async () => {
+    const root = tempDirs.make("openclaw-config-runtime-extras-");
+    const context = createContext(root);
+    context.deps.env.FIXTURE_TOKEN = "fixture-token-value";
+    const warn = vi.spyOn(context.deps.logger, "warn");
+    const includedPath = path.join(root, "discord.json");
+    const included =
+      '{ enabled: false, future: { version: 2 }, guilds: { "12.34": { requireMention: false, extra: 1 } } }';
+    const raw = `{
+      // Preserve editor formatting and future data.
+      future: { enabled: true },
+      meta: { editorNote: "keep", migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true, auth: { keep: true } } },
+      gateway: { auth: { mode: "token", token: "\${FIXTURE_TOKEN}" } },
+      channels: { discord: { $include: "discord.json" } },
+    }`;
+    fs.writeFileSync(includedPath, included);
+    fs.writeFileSync(context.configPath, raw);
+    const loaded = await loadConfigFromContextAsync(context);
+    const { snapshot, strictIssues } = await readConfigFileSnapshotWithPluginMetadataFromContext(
+      context,
+      {
+        prepareValidation: "strict",
+      },
+    );
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.runtimeIgnoredPaths).toHaveLength(5);
+    expect(snapshot.runtimeIgnoredPaths).toEqual(
+      expect.arrayContaining([
+        ["future"],
+        ["meta", "editorNote"],
+        ["meta", "migrations", "auth"],
+        ["channels", "discord", "future"],
+        ["channels", "discord", "guilds", "12.34", "extra"],
+      ]),
+    );
+    for (const config of [loaded, snapshot.runtimeConfig]) {
+      expect(config).not.toHaveProperty("future");
+      expect(config.meta).not.toHaveProperty("editorNote");
+      expect(config.meta?.migrations).toEqual({
+        modelPolicyAllowlist: true,
+        utilityModelSeparation: true,
+      });
+      expect(config.channels?.discord).not.toHaveProperty("future");
+      expect(config.channels?.discord?.guilds?.["12.34"]).toEqual({ requireMention: false });
+      expect(config.gateway?.auth?.token).toBe("fixture-token-value");
+    }
+    expect(snapshot.authoredConfig).toHaveProperty("future.enabled", true);
+    expect(snapshot.sourceConfig.channels?.discord).toHaveProperty("future.version", 2);
+    expect(snapshot.raw).toBe(raw);
+    expect(strictIssues?.length).toBeGreaterThan(0);
+    expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
+    expect(fs.readFileSync(includedPath, "utf8")).toBe(included);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("preserves source paths across core-only and prepared plugin reads with a Windows home", async () => {
     const root = tempDirs.make("openclaw-config-windows-paths-");
     const context = createContext(root);

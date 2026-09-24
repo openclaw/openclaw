@@ -44,6 +44,47 @@ export function walkConfigSchema(
   walk(schema, path);
 }
 
+/** Resolve declared property owners without treating record keys or array indices as fields. */
+export function resolveConfigSchemaStructuralPath(
+  schema: z.ZodType,
+  path: readonly PropertyKey[],
+): string[] | undefined {
+  let current: z.core.$ZodType = schema;
+  const structuralPath: string[] = [];
+  let index = 0;
+  for (;;) {
+    if (isUnwrappable(current)) {
+      current = current.unwrap();
+      continue;
+    }
+    if (current instanceof z.ZodPipe) {
+      current = current.out;
+      continue;
+    }
+    if (index === path.length) {
+      return current instanceof z.ZodObject ? structuralPath : undefined;
+    }
+    const segment = path[index++];
+    if (current instanceof z.ZodObject) {
+      if (typeof segment === "string" && Object.hasOwn(current.shape, segment)) {
+        structuralPath.push(segment);
+        current = current.shape[segment];
+      } else if (current.def.catchall && !(current.def.catchall instanceof z.ZodNever)) {
+        current = current.def.catchall;
+      } else {
+        return undefined;
+      }
+    } else if (current instanceof z.ZodRecord) {
+      current = current.def.valueType;
+    } else if (current instanceof z.ZodArray && typeof segment === "number") {
+      current = current.element;
+    } else {
+      // A validator issue alone cannot identify the selected union/intersection branch.
+      return undefined;
+    }
+  }
+}
+
 function isUnwrappable(
   schema: z.core.$ZodType,
 ): schema is z.core.$ZodType & { unwrap: () => z.core.$ZodType } {

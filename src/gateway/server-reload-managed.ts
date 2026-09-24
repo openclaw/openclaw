@@ -83,7 +83,11 @@ export function startManagedGatewayConfigReloader(
     sourceConfig: OpenClawConfig,
     ownership?: GatewayConfigReloadTransactionOwnership,
   ): OpenClawConfig => {
-    const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
+    const canonicalConfig = restoreCanonicalSecretRefs(
+      runtimeConfig,
+      sourceConfig,
+      ownership?.runtimeIgnoredPaths,
+    );
     copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
     const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
@@ -321,6 +325,7 @@ export function startManagedGatewayConfigReloader(
     onReloadEnabledChange: params.onReloadEnabledChange,
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
+    initialRuntimeIgnoredPaths: params.initialRuntimeIgnoredPaths,
     initialSnapshotRawHash: params.initialSnapshotRawHash,
     initialAuthoredConfig: params.initialAuthoredConfig,
     initialIncludedPaths: params.initialIncludedPaths ?? [],

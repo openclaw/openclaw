@@ -68,6 +68,7 @@ export async function prepareConfigSnapshotValidation(
   return {
     deferredPluginMigrations: pending,
     validated: await validate(request.raw, {
+      schemaValidation: "runtime",
       ...context.pathResolution,
       pluginValidation: context.options.pluginValidation,
       loadPluginMetadataSnapshotAsync: metadata.loadAsync,

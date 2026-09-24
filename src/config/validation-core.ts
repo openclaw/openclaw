@@ -31,6 +31,7 @@ import {
   inheritLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
@@ -38,14 +39,19 @@ import {
   parseOperatorModelPolicyWildcardRef,
 } from "./model-policy-ref.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
+import { resolveConfigSchemaStructuralPath } from "./schema.walk.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
+import {
+  collectRawBundledChannelConfigIssues,
+  normalizeBundledChannelId,
+} from "./validation-channel-rules.js";
 import {
   collectUnsupportedSecretRefPolicyIssues,
   mapZodIssueToConfigIssue,
   mergeUnsupportedMutableSecretRefIssues,
   withConfigIssuePath,
 } from "./validation-issues.js";
+import { isRuntimeConfigUnknownPath, omitRuntimeConfigPaths } from "./validation-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
@@ -389,11 +395,14 @@ export function validateConfigObjectRaw(
     sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
     validateBundledChannels?: boolean;
+    schemaValidation?: "runtime" | "strict";
     preservedLegacyRootKeys?: readonly string[];
     env?: NodeJS.ProcessEnv;
     homedir?: () => string;
   },
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; ignoredPaths?: (string | number)[][] }
+  | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyDefaultAgentId = isRecord(raw)
     ? tryGetLegacyDefaultAgentId(raw as OpenClawConfig)
     : undefined;
@@ -424,7 +433,57 @@ export function validateConfigObjectRaw(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
-  const validated = OpenClawSchema.safeParse(normalizedRaw);
+  let ignoredPaths: (string | number)[][] = [];
+  let validated = OpenClawSchema.safeParse(normalizedRaw);
+  if (!validated.success && opts?.schemaValidation === "runtime") {
+    const legacyPaths = findLegacyConfigIssues(normalizedRaw, opts?.sourceRaw).map(
+      (issue) => issue.path,
+    );
+    const paths = validated.error.issues.flatMap((issue) => {
+      if (issue.code !== "unrecognized_keys") {
+        return [];
+      }
+      const structuralPath = resolveConfigSchemaStructuralPath(OpenClawSchema, issue.path);
+      return issue.keys
+        .map((key) => [
+          ...issue.path.map((segment) => (typeof segment === "number" ? segment : String(segment))),
+          key,
+        ])
+        .filter((segments) => {
+          // This owner reads only its two named booleans; future marker names
+          // do not select migration or authority behavior.
+          if (segments.length === 3 && segments[0] === "meta" && segments[1] === "migrations") {
+            return true;
+          }
+          const dotted = segments.join(".");
+          // Authority containers and retired policy aliases require their owning migration.
+          if (
+            !structuralPath ||
+            !isRuntimeConfigUnknownPath(structuralPath) ||
+            (segments.length === 1 && normalizeBundledChannelId(String(segments[0])) !== null) ||
+            segments[0] === "routing" ||
+            segments[0] === "tools" ||
+            (segments[0] === "agents" &&
+              (segments.length === 2 ||
+                (segments[1] === "defaults" && segments.length === 3) ||
+                (segments[1] === "entries" && segments.length === 4))) ||
+            (segments[0] === "gateway" && ["auth", "roles", "token"].includes(String(segments[1])))
+          ) {
+            return false;
+          }
+          return !legacyPaths.some(
+            (legacy) =>
+              dotted === legacy ||
+              dotted.startsWith(`${legacy}.`) ||
+              legacy.startsWith(`${dotted}.`),
+          );
+        });
+    });
+    if (paths.length > 0) {
+      validated = OpenClawSchema.safeParse(omitRuntimeConfigPaths(normalizedRaw, paths));
+      ignoredPaths = paths;
+    }
+  }
   if (!validated.success || mcpServerNameIssues.length > 0) {
     const schemaIssues = validated.success
       ? mcpServerNameIssues
@@ -487,7 +546,7 @@ export function validateConfigObjectRaw(
   if (modelPolicyAllowIssues.length > 0) {
     return { ok: false, issues: modelPolicyAllowIssues };
   }
-  return { ok: true, config: validatedConfig };
+  return { ok: true, config: validatedConfig, ...(ignoredPaths.length ? { ignoredPaths } : {}) };
 }
 
 export function validateConfigObject(

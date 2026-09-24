@@ -207,7 +207,7 @@ Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `docto
 
 ## Bridge (legacy, removed)
 
-Current builds no longer include the TCP bridge. Nodes connect over the Gateway WebSocket. `bridge.*` keys are no longer part of the config schema (validation fails until removed; `openclaw doctor --fix` can strip unknown keys).
+Current builds no longer include the TCP bridge. Nodes connect over the Gateway WebSocket. `bridge.*` keys are no longer part of the config schema. Explicit validation reports them; runtime reads ignore them without enabling the retired bridge or rewriting the file. `openclaw doctor --fix` can remove unsupported keys.
 
 <Accordion title="Legacy bridge config (historical reference)">
 

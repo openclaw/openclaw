@@ -294,6 +294,7 @@ async function readConfigSnapshotWithPreparation(
                 return {
                   deferredPluginMigrations: pending,
                   validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
+                    schemaValidation: "runtime",
                     ...pathResolution,
                     pluginValidation: context.options.pluginValidation,
                     loadPluginMetadataSnapshot: pluginMetadata.load,
@@ -421,6 +422,7 @@ async function readConfigSnapshotWithPreparation(
             ...snapshotSource(),
             valid: true,
             runtimeConfig: snapshotConfig,
+            runtimeIgnoredPaths: validated.ignoredPaths,
             issues: [],
             legacyIssues: [],
           }),
