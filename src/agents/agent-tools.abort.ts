@@ -90,7 +90,11 @@ export function wrapToolWithAbortSignal(
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
       const yieldRunSignal = abortSignal;
-      if (combinedSignal.aborted && !isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal)) {
+      const allowTurnHandoff = tool.name !== "sessions_yield";
+      if (
+        combinedSignal.aborted &&
+        !(allowTurnHandoff && isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal))
+      ) {
         throwAbortError();
       }
       const execution = execute(toolCallId, params, combinedSignal, onUpdate);
@@ -113,7 +117,11 @@ export function wrapToolWithAbortSignal(
         ? AbortSignal.any([params.signal, abortSignal])
         : abortSignal;
       const yieldRunSignal = abortSignal;
-      if (combinedSignal.aborted && !isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal)) {
+      const allowTurnHandoff = tool.name !== "sessions_yield";
+      if (
+        combinedSignal.aborted &&
+        !(allowTurnHandoff && isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal))
+      ) {
         throwAbortError();
       }
       const sourcePreparation = sourcePreparer({ ...params, signal: combinedSignal });
@@ -136,7 +144,7 @@ export function wrapToolWithAbortSignal(
         execute: (onImplementationStart) => {
           if (
             combinedSignal.aborted &&
-            !isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal)
+            !(allowTurnHandoff && isAcceptedTurnHandoffAbort(combinedSignal, yieldRunSignal))
           ) {
             throwAbortError();
           }
