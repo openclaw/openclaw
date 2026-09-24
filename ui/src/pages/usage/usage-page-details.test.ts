@@ -8,6 +8,7 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import * as toast from "../../lib/toast.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   cacheSnapshot,
@@ -56,7 +57,7 @@ describe("UsagePage detail requests", () => {
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-      await vi.waitFor(() => expect(page.textContent).toContain(`${agentId} turn`));
+      await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
 
       for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
         const detail = request.mock.calls.find(([name, params]) => name === method && params?.key);
@@ -109,7 +110,7 @@ describe("UsagePage detail requests", () => {
     page
       .querySelector(".usage-export-menu")!
       .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(download).toHaveBeenCalledOnce());
     expect(download.mock.calls[0]![1]).toContain("exported-context");
     const collectionControl = new WeakRef({ unowned: true });
     await collectGarbageForTest();
@@ -227,7 +228,7 @@ describe("UsagePage detail requests", () => {
     await preloadUsage(page);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(page.details.timeSeries.status.awaitingGateway).toBe(true);
       expect(page.details.sessionLogs.status.awaitingGateway).toBe(true);
     });
@@ -239,7 +240,7 @@ describe("UsagePage detail requests", () => {
     unavailable = false;
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    await vi.waitFor(() => expect(page.textContent).toContain("Recovered conversation"));
+    await waitForFast(() => expect(page.textContent).toContain("Recovered conversation"));
     expect(page.querySelector(".timeseries-svg")).not.toBeNull();
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
@@ -279,7 +280,7 @@ describe("UsagePage detail requests", () => {
       }),
     );
     await Promise.all([timeline, conversation]);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered after late rejection"),
     );
     expect(page.details.timeSeries.data?.points).toHaveLength(1);
@@ -331,7 +332,7 @@ describe("UsagePage detail requests", () => {
     context.setGatewaySnapshot({ phase: "stopped" });
     disconnected = true;
     context.setGatewaySnapshot({ phase: "connected" });
-    await vi.waitFor(() => expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered"));
+    await waitForFast(() => expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered"));
     pending.reject(new Error("gateway closed (1006): disconnected"));
     await Promise.all([timeline, conversation]);
     expect(page.details.timeSeries.status.error).toBeNull();
@@ -384,7 +385,7 @@ describe("UsagePage detail requests", () => {
       page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
     };
     selectSession(0);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain("Loading"),
     );
     const firstContext = request.mock.calls.find(
@@ -407,7 +408,7 @@ describe("UsagePage detail requests", () => {
       sessions: [{ ...result.sessions[0]!, contextWeight: contextWeight("stale-context") }],
     });
     second.reject(new Error("context unavailable"));
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".usage-detail-error--context")?.textContent).toContain(
         "context unavailable",
       ),
@@ -432,7 +433,7 @@ describe("UsagePage detail requests", () => {
     expect(page.querySelector(".usage-detail-error--context button")).toBeNull();
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(
         "selected-context",
       ),
@@ -445,7 +446,7 @@ describe("UsagePage detail requests", () => {
       ([method]) => method === "sessions.usage",
     ).length;
     selectSession(2);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(
         "No context data",
       ),
@@ -508,7 +509,7 @@ describe("UsagePage detail requests", () => {
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
     expect(page.querySelector(".timeseries-summary")?.textContent).toContain("200");
@@ -517,7 +518,7 @@ describe("UsagePage detail requests", () => {
     turns = 3;
     report = "refreshed-context";
     refreshButton(page).click();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(report),
     );
     expect(page.querySelector(".session-detail-stats")?.textContent).toContain("300");
@@ -528,7 +529,7 @@ describe("UsagePage detail requests", () => {
     ).length;
     available = false;
     refreshButton(page).click();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(
         "No context data",
       ),
@@ -594,7 +595,7 @@ describe("UsagePage detail requests", () => {
       })),
     };
     pending.resolve(full);
-    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(download).toHaveBeenCalledOnce());
     const payload = JSON.parse(download.mock.calls[0]![1]) as { sessions: UsageSessionEntry[] };
     expect(payload.sessions).toEqual([
       {
@@ -615,13 +616,13 @@ describe("UsagePage detail requests", () => {
     expect(cancelled[2]?.signal?.aborted).toBe(true);
     await page.updateComplete;
     pending.resolve(full);
-    await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
+    await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));
     expect(download).toHaveBeenCalledOnce();
 
     pending = deferred<SessionsUsageResult>();
     exportJson();
     pending.resolve({ ...full, sessions: [full.sessions[1]!] });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(notice).toHaveBeenCalledWith({
         message: expect.stringContaining("Refresh usage and try again"),
       }),
@@ -654,7 +655,7 @@ describe("UsagePage detail requests", () => {
           },
         ],
       });
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(page.querySelector('.usage-export-menu button[aria-busy="true"]')).toBeNull(),
       );
       expect(download, scenario).toHaveBeenCalledTimes(expectedDownloads);
@@ -772,7 +773,7 @@ describe("UsagePage detail requests", () => {
 
       page.usageSelectedSessions = ["agent:main:a"];
       const firstLoad = page.details.timeSeries.load("agent:main:a");
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       page.usageSelectedSessions = ["agent:main:b"];
       const secondLoad = page.details.timeSeries.load("agent:main:b");
       const latest = { points: [{ timestamp: 2 }] } as SessionUsageTimeSeries;

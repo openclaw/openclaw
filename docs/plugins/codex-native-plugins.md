@@ -539,9 +539,14 @@ get `open_world_enabled: true`. OpenClaw does not expose a separate
 plugin-level open-world policy knob and does not maintain per-plugin
 destructive tool-name deny lists.
 
-Tool approval mode defaults to automatic for admitted apps, so non-destructive
-read tools run without a same-thread approval prompt. Destructive tools stay
-controlled by each app's `destructive_enabled` policy.
+Admitted apps retain their native Codex approval mode and reviewer, including
+app defaults and saved link or tool overrides. With no native approval setting,
+Codex uses its `auto` approval mode, and read-only tools usually run without a prompt.
+Use `allow_destructive_actions: "auto"` to route native human approval requests
+through OpenClaw; native `prompt` with the `auto_review` reviewer stays within
+Codex's automatic review flow. These settings also apply when resuming a thread
+or asking a `/btw` side question. Explicit OpenClaw `"ask"` policy overrides saved
+native approvals as described below; `false` still disables destructive tools.
 
 ## Destructive action policy
 

@@ -7,28 +7,6 @@ import Synchronization
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
-private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
-    var details: [String: ProtoAnyCodable] = [:]
-    if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
-        details.merge(nested) { _, nestedValue in nestedValue }
-    }
-    if let error {
-        if details["code"] == nil {
-            details["code"] = ProtoAnyCodable(error.code)
-        } else {
-            details["errorCode"] = ProtoAnyCodable(error.code)
-        }
-        details["message"] = ProtoAnyCodable(error.message)
-        if let retryable = error.retryable {
-            details["retryable"] = ProtoAnyCodable(retryable)
-        }
-        if let retryAfterMs = error.retryafterms {
-            details["retryAfterMs"] = ProtoAnyCodable(retryAfterMs)
-        }
-    }
-    return details
-}
-
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
