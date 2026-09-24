@@ -3,18 +3,12 @@
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
-  type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 
 const STABLE_PREPARATION_LEASE_MS = 5 * 60_000;
 const STABLE_PREPARATION_LEASE_RENEW_MS = 30_000;
-
-export type StableDeliveryPreparation = DeliveryQueueEntryState & {
-  preparationState: "claimed" | "modifiers_started" | "prepared";
-  preparationOwnerId?: string;
-  preparationLeaseExpiresAt?: number;
-};
 
 export type StableDeliveryPreparationOwner = {
   current: () => Promise<StableDeliveryPreparation>;

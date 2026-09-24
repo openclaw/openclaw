@@ -1,8 +1,8 @@
 import {
   isSessionDeliveryGenerationRevokedError,
   prepareSessionDeliveryGeneration,
-  type SessionDeliveryGeneration,
 } from "../../config/sessions/session-delivery-generation.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 /** Translate session-owner decisions into the existing queue retry/terminal contract. */

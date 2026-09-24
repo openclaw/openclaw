@@ -25,10 +25,13 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
+import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
 import {
-  StableDeliveryPreparationLostError,
-  type StableDeliveryPreparation,
-} from "./delivery-queue-preparation.js";
+  decodeOutboundDeliverySnapshot,
+  encodeOutboundDeliverySnapshot,
+  projectOutboundDelivery,
+} from "./delivery-queue-projection.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import type {
   LegacyQueuedDelivery,
   LegacyQueuedDeliveryPreparation,
@@ -343,7 +346,7 @@ export async function restoreDeliveryAttemptBeforeDispatch(
 ): Promise<void> {
   await executeDeliveryQueueOperation(context, stateDir, {
     type: "deliveryQueue.restoreOutbound",
-    input: { entry, reservedAttemptCount, claimedAttemptId },
+    input: { entry: encodeOutboundDeliverySnapshot(entry), reservedAttemptCount, claimedAttemptId },
   });
 }
 
@@ -416,7 +419,7 @@ async function readOutboundDeliveries(
   if (!reply.ok || reply.type !== "deliveryQueue.outbound") {
     throw new Error("Unexpected outbound queue read result");
   }
-  return reply.entries;
+  return reply.entries.map(({ queueName, entry }) => projectOutboundDelivery(queueName, entry));
 }
 
 export async function loadPendingDelivery(
@@ -451,10 +454,15 @@ export async function stageDeliveryFailureSettlement(
   claimedAttemptId?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<QueuedDelivery | undefined> {
-  return await executeDeliveryQueueOperation(context, stateDir, {
+  const staged = await executeDeliveryQueueOperation(context, stateDir, {
     type: "deliveryQueue.stageFailure",
-    input: { entry, settlement, claimedAttemptId },
+    input: {
+      entry: encodeOutboundDeliverySnapshot(entry),
+      settlementEntry: encodeOutboundDeliverySnapshot({ ...entry, settlement }),
+      claimedAttemptId,
+    },
   });
+  return staged && decodeOutboundDeliverySnapshot(staged);
 }
 
 export async function finalizeDeliveryFailureSettlement(
@@ -464,7 +472,7 @@ export async function finalizeDeliveryFailureSettlement(
 ): Promise<boolean> {
   return await executeDeliveryQueueOperation(context, stateDir, {
     type: "deliveryQueue.finalizeFailure",
-    input: { entry },
+    input: { entry: encodeOutboundDeliverySnapshot(entry) },
   });
 }
 

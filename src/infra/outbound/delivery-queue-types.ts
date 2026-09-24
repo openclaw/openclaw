@@ -6,11 +6,13 @@ import type {
   OutboundReplyFacts,
   RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "../delivery-queue-sqlite.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";

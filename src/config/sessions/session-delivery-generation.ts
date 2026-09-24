@@ -15,17 +15,10 @@ import {
   readCommittedIncognitoSessionSharing,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
+import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-
-export type SessionDeliveryGeneration = Readonly<{
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string | null;
-}>;
 
 class SessionDeliveryGenerationRevokedError extends Error {
   readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";

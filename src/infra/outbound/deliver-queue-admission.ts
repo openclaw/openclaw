@@ -13,7 +13,6 @@ import {
 import { resolveConversationDeliveryScope } from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import {
   loadPendingDelivery,
   type QueuedDelivery,
@@ -21,6 +20,7 @@ import {
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
 } from "./delivery-queue-storage.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,

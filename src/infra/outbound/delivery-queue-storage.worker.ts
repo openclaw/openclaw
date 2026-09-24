@@ -30,18 +30,26 @@ import {
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
   outboundDeliveryQueueName,
 } from "./delivery-queue-namespaces.js";
+import { resolveOutboundDeliveryQueueNameInDatabase } from "./delivery-queue-ownership.kernel.js";
+import {
+  decodeOutboundDeliverySnapshot,
+  encodeOutboundDeliverySnapshot,
+  projectOutboundDelivery,
+} from "./delivery-queue-projection.js";
 import {
   loadOutboundDeliveryInDatabase,
-  projectOutboundDelivery,
-  resolveOutboundDeliveryQueueNameInDatabase,
-} from "./delivery-queue-ownership.kernel.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
-import { restoreDeliveryAttemptBeforeDispatchInDatabase } from "./delivery-queue-storage.kernel.js";
+  restoreDeliveryAttemptBeforeDispatchInDatabase,
+} from "./delivery-queue-storage.kernel.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import type {
   OutboundDeliveryMutation,
   OutboundDeliveryStorageOperations,
 } from "./delivery-queue-storage.worker-contract.js";
-import { hasActiveDeliveryOwner, type QueuedDelivery } from "./delivery-queue-types.js";
+import {
+  hasActiveDeliveryOwner,
+  type QueuedDelivery,
+  type DeliveryFailureSettlement,
+} from "./delivery-queue-types.js";
 
 function claimPreparation(
   database: OpenClawStateDatabase,
@@ -192,7 +200,11 @@ function mutateOutbound(database: OpenClawStateDatabase, input: OutboundDelivery
 
 function stageFailure(
   database: OpenClawStateDatabase,
-  input: OutboundDeliveryStorageOperations["deliveryQueue.stageFailure"]["input"],
+  input: {
+    entry: QueuedDelivery;
+    settlement: DeliveryFailureSettlement;
+    claimedAttemptId?: string;
+  },
 ): QueuedDelivery | undefined {
   const { entry, settlement, claimedAttemptId } = input;
   const queueName = outboundDeliveryQueueName(entry);
@@ -272,24 +284,41 @@ export function executeOutboundDeliveryStorageCommand(
         case "deliveryQueue.restoreOutbound":
           return restoreDeliveryAttemptBeforeDispatchInDatabase(
             database,
-            command.input.entry,
+            decodeOutboundDeliverySnapshot(command.input.entry),
             command.input.reservedAttemptCount,
             command.input.claimedAttemptId,
           );
-        case "deliveryQueue.stageFailure":
-          return stageFailure(database, command.input);
-        case "deliveryQueue.finalizeFailure":
+        case "deliveryQueue.stageFailure": {
+          const entry = decodeOutboundDeliverySnapshot(command.input.entry);
+          const settlementEntry = decodeOutboundDeliverySnapshot(command.input.settlementEntry);
+          if (
+            settlementEntry.id !== entry.id ||
+            command.input.settlementEntry.queueName !== command.input.entry.queueName ||
+            !settlementEntry.settlement
+          ) {
+            throw new Error(`Invalid outbound delivery settlement snapshot: ${entry.id}`);
+          }
+          const staged = stageFailure(database, {
+            entry,
+            settlement: settlementEntry.settlement,
+            claimedAttemptId: command.input.claimedAttemptId,
+          });
+          return staged && encodeOutboundDeliverySnapshot(staged);
+        }
+        case "deliveryQueue.finalizeFailure": {
+          const entry = decodeOutboundDeliverySnapshot(command.input.entry);
           return (
             terminalizePendingDeliveryQueueEntryInDatabase(
               database,
               prepareDeliveryQueueTerminalEntry({
-                queueName: outboundDeliveryQueueName(command.input.entry),
-                id: command.input.entry.id,
-                entry: command.input.entry,
+                queueName: outboundDeliveryQueueName(entry),
+                id: entry.id,
+                entry,
                 expectedStatus: "failed",
               }),
             ).status === "terminalized"
           );
+        }
         case "deliveryQueue.retireUnsent":
           return retireUnsentDeliveryInDatabase(
             database,

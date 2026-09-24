@@ -304,7 +304,16 @@ it.each(["durable", "incognito"] as const)(
         replaceSessionEntrySync(scope, {
           ...entry,
           updatedAt: 2,
-          lastAccountId: "another-account",
+          delivery: {
+            kind: "external",
+            route: {
+              channel: "matrix",
+              accountId: "another-account",
+              target: { to: "!ordinary:example" },
+            },
+            context: { channel: "matrix", accountId: "another-account", to: "!ordinary:example" },
+            origin: { provider: "matrix", accountId: "another-account", to: "!ordinary:example" },
+          },
           activeWriterRunId: "new-ordinary-run",
         });
         addSessionMember(

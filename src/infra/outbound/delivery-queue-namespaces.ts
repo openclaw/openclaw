@@ -1,4 +1,4 @@
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 
 export const LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME = "outbound";
 export const OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME = "outbound-legacy-preparing-v1";

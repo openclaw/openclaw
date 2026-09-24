@@ -4,7 +4,7 @@ import {
   restoreQueuedDeliveryCustody,
   stageAndEnqueueOutboundDelivery,
 } from "./deliver-queue-admission.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 const mocks = vi.hoisted(() => ({

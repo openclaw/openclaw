@@ -8,7 +8,9 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { DeliveryMirror } from "./mirror.js";
+import type { PreparedOutboundBatch } from "./prepared-batch.js";
+import type { OutboundSessionContext } from "./session-context.js";
 
 const log = createSubsystemLogger("outbound/message-sent-hook");
 
@@ -88,10 +90,14 @@ export function createMessageSentEmitter(params: {
 
 /** Bind outbound hook correlation to the accepted delivery's runtime session. */
 export function createOutboundMessageSentEmitter(
-  params: Pick<
-    InternalDeliverOutboundPayloadsParams,
-    "channel" | "to" | "accountId" | "mirror" | "session" | "preparedBatch"
-  >,
+  params: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    mirror?: DeliveryMirror;
+    session?: OutboundSessionContext;
+    preparedBatch?: PreparedOutboundBatch;
+  },
   logPrefix: string,
 ) {
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;

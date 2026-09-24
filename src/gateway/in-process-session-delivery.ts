@@ -1,4 +1,4 @@
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.js";
+import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // Source tools and the built Gateway redeem the same host-owned parameter object.

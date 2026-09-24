@@ -1,6 +1,8 @@
 import type { ReserveDeliveryQueueAttemptResult } from "../delivery-queue-sqlite.kernel.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
-import type { DeliveryFailureSettlement, QueuedDelivery } from "./delivery-queue-types.js";
+import type {
+  OutboundDeliverySnapshot,
+  StableDeliveryPreparation,
+} from "./delivery-queue-storage.types.js";
 
 export type OutboundDeliveryMutation = {
   id: string;
@@ -35,18 +37,22 @@ export type OutboundDeliveryStorageOperations = {
     output: ReserveDeliveryQueueAttemptResult;
   };
   "deliveryQueue.restoreOutbound": {
-    input: { entry: QueuedDelivery; reservedAttemptCount: number; claimedAttemptId?: string };
+    input: {
+      entry: OutboundDeliverySnapshot;
+      reservedAttemptCount: number;
+      claimedAttemptId?: string;
+    };
     output: void;
   };
   "deliveryQueue.stageFailure": {
     input: {
-      entry: QueuedDelivery;
-      settlement: DeliveryFailureSettlement;
+      entry: OutboundDeliverySnapshot;
+      settlementEntry: OutboundDeliverySnapshot;
       claimedAttemptId?: string;
     };
-    output: QueuedDelivery | undefined;
+    output: OutboundDeliverySnapshot | undefined;
   };
-  "deliveryQueue.finalizeFailure": { input: { entry: QueuedDelivery }; output: boolean };
+  "deliveryQueue.finalizeFailure": { input: { entry: OutboundDeliverySnapshot }; output: boolean };
   "deliveryQueue.retireUnsent": {
     input: { id: string; producerClaimId: string; stateDir?: string; terminalOutcome?: "failed" };
     output: { spoolPaths: string[]; retention?: string } | undefined;

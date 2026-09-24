@@ -1,6 +1,6 @@
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeliverFn } from "./delivery-queue-recovery.js";
+import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
@@ -81,5 +81,5 @@ export function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies Parameters<DeliverFn>[0];
+  } satisfies DeliverOutboundPayloadsParams;
 }

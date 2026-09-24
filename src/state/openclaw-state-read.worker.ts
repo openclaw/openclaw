@@ -44,7 +44,7 @@ import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
-import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-ownership.kernel.js";
+import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";

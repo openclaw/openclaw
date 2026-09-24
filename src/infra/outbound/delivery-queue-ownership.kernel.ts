@@ -1,13 +1,5 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
-import {
-  deliveryQueueEntriesQuery,
-  inflateDeliveryQueueRow,
-  loadDeliveryQueueEntryInDatabase,
-  type DeliveryQueueReadMode,
-} from "../delivery-queue-sqlite-bound.js";
 import { getDeliveryQueueEntriesOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
-import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
-import { executeSqliteQuerySync } from "../kysely-sync.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -17,7 +9,6 @@ import {
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
   SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-namespaces.js";
-import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 const OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS = [
   { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "prepared", retired: false },
@@ -52,34 +43,6 @@ export function resolveOutboundDeliveryQueueNameInDatabase(
   return owners?.keys().next().value ?? OUTBOUND_DELIVERY_QUEUE_NAME;
 }
 
-export function loadOutboundDeliveryInDatabase(
-  database: OpenClawStateDatabase,
-  id: string,
-  mode: DeliveryQueueReadMode,
-): QueuedDelivery | null {
-  const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, id);
-  const entry = loadDeliveryQueueEntryInDatabase(database, queueName, id, mode);
-  if (!entry) {
-    return null;
-  }
-  return projectOutboundDelivery(queueName, entry);
-}
-
-export function projectOutboundDelivery(
-  queueName: string,
-  entry: DeliveryQueueEntryState,
-): QueuedDelivery {
-  // SAFETY: Only executable outbound namespaces store prepared delivery payloads.
-  const delivery = entry as QueuedDelivery;
-  if (
-    (queueName === SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME) !==
-    (delivery.sessionGeneration !== undefined)
-  ) {
-    throw new Error(`Outbound delivery generation does not match its format: ${entry.id}`);
-  }
-  return delivery;
-}
-
 export function findDeliveryIntentOwnersInDatabase(
   database: OpenClawStateDatabase,
   params: { ids: readonly string[] },
@@ -101,31 +64,5 @@ export function findDeliveryIntentOwnersInDatabase(
       }
     }
     return null;
-  });
-}
-
-/** One read snapshot orders all executable formats without pruning or mutating custody. */
-export function readOutboundDeliveriesInDatabase(
-  database: Pick<OpenClawStateDatabase, "db">,
-  input: { id?: string; mode: "pending" | "unfinished" },
-): QueuedDelivery[] {
-  let query = deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, input.mode)
-    .select("queue_name")
-    .orderBy("enqueued_at", "asc")
-    .orderBy("id", "asc");
-  if (input.id !== undefined) {
-    query = query.where("id", "=", input.id);
-  }
-  const seen = new Set<string>();
-  return executeSqliteQuerySync(database.db, query).rows.flatMap((row) => {
-    const entry = inflateDeliveryQueueRow(row);
-    if (!entry) {
-      return [];
-    }
-    if (seen.has(entry.id)) {
-      throw new Error(`Ambiguous outbound delivery custody: ${entry.id}`);
-    }
-    seen.add(entry.id);
-    return [projectOutboundDelivery(row.queue_name, entry)];
   });
 }
