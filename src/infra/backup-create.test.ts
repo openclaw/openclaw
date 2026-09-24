@@ -3884,8 +3884,7 @@ describe("createBackupArchive", () => {
         const entrySuffixes = entries.map((entry) => entry.replace(/^.*\/state\//, "/state/"));
         expect(entrySuffixes).toContain("/state/extensions/demo/openclaw.plugin.json");
         expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
-        expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
-        expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
+        expect(entrySuffixes.some((entry) => entry.startsWith("/state/node_modules/"))).toBe(false);
         for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]) {
           expect(
             entrySuffixes.some(
@@ -3906,6 +3905,48 @@ describe("createBackupArchive", () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
         expect(verification.ok).toBe(true);
+      },
+    );
+  });
+
+  it("omits nested worktree node_modules while preserving source files", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-worktree-package-content-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const worktree = state.statePath("worktrees", "group", "wb-card");
+        const sourceFile = path.join(worktree, "src", "index.ts");
+        const dependencyFile = path.join(
+          worktree,
+          "packages",
+          "app",
+          "node_modules",
+          "dependency",
+          "index.js",
+        );
+        await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+        await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
+        await fs.writeFile(sourceFile, "export const durable = true;\n", "utf8");
+        await fs.writeFile(dependencyFile, "module.exports = {};\n", "utf8");
+
+        const result = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: true,
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(
+          entries.some((entry) => entry.endsWith("/worktrees/group/wb-card/src/index.ts")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.includes("/node_modules/dependency/"))).toBe(false);
+
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -4060,7 +4101,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("dereferences hardlinks instead of emitting restore-hostile Link entries", async () => {
+  it("omits hardlinked package content instead of emitting restore-hostile Link entries", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -4087,10 +4128,10 @@ describe("createBackupArchive", () => {
         const entries = await listArchiveEntryDetails(result.archivePath);
 
         expect(entries.filter((entry) => entry.type === "Link")).toStrictEqual([]);
-        expect(entries.some((entry) => entry.path.endsWith("/esbuild/bin/esbuild"))).toBe(true);
+        expect(entries.some((entry) => entry.path.endsWith("/esbuild/bin/esbuild"))).toBe(false);
         expect(
           entries.some((entry) => entry.path.endsWith("/@esbuild/darwin-arm64/bin/esbuild")),
-        ).toBe(true);
+        ).toBe(false);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
