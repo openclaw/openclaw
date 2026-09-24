@@ -79,6 +79,15 @@ struct StatusMenuHeaderView: View {
                 ForEach(problems, id: \.label) { problem in
                     self.statusLine(label: problem.label, diagnostic: problem.diagnostic, color: problem.color)
                 }
+                if self.nodeRecoveryAction == .repairCredential {
+                    Button {
+                        MacNodeModeCoordinator.shared.retryNodeCredentialRepair()
+                    } label: {
+                        Label(String(localized: "Repair Mac node"), systemImage: "wrench.and.screwdriver")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
             }
         }
     }
@@ -277,6 +286,11 @@ struct StatusMenuHeaderView: View {
 
         guard !self.nodesStore.isLoading, !self.nodesStore.nodes.isEmpty else { return nil }
         return (String(localized: "Mac capabilities offline"), nil, .orange)
+    }
+
+    private var nodeRecoveryAction: MacNodeRecoveryAction? {
+        guard self.macNodeStatus != nil else { return nil }
+        return self.nodeChannelStatus.state.recoveryAction
     }
 
     private func statusLine(label: String, diagnostic: String? = nil, color: Color) -> some View {

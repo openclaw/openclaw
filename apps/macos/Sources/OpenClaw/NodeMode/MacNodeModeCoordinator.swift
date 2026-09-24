@@ -69,6 +69,109 @@ private enum RouteInvalidationMode {
     case terminalStop
 }
 
+struct MacNodeCredentialRepairKey: Equatable {
+    let endpointGeneration: UInt64
+    let gatewayID: String
+    let deviceID: String
+}
+
+extension MacNodeCredentialRepairKey {
+    init?(
+        endpoint: GatewayConnection.EndpointSnapshot,
+        endpointGeneration: UInt64,
+        profile: GatewayDeviceIdentityProfile)
+    {
+        guard let gatewayID = endpoint.deviceAuthGatewayID?.trimmingCharacters(
+            in: .whitespacesAndNewlines).nonEmpty
+        else { return nil }
+        self.init(
+            endpointGeneration: endpointGeneration,
+            gatewayID: gatewayID,
+            profile: profile)
+    }
+
+    init(
+        endpointGeneration: UInt64,
+        gatewayID: String,
+        profile: GatewayDeviceIdentityProfile)
+    {
+        let deviceID = DeviceIdentityStore.loadOrCreatePersisted(profile: profile)?.deviceId
+            ?? "unavailable:\(profile.rawValue)"
+        self.init(
+            endpointGeneration: endpointGeneration,
+            gatewayID: gatewayID,
+            deviceID: deviceID)
+    }
+}
+
+struct MacNodeCredentialRepairBudget {
+    private(set) var attemptedKey: MacNodeCredentialRepairKey?
+
+    mutating func claim(_ key: MacNodeCredentialRepairKey) -> Bool {
+        guard self.attemptedKey != key else { return false }
+        self.attemptedKey = key
+        return true
+    }
+
+    mutating func reset() {
+        self.attemptedKey = nil
+    }
+}
+
+struct MacNodeCredentialRepairFailure: Equatable {
+    let key: MacNodeCredentialRepairKey
+    let diagnostic: String
+
+    var channelState: MacNodeChannelState {
+        .unavailable(
+            reason: "Mac node needs repair",
+            diagnostic: self.diagnostic,
+            recoveryAction: .repairCredential)
+    }
+}
+
+struct MacNodeCredentialRepairStatus {
+    private(set) var failure: MacNodeCredentialRepairFailure?
+
+    mutating func recordFailure(
+        key: MacNodeCredentialRepairKey,
+        diagnostic: String) -> MacNodeChannelState
+    {
+        let failure = MacNodeCredentialRepairFailure(key: key, diagnostic: diagnostic)
+        self.failure = failure
+        return failure.channelState
+    }
+
+    mutating func clear() {
+        self.failure = nil
+    }
+
+    func stateAfterExhaustedAttempt(for key: MacNodeCredentialRepairKey) -> MacNodeChannelState? {
+        guard self.failure?.key == key else { return nil }
+        return self.failure?.channelState
+    }
+
+    func stateAfterDisconnect(
+        attemptKey: MacNodeCredentialRepairKey?,
+        attemptGeneration: UInt64,
+        currentGeneration: UInt64,
+        reason: String,
+        diagnostic: String?) -> MacNodeChannelState?
+    {
+        guard attemptGeneration == currentGeneration else { return nil }
+        if let attemptKey, self.failure?.key == attemptKey {
+            return self.failure?.channelState
+        }
+        return .unavailable(reason: reason, diagnostic: diagnostic)
+    }
+}
+
+private enum MacNodeCredentialRepairAttemptResult {
+    case notApplicable
+    case repaired
+    case failed
+}
+
 @MainActor
 final class MacNodeModeCoordinator: NSObject {
     static let shared = MacNodeModeCoordinator()
@@ -140,10 +243,13 @@ final class MacNodeModeCoordinator: NSObject {
     private var desktopPublicationTask: Task<Void, Never>?
     private let notificationCenter: NotificationCenter
     private let nodeHostWorkerRetrySleep: @Sendable (UInt64) async throws -> Void
+    private let nodeCredentialRepairer: MacNodeCredentialRepairer
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
     private var tlsSessionCache = MacNodeGatewayTLSSessionCache()
     private var nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy
+    private var nodeCredentialRepairBudget = MacNodeCredentialRepairBudget()
+    private var nodeCredentialRepairStatus = MacNodeCredentialRepairStatus()
 
     override private convenience init() {
         let session = GatewayNodeSession()
@@ -179,6 +285,7 @@ final class MacNodeModeCoordinator: NSObject {
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
         initialComputerControlProvider: ComputerControlProvider? = nil,
+        nodeCredentialRepairer: MacNodeCredentialRepairer = MacNodeCredentialRepairer(),
         nodeHostWorkerRetrySleep: @escaping @Sendable (UInt64) async throws -> Void = {
             try await Task.sleep(nanoseconds: $0)
         },
@@ -193,6 +300,7 @@ final class MacNodeModeCoordinator: NSObject {
         self.workerHostingEnabled = workerHostingEnabled
         self.channelStatus = channelStatus
         self.notificationCenter = notificationCenter
+        self.nodeCredentialRepairer = nodeCredentialRepairer
         self.nodeHostWorkerRetrySleep = nodeHostWorkerRetrySleep
         self.nodeHostWorkerRetryPolicy = nodeHostWorkerRetryPolicy
         self.refreshEvents = refreshEvents.stream
@@ -346,6 +454,11 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: ComputerControlProvider.current())
     }
 
+    func retryNodeCredentialRepair() {
+        self.nodeCredentialRepairBudget.reset()
+        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+    }
+
     func setPresenceActivityReportingEnabled(_ enabled: Bool) async {
         await self.presenceReporter.setReportingEnabled(enabled)
     }
@@ -400,6 +513,7 @@ final class MacNodeModeCoordinator: NSObject {
 
     private func invalidateEndpointAttempt() {
         self.endpointAttemptGeneration &+= 1
+        self.nodeCredentialRepairStatus.clear()
     }
 
     private func revokeRouteAuthority() {
@@ -520,6 +634,7 @@ final class MacNodeModeCoordinator: NSObject {
             let claudeSessionCatalogEnabled = MacNodeClaudeSessionCatalog.shouldAdvertise()
 
             var attemptedEndpoint: GatewayConnection.EndpointSnapshot?
+            var attemptedEndpointGeneration: UInt64?
             do {
                 let endpointAttemptGeneration = self.endpointAttemptGeneration
                 let routeAuthorityGeneration = self.routeAuthorityGeneration
@@ -535,6 +650,7 @@ final class MacNodeModeCoordinator: NSObject {
                         isPaused: false)
                 else { continue }
                 attemptedEndpoint = endpoint
+                attemptedEndpointGeneration = endpointAttemptGeneration
                 guard let attempt = try await self.prepareConnectionAttempt(
                     endpoint: endpoint,
                     endpointGeneration: endpointAttemptGeneration,
@@ -570,6 +686,22 @@ final class MacNodeModeCoordinator: NSObject {
                     await self.session.disconnect()
                     retryDelay = 1_000_000_000
                     continue
+                }
+                let repairResult = await self.attemptNodeCredentialRepair(
+                    after: error,
+                    endpoint: attemptedEndpoint,
+                    endpointGeneration: attemptedEndpointGeneration)
+                switch repairResult {
+                case .repaired:
+                    await self.session.disconnect()
+                    retryDelay = 1_000_000_000
+                    continue
+                case .failed:
+                    try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
+                    retryDelay = min(retryDelay * 2, 10_000_000_000)
+                    continue
+                case .notApplicable:
+                    break
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
                 let failure = Self.nodeGatewayConnectionFailure(error)
@@ -701,9 +833,7 @@ final class MacNodeModeCoordinator: NSObject {
                 guard workerRouteInstalled else { return }
                 await self.nodeHostWorker?.gatewayConnected(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
-                await self.channelStatus.record(.connected(
-                    workerUnavailableReason: attempt.workerUnavailable?.reason,
-                    diagnostic: attempt.workerUnavailable?.diagnostic))
+                await self.recordNodeConnected(for: attempt)
                 self.logger.info("mac node connected to gateway")
                 // The node hello owns this route's session defaults. Reusing the operator
                 // connection here can trigger remote-tunnel recovery while the node connects.
@@ -744,9 +874,12 @@ final class MacNodeModeCoordinator: NSObject {
                 guard let self else { return }
                 await self.retireDesktopRoute(
                     ifAuthorityGeneration: attempt.routeAuthorityGeneration, reason: "gateway-disconnect")
-                await self.channelStatus.record(.unavailable(
-                    reason: reason,
-                    diagnostic: attempt.workerUnavailable?.diagnostic))
+                if let state = await self.nodeCredentialRepairDisconnectState(
+                    for: attempt,
+                    reason: reason)
+                {
+                    await self.channelStatus.record(state)
+                }
                 await self.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
                 await self.scheduleReconnectProbe()
                 self.logger.error("mac node disconnected: \(reason, privacy: .public)")
@@ -963,6 +1096,83 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    private func recordNodeConnected(for attempt: ConnectionAttempt) async {
+        self.nodeCredentialRepairStatus.clear()
+        await self.channelStatus.record(.connected(
+            workerUnavailableReason: attempt.workerUnavailable?.reason,
+            diagnostic: attempt.workerUnavailable?.diagnostic))
+    }
+
+    private func nodeCredentialRepairDisconnectState(
+        for attempt: ConnectionAttempt,
+        reason: String) -> MacNodeChannelState?
+    {
+        self.nodeCredentialRepairStatus.stateAfterDisconnect(
+            attemptKey: MacNodeCredentialRepairKey(
+                endpoint: attempt.endpoint,
+                endpointGeneration: attempt.endpointGeneration,
+                profile: Self.nodeIdentityProfile),
+            attemptGeneration: attempt.endpointGeneration,
+            currentGeneration: self.endpointAttemptGeneration,
+            reason: reason,
+            diagnostic: attempt.workerUnavailable?.diagnostic)
+    }
+
+    private func attemptNodeCredentialRepair(
+        after error: Error,
+        endpoint: GatewayConnection.EndpointSnapshot?,
+        endpointGeneration: UInt64?) async -> MacNodeCredentialRepairAttemptResult
+    {
+        guard let endpoint,
+              let endpointGeneration,
+              Self.shouldAttemptNodeCredentialRepair(after: error, endpoint: endpoint),
+              let gatewayID = endpoint.deviceAuthGatewayID?.trimmingCharacters(
+                  in: .whitespacesAndNewlines).nonEmpty
+        else { return .notApplicable }
+
+        let profile = Self.nodeIdentityProfile
+        let key = MacNodeCredentialRepairKey(
+            endpointGeneration: endpointGeneration,
+            gatewayID: gatewayID,
+            profile: profile)
+        guard self.nodeCredentialRepairBudget.claim(key) else {
+            if let state = self.nodeCredentialRepairStatus.stateAfterExhaustedAttempt(for: key) {
+                self.channelStatus.record(state)
+            }
+            return .failed
+        }
+
+        do {
+            _ = try await self.nodeCredentialRepairer.repair(
+                endpoint: endpoint,
+                nodeIdentityProfile: profile)
+            let currentEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
+            guard Self.endpointAttemptCanConnect(
+                capturedGeneration: endpointGeneration,
+                currentGeneration: self.endpointAttemptGeneration,
+                isCancelled: Task.isCancelled,
+                isPaused: AppStateStore.shared.isPaused,
+                capturedEndpoint: endpoint,
+                currentEndpoint: currentEndpoint)
+            else {
+                return .failed
+            }
+            self.nodeCredentialRepairStatus.clear()
+            self.logger.info("repaired missing Mac node credential")
+            return .repaired
+        } catch {
+            guard endpointGeneration == self.endpointAttemptGeneration else { return .failed }
+            let diagnostic = (error as? MacNodeCredentialRepairError)?.localizedDescription
+                ?? "The automatic node credential repair did not complete."
+            self.logger.error("Mac node credential repair failed")
+            let state = self.nodeCredentialRepairStatus.recordFailure(key: key, diagnostic: diagnostic)
+            self.channelStatus.record(state)
+            return .failed
+        }
+    }
+}
+
+extension MacNodeModeCoordinator {
     private func currentCaps(
         cameraEnabled: Bool,
         computerControlProvider: ComputerControlProvider,
@@ -1151,6 +1361,20 @@ extension MacNodeModeCoordinator {
 }
 
 extension MacNodeModeCoordinator {
+    nonisolated static func shouldAttemptNodeCredentialRepair(
+        after error: Error,
+        endpoint: GatewayConnection.EndpointSnapshot) -> Bool
+    {
+        guard let authError = error as? GatewayConnectAuthError,
+              authError.detail == .authTokenMissing,
+              endpoint.config.token?.nonEmpty == nil,
+              endpoint.config.password?.nonEmpty == nil,
+              endpoint.deviceAuthGatewayID?.trimmingCharacters(
+                  in: .whitespacesAndNewlines).nonEmpty != nil
+        else { return false }
+        return true
+    }
+
     nonisolated static func nodeDeviceAuthBinding(
         for endpoint: GatewayConnection.EndpointSnapshot) -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
     {

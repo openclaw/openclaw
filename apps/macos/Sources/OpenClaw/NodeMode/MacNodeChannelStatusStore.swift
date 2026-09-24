@@ -1,6 +1,10 @@
 import Foundation
 import Observation
 
+enum MacNodeRecoveryAction: Equatable, Sendable {
+    case repairCredential
+}
+
 /// Recorded fact for the Mac node channel, written by MacNodeModeCoordinator at
 /// the connect boundary. The menu bar reads this instead of inferring node
 /// health from gateway node listings, so a node channel that never dials still
@@ -12,7 +16,15 @@ enum MacNodeChannelState: Equatable, Sendable {
     /// unavailable and only native capabilities are advertised.
     case connected(workerUnavailableReason: String?, diagnostic: String? = nil)
     /// The last connect attempt failed; the coordinator keeps retrying.
-    case unavailable(reason: String, diagnostic: String? = nil)
+    case unavailable(
+        reason: String,
+        diagnostic: String? = nil,
+        recoveryAction: MacNodeRecoveryAction? = nil)
+
+    var recoveryAction: MacNodeRecoveryAction? {
+        guard case let .unavailable(_, _, action) = self else { return nil }
+        return action
+    }
 
     var operatorStatusLine: (label: String, diagnostic: String?, isDegraded: Bool)? {
         switch self {
@@ -20,7 +32,9 @@ enum MacNodeChannelState: Equatable, Sendable {
             nil
         case let .connected(workerUnavailableReason: .some(reason), diagnostic: diagnostic):
             ("Mac node degraded — \(Self.condense(reason))", Self.excerpt(diagnostic), true)
-        case let .unavailable(reason, diagnostic):
+        case let .unavailable(reason, diagnostic, .some(.repairCredential)):
+            (Self.condense(reason), Self.excerpt(diagnostic), false)
+        case let .unavailable(reason, diagnostic, nil):
             ("Mac node unavailable — \(Self.condense(reason))", Self.excerpt(diagnostic), false)
         }
     }
