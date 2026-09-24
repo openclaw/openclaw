@@ -399,6 +399,9 @@ describe("browser panel route handoff", () => {
       vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
         drawImage: vi.fn(),
         clearRect: vi.fn(),
+        save: vi.fn(),
+        restore: vi.fn(),
+        translate: vi.fn(),
         strokeRect: vi.fn(),
       } as unknown as CanvasRenderingContext2D);
       vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(

@@ -143,6 +143,17 @@ function renderToolbar(controller: BrowserPanelController, embedded: boolean) {
       >
         ${nativeTab?.loading ? icons.x : icons.refresh}
       </button>
+      <button
+        class="bp-icon ${controller.viewport.fixedViewportView ? "is-active" : ""}"
+        type="button"
+        title=${t("browser.fixedViewport")}
+        aria-label=${t("browser.fixedViewport")}
+        aria-pressed=${controller.viewport.fixedViewportView ? "true" : "false"}
+        ?disabled=${!hasView || Boolean(nativeTab)}
+        @click=${() => controller.viewport.setFixedViewport(!controller.viewport.fixedViewportView)}
+      >
+        ${icons.lock}
+      </button>
       <input
         class="bp-url"
         type="text"

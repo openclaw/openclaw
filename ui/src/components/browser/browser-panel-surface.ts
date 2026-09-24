@@ -60,8 +60,8 @@ export function browserPanelShouldForwardKey(key: string): boolean {
   return FORWARDED_KEYS.has(key) || key.length === 1;
 }
 
-/** Normalized [0..1] stage coordinates for a pointer event. */
-export function browserPanelNormalizedPoint(
+/** Normalized [0..1] stage coordinates for a pointer event, ignoring any letterbox margin. */
+export function browserPanelStageNormalizedPoint(
   stage: HTMLElement | null,
   event: MouseEvent,
 ): { x: number; y: number } | null {
@@ -76,6 +76,63 @@ export function browserPanelNormalizedPoint(
     x: (event.clientX - rect.left) / rect.width,
     y: (event.clientY - rect.top) / rect.height,
   };
+}
+
+/**
+ * Painted frame box inside the stage. The frame image uses `object-fit: contain`,
+ * so the visible area letterboxes inside the element box; geometry (pointer
+ * mapping, annotation painting) must use the painted area, not the element.
+ */
+function renderedFrameBox(stage: HTMLElement | null): DOMRect | null {
+  const shot =
+    stage && typeof stage.querySelector === "function"
+      ? stage.querySelector<HTMLImageElement>(".bp-shot")
+      : null;
+  if (!shot) {
+    return null;
+  }
+  const rect = shot.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+  const naturalWidth = shot.naturalWidth;
+  const naturalHeight = shot.naturalHeight;
+  if (naturalWidth <= 0 || naturalHeight <= 0) {
+    return rect;
+  }
+  const scale = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+  return new DOMRect(
+    rect.left + (rect.width - width) / 2,
+    rect.top + (rect.height - height) / 2,
+    width,
+    height,
+  );
+}
+
+/** Normalized [0..1] stage coordinates for a pointer event. */
+export function browserPanelNormalizedPoint(
+  stage: HTMLElement | null,
+  event: MouseEvent,
+): { x: number; y: number } | null {
+  if (!stage) {
+    return null;
+  }
+  // The live frame may letterbox inside the stage (locked viewport, or a
+  // stream frame that still matches an older panel size); pointers must map
+  // against the rendered frame box, not the surrounding stage.
+  const rect = renderedFrameBox(stage) ?? stage.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+  const x = (event.clientX - rect.left) / rect.width;
+  const y = (event.clientY - rect.top) / rect.height;
+  // Clicks in the letterbox margin around a scaled frame are not part of the page.
+  if (x < 0 || x > 1 || y < 0 || y > 1) {
+    return null;
+  }
+  return { x, y };
 }
 
 /** Remote CSS-pixel coordinates for a pointer event. */
@@ -133,7 +190,18 @@ export function paintBrowserPanelOverlay(
     return;
   }
   context.clearRect(0, 0, width, height);
-  paintAnnotations(context, { width, height, strokes, highlight });
+  // Strokes/highlights are normalized against the painted frame, which may
+  // letterbox inside the stage; paint frame-sized content at the frame origin.
+  const stageRect = stage.getBoundingClientRect();
+  const frameBox = renderedFrameBox(stage);
+  const frameWidth = Math.max(1, Math.round(frameBox?.width ?? width));
+  const frameHeight = Math.max(1, Math.round(frameBox?.height ?? height));
+  const offsetX = frameBox ? Math.round(frameBox.left - stageRect.left) : 0;
+  const offsetY = frameBox ? Math.round(frameBox.top - stageRect.top) : 0;
+  context.save();
+  context.translate(offsetX, offsetY);
+  paintAnnotations(context, { width: frameWidth, height: frameHeight, strokes, highlight });
+  context.restore();
 }
 
 export function dispatchCompositedBrowserAnnotation(
