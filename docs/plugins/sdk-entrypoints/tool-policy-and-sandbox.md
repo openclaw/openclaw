@@ -71,3 +71,11 @@ to host-root admission. Older external bridges that omit the property retain
 the host-root compatibility exposed in v2026.9.4. New implementations should
 supply the mappings; removal of that compatibility requires a breaking SDK
 contract that makes the property required.
+
+Host-backed bridges can additionally expose `resolveReadPolicyPath()` to map
+an existing read target into that caller-facing mount namespace. When present,
+`readFile()` and `stat()` must reject an `expectedPolicyPath` that no longer
+names their final opened target. This keeps
+the bridge, not its caller, responsible for physical alias resolution.
+Expected-policy metadata comes from the admitted descriptor; bridges can keep
+their existing pathname metadata behavior when this optional contract is unused.

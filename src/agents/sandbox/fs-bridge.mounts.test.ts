@@ -176,6 +176,7 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.symlink("cache/hop", path.join(workspaceDir, "alias"));
         await fs.symlink("/data/hop", path.join(workspaceDir, "absolute-alias"));
         await fs.writeFile(path.join(replacement, "hop"), "B");
+        await fs.symlink("hop", path.join(replacement, "data-link"));
         const bridge = createSandboxFsBridge({
           sandbox: createSandbox({
             workspaceDir,
@@ -190,6 +191,7 @@ describe("sandbox effective filesystem mounts", () => {
         mockContainerCanonicalPaths({
           "/workspace/alias": "/workspace/cache/hop",
           "/workspace/absolute-alias": "/data/hop",
+          "/data/data-link": "/data/hop",
         });
         for (const filePath of ["alias", "absolute-alias", "/workspace/cache/hop", "/data/hop"]) {
           expect((await bridge.readFile({ filePath })).toString()).toBe("B");
@@ -198,6 +200,41 @@ describe("sandbox effective filesystem mounts", () => {
             path.join(replacement, "hop"),
           );
         }
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "alias" })).toBe(
+          "/workspace/cache/hop",
+        );
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "absolute-alias" })).toBe(
+          "/data/hop",
+        );
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "/data/hop" })).toBe("/data/hop");
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "/data/data-link" })).toBe(
+          "/data/hop",
+        );
+        await expect(
+          bridge.stat({
+            filePath: "alias",
+            expectedPolicyPath: await bridge.resolveReadPolicyPath!({ filePath: "alias" }),
+          }),
+        ).resolves.toMatchObject({
+          type: "file",
+          size: 1,
+          mtimeMs: Math.trunc((await fs.stat(path.join(replacement, "hop"))).mtimeMs),
+        });
+        await expect(
+          bridge.readFile({
+            filePath: "absolute-alias",
+            expectedPolicyPath: "/workspace/cache/hop",
+          }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.readFile({ filePath: "/data/hop", expectedPolicyPath: "/workspace/cache/hop" }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.stat({ filePath: "/data/hop", expectedPolicyPath: "/workspace/cache/hop" }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.stat({ filePath: "/data/hop", expectedPolicyPath: "" }),
+        ).rejects.toThrow("changed after authorization");
         expect(await fs.readFile(path.join(workspaceDir, "visible.txt"), "utf8")).toBe("A");
         expect(
           mockedOpenRootFile.mock.calls.every(
@@ -255,6 +292,31 @@ describe("sandbox effective filesystem mounts", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each(["readFile", "stat"] as const)(
+    "rejects a denied descriptor after its admitted path is retargeted through %s",
+    async (action) => {
+      await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
+        await fs.writeFile(path.join(workspaceDir, "visible"), "VISIBLE");
+        await fs.writeFile(path.join(workspaceDir, "hidden"), "HIDDEN");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        });
+        mockContainerCanonicalPaths({ "/workspace/alias": "/workspace/hidden" });
+        const open = mockedOpenRootFile.getMockImplementation()!;
+        mockedOpenRootFile.mockImplementationOnce(async (request) => {
+          const opened = await open(request);
+          await fs.unlink(path.join(workspaceDir, "hidden"));
+          await fs.symlink("visible", path.join(workspaceDir, "hidden"));
+          return opened;
+        });
+
+        await expect(
+          bridge[action]({ filePath: "alias", expectedPolicyPath: "/workspace/visible" }),
+        ).rejects.toThrow("changed after authorization");
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "reads a workspace whose root contains a literal backslash",
     async () => {
@@ -276,6 +338,26 @@ describe("sandbox effective filesystem mounts", () => {
       });
     },
   );
+
+  it.runIf(process.platform === "darwin")("uses physical casing for read policy", async () => {
+    await withTempDir("openclaw-effective-mounts-", async (root) => {
+      const workspaceDir = path.join(root, "Workspace");
+      await fs.mkdir(path.join(workspaceDir, "Private"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "Private/secret.txt"), "secret");
+      try {
+        await fs.stat(path.join(workspaceDir, "private/SECRET.txt"));
+      } catch {
+        return;
+      }
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      expect(await bridge.resolveReadPolicyPath!({ filePath: "private/SECRET.txt" })).toBe(
+        "/workspace/Private/secret.txt",
+      );
+    });
+  });
 
   it("keeps container-only identity separate from hidden host bytes without authorizing reads", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {

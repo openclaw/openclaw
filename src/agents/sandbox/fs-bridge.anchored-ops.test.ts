@@ -473,6 +473,9 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).resolves.toBeNull();
 
       const statCall = requireDockerCall(
         findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
