@@ -189,21 +189,6 @@ export const webHandlers: GatewayRequestHandlers = {
         verbose: Boolean(params.verbose),
         accountId,
       };
-      const existingResult = await gateway.loginWithQrStartExisting?.(loginParams);
-      if (existingResult) {
-        if (
-          existingResult.qrDataUrl &&
-          wasChannelRunning({
-            context,
-            channelId: provider.id,
-            accountId,
-          })
-        ) {
-          await context.stopChannel(provider.id, accountId);
-        }
-        respond(true, existingResult, undefined);
-        return;
-      }
       const preflightResult = await gateway.loginWithQrStartPreflight?.(loginParams);
       if (preflightResult) {
         respond(true, preflightResult, undefined);

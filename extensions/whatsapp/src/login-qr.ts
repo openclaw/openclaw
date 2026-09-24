@@ -94,26 +94,22 @@ function isLoginFresh(login: ActiveLogin) {
   return Date.now() - login.startedAt < ACTIVE_LOGIN_TTL_MS;
 }
 
-function readActiveQrResult(accountId: string): StartWebLoginWithQrResult | null {
+function readActiveQrResult(accountId: string, force = false): StartWebLoginWithQrResult | null {
   const existing = activeLogins.get(accountId);
-  if (!existing || !isLoginFresh(existing) || !existing.qrDataUrl) {
+  if (
+    force ||
+    !existing ||
+    !isLoginFresh(existing) ||
+    existing.connected ||
+    existing.error !== undefined ||
+    !existing.qrDataUrl
+  ) {
     return null;
   }
   return {
     qrDataUrl: existing.qrDataUrl,
     message: "QR already active. Scan it in WhatsApp → Linked Devices.",
   };
-}
-
-export function readExistingWebLoginWithQrResult(
-  opts: Pick<WebLoginStartParams, "accountId" | "force"> = {},
-): StartWebLoginWithQrResult | null {
-  if (opts.force) {
-    return null;
-  }
-  const cfg = getRuntimeConfig();
-  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
-  return readActiveQrResult(account.accountId);
 }
 
 function resetQrUpdateSignal(login: ActiveLogin) {
@@ -311,23 +307,6 @@ async function waitForQrOrRecoveredLogin(params: {
 }
 
 export async function startWebLoginWithQr(
-  opts: {
-    verbose?: boolean;
-    timeoutMs?: number;
-    force?: boolean;
-    accountId?: string;
-    runtime?: RuntimeEnv;
-    beforeCredentialPersistence?: () => Promise<void>;
-  } = {},
-): Promise<StartWebLoginWithQrResult> {
-  const activeQr = readExistingWebLoginWithQrResult(opts);
-  if (activeQr) {
-    return activeQr;
-  }
-  return await startWebLoginWithQrAfterPreflight(opts);
-}
-
-export async function startWebLoginWithQrAfterPreflight(
   opts: WebLoginStartParams = {},
 ): Promise<StartWebLoginWithQrResult> {
   const runtime = opts.runtime ?? defaultRuntime;
@@ -369,12 +348,9 @@ export async function startWebLoginWithQrAfterPreflight(
     }
   }
 
-  const existing = activeLogins.get(account.accountId);
-  if (existing && isLoginFresh(existing) && existing.qrDataUrl) {
-    return {
-      qrDataUrl: existing.qrDataUrl,
-      message: "QR already active. Scan it in WhatsApp → Linked Devices.",
-    };
+  const activeQr = readActiveQrResult(account.accountId, Boolean(opts.force));
+  if (activeQr) {
+    return activeQr;
   }
 
   await resetActiveLogin(account.accountId);
