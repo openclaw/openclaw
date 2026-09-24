@@ -479,7 +479,19 @@ checklist below explains each step; this section decides what the default is.
    Run the beta-to-stable dist-tag sync (`openclaw-npm-dist-tags.yml` in
    `openclaw/releases`, `mode=sync_beta_to_stable`) immediately after core npm
    publishes and before the parent's completion verify, because that verify
-   fails on a stale `beta` tag and leaves the release drafted.
+   fails on a stale `beta` tag and leaves the release drafted. "Visible" means
+   `npm view openclaw versions --prefer-online` lists it, 5-6 minutes after the
+   core child's `+ openclaw@YYYY.M.PATCH`. Each npm child (`Plugin NPM
+Release`, `openclaw-npm-release.yml`) needs its own `npm-release` approval;
+   watch `gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments`
+   and approve npm children only. Never approve a ClawHub child by hand (its
+   publish jobs then fail `Artifact not found`); cancel it and re-dispatch the
+   parent. Before any re-dispatch, reject and cancel the failed parent's stale
+   `waiting`/`queued` children or the new parent fails
+   `ClawHub dispatch blocked by waiting run`. If the parent failed only at its
+   completion verify, run the sync and dispatch a new parent with the same
+   inputs: it recognizes published bytes and only runs ClawHub, GitHub release
+   evidence, and Docker. Exact commands: `$release-openclaw-ci` Publish children.
 
 7. **Targeted local proof.** Do not mirror FRV locally. Run a lane locally only
    after it failed in CI, to separate flake from defect, bounded to 15 minutes
@@ -640,6 +652,11 @@ response`, `PR context and evidence`, `Labeler`, the `CodeQL` workflows,
   cancels validation of a newer head. Run it after the release seals; deferred
   PR work is never re-dispatched automatically. Not yet proven live: GitHub
   re-evaluating the `vars` gate on `gh run rerun`.
+- Publish children run on hosted `ubuntu-latest`; Blacksmith testbox runs are
+  a separate pool and do not compete. When the hosted pool is saturated, cancel
+  queued PR CI and ClawSweeper review runs, then restore them afterwards with
+  `pnpm frv prioritize --restore <record>` or by re-running each open PR's
+  latest cancelled CI run.
 
 ## Stable main closeout
 
@@ -886,7 +903,7 @@ design approval and package-manager integration proof before implementation.
 - Before tagging a release candidate locally, run `RELEASE_TAG=vYYYY.M.PATCH-beta.N pnpm release:fast-pretag-check`. The helper runs the fast release guardrails, plugin npm/ClawHub release checks, build, UI build, and `release:openclaw:npm:check` in the order that catches common approval-blocking mistakes before the GitHub publish workflow starts.
 - Plugin `openclaw.release.requireLatestDependencies` declarations remain release metadata, but npm `latest` drift is advisory. Checks warn with the plugin, dependency, pinned version, and current latest version; a failed latest lookup also warns and does not establish that the pin is unusable. Full Release Validation's Codex lanes validate the `@openclaw/codex` harness pin. Keep that frozen, tested pin when upstream publishes a newer version. Missing or malformed required runtime dependency metadata, package/install failures, and failed required validation lanes still block release.
 - Run `RELEASE_TAG=vYYYY.M.PATCH node --import tsx scripts/openclaw-npm-release-check.ts` (or the matching prerelease/correction tag) before approval.
-- After npm publish, run `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.PATCH` (or the matching beta/correction version) to verify the published registry install path in a fresh temp prefix.
+- After npm publish, run `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.PATCH` (or the matching beta/correction version) to verify the published registry install path in a fresh temp prefix. Run it from a checkout of the Release SHA, not the tooling checkout (a newer checkout reports main-only bundled plugin files as missing), with `OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<sha12>-<epoch>` and `OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha>` exported; without them it fails `SHA-pinned release-publish ref does not match`.
 - After a beta publish, run `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@YYYY.M.PATCH-beta.N OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=maintainer pnpm test:docker:npm-telegram-live` with `OPENCLAW_QA_CONVEX_SITE_URL` and `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` set. This verifies installed-package onboarding, Telegram setup, and real Telegram E2E against the published npm package using the shared Test Server userbot pool. CI uses the `ci` role and `OPENCLAW_QA_CONVEX_SECRET_CI` instead.
 - To run the full post-publish beta smoke from a maintainer machine, use `pnpm release:beta-smoke -- --beta betaN`. The helper runs Parallels npm update/fresh-target validation, dispatches `NPM Telegram Beta E2E`, polls the exact workflow run, downloads the artifact, and prints the Telegram report.
 - Maintainers can run the same post-publish check from GitHub Actions via the manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and does not run on every merge.
@@ -1461,10 +1478,16 @@ TOOLING_SHA="<recorded-full-tooling-sha>"
 PUBLISH_REF="release-publish/$(printf '%s' "$TOOLING_SHA" | cut -c1-12)-$(date +%s)"
 git tag "$PUBLISH_REF" "$TOOLING_SHA"
 git push origin "refs/tags/$PUBLISH_REF"
+# the push may warn "Cannot create ref due to creations being restricted" while the tag still exists
+gh api "repos/openclaw/openclaw/git/ref/tags/$PUBLISH_REF" \
+  || gh api -X POST repos/openclaw/openclaw/git/refs -f "ref=refs/tags/$PUBLISH_REF" -f "sha=$TOOLING_SHA"
 ```
 
 Pass `--ref "$PUBLISH_REF"` to `gh workflow run`; real child publication from
-`main` is rejected before work starts. Docker-only recovery may use `main`;
+`main` is rejected before work starts. Under a lane waiver the Tooling SHA must
+include #156816, which forwards `lane_waiver` to the npm children; an older
+tag fails the core child's `Verify full release validation target` with
+`pass lane_waiver=<reason> to acknowledge it`, so cut a newer tooling tag. Docker-only recovery may use `main`;
 the matching Tideclaw alpha branch route is unchanged.
 
 Beta publish example (using the tooling tag above):

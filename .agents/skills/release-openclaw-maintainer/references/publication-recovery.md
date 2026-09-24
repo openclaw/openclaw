@@ -46,10 +46,15 @@ Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
 metadata. For an already-published version, run:
 
 ```bash
+OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
+OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 pnpm release:verify-beta -- <published-version> ... --skip-github-release
 ```
 
+Run the verifier from a checkout of the Release SHA, not the tooling checkout,
+and only after `npm view openclaw versions --prefer-online` lists the version
+(5-6 minutes after the child's `+ openclaw@<version>`).
 Use the original successful child run IDs and evidence output path with the
 beta verifier. Restore the draft, dependency evidence asset, proof section and
 finalization from that evidence. Never rerun publication for bytes already
@@ -57,7 +62,13 @@ published. A failed postpublish confidence lane does not authorize unpublishing.
 Do not leave the GitHub release drafted while you recover: once npm is out, run
 `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`
 first (see [regular release](regular-release.md#publish-and-verify)), then repair
-the parent.
+the parent: run the beta-to-stable dist-tag sync, sweep the failed parent's
+stale `waiting`/`queued` children (reject their gate and cancel them, per
+`$release-openclaw-ci` Publish children), and dispatch a new parent with the
+same inputs. It recognizes published bytes and only runs ClawHub, GitHub
+release evidence, and Docker. Never approve a ClawHub child by hand; without
+the parent's recovery-approval artifact its publish jobs fail
+`Artifact not found`.
 
 Follow `docs/reference/RELEASING.md`: once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm

@@ -93,8 +93,14 @@ prepare-only request does not
 authorize pushing publication tags: use an existing matching protected tooling
 ref where available, otherwise report that qualification still needs one.
 With publication/tag-push authority, create and push the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tooling tag at the recorded
-Tooling SHA (see `docs/reference/RELEASING.md`), then consume existing validation
-against the untagged Release SHA:
+Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
+`Cannot create ref due to creations being restricted` ruleset warning while the
+tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
+and, only if missing, create it with
+`gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
+The tooling `main` must include #156816 (lane waiver forwarded to children) when
+a lane waiver is in force. Then consume existing validation against the untagged
+Release SHA:
 
 ```bash
 pnpm release:candidate -- \
@@ -161,7 +167,31 @@ candidate-approved digests are supplied together or both omitted.
 Wait for `npm-release` environment approval, plugin npm then core npm, parallel
 ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
-on recovery; never rebuild or republish successful versions.
+on recovery; never rebuild or republish successful versions. Each npm child
+needs its own `npm-release` approval and ClawHub children must never be
+approved by hand; watch `pending_deployments` on every child per
+`$release-openclaw-ci` (Publish children). Children run on hosted
+`ubuntu-latest`; if that pool is saturated, apply the runner-priority recipe in
+`docs/reference/RELEASING.md` (Blacksmith testbox runs do not compete).
+
+After the core child logs `+ openclaw@<version>`, the package takes 5-6 minutes
+to appear in `npm view openclaw versions --json --prefer-online`; poll it before
+the dist-tag sync, the GitHub flip, or verification. Run postpublish
+verification from a checkout of the Release SHA (a newer tooling checkout
+reports main-only bundled plugin files as missing), with the tooling identity
+exported, or it fails `SHA-pinned release-publish ref does not match`:
+
+```bash
+OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
+OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
+node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>
+```
+
+If the parent fails at `Complete publish workflows` (it requires `beta` ==
+`latest` for every package) after core published, do not re-publish: run the
+dist-tag sync, sweep stale children, and dispatch a new parent with the same
+inputs; already-published bytes are recognized and it only runs ClawHub, GitHub
+release evidence, and Docker.
 
 As soon as `openclaw@<version>` is visible on npm under the target dist-tag,
 flip the GitHub release public: un-draft it and mark it latest for stable.
