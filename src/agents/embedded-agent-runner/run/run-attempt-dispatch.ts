@@ -124,6 +124,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtime.providerRuntimeHandle,
   );
 
+  params.assertModelInput?.(effectiveModel);
+
   await fs.mkdir(workspaceDir, { recursive: true });
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);

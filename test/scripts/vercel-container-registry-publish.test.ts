@@ -401,42 +401,38 @@ describe("Vercel Container Registry publishing", () => {
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
 
-  it("rejects the observed oversized layer before any registry write", () => {
+  it("admits the observed release node_modules layer that the former 500 MB cap rejected", () => {
     const calls: string[][] = [];
     const manifest = platformManifest();
-    const rejectedDigest =
-      "sha256:4b9a73079b17c36ef03670032ea1d22f0441dc38d2668a0d176753795b586a18";
+    const observedDigest =
+      "sha256:87a84edfc11732d9ef1ca5a598a871ce3f4b7572dd3213dc5107d519d9ab61c0";
     manifest.layers = Array.from({ length: 11 }, (_, index) => ({
       ...manifest.layers[0]!,
-      digest: index === 10 ? rejectedDigest : layerDigest,
-      size: index === 10 ? 870_479_908 : 1024,
+      digest: index === 10 ? observedDigest : layerDigest,
+      size: index === 10 ? 869_561_235 : 1024,
     }));
     const execFileSyncImpl = successfulExecutor(calls, {
       rawManifests: { [`${sourceImage}@${amd64Digest}`]: JSON.stringify(manifest) },
+      version: "2026.9.6",
     });
 
-    expect
-      .soft(() =>
-        publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
-          execFileSyncImpl,
-          log: () => {},
-        }),
-      )
-      .toThrow(
-        `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: layer[10] ${rejectedDigest} is 870479908 bytes; client cap 500000000 bytes`,
-      );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    publishVercelContainerRegistryImages(publishParams("2026.9.6", true), {
+      execFileSyncImpl,
+      log: () => {},
+    });
+
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
   });
 
   it("admits every selection before copying even when only the last platform exceeds a cap", () => {
     const manifest = platformManifest();
-    manifest.layers[0]!.size = 500_000_001;
+    manifest.layers[0]!.size = 2_000_000_001;
     const { calls, publish } = admissionFixture(JSON.stringify(manifest), {
       digest: browserArm64Digest,
     });
 
     expect(publish).toThrow(
-      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 500000001 bytes; client cap 500000000 bytes`,
+      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 2000000001 bytes; client cap 2000000000 bytes`,
     );
     expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
   });
@@ -460,8 +456,8 @@ describe("Vercel Container Registry publishing", () => {
   });
 
   it.each([
-    ["layer", 500_000_000, 0],
-    ["layer", 500_000_000, 1],
+    ["layer", 2_000_000_000, 0],
+    ["layer", 2_000_000_000, 1],
     ["config", 1_000_000, 0],
     ["config", 1_000_000, 1],
   ] as const)("applies the inclusive %s cap of %i bytes with excess %i", (field, cap, excess) => {

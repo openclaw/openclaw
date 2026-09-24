@@ -67,8 +67,8 @@ the WebSocket close code for troubleshooting; specific Gateway errors keep their
 Open the account menu and use **Retry now** to request an immediate attempt when offered.
 Sign-in failures use the sign-in flow, and a required dashboard refresh uses its reload flow;
 retrying the connection does not replace either action. Live updates and realtime/session actions pause until the connection
-returns. Chat remains editable, with a conversation-specific outbox notice instead of another
-global connection warning.
+returns. Chat remains editable without a pre-queue helper. The conversation-specific outbox
+summary appears only after a message is queued, alongside the actual queued message.
 
 Ordinary text and attachment sends require successful admission to the current tab's
 Gateway/session-scoped browser outbox. Eligible messages resume automatically after connection

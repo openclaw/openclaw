@@ -743,7 +743,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
     // Strict declaration checking needs the release-declared ws types; without
     // them skipLibCheck:false reports TS7016 before the __exportAll TS2304.
     "@types/ws": "8.18.1",
-    typescript: "6.0.3",
+    typescript: "7.0.2",
   };
   if (params.aiPackageSpec) {
     dependencies["@openclaw/ai"] = params.aiPackageSpec;
@@ -856,11 +856,8 @@ function runPackedPluginSdkTypescriptSmoke(
         );
       }
     }
-    const tscPath = [
-      join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
-      join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
-    ].find((candidate) => existsSync(candidate));
-    if (!tscPath) {
+    const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
+    if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
     }
     runReleaseCheckCommand(

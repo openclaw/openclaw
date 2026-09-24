@@ -593,7 +593,6 @@
     "native.android.56ba8fc553a399af": "適用、拒否、隔離には operator.admin スコープが必要です。ライフサイクル操作を有効にするには、共有 Gateway 認証で再接続するか、デバイスの operator.admin スコープへのアップグレードを承認してください。",
     "native.android.56d46eccb37487c3": "スケジュール",
     "native.android.56d7703155f09152": "変更を確認するには、Gateway に接続してください。",
-    "native.android.56da9a315483abe4": "音声会話が停止しました",
     "native.android.56de778dd64c4cba": "次のサイクル",
     "native.android.56eac13e3394c87f": "サインアウト",
     "native.android.5731193296f6ca25": "適用",

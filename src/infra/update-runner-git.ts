@@ -103,27 +103,19 @@ export async function updateGitCheckout(params: {
     reason: "Installed checkout was not changed",
   };
   const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
-    if (mutationPrepared) {
-      // Remote transport can outlive the earlier service inspection. Recheck
-      // its frozen contexts before checkout without repeating stop/preparation.
-      await prepareGitMutation({
-        runCommand: runner,
-        root,
-        revision,
-        timeoutMs,
-        beforeGitMutation: opts.inspectGitTarget,
-      });
-      return;
-    }
+    // Remote transport can outlive the earlier service inspection. Recheck
+    // its frozen contexts before checkout without repeating stop/preparation.
     await prepareGitMutation({
       runCommand: runner,
       root,
       revision,
       timeoutMs,
-      beforeGitMutation: opts.beforeGitMutation,
+      beforeGitMutation: mutationPrepared ? opts.inspectGitTarget : opts.beforeGitMutation,
     });
-    mutationPrepared = true;
-    recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    if (!mutationPrepared) {
+      mutationPrepared = true;
+      recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+    }
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({
     status,

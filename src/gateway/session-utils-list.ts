@@ -1,4 +1,8 @@
 import { performance } from "node:perf_hooks";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
@@ -41,23 +45,6 @@ type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & 
   hasMore: boolean;
 };
 
-function resolveSessionsListLimit(
-  opts: SessionsListParams,
-  defaultLimit?: number,
-): number | undefined {
-  if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
-    return defaultLimit;
-  }
-  return Math.max(1, Math.floor(opts.limit));
-}
-
-function resolveSessionsListOffset(opts: SessionsListParams): number {
-  if (typeof opts.offset !== "number" || !Number.isFinite(opts.offset)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(opts.offset));
-}
-
 function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
   if (limit === undefined) {
     return undefined;
@@ -70,8 +57,8 @@ function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
-  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
-  const offset = resolveSessionsListOffset(params.opts);
+  const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
+  const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
   const sortedWindow = yield* sortAndLimitSessionEntries(
     filtered,

@@ -1,8 +1,6 @@
-import type ts from "typescript";
-import { getTypeScript } from "./ts-guard-utils.mts";
+import * as ts from "typescript/unstable/ast";
 
 function precedingConstInitializer(node: ts.Node, name: string): ts.Expression | undefined {
-  const ts = getTypeScript();
   let statement = node;
   while (statement.parent && !ts.isBlock(statement.parent)) {
     statement = statement.parent;
@@ -29,7 +27,6 @@ function precedingConstInitializer(node: ts.Node, name: string): ts.Expression |
 }
 
 function isOwnPackageRoot(node: ts.Node, name: string): boolean {
-  const ts = getTypeScript();
   const awaited = node.parent;
   const declaration = awaited?.parent;
   const declarations = declaration?.parent;
@@ -83,7 +80,6 @@ function isOwnPackageRoot(node: ts.Node, name: string): boolean {
 
 /** Recognize shipped package assets outside the hashed dist compatibility graph. */
 export function isUpdatePackageAssetImport(owner: string, node: ts.CallExpression): boolean {
-  const ts = getTypeScript();
   const specifier = node.arguments[0];
   if (!specifier || !ts.isPropertyAccessExpression(specifier) || specifier.name.text !== "href") {
     return false;

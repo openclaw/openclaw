@@ -252,11 +252,15 @@ describe("host-owned workspace access", () => {
       canonicalPath: "/remote/MEMORY.md",
     }));
     host.bridge.readDirectory = vi.fn(async () => [{ name: "MEMORY.md", isDirectory: false }]);
+    host.bridge.createFileExclusive = vi.fn(async () => "created" as const);
     const release = registerAgentWorkspaceAccess(root, host);
     const retained = getAgentWorkspaceAccess(root)!;
     await expect(
       retained.bridge.readFileWithSource!({ filePath: "alias/MEMORY.md", maxBytes: 6 }),
     ).resolves.toEqual({ data: Buffer.from("remote"), canonicalPath: "/remote/MEMORY.md" });
+    await expect(
+      retained.bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "new memory" }),
+    ).resolves.toBe("created");
     release();
     await expect(
       retained.bridge.readFileWithSource!({ filePath: "alias/MEMORY.md" }),
@@ -264,8 +268,29 @@ describe("host-owned workspace access", () => {
     await expect(retained.bridge.readDirectory!({ filePath: "." })).rejects.toThrow(
       "stopped or not ready",
     );
+    await expect(
+      retained.bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "late memory" }),
+    ).rejects.toThrow("stopped or not ready");
     expect(host.bridge.readFileWithSource).toHaveBeenCalledTimes(1);
     expect(host.bridge.readDirectory).not.toHaveBeenCalled();
+    expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report exclusive creation success after its host is revoked", async () => {
+    const root = workspace();
+    const host = provider();
+    host.bridge.createFileExclusive = vi.fn(async () => {
+      release();
+      return "created" as const;
+    });
+    const release = registerAgentWorkspaceAccess(root, host);
+    await expect(
+      getAgentWorkspaceAccess(root)!.bridge.createFileExclusive!({
+        filePath: "MEMORY.md",
+        data: "new memory",
+      }),
+    ).rejects.toThrow(WorkspaceAccessUnavailableError);
+    expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
   });
 
   it("does not return source metadata after access is revoked during a read", async () => {

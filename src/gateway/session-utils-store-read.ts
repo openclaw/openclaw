@@ -122,14 +122,7 @@ function loadGatewaySessionLookupStoreUncached(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: {
-    exactKeys?: readonly string[];
-    listKeys?: readonly string[];
-    readOnly?: boolean;
-    projection?: SessionEntryListScope["projection"];
-    readConsistency?: SessionEntryListScope["readConsistency"];
-    readSource?: SessionEntryReadSource;
-  } = {},
+  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]> = {},
 ): GatewaySessionStoreView {
   if (options.exactKeys) {
     // Borrowed listing views and probes never create stores; ordinary owned reads may.

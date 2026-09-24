@@ -1303,7 +1303,6 @@ verify_published_release() {
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
-    --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1312,7 +1311,6 @@ verify_published_release() {
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
-      (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1385,7 +1383,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
-    STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1414,9 +1411,6 @@ const section = [
     ? [
         `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
       ]
-    : []),
-  ...(process.env.STABLE_SOAK_WAIVER
-    ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
     : []),
   process.env.TELEGRAM_LINE,
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),

@@ -288,14 +288,16 @@ concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
 The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
-are bound into the broker command. The AWS lease uses a 90-minute idle timeout
+are bound into the canonical command. The publisher streams a launcher through
+Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
+bootstrap, canonical command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
 and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates its newly created authenticated broker
-run under the same service token, ordered complete events, canonical command
-and bootstrap upload hash, and
+run under the same service token, ordered complete events, independently rebuilt
+canonical command and launcher upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its immutable protected-main workflow SHA and adds that workflow SHA to

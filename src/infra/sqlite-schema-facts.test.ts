@@ -1,7 +1,9 @@
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
 import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -36,6 +38,41 @@ describe("admitted SQLite schema facts", () => {
       if (database.isOpen) {
         database.close();
       }
+    }
+  });
+
+  it("retains table and column facts across 100 foreign data commits", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
+    const reader = openDatabase(
+      "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
+      true,
+      filename,
+    );
+    reader.exec("PRAGMA journal_mode=WAL");
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    const read = () =>
+      runSqliteReadOperationSync(reader, () => {
+        expect(tableExists(reader, "session_nodes")).toBe(true);
+        expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
+      });
+    read();
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      const insert = writer.prepare("INSERT INTO session_nodes VALUES (?)");
+      for (let index = 0; index < 100; index += 1) {
+        insert.run(index);
+        read();
+      }
+      expect(
+        observation.queries.filter((sql) => /sqlite_schema|pragma_table_info/iu.test(sql)),
+      ).toHaveLength(0);
+      expect(
+        observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
+      ).toBeLessThanOrEqual(100);
+    } finally {
+      observation.restore();
     }
   });
 
@@ -74,6 +111,10 @@ describe("admitted SQLite schema facts", () => {
       }
       expect(hasTable("later")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
+      writer.exec("PRAGMA user_version = 2147483647");
+      expect(() => assertSupportedAgentSchemaVersion(reader, filename)).toThrow(
+        /newer schema version/iu,
+      );
     },
   );
 

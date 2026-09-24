@@ -1119,7 +1119,23 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-assert.deepEqual(result.steps, [], "second update executed package mutations");
+// The isolated state directory records a service refusal without running the suggested command.
+const expectedSteps = result.steps.length === 0 ? [] : [{
+  name: "managed-service-reconciliation",
+  command: "openclaw gateway install --force",
+  cwd: result.root ?? "",
+  durationMs: 0,
+  exitCode: 0,
+  advisory: {
+    kind: "recoverable-maintenance",
+    message:
+      "service management skipped: non-default state dir or config path. " +
+      "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
+      "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
+      "at the canonical paths for that account home and profile to manage the gateway service during update.",
+  },
+}];
+assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
@@ -1509,6 +1525,7 @@ update_candidate() {
   if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR")
+    update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE=$ARTIFACT_ROOT/workshop-legacy-seeded.json")
   fi
   if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
     { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
@@ -1593,6 +1610,7 @@ run_workshop_doctor() {
   local doctor_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_UPDATE_IN_PROGRESS \
     "OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR" \
+    "OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE=$ARTIFACT_ROOT/workshop-legacy-seeded.json" \
     "OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=$workshop_doctor_observation_root" \
     "NODE_OPTIONS=$doctor_node_options" \
     openclaw doctor --fix --non-interactive >"$log" 2>&1
@@ -2232,7 +2250,9 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase prepare-workshop-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
   phase resolve-workshop-candidate resolve_candidate_version
   phase capture-workshop-baseline node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs baseline "$(package_root)"
+  phase capture-workshop-published-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
+  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
   phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
   phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
   phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore
@@ -2240,14 +2260,16 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase assert-workshop-published-refusal assert_workshop_published_refusal
   phase repair-workshop-baseline run_workshop_doctor baseline "$ARTIFACT_ROOT/baseline-doctor.log"
   phase assert-workshop-baseline-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" baseline
+  phase seed-workshop-legacy-proposals node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed-legacy
   phase update-workshop-recovered-state update_candidate 1
+  phase assert-workshop-installed-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs installed "$(package_root)" "$CANDIDATE_SPEC"
   phase assert-workshop-recovered-upgrade node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs upgrade "$last_update_observation_root" "$(package_root)"
-  phase seed-workshop-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed candidate
-  phase repair-workshop-candidate run_workshop_doctor candidate "$DOCTOR_LOG"
-  phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
   phase seed-physical-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed candidate
   phase repair-physical-candidate run_workshop_doctor candidate-physical "$ARTIFACT_ROOT/physical-candidate-doctor.log"
   phase assert-physical-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-doctor "$workshop_doctor_observation_root" "$ARTIFACT_ROOT/physical-candidate-doctor.log"
+  phase seed-workshop-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed candidate
+  phase repair-workshop-candidate run_workshop_doctor candidate "$DOCTOR_LOG"
+  phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
   phase assert-workshop-recovery node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs complete
   run_completed="1"
   echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor, recovered upgrade, and explicit candidate Doctor succeeded."

@@ -67,7 +67,6 @@ extensions/device-pair/index.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/diagnostics-prometheus/src/service.ts
 extensions/discord/src/actions/runtime.test.ts
-extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
@@ -590,7 +589,6 @@ src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
 src/gateway/server.sessions.compaction.test.ts
-src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
 src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts
 src/gateway/session-create-service.ts

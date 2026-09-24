@@ -6,6 +6,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import {
+  assertWorkshopLegacyImported,
+  assertWorkshopLegacyWarning,
+  captureWorkshopLegacyState,
+  seedWorkshopLegacyProposals,
+} from "./workshop-legacy-proposals.mjs";
 
 const PHYSICAL_INDEX = "idx_audit_events_kind_sequence";
 const INDEX = "idx_skill_workshop_collection_reviews_workspace_time";
@@ -190,18 +196,18 @@ function inspectPhysicalState(filename) {
       rows: database
         .prepare("SELECT * FROM audit_events NOT INDEXED ORDER BY sequence")
         .all()
-        .map((row) => ({ ...row })),
+        .map((row) => Object.assign({}, row)),
       foreignKeys: database
         .prepare("PRAGMA foreign_key_check")
         .all()
-        .map((row) => ({ ...row })),
+        .map((row) => Object.assign({}, row)),
     };
   } finally {
     database.close();
   }
 }
 
-export function seedPhysicalIndex(stateDir, artifactRoot, stage) {
+function seedPhysicalIndex(stateDir, artifactRoot, stage) {
   assert(["baseline", "candidate"].includes(stage));
   const filename = databasePath(stateDir);
   const original = Buffer.from(`physical-${stage}-original`);
@@ -284,13 +290,7 @@ export function seedPhysicalIndex(stateDir, artifactRoot, stage) {
   return seeded;
 }
 
-export function assertPhysicalUpdateRefusal(
-  stateDir,
-  artifactRoot,
-  observations,
-  packageRoot,
-  exitCode,
-) {
+function assertPhysicalUpdateRefusal(stateDir, artifactRoot, observations, packageRoot, exitCode) {
   assert.equal(exitCode, 1, "Published updater must refuse physical index corruption");
   const baseline = readJson(path.join(artifactRoot, "workshop-baseline.json"));
   assert.deepEqual(
@@ -338,7 +338,7 @@ export function assertPhysicalUpdateRefusal(
   });
 }
 
-export function restorePhysicalBaselineFixture(stateDir, artifactRoot) {
+function restorePhysicalBaselineFixture(stateDir, artifactRoot) {
   const seeded = readJson(path.join(artifactRoot, "physical-baseline-seeded.json"));
   const filename = databasePath(stateDir);
   assert.equal(sha256(fs.readFileSync(filename)), seeded.damagedSha256);
@@ -363,7 +363,7 @@ export function restorePhysicalBaselineFixture(stateDir, artifactRoot) {
   });
 }
 
-export function assertPhysicalDoctorRepair(stateDir, artifactRoot, observations, logPath) {
+function assertPhysicalDoctorRepair(stateDir, artifactRoot, observations, logPath) {
   const seeded = readJson(path.join(artifactRoot, "physical-candidate-seeded.json"));
   const filename = databasePath(stateDir);
   const repaired = inspectPhysicalState(filename);
@@ -451,8 +451,30 @@ function observeProcess() {
   } catch {
     // Missing identity rejects the evidence without changing the observed CLI.
   }
-  const filename = databasePath(stateDir);
-  const malformedAtStart = hasMalformedWorkshopIndex(filename);
+  const legacyFixture = process.env.OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE;
+  const doctorResultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+  let malformedAtStart;
+  let physicalIndexCorruptAtStart;
+  let legacySeed;
+  let legacyAtStart;
+  let startupCaptureError;
+  try {
+    const filename = databasePath(stateDir);
+    malformedAtStart = hasMalformedWorkshopIndex(filename);
+    physicalIndexCorruptAtStart =
+      !malformedAtStart &&
+      inspectPhysicalState(filename).findings.some((finding) =>
+        finding.endsWith(`index ${PHYSICAL_INDEX}`),
+      );
+    if (legacyFixture && fs.existsSync(legacyFixture)) {
+      legacySeed = readJson(legacyFixture);
+      if (!malformedAtStart) {
+        legacyAtStart = captureWorkshopLegacyState(stateDir, legacySeed);
+      }
+    }
+  } catch (error) {
+    startupCaptureError = String(error);
+  }
   const evidence = {
     role,
     pid: process.pid,
@@ -460,15 +482,58 @@ function observeProcess() {
     identity,
     updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1",
     malformedAtStart,
-    physicalIndexCorruptAtStart:
-      !malformedAtStart &&
-      inspectPhysicalState(filename).findings.some((finding) =>
-        finding.endsWith(`index ${PHYSICAL_INDEX}`),
-      ),
+    physicalIndexCorruptAtStart,
+    ...(legacyAtStart ? { legacyAtStart } : {}),
+    ...(startupCaptureError !== undefined ? { startupCaptureError } : {}),
   };
-  const receiptPath = path.join(observations, `workshop-process-${process.pid}.json`);
-  writeJson(receiptPath, evidence);
-  process.once("exit", (exitCode) => writeJson(receiptPath, { ...evidence, exitCode }));
+  const filename = path.join(observations, `workshop-process-${process.pid}.json`);
+  try {
+    writeJson(filename, evidence);
+  } catch {
+    // The exit observer can still persist the captured facts if artifact storage recovers.
+  }
+  process.once("exit", (exitCode) => {
+    let legacyExit;
+    if (role === "doctor" && legacySeed) {
+      try {
+        legacyExit = {
+          legacyAtExit: captureWorkshopLegacyState(stateDir, legacySeed),
+          ...(doctorResultPath
+            ? { doctorResultAtExit: readWorkshopDoctorResult(doctorResultPath) }
+            : {}),
+        };
+      } catch (error) {
+        legacyExit = { legacyExitCaptureError: String(error) };
+      }
+    }
+    try {
+      writeJson(filename, { ...evidence, exitCode, ...legacyExit });
+    } catch {
+      // Missing exit evidence rejects qualification without changing the observed CLI exit.
+    }
+  });
+}
+
+function readWorkshopDoctorResult(filename) {
+  assert(path.isAbsolute(filename), "Doctor IPC path must be absolute");
+  assert.match(
+    path.basename(filename),
+    /^openclaw-update-doctor-\d+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/iu,
+  );
+  const stat = fs.lstatSync(filename);
+  assert(stat.isFile() && stat.size <= 256 * 1024, "Invalid Doctor IPC file");
+  const bytes = fs.readFileSync(filename);
+  assert(bytes.length <= 256 * 1024, "Doctor IPC exceeds observation limit");
+  const result = JSON.parse(bytes.toString("utf8"));
+  assert(["ok", "advisory"].includes(result.status), "Doctor IPC did not report success");
+  const warnings = result.warnings ?? [];
+  assert(
+    Array.isArray(warnings) &&
+      warnings.length <= 32 &&
+      warnings.every((warning) => typeof warning === "string" && warning.length <= 500),
+    "Invalid Doctor IPC warnings",
+  );
+  return { path: filename, sha256: sha256(bytes), status: result.status, warnings };
 }
 
 function processWitness(observations, identity, expected) {
@@ -485,6 +550,7 @@ function processWitness(observations, identity, expected) {
     (entry) =>
       entry.identity?.version === identity.version &&
       entry.identity?.buildInfoSha256 === identity.buildInfoSha256 &&
+      entry.startupCaptureError === undefined &&
       Object.entries(expected).every(([key, value]) => entry[key] === value) &&
       receipts.some(
         (receipt) =>
@@ -585,7 +651,34 @@ export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations,
     malformedAtStart: true,
     updateInProgress: false,
   });
-  const repair = { status: "explicit-doctor-repaired", doctor };
+  let legacy;
+  let legacyWarning;
+  if (
+    stage === "candidate" &&
+    fs.existsSync(path.join(artifactRoot, "workshop-legacy-seeded.json"))
+  ) {
+    const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
+    assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
+    legacy = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
+    assert.deepEqual(
+      legacy,
+      readJson(path.join(artifactRoot, "workshop-recovered-upgrade.json")).legacy.after,
+      "Second candidate Doctor changed imported or recoverable Workshop state",
+    );
+    assert.deepEqual(
+      captureWorkshopLegacyState(stateDir, seeded),
+      legacy,
+      "Workshop state changed after second Doctor exit",
+    );
+    legacyWarning = assertWorkshopLegacyWarning(seeded, [
+      fs.readFileSync(path.join(artifactRoot, "doctor.log"), "utf8"),
+    ]);
+  }
+  const repair = {
+    status: "explicit-doctor-repaired",
+    doctor,
+    ...(legacy ? { legacy, legacyWarning } : {}),
+  };
   writeJson(path.join(artifactRoot, `workshop-${stage}-doctor.json`), repair);
   return repair;
 }
@@ -610,7 +703,27 @@ export function assertWorkshopRecoveredUpgrade(stateDir, artifactRoot, observati
     malformedAtStart: false,
     updateInProgress: true,
   });
-  const upgraded = { status: "upgraded-after-explicit-repair", updater, doctor };
+  const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
+  assert.deepEqual(
+    updater.legacyAtStart,
+    seeded.before,
+    "Published updater did not receive original legacy sidecars",
+  );
+  assert.deepEqual(
+    doctor.legacyAtStart,
+    seeded.before,
+    "Candidate Doctor did not receive original legacy sidecars",
+  );
+  assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
+  const after = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
+  assert.deepEqual(
+    captureWorkshopLegacyState(stateDir, seeded),
+    after,
+    "Workshop state changed after candidate Doctor exit",
+  );
+  const warning = assertWorkshopLegacyWarning(seeded, doctor.doctorResultAtExit?.warnings);
+  const legacy = { seeded, after, warning };
+  const upgraded = { status: "upgraded-after-explicit-repair", updater, doctor, legacy };
   writeJson(path.join(artifactRoot, "workshop-recovered-upgrade.json"), upgraded);
   return upgraded;
 }
@@ -626,6 +739,12 @@ export function completeWorkshopRecovery(stateDir, artifactRoot) {
   assert.equal(baselineDoctor.status, "explicit-doctor-repaired");
   assert.equal(upgrade.status, "upgraded-after-explicit-repair");
   assert.equal(candidateDoctor.status, "explicit-doctor-repaired");
+  assert.deepEqual(
+    candidateDoctor.legacy,
+    upgrade.legacy.after,
+    "Missing candidate Doctor idempotence evidence for the imported legacy proposals",
+  );
+  assert.equal(candidateDoctor.legacyWarning.warning, upgrade.legacy.warning.warning);
   const result = { firstAttempt, baselineDoctor, upgrade, candidateDoctor };
   writeJson(path.join(artifactRoot, "workshop-doctor-recovery.json"), result);
   return result;
@@ -684,6 +803,8 @@ if (direct) {
     assertPhysicalDoctorRepair(stateDir, artifacts, first, second);
   } else if (mode === "seed") {
     seedWorkshopIndex(stateDir, artifacts, first);
+  } else if (mode === "seed-legacy") {
+    seedWorkshopLegacyProposals(stateDir, artifacts);
   } else if (mode === "refusal") {
     if (fourth === "physical") {
       assertPhysicalUpdateRefusal(stateDir, artifacts, first, second, Number(third));

@@ -430,8 +430,29 @@ export const agentFileHandlers: Pick<
           throw new Error("Workspace access changed while saving an Agent document");
         }
       };
+      const createFileExclusive = access.bridge.createFileExclusive;
+      if (params.expectedMissing && !createFileExclusive) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "This workspace host cannot safely create a missing Agent document. Update its workspace provider, or create the file on that host and reload it before saving.",
+          ),
+        );
+        return;
+      }
       conflict = await enqueueWorkspaceFileUpdate(async () => {
         assertCurrent();
+        if (params.expectedMissing && createFileExclusive) {
+          const result = await createFileExclusive({
+            filePath: name,
+            data: content,
+            mkdir: true,
+          });
+          assertCurrent();
+          return result === "exists" ? { currentHash: undefined } : undefined;
+        }
         const expectedHash = params.expectedHash?.toLowerCase();
         if (expectedHash) {
           const stat = await access.bridge.stat({ filePath: name });
@@ -465,6 +486,17 @@ export const agentFileHandlers: Pick<
         const writeRoot = workspaceRoot;
         const expectedHash = params.expectedHash?.toLowerCase();
         conflict = await enqueueWorkspaceFileUpdate(async () => {
+          if (params.expectedMissing) {
+            try {
+              await writeRoot.create(name, content, { encoding: "utf8", atomic: true });
+            } catch (err) {
+              if (err instanceof FsSafeError && err.code === "already-exists") {
+                return { currentHash: undefined };
+              }
+              throw err;
+            }
+            return undefined;
+          }
           if (expectedHash) {
             const currentHash = await readWorkspaceFileHash(writeRoot, name);
             if (currentHash !== expectedHash) {

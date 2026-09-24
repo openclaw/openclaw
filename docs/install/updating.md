@@ -77,6 +77,13 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Control UI updates use a verified helper to stop and restart the managed Gateway.
+On macOS, the helper carries its live update ownership into LaunchAgent activation;
+ordinary commands inside the Gateway still cannot stop their own service. If an
+older installed updater reports `managed-service-stop-failed` before activation,
+the candidate has not replaced that updater. Update from an external terminal
+using the same installation owner, then retry the Control UI update.
+
 After package replacement, compatibility config reads from older updaters run
 in a fresh process using the updated package and its dependencies. This also
 applies to updates driven by 2026.9.4. If an optional read fails, the updater
@@ -208,6 +215,11 @@ Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 them avoids a disk flush for every file; canonical state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
+
+Database rehearsal also avoids a second full backup of each private snapshot.
+It acquires a fresh consistent copy, then checks, compacts, and publishes that
+copy for validation. Source databases and recovery backups retain their existing
+protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets

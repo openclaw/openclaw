@@ -9,6 +9,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import {
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -29,26 +30,29 @@ const ONE_PIXEL_PNG_B64 =
 
 type DeferredAttachmentProof = {
   aborts: number;
-  finish: (() => void) | undefined;
+  finish: (() => Promise<void>) | undefined;
 };
 
 async function installDeferredAttachmentReader(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const proof = { aborts: 0, finish: undefined as (() => void) | undefined };
+    const proof = { aborts: 0, finish: undefined as (() => Promise<void>) | undefined };
     (globalThis as unknown as { attachmentReadProof: typeof proof }).attachmentReadProof = proof;
     // Keep the native methods before overriding them so deferred completion and
     // cancellation cannot recursively call their own test hooks.
-    const readAsDataURL = Reflect.get(
-      FileReader.prototype,
-      "readAsDataURL",
-    ) as FileReader["readAsDataURL"];
-    const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
+    const readAsDataURL = Reflect.get(FileReader.prototype, "readAsDataURL") as (
+      this: FileReader,
+      blob: Blob,
+    ) => void;
+    const abort = Reflect.get(FileReader.prototype, "abort") as (this: FileReader) => void;
     FileReader.prototype.readAsDataURL = function (blob: Blob) {
       proof.finish = () => {
         // Only the paste read is held; later outbox hydration uses native reads.
         FileReader.prototype.readAsDataURL = readAsDataURL;
         proof.finish = undefined;
-        readAsDataURL.call(this, blob);
+        return new Promise<void>((resolve) => {
+          this.addEventListener("loadend", () => resolve(), { once: true });
+          readAsDataURL.call(this, blob);
+        });
       };
     };
     FileReader.prototype.abort = function () {
@@ -94,6 +98,78 @@ async function waitForCommittedAttachmentDraft(
 }
 
 suite.define(() => {
+  it("keeps a preparing Home attachment through the page and dock route", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installDeferredAttachmentReader(page);
+      const homeKey = "agent:main:main";
+      const draft = "QA attachment handoff: keep this file with my Home draft.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
+        sessionKey: homeKey,
+        sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
+      });
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      const proofDir = path.join(suite.artifactDir, "home-handoff");
+      await mkdir(proofDir, { recursive: true });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+      const home = page.locator("openclaw-chat-page");
+      const composer = home.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(draft);
+      await home.locator(".agent-chat__file-input").setInputFiles({
+        name: "handoff.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Synthetic attachment payload survives Home handoff."),
+      });
+      await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
+      await page.getByRole("link", { name: "Agents", exact: true }).click();
+      await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+      await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+      await page.locator(".sidebar-footer-bar__home").click();
+      const dock = page.locator("openclaw-assistant-panel");
+      const dockComposer = dock.locator(".agent-chat__composer-combobox textarea");
+      await dockComposer.waitFor({ state: "visible" });
+      await expect.poll(() => dockComposer.inputValue()).toBe(draft);
+      const pending = {
+        files: await dock.locator('.chat-attachment-thumb[aria-busy="true"]').count(),
+        sendDisabled: await dock
+          .getByRole("button", { name: "Send message", exact: true })
+          .isDisabled(),
+      };
+      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      await page.evaluate(async () => {
+        const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
+          .attachmentReadProof;
+        if (!proof.finish) {
+          throw new Error("Selected file read was not held");
+        }
+        await proof.finish();
+      });
+      await page.locator("a.nav-item--home").click();
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => dockComposer.isVisible()).toBe(false);
+      const receipt = {
+        pending,
+        returnedDraft: await composer.inputValue(),
+        returnedFiles: await home.locator('.chat-attachment-thumb[aria-busy="false"]').count(),
+        removeAvailable: await home
+          .getByRole("button", { name: "Remove handoff.txt", exact: true })
+          .count(),
+        pageErrors,
+        requests: await gateway.getRequests("chat.send"),
+      };
+      await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
+      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
+      expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
+      expect(receipt.returnedDraft).toBe(draft);
+      expect(receipt.returnedFiles).toBe(1);
+      expect(receipt.removeAvailable).toBe(1);
+      expect(receipt.pageErrors).toEqual([]);
+      expect(receipt.requests).toEqual([]);
+    });
+  });
+
   it.each([
     "same-draft",
     "rewind-completed",
@@ -151,7 +227,7 @@ suite.define(() => {
           if (!proof.finish) {
             throw new Error("Selected file read was not held");
           }
-          proof.finish();
+          return proof.finish();
         });
       if (scenario === "same-draft" || scenario === "rewind-completed") {
         await finishRead();
@@ -550,7 +626,7 @@ suite.define(() => {
       await composer.waitFor();
 
       await gateway.setOnline(false);
-      await page.locator('.agent-chat__composer-status[data-tone="info"]').waitFor();
+      await page.locator(".agent-chat__input--offline").waitFor();
       await composer.fill(text);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "offline.txt",
@@ -786,7 +862,7 @@ suite.define(() => {
         if (!proof.finish) {
           throw new Error("Pasted image read was not started");
         }
-        proof.finish();
+        return proof.finish();
       });
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
@@ -872,7 +948,7 @@ suite.define(() => {
         if (!proof.finish) {
           throw new Error("Pasted image read was not retained");
         }
-        proof.finish();
+        return proof.finish();
       });
       await page
         .locator('openclaw-chat-pane[aria-hidden="false"]')
