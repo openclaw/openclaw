@@ -1,6 +1,7 @@
 // Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { EXEC_TIMEOUT_RETRY_GUIDANCE } from "../agents/bash-tools.exec-output.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   isHeartbeatAcknowledgementText,
@@ -19,23 +20,50 @@ type StructuredExecCompletionEvent = {
   result: string;
   output: string;
   succeeded: boolean;
+  /**
+   * The process was terminated by a signal (e.g. SIGTERM at gateway drain, a
+   * timeout, or a cancel) rather than exiting with a code. Without captured
+   * output this carries no user-facing content: the completion wake would
+   * only produce a "terminated by signal N" report for an internal process
+   * the owner never started (see #141973).
+   */
+  killed: boolean;
 };
 
+const EXEC_TIMEOUT_RETRY_GUIDANCE_SUFFIX = "\n\n" + EXEC_TIMEOUT_RETRY_GUIDANCE;
+
+/**
+ * Strip the producer-appended timeout retry guidance suffix, if present, so the
+ * structured parser treats it as metadata rather than captured output. The
+ * suffix comes from appendExecTimeoutRetryGuidance (bash-tools.exec-output.ts),
+ * which appends it after the event for overall-timeout / no-output-timeout
+ * exits; without this, the anchored parser rejects the decorated event and the
+ * heartbeat can still relay the model's narration to the owner.
+ */
+function stripTimeoutRetryGuidanceSuffix(evt: string): string {
+  if (evt.endsWith(EXEC_TIMEOUT_RETRY_GUIDANCE_SUFFIX)) {
+    return evt.slice(0, -EXEC_TIMEOUT_RETRY_GUIDANCE_SUFFIX.length);
+  }
+  return evt;
+}
+
 function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompletionEvent | null {
-  const trimmed = evt.trim();
+  const trimmed = stripTimeoutRetryGuidanceSuffix(evt.trim());
   const match = STRUCTURED_EXEC_COMPLETION_EVENT_RE.exec(trimmed);
   if (!match) {
     return null;
   }
   const action = match[1] ?? "";
   const result = match[3] ?? "";
+  const succeeded = action.toLowerCase() === "completed" && result.toLowerCase() === "code 0";
   return {
     raw: trimmed,
     action,
     id: match[2] ?? "",
     result,
     output: (match[4] ?? "").trim(),
-    succeeded: action.toLowerCase() === "completed" && result.toLowerCase() === "code 0",
+    succeeded,
+    killed: !succeeded && /^signal /i.test(result.trim()),
   };
 }
 
@@ -46,6 +74,9 @@ export function isRelayableExecCompletionEvent(evt: string): boolean {
   }
   if (parsed.output) {
     return true;
+  }
+  if (parsed.killed) {
+    return false;
   }
   return !parsed.succeeded;
 }
@@ -64,7 +95,7 @@ function formatExecEventPromptText(pendingEvents: string[]): {
     if (parsed.output) {
       return [parsed.raw];
     }
-    if (parsed.succeeded) {
+    if (parsed.succeeded || parsed.killed) {
       return [];
     }
     hasMissingOutputFailure = true;
@@ -175,7 +206,7 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  const trimmed = evt.trimStart();
+  const trimmed = stripTimeoutRetryGuidanceSuffix(evt.trimStart());
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   return (
     /^exec finished(?::|\s*\()/.test(normalized) ||
