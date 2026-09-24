@@ -16,6 +16,7 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 
 /** Admission has not opened repair writers; deferral cannot authorize any later work. */
@@ -85,6 +86,23 @@ export async function assertDoctorMaintenanceReady(
   const { assertNoPendingLegacyExecApprovals } =
     await import("../infra/exec-approvals-migration-gate.js");
   assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
+}
+
+/** Repair may have committed config before a later diagnostic failed. */
+export async function readDoctorMaintenanceRecoveryConfig(
+  resources: Pick<OpenClawDatabaseMaintenanceScope, "run">,
+  env: NodeJS.ProcessEnv,
+  log: (message: string) => void,
+): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  return resources.run(async () => {
+    const { config } = await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      observe: false,
+    });
+    await assertDoctorMaintenanceReady(config, env, log);
+    return config;
+  });
 }
 
 export function assertDoctorMaintenanceInspection(

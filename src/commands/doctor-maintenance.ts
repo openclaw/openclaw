@@ -41,8 +41,8 @@ import { holdDoctorMaintenanceExit } from "./doctor-maintenance-exit.js";
 import { acquireDoctorGatewayMaintenanceCoordinator } from "./doctor-maintenance-foreground.js";
 import {
   assertDoctorMaintenanceInspection,
-  assertDoctorMaintenanceReady,
   classifyDoctorMaintenanceRefusal,
+  readDoctorMaintenanceRecoveryConfig,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -690,16 +690,7 @@ export async function beginDoctorMaintenance(params: {
         }
         if (!cfg) {
           try {
-            // Repair may have committed config before a later diagnostic failed.
-            const { readConfigFileSnapshot } = await import("../config/config.js");
-            cfg = await resources!.run(async () => {
-              const { config } = await readConfigFileSnapshot({
-                skipPluginValidation: true,
-                observe: false,
-              });
-              await assertDoctorMaintenanceReady(config, env, params.runtime.log);
-              return config;
-            });
+            cfg = await readDoctorMaintenanceRecoveryConfig(resources!, env, params.runtime.log);
           } catch (error) {
             retainStoppedInstallation = true;
             throw new DoctorMaintenanceRefusalError(
