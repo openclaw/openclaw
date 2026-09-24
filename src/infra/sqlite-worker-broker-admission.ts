@@ -99,6 +99,9 @@ export function captureSqliteWorkerOpen(
       ? {
           stateContext: {
             environment: { ...stateContext.environment },
+            ...(stateContext.initializationEnvironment
+              ? { initializationEnvironment: { ...stateContext.initializationEnvironment } }
+              : {}),
             coordinatorRuntime: { ...stateContext.coordinatorRuntime },
             existingSchemaPath: stateContext.existingSchemaPath,
           },

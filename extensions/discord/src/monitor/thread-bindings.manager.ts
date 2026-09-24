@@ -532,7 +532,17 @@ function createLoadedThreadBindingManager(
             cfg,
             record,
             text: introText,
-            ...(assertCurrent ? { assertCurrent } : {}),
+            assertCurrent: () => {
+              assertCurrent?.();
+              const current = getCurrentBinding(record.threadId);
+              if (
+                !current ||
+                current.targetSessionKey !== record.targetSessionKey ||
+                current.targetKind !== record.targetKind
+              ) {
+                throw new Error("Discord thread binding changed before its intro");
+              }
+            },
           });
         }
         return record;

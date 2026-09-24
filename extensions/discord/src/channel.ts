@@ -253,22 +253,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         directTargetStyle: "user-prefixed",
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
-        resolveInboundConversation: ({
-          from,
-          to,
-          conversationId,
-          threadId,
-          threadParentId,
-          isGroup,
-        }) =>
-          resolveDiscordInboundConversation({
-            from,
-            to,
-            conversationId,
-            threadId,
-            threadParentId,
-            isGroup,
-          }),
+        resolveInboundConversation: resolveDiscordInboundConversation,
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
@@ -284,7 +269,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
         },
         buildCrossContextPresentation: buildDiscordCrossContextPresentation,
-        resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveDiscordOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
@@ -391,26 +376,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             conversationId,
             parentConversationId,
           }),
-        resolveCommandConversation: ({
-          threadId,
-          threadParentId,
-          parentSessionKey,
-          from,
-          chatType,
-          originatingTo,
-          commandTo,
-          fallbackTo,
-        }) =>
-          resolveDiscordCommandConversation({
-            threadId,
-            threadParentId,
-            parentSessionKey,
-            from,
-            chatType,
-            originatingTo,
-            commandTo,
-            fallbackTo,
-          }),
+        resolveCommandConversation: resolveDiscordCommandConversation,
       },
       conversationBindings: discordConversationBindings,
       heartbeat: {
@@ -713,13 +679,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       ...discordOutbound,
       preferFinalAssistantVisibleText: true,
       shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
-        shouldSuppressLocalDiscordExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-          hint,
-        }),
+      shouldSuppressLocalPayloadPrompt: shouldSuppressLocalDiscordExecApprovalPrompt,
     },
   });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

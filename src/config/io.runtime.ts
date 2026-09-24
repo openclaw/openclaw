@@ -17,7 +17,8 @@ import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
-import { createManagedRuntimeEnvBase, replaceEnvSnapshot } from "./io.read-helpers.js";
+import { replaceEnvSnapshot } from "./io.read-helpers.js";
+import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import { finalizeCommittedConfigWrite } from "./io.runtime-write-finalization.js";
 import type {
   BestEffortConfigSnapshot,

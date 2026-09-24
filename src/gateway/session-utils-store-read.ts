@@ -95,12 +95,13 @@ function loadGatewaySessionLookupStore(
     exactKeys?: readonly string[];
     listKeys?: readonly string[];
     projection?: SessionEntryListScope["projection"];
+    readConsistency?: SessionEntryListScope["readConsistency"];
     readSource?: SessionEntryReadSource;
   } = {},
 ): GatewaySessionStoreView {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.listKeys ? JSON.stringify(options.listKeys) : ""}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.listKeys ? JSON.stringify(options.listKeys) : ""}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -122,6 +123,7 @@ function loadGatewaySessionLookupStoreUncached(
     listKeys?: readonly string[];
     readOnly?: boolean;
     projection?: SessionEntryListScope["projection"];
+    readConsistency?: SessionEntryListScope["readConsistency"];
     readSource?: SessionEntryReadSource;
   } = {},
 ): GatewaySessionStoreView {
@@ -157,6 +159,7 @@ function loadGatewaySessionLookupStoreUncached(
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         ...(options.projection ? { projection: options.projection } : {}),
+        ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
         ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),

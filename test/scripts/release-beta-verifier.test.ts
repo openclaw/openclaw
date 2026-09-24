@@ -378,6 +378,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
                 });
               },
             });
+            return undefined;
           },
         },
       };
@@ -393,6 +394,21 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(tarballState === "exact");
     },
   );
+
+  it("reports a superseded plugin readback as a warning line, not a failure", async () => {
+    const fixture = workflowFixture({}, true, undefined, {
+      version,
+      distTag: "beta",
+      tags: { openclaw: { beta: version }, "@openclaw/demo": { beta: version } },
+    });
+    const note = "@openclaw/demo@2026.9.6 superseded by 2026.9.7; dist-tag latest stays.";
+    const lines = await verifyBetaRelease(fixture.args, {
+      rootDir: fixture.rootDir,
+      pluginNpmReadback: { evidence: [], verify: async () => note },
+    });
+    expect(lines).toContain(`plugin npm WARN: ${note}`);
+    expect(lines).toContain("plugin npm OK: 1");
+  });
 
   it.each(["E404", "ETARGET"])(
     "retains CLI diagnostics after core npm %s exhaustion without a success receipt",
@@ -839,67 +855,38 @@ syncBuiltinESMExports();`,
     expect(parsePublicationDiagnostic(diagnostic, run)).toBeNull();
   });
 
-  it.each([
-    { status: "completed", conclusion: "failure" },
-    { status: "completed", conclusion: "cancelled" },
-    { status: "completed", conclusion: "skipped" },
-    { status: "completed", conclusion: "success" },
-  ])(
-    "records optional Telegram as advisory without relabeling $status/$conclusion",
-    async (run) => {
-      const fixture = workflowFixture(run);
-
-      const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
-      const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
-
-      expect(lines).toContain("openclaw npm OK: 2026.5.10-beta.3 (beta)");
-      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E advisory:"))).toBe(true);
-      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E OK:"))).toBe(false);
-      expect(evidence.workflowRuns).toEqual([
-        expect.objectContaining({
-          id: "44",
-          advisory: {
-            status: run.status,
-            conclusion: run.conclusion ?? "unavailable",
-            failedJobs: [],
-          },
-        }),
-      ]);
-      const diagnostic = JSON.parse(
-        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+  it.each(["failure", "cancelled", "skipped"])(
+    "rejects a completed Telegram %s before publication evidence",
+    async (conclusion) => {
+      const fixture = workflowFixture({ status: "completed", conclusion });
+      await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+        `NPM Telegram Beta E2E: run 44 is completed/${conclusion}`,
       );
-      expect(diagnostic.children.npmTelegram).toMatchObject({
-        status: run.status,
-        conclusion: run.conclusion,
-        runAttempt: null,
-      });
-      expect(diagnostic.stages.clawHub.state).toBe("skipped");
-      expect(diagnostic.stages.githubRelease.state).toBe("skipped");
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
     },
   );
 
-  it("requires a terminal Telegram attempt before recording advisory evidence", async () => {
-    const fixture = workflowFixture({ status: "in_progress", conclusion: null });
+  it("records a successful Telegram attempt", async () => {
+    const fixture = workflowFixture({ status: "completed", conclusion: "success" });
+    const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+    expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E OK:"))).toBe(true);
+  });
 
+  it("requires a terminal Telegram attempt before publication evidence", async () => {
+    const fixture = workflowFixture({ status: "in_progress", conclusion: null });
     await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
       "NPM Telegram Beta E2E: run 44 is in_progress/<missing>",
     );
   });
 
-  it("preserves a failed Telegram job even when its advisory workflow concludes success", async () => {
+  it("rejects a failed Telegram job even when its workflow concludes success", async () => {
     const fixture = workflowFixture({
       jobs: [{ name: "Run package Telegram E2E", conclusion: "failure" }],
     });
-
-    const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
-    const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
-
-    expect(lines.join("\n")).toContain("Run package Telegram E2E");
-    expect(evidence.workflowRuns[0].advisory).toEqual({
-      status: "completed",
-      conclusion: "success",
-      failedJobs: ["Run package Telegram E2E"],
-    });
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "Run package Telegram E2E",
+    );
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
   });
 
   it.each([

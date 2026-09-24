@@ -14,6 +14,7 @@ import {
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi, type Mock } from "vitest";
 import { discordPlugin } from "../channel.js";
+import * as discordSend from "../send.js";
 import {
   unbindThreadBindingsBySessionKey,
   unbindThreadBindingsBySessionKeyAsync,
@@ -49,6 +50,8 @@ export function registerThreadBindingCompatibilityTests({
   it.each([
     "before-write",
     "committed-write",
+    "committed-intro-unbind",
+    "committed-intro-touch",
     "committed-delete-touch",
     "committed-delete-unbind",
     "missing-delete-unbind",
@@ -64,6 +67,17 @@ export function registerThreadBindingCompatibilityTests({
       const entered = createDeferred<void>();
       const finish = createDeferred<void>();
       const deleting = boundary.includes("delete");
+      const introOperation = boundary.startsWith("committed-intro-");
+      const webhookSend = introOperation
+        ? vi
+            .spyOn(discordSend, "sendWebhookMessageDiscord")
+            .mockRejectedValue(new Error("Synthetic transport boundary"))
+        : undefined;
+      const botSend = introOperation
+        ? vi
+            .spyOn(discordSend, "sendMessageDiscord")
+            .mockRejectedValue(new Error("Unexpected bot intro"))
+        : undefined;
       const queuedOperation = boundary.startsWith("queued-") ? boundary.slice(7) : undefined;
       let deletingMissing = false;
       stores.openKeyedStore.mockImplementation((options) => {
@@ -83,7 +97,7 @@ export function registerThreadBindingCompatibilityTests({
               await finish.promise;
             }
             await store.register(...args);
-            if (boundary === "committed-write" || queuedOperation) {
+            if (boundary === "committed-write" || queuedOperation || introOperation) {
               entered.resolve();
               await finish.promise;
             }
@@ -100,6 +114,9 @@ export function registerThreadBindingCompatibilityTests({
         createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options),
       );
       const saved = persistedBinding();
+      const bindingTarget = introOperation
+        ? saved.value.targetSessionKey
+        : "agent:main:subagent:replacement";
       const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
         namespace: "thread-bindings",
         maxEntries: 10_000,
@@ -126,7 +143,8 @@ export function registerThreadBindingCompatibilityTests({
             threadId: "thread-1",
             channelId: "parent-1",
             targetKind: "subagent",
-            targetSessionKey: "agent:main:subagent:replacement",
+            targetSessionKey: bindingTarget,
+            ...(introOperation ? { introText: "Binding ready" } : {}),
             agentId: "main",
             webhookId: "synthetic-webhook",
             webhookToken: "synthetic-token",
@@ -135,9 +153,7 @@ export function registerThreadBindingCompatibilityTests({
         boundary === "before-write" || boundary === "missing-delete-sibling-touch"
           ? expect(mutation).rejects.toThrow("changed during persistence")
           : expect(mutation).resolves.toMatchObject({
-              targetSessionKey: deleting
-                ? saved.value.targetSessionKey
-                : "agent:main:subagent:replacement",
+              targetSessionKey: deleting ? saved.value.targetSessionKey : bindingTarget,
             });
       let stopping: Promise<void> | undefined;
       let followup: Promise<unknown[]> | undefined;
@@ -149,9 +165,18 @@ export function registerThreadBindingCompatibilityTests({
             ? undefined
             : boundary === "before-write" || boundary === "stopping-unbind"
               ? saved.value.targetSessionKey
-              : "agent:main:subagent:replacement",
+              : bindingTarget,
         );
-        if (boundary === "stopping-unbind") {
+        if (boundary === "committed-intro-unbind") {
+          expect(
+            unbindThreadBindingsBySessionKey({
+              targetSessionKey: saved.value.targetSessionKey,
+              sendFarewell: false,
+            }),
+          ).toHaveLength(1);
+          expect(store.lookup(saved.key)).toBeUndefined();
+          expect(manager.getByThreadId("thread-1")).toBeUndefined();
+        } else if (boundary === "stopping-unbind") {
           stopping = manager.stop();
           expect(() =>
             unbindThreadBindingsBySessionKey({ targetSessionKey: saved.value.targetSessionKey }),
@@ -168,7 +193,7 @@ export function registerThreadBindingCompatibilityTests({
           expect(store.lookup(sibling.key)?.lastActivityAt).toBe(200);
           expect(notify).not.toHaveBeenCalled();
         } else if (queuedOperation) {
-          const params = { targetSessionKey: "agent:main:subagent:replacement", accountId: "work" };
+          const params = { targetSessionKey: bindingTarget, accountId: "work" };
           followup =
             queuedOperation === "unbind"
               ? unbindThreadBindingsBySessionKeyAsync({ ...params, sendFarewell: false })
@@ -238,11 +263,11 @@ export function registerThreadBindingCompatibilityTests({
           }
         }
         const expectedTarget =
-          deleting || queuedOperation === "unbind"
+          deleting || queuedOperation === "unbind" || boundary === "committed-intro-unbind"
             ? undefined
             : boundary === "before-write"
               ? saved.value.targetSessionKey
-              : "agent:main:subagent:replacement";
+              : bindingTarget;
         expect(store.lookup(saved.key)?.targetSessionKey).toBe(expectedTarget);
         expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
           boundary === "missing-delete-sibling-touch"
@@ -250,10 +275,16 @@ export function registerThreadBindingCompatibilityTests({
             : expectedTarget,
         );
         expect(notify).toHaveBeenCalledTimes(
-          (deleting && boundary !== "missing-delete-sibling-touch") || queuedOperation === "unbind"
+          (deleting && boundary !== "missing-delete-sibling-touch") ||
+            queuedOperation === "unbind" ||
+            boundary === "committed-intro-unbind"
             ? 1
             : 0,
         );
+        if (introOperation) {
+          expect(webhookSend).toHaveBeenCalledTimes(boundary === "committed-intro-touch" ? 1 : 0);
+          expect(botSend).not.toHaveBeenCalled();
+        }
         if (sibling) {
           expect(store.lookup(sibling.key)).toEqual(
             boundary === "missing-delete-sibling-touch"
@@ -267,6 +298,8 @@ export function registerThreadBindingCompatibilityTests({
         await manager.stop();
         await resetThreadBindingsForTests();
         resetPluginStateStoreForTests();
+        webhookSend?.mockRestore();
+        botSend?.mockRestore();
       }
     });
   });

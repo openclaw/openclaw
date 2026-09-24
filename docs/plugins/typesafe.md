@@ -255,6 +255,14 @@ Execution rechecks the selection and current authority. `timeoutMs` defaults to
 remaining deadline. Typed answers supply evidence, not permission to publish,
 send messages, or change durable state.
 
+HTTP 413 (Content Too Large) and TypeSafe's [documented 422 request-validation
+response](https://docs.typesafe.ai/api#errors) return `unsupported-input`, not a
+provider outage. A 422 does not establish context overflow specifically. The
+adapter cancels error bodies without reading them because they can reflect
+credentials or submitted evidence. Authentication (401/403), rate limits (429),
+and other HTTP/transport failures retain their existing classifications; no
+automatic retry is added.
+
 ## Existing external installation
 
 The official package keeps the `typesafe` plugin ID used by the prototype and

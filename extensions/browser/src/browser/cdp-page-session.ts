@@ -2,7 +2,7 @@
  * CDP page-session preparation and committed-navigation observation.
  */
 import { createHash } from "node:crypto";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
 

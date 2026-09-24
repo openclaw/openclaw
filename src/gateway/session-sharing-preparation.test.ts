@@ -270,37 +270,51 @@ it("requires an existing session before preparing sharing facts", async () => {
   });
 });
 
-it("does not transfer prepared sharing facts to a replacement store behind the same alias", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const original = state.statePath("original", "session.sqlite");
-    const replacement = state.statePath("replacement", "session.sqlite");
-    const alias = state.statePath("selected");
-    const sessionKey = "agent:main:sharing";
-    for (const storePath of [original, replacement]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
-      );
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    }
-    fs.symlinkSync(state.statePath("original"), alias, "junction");
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: state.statePath("selected", "session.sqlite") },
-    };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-    try {
-      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
-      fs.rmSync(alias, { recursive: true });
-      fs.symlinkSync(state.statePath("replacement"), alias, "junction");
-      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      prepared.release();
-    }
-  });
-});
+it.each(["directory", "custom-family"] as const)(
+  "does not transfer prepared sharing facts to a replacement store behind a %s alias",
+  async (layout) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const original = state.statePath("original", "session.sqlite");
+      const replacement = state.statePath("replacement", "session.sqlite");
+      const alias = state.statePath(layout === "directory" ? "selected" : "custom.sqlite");
+      const sessionKey = "agent:main:sharing";
+      for (const storePath of [original, replacement]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
+        );
+        await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+      }
+      const link = (storePath: string, directory: string) => {
+        if (layout === "directory") {
+          fs.symlinkSync(state.statePath(directory), alias, "junction");
+        } else {
+          fs.symlinkSync(storePath, alias, "file");
+        }
+      };
+      link(original, "original");
+      const cfg = {
+        agents: { entries: { main: {} } },
+        session: {
+          store: state.statePath(
+            ...(layout === "directory" ? ["selected", "session.sqlite"] : ["custom.json"]),
+          ),
+        },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+      try {
+        expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
+        fs.rmSync(alias, { recursive: true });
+        link(replacement, "replacement");
+        expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+      } finally {
+        prepared.release();
+      }
+    });
+  },
+);
 
 it("invalidates selected facts before observers when another searched store gains a duplicate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

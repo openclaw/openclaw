@@ -174,7 +174,6 @@ Options:
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --stable-soak-waiver <reason>       Operator-approved reason to publish stable from beta-profile validation without soak.
-  --lane-waiver <reason>              Operator acknowledgement for evidence sealed under a Full Release Validation lane waiver.
   --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -231,7 +230,6 @@ export function parseArgs(argv: string[]) {
     windowsNodeTag: "",
     windowsNodeInstallerDigests: "",
     stableSoakWaiver: "",
-    laneWaiver: "",
     outputDir: "",
   };
   const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
@@ -252,7 +250,6 @@ export function parseArgs(argv: string[]) {
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
           ["--stable-soak-waiver", "stableSoakWaiver"],
-          ["--lane-waiver", "laneWaiver"],
           ["--telegram-provider-mode", "telegramProviderMode"],
           ["--provider", "provider"],
           ["--mode", "mode"],
@@ -1649,9 +1646,6 @@ export function buildPublishCommand(
   if (options.stableSoakWaiver.trim()) {
     fields.push(["stable_soak_waiver", options.stableSoakWaiver]);
   }
-  if (options.laneWaiver.trim()) {
-    fields.push(["lane_waiver", options.laneWaiver]);
-  }
   if (
     mode === "prepare" &&
     (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
@@ -2386,7 +2380,6 @@ async function main() {
       pluginPublishScope: publicationSelection.pluginPublishScope,
       plugins: options.plugins,
       stableSoakWaiver: options.stableSoakWaiver,
-      laneWaiver: options.laneWaiver,
       workflowRef:
         options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
       releaseProfile: "from-validation",

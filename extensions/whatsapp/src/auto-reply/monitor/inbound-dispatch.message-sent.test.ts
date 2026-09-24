@@ -101,8 +101,6 @@ function createPlan(
     connectionId: "conn-1",
     context,
     deliverReply,
-    groupHistories: new Map(),
-    groupHistoryKey: sessionKey,
     maxMediaBytes: 1024,
     inbound: {
       channel: "whatsapp",
@@ -135,7 +133,6 @@ function createPlan(
       lastRoutePolicy: "main",
       matchedBy: "default",
     },
-    shouldClearGroupHistory: false,
     transport: buildWhatsAppInboundTransportContext(msg),
   });
   return { context, plan, replyLogger };

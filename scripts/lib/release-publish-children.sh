@@ -381,6 +381,7 @@ wait_for_run() {
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
   local approved_environment="${6:-}"
+  local wait_for_terminal="${7:-false}"
   local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -399,8 +400,10 @@ wait_for_run() {
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
-      print_failed_run_summary "${run_id}"
-      return 1
+      if [[ "$wait_for_terminal" != "true" ]]; then
+        print_failed_run_summary "${run_id}"
+        return 1
+      fi
     fi
     if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
       started_jobs="$(jq -c --arg name "${started_job}" '[.[] | select(.name == $name)]' <<< "${jobs_json}")" || return 1
@@ -1202,7 +1205,7 @@ upload_release_evidence_assets() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver lane_waiver waived_jobs verifier
+  local validation_file workflow_ref telegram_waiver verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1294,20 +1297,13 @@ verify_published_release() {
     exit 1
   fi
   telegram_waiver=""
-  lane_waiver=""
-  waived_jobs="[]"
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
     telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
-    lane_waiver="$(jq -r '.validationInputs.laneWaiver // ""' "${validation_file}")"
-    waived_jobs="$(jq -c '[(.advisoryJobs // [])[] | select(.reason == "lane_waiver") | {child, job, conclusion}]' "${validation_file}")"
   fi
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
     --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
-    --arg lane_waiver "${lane_waiver}" \
-    --arg lane_waiver_acknowledgement "${LANE_WAIVER_ACKNOWLEDGEMENT:-}" \
-    --argjson waived_jobs "${waived_jobs}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1317,7 +1313,6 @@ verify_published_release() {
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
       (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
-      (if $lane_waiver == "" then . else .laneWaiver = $lane_waiver | .laneWaiverAcknowledgement = $lane_waiver_acknowledgement | .waivedJobs = $waived_jobs end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1391,8 +1386,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
     STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
-    LANE_WAIVER="$(jq -r '.laneWaiver // ""' "${evidence_path}")" \
-    WAIVED_JOBS_LINE="$(jq -r '(.waivedJobs // []) | map("\(.child) \(.job) (\(.conclusion))") | join("; ")' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1424,11 +1417,6 @@ const section = [
     : []),
   ...(process.env.STABLE_SOAK_WAIVER
     ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
-    : []),
-  ...(process.env.LANE_WAIVER
-    ? [
-        `- Operator lane waiver: ${JSON.stringify(process.env.LANE_WAIVER)}; waived lanes: ${process.env.WAIVED_JOBS_LINE || "none"}`,
-      ]
     : []),
   process.env.TELEGRAM_LINE,
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),

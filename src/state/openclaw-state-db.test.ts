@@ -7,6 +7,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { saveCronStore } from "../cron/store.js";
@@ -85,10 +86,13 @@ import {
 } from "./openclaw-state-schema-v13-widerow.test-support.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  createInitialStateSchemaShape,
+  createOlderV6StateSchemaWithoutWorkerSshFallbackPorts,
+} from "./openclaw-state-schema.test-support.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
-  createSqliteSchemaShapeFromSql,
   normalizeSqliteSchemaShapeSql,
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
@@ -166,29 +170,6 @@ function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
   database
     .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
     .run("2026.7.0");
-}
-
-function createInitialStateSchemaShape() {
-  const shape = createSqliteSchemaShapeFromSql(
-    new URL("./openclaw-state-schema.sql", import.meta.url),
-  );
-  for (const tableName of FIRST_USE_STATE_TABLES) {
-    delete shape[tableName];
-  }
-  return shape;
-}
-
-function createOlderV6StateSchemaWithoutWorkerSshFallbackPorts(): string {
-  const startMarker = "CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (";
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("worker SSH fallback port schema block is missing");
-  }
-  return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(
-    end + endMarker.length,
-  )}`;
 }
 
 function expectStateSchemaMigrationRequired(
@@ -3742,9 +3723,15 @@ describe("openclaw state database", () => {
           .get(tableName),
       ).toBeUndefined();
     }
+    const expected = createInitialStateSchemaShape("unavailable");
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
+      normalizeSqliteSchemaShapeSql(expected),
     );
+    expect(
+      migrated.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get(),
+    ).toBeUndefined();
     // The fixture's auth_profile_stores row is keyed 'fixture-store', not the
     // production 'shared' key, so the v13 fold drops the table without
     // importing it into the KV.
@@ -4252,7 +4239,13 @@ INSERT INTO device_identities VALUES (
       updated_at_ms: 20,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+    const expected = createInitialStateSchemaShape("unavailable");
+    expect(collectSqliteSchemaShape(database.db)).toEqual(expected);
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get(),
+    ).toBeUndefined();
   });
 
   it("adopts a canonical native PortGuardian seed without losing records", () => {
@@ -4289,7 +4282,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       timestamp: 42.5,
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+    const expected = createInitialStateSchemaShape("unavailable");
+    expect(collectSqliteSchemaShape(database.db)).toEqual(expected);
+    expect(
+      database.db
+        .prepare("SELECT name FROM sqlite_master WHERE name = 'agent_deletion_journal'")
+        .get(),
+    ).toBeUndefined();
   });
 
   it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
@@ -8556,30 +8555,19 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
   it("reads ownership once inside each cached-owner transaction", () => {
     const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
-    const database = openOpenClawStateDatabase(options);
-    const { constants } = requireNodeSqlite();
-    let ownershipSelects = 0;
-    let schemaReads = 0;
-    database.db.setAuthorizer((actionCode, tableName) => {
-      if (actionCode === constants.SQLITE_SELECT) {
-        ownershipSelects += 1;
-      }
-      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
-        schemaReads += 1;
-      }
-      return constants.SQLITE_OK;
-    });
-
+    openOpenClawStateDatabase(options);
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
       for (let index = 0; index < 12; index += 1) {
         runOpenClawStateWriteTransaction(() => undefined, options);
       }
+      expect(observer.queries.filter((sql) => /^\s*SELECT\b/i.test(sql))).toHaveLength(12);
+      expect(observer.queries.filter((sql) => /\bsqlite_(?:master|schema)\b/i.test(sql))).toEqual(
+        [],
+      );
     } finally {
-      database.db.setAuthorizer(null);
+      observer.restore();
     }
-
-    expect(ownershipSelects).toBe(12);
-    expect(schemaReads).toBe(0);
   });
 
   it("rejects Promise-returning write transactions", () => {

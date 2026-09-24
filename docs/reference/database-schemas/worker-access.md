@@ -104,6 +104,14 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Disk-budget historical discovery reads reference, recent-history, and admitted-key
+protection in the existing maintenance read worker. It returns candidate IDs;
+the host captures live admission identities and rechecks protection before each
+archive and deletion. A deferred WAL checkpoint still blocks another discovery
+pass until a newer completed checkpoint. Exact lifecycle removal and logical
+maintenance planning limit reference results to the generations they might
+delete. No new cache, index, schema, retention policy, or update step is required.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check
@@ -279,6 +287,14 @@ settlement before disposing its engine or releasing its process owner; its progr
 timer ends before terminal persistence. Worktree run admission, task creation and
 progress, and the remaining native cron transitions still need migration. This
 cutover preserves schemas, stored bytes, retention, configuration, and update behavior.
+
+Native cron receipt guards read deletion authority through their transaction's
+admitted connection. Other synchronous current-authority readers may reuse that
+same thread's coordinated write transaction, including its pending lifecycle rows;
+ordinary discovery reads retain committed-state isolation. This avoids preparing
+a child-process snapshot while holding the shared-state write coordinator. Agent
+database admission refusals remain with their in-memory admission owner. Schemas,
+retention, configuration, and update behavior are unchanged.
 
 Streaming assistant and tool-result completion events use the session manager's
 existing SQLite writer domain. The host retains extension hooks, redaction, and

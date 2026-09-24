@@ -40,10 +40,6 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
-function supportsForcedDocumentMediaType(mediaType: string): boolean {
-  return mediaType.startsWith("image/") || mediaType.startsWith("video/");
-}
-
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (
@@ -129,18 +125,7 @@ export function createWebSendApi(params: {
         ? { text, mentionedJids: [] }
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
-        if (sendOptions?.asDocument === true && supportsForcedDocumentMediaType(mediaType)) {
-          const fileName = resolveWhatsAppDocumentFileName({
-            fileName: sendOptions?.fileName,
-            mimetype: mediaType,
-          });
-          payload = {
-            document: mediaBuffer,
-            fileName,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
-          };
-        } else if (mediaType.startsWith("image/")) {
+        if (mediaType.startsWith("image/") && sendOptions?.asDocument !== true) {
           payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
             caption: resolvedPayloadText.text || undefined,
@@ -148,7 +133,7 @@ export function createWebSendApi(params: {
           });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
-        } else if (mediaType.startsWith("video/")) {
+        } else if (mediaType.startsWith("video/") && sendOptions?.asDocument !== true) {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
@@ -173,15 +158,10 @@ export function createWebSendApi(params: {
       }
       payload = addWhatsAppOutboundMentionsToContent(payload, resolvedPayloadText.mentionedJids);
       const quotedOpts = buildQuotedMessageOptions({
+        ...sendOptions?.quotedMessageKey,
         messageId: sendOptions?.quotedMessageKey?.id,
-        remoteJid: sendOptions?.quotedMessageKey?.remoteJid,
-        fromMe: sendOptions?.quotedMessageKey?.fromMe,
-        participant: sendOptions?.quotedMessageKey?.participant,
         destinationJid: jid,
         requestedJid: toWhatsappJid(to),
-        lookupTargetJid: sendOptions?.quotedMessageKey?.lookupTargetJid,
-        messageText: sendOptions?.quotedMessageKey?.messageText,
-        media: sendOptions?.quotedMessageKey?.media,
       });
       const kind = mediaBuffer ? "media" : "text";
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;

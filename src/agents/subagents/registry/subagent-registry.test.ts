@@ -12,7 +12,6 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
@@ -77,7 +76,7 @@ import {
 } from "./subagent-registry.run-fixtures.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
-  registerRestoredSessionSettlementTest,
+  registerRestoredRunningTaskSettlementTest,
   registerRestoredTaskSettlementTest,
 } from "./subagent-registry.task-settlement.test-support.js";
 import type {
@@ -1063,10 +1062,10 @@ describe("subagent registry seam flow", () => {
     }
   });
 
-  registerRestoredSessionSettlementTest({
+  registerRestoredRunningTaskSettlementTest({
+    getRegistry: () => mod,
     mocks,
     hydrateAndActivateRegistry,
-    findRequesterRun,
   });
 
   it.each([
@@ -1963,9 +1962,7 @@ describe("subagent registry seam flow", () => {
     expect(run?.execution.outcome).toBeUndefined();
   });
 
-  it("detaches subagent completion from a disposed requester transcript owner", async ({
-    signal,
-  }) => {
+  it("detaches subagent completion from a disposed requester transcript owner", async () => {
     const sessionKey = "agent:main:main";
     const activeGatewayContext = { recoveryRuntime } as never;
     mod.activateSubagentRegistry(
@@ -1976,10 +1973,9 @@ describe("subagent registry seam flow", () => {
         }) as never,
     );
     let disposed = false;
-    let resolveWait: (value: Record<string, unknown>) => void = () => {};
-    const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
-      resolveWait = resolve;
-    });
+    const pendingWait = createDeferred<Record<string, unknown>>();
+    const waitStarted = createDeferred();
+    const announceStarted = createDeferred();
     const requesterTranscriptWrite = vi.fn();
     const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
       requesterTranscriptWrite();
@@ -1988,63 +1984,57 @@ describe("subagent registry seam flow", () => {
       }
       return await operation();
     };
-    const transcriptWritten = createDeferred();
-    const freshTranscriptWrite = vi.fn(async () => {
-      transcriptWritten.resolve();
-    });
+    const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
 
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method !== "agent.wait") {
         return {};
       }
-      const result = await pendingWait;
+      waitStarted.resolve();
+      const result = await pendingWait.promise;
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshCompletionWrite);
       return result;
     });
     mocks.runSubagentAnnounceFlow.mockImplementation(async () => {
+      announceStarted.resolve();
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return "delivered";
     });
 
+    await withOwnedSessionTranscriptWrites(
+      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
+      async () => {
+        mod.registerSubagentRun({
+          runId: "run-detached-requester-owner",
+          requesterSessionKey: sessionKey,
+          task: "finish after the requester attempt exits",
+          expectsCompletionMessage: true,
+        });
+        await waitStarted.promise;
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "agent.wait" }),
+        );
+      },
+    );
+
     const settleRootWork = observeRootWork();
-    try {
-      await withOwnedSessionTranscriptWrites(
-        { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
-        async () => {
-          mod.registerSubagentRun({
-            runId: "run-detached-requester-owner",
-            requesterSessionKey: sessionKey,
-            task: "finish after the requester attempt exits",
-            expectsCompletionMessage: true,
-          });
-          await waitForFast(() =>
-            expect(mocks.callGateway).toHaveBeenCalledWith(
-              expect.objectContaining({ method: "agent.wait" }),
-            ),
-          );
-        },
-      );
+    disposed = true;
+    pendingWait.resolve({ status: "ok", startedAt: 111, endedAt: 222 });
+    await announceStarted.promise;
+    await settleRootWork();
 
-      disposed = true;
-      resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
-
-      await racePromiseWithAbortSignal(transcriptWritten.promise, signal);
-      await settleRootWork(true);
-      expect(freshTranscriptWrite).toHaveBeenCalledOnce();
-      expect(freshCompletionWrite).toHaveBeenCalledOnce();
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-      const announceParams = (
-        mocks.runSubagentAnnounceFlow.mock.calls as unknown as Array<
-          [{ resolveGatewayContext?: () => unknown }]
-        >
-      )[0]?.[0];
-      expect(announceParams?.resolveGatewayContext?.()).toBe(activeGatewayContext);
-      expect(requesterTranscriptWrite).not.toHaveBeenCalled();
-    } finally {
-      resolveWait({ status: "ok", startedAt: 111, endedAt: 222 });
-      await settleRootWork();
-    }
+    expect(findRequesterRun("run-detached-requester-owner")?.execution.status).toBe("terminal");
+    expect(freshTranscriptWrite).toHaveBeenCalledOnce();
+    expect(freshCompletionWrite).toHaveBeenCalledOnce();
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    const announceParams = (
+      mocks.runSubagentAnnounceFlow.mock.calls as unknown as Array<
+        [{ resolveGatewayContext?: () => unknown }]
+      >
+    )[0]?.[0];
+    expect(announceParams?.resolveGatewayContext?.()).toBe(activeGatewayContext);
+    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
