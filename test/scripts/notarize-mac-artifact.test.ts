@@ -171,7 +171,9 @@ if (args[0] === "notarytool") {
   }
   if (args[1] === "history") {
     if (count < (control.historyFailures || 0)) { console.error("history transport failure"); process.exit(1); }
-    console.log(JSON.stringify({history: control.history || []}));
+    const history = control.history || [];
+    if (control.historyMalformed && count === 1) history[0] = {...history[0], createdDate: "not a timestamp"};
+    console.log(JSON.stringify({history}));
     process.exit(0);
   }
   if (args[1] === "log") {
@@ -298,6 +300,7 @@ describe("notarization submission recovery", () => {
         submitFailures: 1,
         submitElapsed: 600,
         historyFailures: 1,
+        historyMalformed: true,
         history: [
           {
             id: submissionId,
@@ -316,6 +319,7 @@ describe("notarization submission recovery", () => {
     expect(completed.status, completed.stderr).toBe(0);
     expect(fixture.calls().map((call) => call[1])).toEqual([
       "submit",
+      "history",
       "history",
       "history",
       "wait",

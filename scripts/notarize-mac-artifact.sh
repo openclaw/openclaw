@@ -151,7 +151,7 @@ fi
 
 retry_notarization() {
   local phase="$1" started now elapsed remaining timeout delay=5 attempts=0 history_pending=0 history_result candidate variant tag source_ref upload_name
-  local id_filter='.id | select(type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))'
+  local id_pattern='^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
   if [[ "$phase" == "submit" ]]; then
     # Parallel release variants all use app.zip; bind Apple's history name to the bytes.
     upload_name="$artifact_sha-$(basename "$ARTIFACT")"
@@ -169,21 +169,24 @@ retry_notarization() {
         attempts=$((attempts + 1))
         notary_result="$(xcrun notarytool submit "$notary_upload_dir/$upload_name" "${auth_args[@]}" \
           --no-wait --no-s3-acceleration --output-format json)" || true
-        notary_id="$(jq -er "$id_filter" <<<"$notary_result" 2>/dev/null)" || notary_id=""
+        notary_id="$(jq -er --arg pattern "$id_pattern" '.id | select(type == "string" and test($pattern))' <<<"$notary_result" 2>/dev/null)" || notary_id=""
         [[ -z "$notary_id" ]] || return 0
         history_pending=1
       fi
       # A failed history lookup cannot prove that the previous upload was absent.
+      now="$(date +%s)"
       if history_result="$(xcrun notarytool history "${auth_args[@]}" --output-format json)" &&
-        jq -e '.history | type == "array"' <<<"$history_result" >/dev/null 2>&1; then
+        candidate="$(jq -cs --arg name "$upload_name" --arg pattern "$id_pattern" --argjson now "$now" --argjson started "$started" '
+          if length == 1 then .[0] else error("Malformed history") end |
+          [.history[:100][] |
+            if (.name | type == "string") and (.id | type == "string" and test($pattern))
+            then . else error("Malformed submission") end |
+            (.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $created |
+            select(.name == $name and $created >= ($started - 300) and $created <= $now)] |
+          sort_by(.createdDate) | last // {}
+        ' <<<"$history_result" 2>/dev/null)"; then
         history_pending=0
-        now="$(date +%s)"
-        candidate="$(jq -c --arg name "$upload_name" --argjson now "$now" --argjson started "$started" '
-          [.history[:100][] | select(.name == $name) |
-            select((try (.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0) as $created |
-              $created >= ($started - 300) and $created <= $now)] | sort_by(.createdDate) | last
-        ' <<<"$history_result" 2>/dev/null)" || candidate=""
-        notary_id="$(jq -er "$id_filter" <<<"$candidate" 2>/dev/null)" || notary_id=""
+        notary_id="$(jq -er --arg pattern "$id_pattern" '.id | select(type == "string" and test($pattern))' <<<"$candidate" 2>/dev/null)" || notary_id=""
         if [[ -n "$notary_id" ]]; then
           echo "Recovered notarization submission $notary_id from Apple history." >&2
           return 0
