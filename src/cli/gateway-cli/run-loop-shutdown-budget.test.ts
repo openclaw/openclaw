@@ -94,3 +94,35 @@ describe("Gateway stop deadline independent of restart ownership", () => {
     expect(execUser).not.toHaveBeenCalled();
   });
 });
+
+describe("Gateway stop deadline on darwin independent of restart ownership", () => {
+  beforeEach(() => {
+    vi.stubGlobal("process", { ...process, platform: "darwin", env: {} });
+  });
+
+  it("uses the launchd ExitTimeOut when externally supervised inside a launchd job", async () => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    const info = vi.fn();
+    const budget = await resolveGatewayShutdownBudget("external", { info, warn: vi.fn() });
+    budget.log("shutdown");
+    expect(info).toHaveBeenCalledWith(
+      "shutdown budget at shutdown: drain=5000ms shutdown=15000ms reserve=10000ms exitMargin=5000ms; source=launchd ExitTimeOut=20000ms",
+    );
+    expect(budget.timeoutMs).toBe(15_000);
+    expect(budget.nativeStopBudget).toBe(true);
+    expect(execSystem).not.toHaveBeenCalled();
+    expect(execUser).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Gateway stop policy when externally supervised outside a launchd job", async () => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    const warn = vi.fn();
+    const budget = await resolveGatewayShutdownBudget("external", { info: vi.fn(), warn });
+    expect(budget.timeoutMs).toBe(325_000);
+    expect(budget.nativeStopBudget).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    expect(execSystem).not.toHaveBeenCalled();
+    expect(execUser).not.toHaveBeenCalled();
+  });
+});

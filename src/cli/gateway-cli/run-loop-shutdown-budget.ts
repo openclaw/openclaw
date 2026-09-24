@@ -6,6 +6,7 @@ import {
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
   GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
 } from "../../infra/gateway-shutdown-budget.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
 
 export async function resolveGatewayShutdownBudget(
@@ -18,6 +19,13 @@ export async function resolveGatewayShutdownBudget(
 ) {
   // Restart ownership may be external while systemd still enforces the stop deadline.
   const systemdStop = process.platform === "linux" ? await readSystemdStopTimeout() : null;
+  // Restart ownership may be external while launchd still enforces the stop deadline.
+  const timingSupervisor =
+    supervisor === "launchd" ||
+    (process.platform === "darwin" &&
+      detectRespawnSupervisor(process.env, process.platform) === "launchd")
+      ? "launchd"
+      : supervisor;
   const retained =
     refresh?.previous.nativeStopBudget && (!systemdStop || systemdStop.warning)
       ? refresh.previous
@@ -32,12 +40,13 @@ export async function resolveGatewayShutdownBudget(
   }
   const stop = systemdStop ?? {
     timeoutMs:
-      supervisor === "launchd"
+      timingSupervisor === "launchd"
         ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000
         : GATEWAY_SERVICE_STOP_TIMEOUT_MS,
-    source: supervisor === "launchd" ? "launchd ExitTimeOut" : "Gateway stop policy",
+    source: timingSupervisor === "launchd" ? "launchd ExitTimeOut" : "Gateway stop policy",
   };
-  const nativeStopBudget = systemdStop !== null || supervisor === "launchd" || Boolean(retained);
+  const nativeStopBudget =
+    systemdStop !== null || timingSupervisor === "launchd" || Boolean(retained);
   const limitMs =
     retained?.timeoutMs ??
     Math.min(GATEWAY_SHUTDOWN_TIMEOUT_MS, stop.timeoutMs - GATEWAY_SUPERVISOR_EXIT_MARGIN_MS);
