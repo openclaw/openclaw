@@ -425,6 +425,71 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["codes"], ["alpha", "gamma", "beta", "delta"]);
   });
 
+  it.each(["remove", "default append", "draft append"] as const)(
+    "allows %s beside a preserved unknown row property",
+    async (action) => {
+      const onPatch = vi.fn();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const saved = [{ name: "keep", future: "preserved" }, { name: "remove" }];
+      renderArrayFixture(container, {
+        schema: {
+          type: "array",
+          uniqueItems: action === "draft append",
+          items: {
+            type: "object",
+            properties: { name: { type: "string", minLength: 1, default: "new" } },
+            required: ["name"],
+            additionalProperties: false,
+          },
+        },
+        value: saved,
+        path: ["entries"],
+        onPatch,
+      });
+      try {
+        if (action === "remove") {
+          const remove = expectElement(
+            container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']")[1],
+            "valid sibling remove",
+          );
+          expect(remove.disabled).toBe(false);
+          remove.click();
+          expect(onPatch).toHaveBeenCalledWith(["entries"], [saved[0]]);
+          return;
+        }
+        expectElement(findAddButton(container), "append beside ignored property").click();
+        if (action === "draft append") {
+          const draft = expectElement(
+            container.querySelector<ConfigFormCollectionDraft>(
+              "openclaw-config-form-collection-draft",
+            ),
+            "array append draft",
+          );
+          await draft.updateComplete;
+          const input = expectElement(
+            draft.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
+            "new row JSON",
+          );
+          for (const raw of ['{"name":"new","future":"new intent"}', '{"name":"new"}']) {
+            input.value = raw;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            await draft.updateComplete;
+            expectElement(findAddButton(draft), "commit new row").click();
+            await draft.updateComplete;
+            if (raw.includes("future")) {
+              expect(onPatch).not.toHaveBeenCalled();
+              expect(input.getAttribute("aria-invalid")).toBe("true");
+            }
+          }
+        }
+        expect(onPatch).toHaveBeenCalledWith(["entries"], [...saved, { name: "new" }]);
+      } finally {
+        container.remove();
+      }
+    },
+  );
+
   it("validates the resulting tuple before removing an item", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

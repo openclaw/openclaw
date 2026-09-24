@@ -1,5 +1,6 @@
 import {
   arrayConstraintCandidates,
+  canApplyArrayCandidate,
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
@@ -59,7 +60,7 @@ export function arrayAddCandidates(params: {
     !uniqueItems &&
     (maximumItems === undefined || generatedCandidate.length <= maximumItems) &&
     (generatedCandidate.length < minimumItems ||
-      isSupportedConfigValueValid(schema, generatedCandidate))
+      canApplyArrayCandidate(schema, value, generatedCandidate, uniqueItems, true))
       ? generatedCandidate
       : undefined;
 

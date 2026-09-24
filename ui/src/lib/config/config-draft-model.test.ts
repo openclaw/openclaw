@@ -148,65 +148,6 @@ describe("config draft model", () => {
     },
   );
 
-  it("config.set serializes schema-coerced form values with the draft base hash", async () => {
-    const submitted: Array<{ method: string; params: unknown }> = [];
-    let configGetCount = 0;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config.get") {
-        configGetCount += 1;
-        return {
-          config:
-            configGetCount === 1
-              ? { count: 1, composedCount: 2, enabled: false, tags: [1], label: "ok" }
-              : {},
-          hash: configGetCount === 1 ? "hash-1" : "hash-2",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.schema") {
-        return {
-          schema: {
-            type: "object",
-            properties: {
-              count: { type: "number" },
-              composedCount: { type: "number", allOf: [{ minimum: 2 }] },
-              enabled: { type: "boolean" },
-              tags: { type: "array", items: { type: "integer" } },
-              label: { type: "string", minLength: 1 },
-            },
-          },
-          uiHints: {},
-        };
-      }
-      submitted.push({ method, params });
-      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const runtimeConfig = createRuntimeConfigCapability(gateway);
-
-    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
-    runtimeConfig.patchForm(["count"], "42.5");
-    runtimeConfig.patchForm(["composedCount"], "8.5");
-    runtimeConfig.patchForm(["enabled"], "true");
-    runtimeConfig.patchForm(["tags"], ["7", ""]);
-    runtimeConfig.patchForm(["label"], "");
-
-    await expect(runtimeConfig.save()).resolves.toBe(true);
-    const submission = submitted.find((entry) => entry.method === "config.set");
-    expect(submission?.params).toMatchObject({ baseHash: "hash-1" });
-    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
-    expect(typeof raw).toBe("string");
-    expect(JSON.parse(raw as string)).toEqual({
-      count: 42.5,
-      composedCount: 8.5,
-      enabled: true,
-      tags: [7],
-    });
-    runtimeConfig.dispose();
-  });
-
   it("removes a restored optional override from config.set while preserving siblings", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {

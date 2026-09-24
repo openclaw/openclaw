@@ -2,6 +2,7 @@ import {
   asNullableRecord as asConfigRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
@@ -183,16 +184,20 @@ function coerceBooleanString(value: string): boolean | string {
   return value;
 }
 
-function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
+function coerceFormValues(value: unknown, schema: JsonSchema, original?: unknown): unknown {
+  // Saved source may contain ignored optional values. Only edits own coercion.
+  if (Object.is(value, original) || stableStringify(value) === stableStringify(original)) {
+    return value;
+  }
   if (value === null || value === undefined) {
     return value;
   }
 
   if (schema.allOf && schema.allOf.length > 0) {
     const { allOf, ...baseSchema } = schema;
-    let next: unknown = coerceFormValues(value, baseSchema);
+    let next: unknown = coerceFormValues(value, baseSchema, original);
     for (const segment of allOf) {
-      next = coerceFormValues(next, segment);
+      next = coerceFormValues(next, segment, original);
     }
     return next;
   }
@@ -209,12 +214,11 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
     if (variants.length === 1) {
       const variant = variants[0];
-      return variant ? coerceFormValues(value, variant) : value;
+      return variant ? coerceFormValues(value, variant, original) : value;
     }
     if (typeof value === "string") {
-      // Editors commit branch-validated types (including boolean literals),
-      // and loaded values already passed Gateway validation. Preserve strings
-      // instead of guessing again here.
+      // Editors commit branch-validated types (including boolean literals).
+      // Preserve authored strings instead of guessing the union branch again.
       if (variants.some(schemaMayAcceptString)) {
         return value;
       }
@@ -237,10 +241,10 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     for (const variant of variants) {
       const variantType = schemaType(variant);
       if (variantType === "object" && typeof value === "object" && !Array.isArray(value)) {
-        return coerceFormValues(value, variant);
+        return coerceFormValues(value, variant, original);
       }
       if (variantType === "array" && Array.isArray(value)) {
-        return coerceFormValues(value, variant);
+        return coerceFormValues(value, variant, original);
       }
     }
     return value;
@@ -279,7 +283,9 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       const propSchema = props[key] ?? additional;
-      const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+      const coerced = propSchema
+        ? coerceFormValues(val, propSchema, isRecord(original) ? original[key] : undefined)
+        : val;
       if (coerced !== undefined) {
         result[key] = coerced;
       }
@@ -291,14 +297,25 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return value;
     }
     const items = schema.items;
+    const originalItems = Array.isArray(original) ? original : [];
+    const originalItemValues = new Set(originalItems.map((item) => stableStringify(item)));
+    const coerceItem = (item: unknown, itemSchema: JsonSchema, index: number) => {
+      // Removing or moving a row does not edit an unchanged surviving value.
+      if (originalItemValues.has(stableStringify(item))) {
+        return item;
+      }
+      return coerceFormValues(item, itemSchema, originalItems[index]);
+    };
     if (Array.isArray(items)) {
       return value.map((item, index) => {
         const itemSchema = index < items.length ? items[index] : undefined;
-        return itemSchema ? coerceFormValues(item, itemSchema) : item;
+        return itemSchema ? coerceItem(item, itemSchema, index) : item;
       });
     }
     return items
-      ? value.map((item) => coerceFormValues(item, items)).filter((item) => item !== undefined)
+      ? value
+          .map((item, index) => coerceItem(item, items, index))
+          .filter((item) => item !== undefined)
       : value;
   }
   return value;
@@ -319,12 +336,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   if (state.configFormMode !== "form" || !state.configForm) {
     return null;
   }
-  const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
-  const form = schema
-    ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
-    : state.configForm;
   return sanitizeRedactedFormForSubmit(
-    form,
+    state.configForm,
     state.configFormOriginal,
     // The draft original is include-resolved source; raw only describes the root file.
     state.configFormOriginal,
@@ -538,12 +551,15 @@ function mutateConfigForm(
     }
     base = parsedRawDraft;
   } else {
-    base = cloneConfigObject(
-      state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
-    );
+    base = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
   }
-  mutate(base);
-  syncConfigDraft(state, base);
+  const draft = cloneConfigObject(base);
+  mutate(draft);
+  const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
+  syncConfigDraft(
+    state,
+    schema ? (coerceFormValues(draft, schema, base) as Record<string, unknown>) : draft,
+  );
 }
 
 function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {

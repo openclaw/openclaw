@@ -313,7 +313,8 @@ function renderArrayContent(
       const nextValue = [...arrayValue, candidate];
       return (
         (maximumItems === undefined || nextValue.length <= maximumItems) &&
-        (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue))
+        (nextValue.length < minimumItems ||
+          canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true))
       );
     },
   };
@@ -417,7 +418,8 @@ function renderArrayContent(
             ) &&
             (maximumItems === undefined || arrayValue.length < maximumItems) &&
             isSupportedConfigValueValid(nextItemSchema, event.detail.value) &&
-            (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
+            (nextValue.length < minimumItems ||
+              canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true));
           let accepted = false;
           if (canApply) {
             accepted = patch(nextValue, [...rowIdentities, Symbol("array-row")]);
@@ -445,7 +447,7 @@ function renderArrayContent(
                       arrayValue,
                       nextValue,
                       uniqueItems,
-                      false,
+                      true,
                     );
                     const removeControl = html` <openclaw-tooltip
                       .content=${t("configForm.removeItem")}
