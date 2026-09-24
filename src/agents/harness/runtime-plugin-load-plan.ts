@@ -157,6 +157,7 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   }
   lookup.addAgentHarnessOwners(pluginIds, runtimeIds);
   addConfiguredSlotPluginIds(pluginIds, {
+    index: params.index,
     activationSourceConfig: params.config ?? {},
     activationSourcePlugins: pluginsConfig,
     lookup,
@@ -338,7 +339,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
       })
     : [];
   const contextEnginePluginId = includeAgentOwners
-    ? resolveSelectedContextEnginePluginId(params.config)
+    ? resolveSelectedContextEnginePluginId(
+        params.config,
+        params.metadataSnapshot.registryIndex.plugins.map((plugin) => ({
+          id: plugin.pluginId,
+          contextEngineIds: plugin.contextEngineIds,
+        })),
+      )
     : undefined;
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(

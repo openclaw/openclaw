@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -51,4 +52,9 @@ export function resetContextEngineRuntimeQuarantineForTests(): void {
   const state = getContextEngineRegistryStateForTests();
   state.quarantinedEngines.clear();
   clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
+}
+
+/** Selects a test engine with independent approval for its registered plugin owner. */
+export function contextEngineConfig(engineId: string, owner: string): OpenClawConfig {
+  return { plugins: { allow: [owner], slots: { contextEngine: engineId } } };
 }

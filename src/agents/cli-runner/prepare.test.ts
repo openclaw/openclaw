@@ -2615,7 +2615,7 @@ describe("prepareCliRunContext", () => {
     try {
       const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
         fixture.prepare({
-          config: { plugins: { slots: { contextEngine: engineId } } },
+          config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           assertCurrent: () => {
             if (!current) {
               throw new Error("CLI owner retired after engine acquisition");
@@ -2706,7 +2706,7 @@ describe("prepareCliRunContext", () => {
             model: "test-model",
             runId: "cli-custody-history-failure",
             timeoutMs: 1_000,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           }),
         ),
       ).rejects.toBe(historyFailure);
@@ -2756,7 +2756,7 @@ describe("prepareCliRunContext", () => {
         "plugin:fixture",
       );
       try {
-        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const config = { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } };
         const context = await work.run(() =>
           withPluginRuntimeRegistryScope(custody.registry, async () => {
             if (ownership === "borrowed") {

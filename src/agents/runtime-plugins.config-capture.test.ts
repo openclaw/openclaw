@@ -1,11 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
+import { makeRegistry } from "../config/plugin-auto-enable.test-helpers.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
@@ -29,12 +28,10 @@ it("carries one captured fleet to every already-enabled runtime load and project
       entries: { "fleet-owner": { enabled: true }, existing: { enabled: true } },
     },
   });
-  const metadataSnapshot = createPluginMetadataSnapshot({
-    config,
-    manifestRegistry: makeRegistry(
-      ["fleet-owner", "existing", "new-engine"].map((id) => ({ id, channels: [] })),
-    ),
-  });
+  const metadataSnapshot = createPluginMetadataSnapshotFixture(
+    makeRegistry(["fleet-owner", "existing", "new-engine"].map((id) => ({ id, channels: [] }))),
+    resolveInstalledPluginIndexPolicyHash(config),
+  );
   const load = vi.mocked(loadPluginRegistryHandle).mockReturnValue(createEmptyPluginRegistry());
   for (let index = 0; index < 200; index += 1) {
     loadAgentRuntimePluginRegistryHandle({

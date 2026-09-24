@@ -4630,7 +4630,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     );
     try {
       const contextEngine = await resolveContextEngine({
-        plugins: { slots: { contextEngine: engineId } },
+        plugins: { allow: ["health-test"], slots: { contextEngine: engineId } },
       } as OpenClawConfig);
       await contextEngine.assemble({ sessionId: "s1", messages: [] });
 

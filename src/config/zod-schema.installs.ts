@@ -66,6 +66,8 @@ export type InstallRecordBase = z.infer<typeof InstallRecordSchema>;
 const PluginInstallRecordShape = {
   ...InstallRecordShape,
   source: PluginInstallSourceSchema,
+  /** Retained package child-plugin engine ownership for uninstall without runtime files. */
+  contextEngineIdsByPlugin: z.record(z.string().min(1), z.array(z.string().min(1))).optional(),
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),

@@ -108,6 +108,16 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
+    if (
+      record.declaredContextEngineIds &&
+      !record.declaredContextEngineIds.includes(normalizedId)
+    ) {
+      reportRegistrationError(
+        record,
+        `context engine "${normalizedId}" is not declared in manifest contextEngineIds`,
+      );
+      return;
+    }
     const result = registerContextEngineInRegistry(
       registry,
       normalizedId,
@@ -121,7 +131,9 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     if (!result.ok) {
       reportRegistrationError(
         record,
-        `context engine already registered: ${normalizedId} (${result.existingOwner})`,
+        result.existingOwner === null
+          ? `context engine has no approved selected owner: ${normalizedId}`
+          : `context engine already registered: ${normalizedId} (${result.existingOwner})`,
       );
       return;
     }

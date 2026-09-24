@@ -13,7 +13,7 @@ import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
-import { resetPluginSlotsToDefaults } from "./slots.js";
+import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import type { PluginUpdateLogger } from "./update-source.js";
 
@@ -329,11 +329,36 @@ export function migratePluginConfigId(
   }
 
   const slots = plugins.slots;
-  if (slots?.memory === fromId || slots?.contextEngine === fromId) {
+  for (const [installOwner, record] of Object.entries(nextPlugins.installs ?? {})) {
+    const mapping = record.contextEngineIdsByPlugin;
+    if (!mapping || !Object.hasOwn(mapping, fromId)) {
+      continue;
+    }
+    const { [fromId]: engineIds, ...rest } = mapping;
+    if (!engineIds) {
+      continue;
+    }
+    ensureNextPlugins().installs = {
+      ...nextPlugins.installs,
+      [installOwner]: {
+        ...record,
+        contextEngineIdsByPlugin: {
+          ...rest,
+          [toId]: Object.hasOwn(rest, toId) ? (rest[toId] ?? engineIds) : engineIds,
+        },
+      },
+    };
+  }
+  const declaredEngine = Object.values(installs ?? {}).some((record) =>
+    Object.values(record.contextEngineIdsByPlugin ?? {}).some((ids) =>
+      ids.includes(slots?.contextEngine ?? ""),
+    ),
+  );
+  if (slots?.memory === fromId || (slots?.contextEngine === fromId && !declaredEngine)) {
     ensureNextPlugins().slots = {
       ...slots,
       ...(slots.memory === fromId ? { memory: toId } : {}),
-      ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+      ...(slots.contextEngine === fromId && !declaredEngine ? { contextEngine: toId } : {}),
     };
   }
 
@@ -353,7 +378,11 @@ export function disablePluginAfterUpdateFailure(
     plugins: {
       ...pluginsConfig,
       // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
+      slots: resetPluginSlotsToDefaults(
+        pluginsConfig.slots,
+        pluginId,
+        resolveRetainedContextEngineIds(config, pluginId),
+      ),
     },
   };
 }

@@ -30,17 +30,17 @@ afterEach(() => {
 });
 
 // Each case owns a registry; factories expose invocation independently from selection metadata.
-function fixture(owner = engineId, registered = true) {
+function fixture(owner = engineId, registered = true, selectedId = engineId) {
   const registry = createEmptyPluginRegistry();
   const factory = vi.fn(() => ({
-    info: { id: engineId, name: "Synthetic" },
+    info: { id: selectedId, name: "Synthetic" },
     ingest: async () => ({ ingested: false }),
     assemble: async () => ({ messages: [], estimatedTokens: 0 }),
     compact: async () => ({ ok: true, compacted: false, reason: "fixture" }),
   }));
   registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
   if (registered) {
-    registerContextEngineInRegistry(registry, engineId, factory, `plugin:${owner}`);
+    registerContextEngineInRegistry(registry, selectedId, factory, `plugin:${owner}`);
   }
   return { registry, factory };
 }
@@ -80,6 +80,14 @@ for (const path of ["standalone", "logical-turn"] as const) {
       ["denied registered", engineId, true, { deny: [engineId] }],
       ["distinct owner disabled", ownerId, true, { entries: { [ownerId]: { enabled: false } } }],
       ["distinct owner denied", ownerId, true, { deny: [ownerId] }],
+      ["distinct owner unapproved", ownerId, true, {}],
+      ["engine allowlisted instead of owner", ownerId, true, { allow: [engineId] }],
+      [
+        "enabled distinct owner outside allowlist",
+        ownerId,
+        true,
+        { allow: [engineId], entries: { [ownerId]: { enabled: true } } },
+      ],
     ] satisfies Array<[string, string, boolean, OpenClawConfig["plugins"]]>)(
       "uses normal default for %s",
       async (_name, owner, registered, policy) => {
@@ -131,6 +139,33 @@ for (const path of ["standalone", "logical-turn"] as const) {
       },
     );
 
+    it("preserves an exact engine selector with an independently allowlisted owner", async () => {
+      const selectedId = "Synthetic-Engine";
+      const { registry, factory } = fixture(ownerId, true, selectedId);
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        expect(
+          await resolve({
+            plugins: { allow: [ownerId], slots: { contextEngine: selectedId } },
+          }),
+        ).toEqual({ id: selectedId, owner: ownerId, failure: undefined });
+        expect(listContextEngineQuarantines()).toEqual([]);
+      });
+      expect(factory).toHaveBeenCalledOnce();
+    });
+
+    it("preserves equal-ID selection outside an unrelated allowlist", async () => {
+      const { registry, factory } = fixture();
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        expect(
+          await resolve({
+            plugins: { allow: ["unrelated"], slots: { contextEngine: engineId } },
+          }),
+        ).toEqual({ id: engineId, owner: engineId, failure: undefined });
+        expect(listContextEngineQuarantines()).toEqual([]);
+      });
+      expect(factory).toHaveBeenCalledOnce();
+    });
+
     it.each(["missing", "factory"])("preserves enabled %s failure", async (failure) => {
       const { registry, factory } = fixture(engineId, failure !== "missing");
       factory.mockImplementation(() => {
@@ -155,21 +190,24 @@ for (const path of ["standalone", "logical-turn"] as const) {
       });
     });
 
-    it("disables then re-enables without clearing the retained slot or registering again", async () => {
-      const { registry, factory } = fixture();
-      const initial = { plugins: { slots: { contextEngine: engineId } } };
-      const disabled = setPluginEnabledInConfig(initial, engineId, false);
-      await withPluginRuntimeRegistryScope(registry, async () => {
-        expect((await resolve(disabled)).id).toBe("legacy");
-        expect(factory).not.toHaveBeenCalled();
-        expect((await resolve(setPluginEnabledInConfig(disabled, engineId, true))).id).toBe(
-          engineId,
-        );
-        expect(listContextEngineQuarantines()).toEqual([]);
-      });
-      expect(disabled.plugins?.slots?.contextEngine).toBe(engineId);
-      expect(factory).toHaveBeenCalledOnce();
-    });
+    it.each([engineId, ownerId])(
+      "disables then re-enables owner %s without clearing the slot or registering again",
+      async (owner) => {
+        const { registry, factory } = fixture(owner);
+        const initial = { plugins: { slots: { contextEngine: engineId } } };
+        const disabled = setPluginEnabledInConfig(initial, owner, false);
+        await withPluginRuntimeRegistryScope(registry, async () => {
+          expect((await resolve(disabled)).id).toBe("legacy");
+          expect(factory).not.toHaveBeenCalled();
+          expect((await resolve(setPluginEnabledInConfig(disabled, owner, true))).id).toBe(
+            engineId,
+          );
+          expect(listContextEngineQuarantines()).toEqual([]);
+        });
+        expect(disabled.plugins?.slots?.contextEngine).toBe(engineId);
+        expect(factory).toHaveBeenCalledOnce();
+      },
+    );
   });
 }
 

@@ -5,8 +5,11 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginSnapshotReportMock,
+  applyExclusiveSlotSelectionMock,
   clearPluginRegistryLoadCacheMock,
   enablePluginInConfigMock,
+  loadPluginManifestRegistryMock,
+  loadPluginMetadataSnapshotMock,
   planPluginUninstallMock,
   replaceConfigFileMock,
   restorePersistedInstalledPluginIndexIfCurrentMock,
@@ -95,6 +98,121 @@ describe("persistPluginInstall", () => {
       );
       expect(commit).toHaveBeenCalledOnce();
       expect(rollback).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "new installation",
+      enabled: true,
+      previousIds: undefined,
+      declaredIds: ["canonical-engine"],
+    },
+    {
+      name: "update replaces obsolete ownership",
+      enabled: true,
+      previousIds: ["obsolete-engine"],
+      declaredIds: ["canonical-engine"],
+    },
+    {
+      name: "update removes retired declaration",
+      enabled: true,
+      previousIds: ["obsolete-engine"],
+      declaredIds: undefined,
+    },
+    {
+      name: "disabled installation retains ownership",
+      enabled: false,
+      previousIds: undefined,
+      declaredIds: ["canonical-engine"],
+    },
+  ])(
+    "persists manifest engine selection and ownership: $name",
+    async ({ enabled, previousIds, declaredIds }) => {
+      const { persistPluginInstall } = await import("./install-persistence.js");
+      enablePluginInConfigMock.mockImplementation((...args: unknown[]) => {
+        const [cfg, pluginId] = args as [OpenClawConfig, string];
+        return {
+          config: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              entries: { ...cfg.plugins?.entries, [pluginId]: { enabled: true } },
+            },
+          },
+          enabled: true,
+        };
+      });
+      const actualMetadata = await vi.importActual<typeof import("./plugin-metadata-snapshot.js")>(
+        "./plugin-metadata-snapshot.js",
+      );
+      loadPluginMetadataSnapshotMock.mockImplementation(actualMetadata.loadPluginMetadataSnapshot);
+      const actualSlots = await vi.importActual<typeof import("./slots.js")>("./slots.js");
+      applyExclusiveSlotSelectionMock.mockImplementation((input) =>
+        actualSlots.applyExclusiveSlotSelection(
+          input as Parameters<typeof actualSlots.applyExclusiveSlotSelection>[0],
+        ),
+      );
+      const actualManifest =
+        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
+      loadPluginManifestRegistryMock.mockImplementation((input) =>
+        actualManifest.loadPluginManifestRegistryCore(
+          input as Parameters<typeof actualManifest.loadPluginManifestRegistryCore>[0],
+        ),
+      );
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-install-"));
+      try {
+        fs.writeFileSync(
+          path.join(rootDir, "package.json"),
+          JSON.stringify({
+            name: "vendor-plugin",
+            version: "2.0.0",
+            openclaw: { extensions: ["./index.js"] },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(rootDir, "index.js"),
+          "throw new Error('install must not execute plugin runtime');",
+        );
+        fs.writeFileSync(
+          path.join(rootDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "vendor-plugin",
+            kind: "context-engine",
+            contextEngineIds: declaredIds,
+            configSchema: {},
+          }),
+        );
+        if (previousIds) {
+          setInstalledPluginIndexInstallRecords({
+            "vendor-plugin": {
+              source: "path",
+              sourcePath: rootDir,
+              contextEngineIdsByPlugin: { "vendor-plugin": previousIds },
+            },
+          });
+        }
+        const next = await persistPluginInstall({
+          snapshot: { config: {}, baseHash: "config-1", writeOptions: installWriteOptions },
+          pluginId: "vendor-plugin",
+          install: { source: "path", sourcePath: rootDir },
+          enable: enabled,
+        });
+        const records = requireMockCallArg(
+          writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+          "install record writer",
+        );
+        expect(records["vendor-plugin"]).toMatchObject({ source: "path", sourcePath: rootDir });
+        expect(
+          (records["vendor-plugin"] as Record<string, unknown>).contextEngineIdsByPlugin,
+        ).toEqual(declaredIds ? { "vendor-plugin": declaredIds } : undefined);
+        expect(next.plugins?.slots?.contextEngine).toBe(
+          enabled ? (declaredIds?.[0] ?? "vendor-plugin") : undefined,
+        );
+        expect(configWriteMock).toHaveBeenCalledWith(next);
+      } finally {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      }
     },
   );
 

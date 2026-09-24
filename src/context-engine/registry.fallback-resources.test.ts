@@ -113,7 +113,9 @@ it.each([
   let cleanup: Promise<void> | undefined;
   try {
     engine = await withPluginRuntimeRegistryScope(registry, () =>
-      resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
+      resolveContextEngine({
+        plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: selectedId } },
+      }),
     );
     if (mode !== "unused") {
       operation = withPluginRuntimeRegistryScope(registry, () => engine!.assemble(params));

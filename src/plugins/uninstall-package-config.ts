@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resetPluginSlotsToDefaults } from "./slots.js";
+import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
 
 export type PluginConfigUninstallActions = {
   entry: boolean;
@@ -103,7 +103,7 @@ function removeMatchingLoadPaths(
 export function removePluginRuntimePolicyFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
-  opts?: { channelIds?: string[]; loadPaths?: string[] },
+  opts?: { channelIds?: string[]; loadPaths?: string[]; contextEngineIds?: readonly string[] },
 ): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
   const actions = createEmptyConfigUninstallActions();
   const pluginsConfig = cfg.plugins ?? {};
@@ -133,13 +133,15 @@ export function removePluginRuntimePolicyFromConfig(
   actions.loadPath = loadResult.changed;
 
   let slots = pluginsConfig.slots;
+  const selectedEngineId = slots?.contextEngine;
+  const ownedEngineIds = opts?.contextEngineIds ?? resolveRetainedContextEngineIds(cfg, pluginId);
   if (slots?.memory === pluginId) {
     actions.memorySlot = true;
   }
-  if (slots?.contextEngine === pluginId) {
+  if (selectedEngineId && ownedEngineIds.includes(selectedEngineId)) {
     actions.contextEngineSlot = true;
   }
-  slots = resetPluginSlotsToDefaults(slots, pluginId);
+  slots = resetPluginSlotsToDefaults(slots, pluginId, ownedEngineIds);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
   }

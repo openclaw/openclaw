@@ -17,7 +17,9 @@ import {
 } from "./capability-summary.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
+import { recordPluginInstall } from "./installs.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 
 const tempDirs: string[] = [];
 
@@ -54,6 +56,59 @@ function createDeclaredSurface(
 }
 
 describe("plugin capability consent", () => {
+  it.each([
+    { enabled: true, ids: ["new-engine"] },
+    { enabled: false, ids: ["new-engine"] },
+    { enabled: true, ids: undefined },
+    { enabled: false, ids: undefined },
+  ])(
+    "refreshes retained ownership through update record replacement: $enabled / $ids",
+    async ({ enabled, ids }) => {
+      const stage = createArtifactFixture({
+        "package.json": { openclaw: { extensions: ["./index.js"] } },
+        "index.js": "throw new Error('metadata inspection must not run plugin');",
+        "openclaw.plugin.json": {
+          id: "plugin",
+          kind: "context-engine",
+          contextEngineIds: ids,
+          configSchema: {},
+        },
+      });
+      const previousRecord: PluginInstallRecord = {
+        source: "npm",
+        installPath: "/missing/old-artifact",
+        contextEngineIdsByPlugin: { plugin: ["old-engine"], removedChild: ["removed-engine"] },
+      };
+      const config = {
+        plugins: { entries: { plugin: { enabled } }, installs: { plugin: previousRecord } },
+      };
+      const consent = preparePluginUpdateCapabilityConsent({
+        config,
+        pluginId: "plugin",
+        record: previousRecord,
+        installPath: "/missing/old-artifact",
+        packagePluginIds: ["plugin"],
+        onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+      });
+      await consent.onBeforePluginArtifactCommit({
+        pluginId: "plugin",
+        stagedArtifactDir: stage,
+        mode: "update",
+      });
+      const next = recordPluginInstall(
+        config,
+        consent.acceptInstallRecord({ pluginId: "plugin", ...previousRecord, installPath: stage }),
+      );
+      expect(next.plugins?.installs?.plugin?.contextEngineIdsByPlugin).toEqual(
+        ids ? { plugin: ids } : undefined,
+      );
+      expect(previousRecord.contextEngineIdsByPlugin).toEqual({
+        plugin: ["old-engine"],
+        removedChild: ["removed-engine"],
+      });
+    },
+  );
+
   it("merges every package-owned plugin into a sorted, duplicate-free capability surface", () => {
     expect(
       mergePluginDeclaredSurfaces([

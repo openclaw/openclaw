@@ -425,6 +425,7 @@ export function buildPluginManifestRecord(params: {
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
+    contextEngineIds: params.manifest.contextEngineIds,
     channels: params.manifest.channels ?? [],
     channelAccountKeyPolicies: params.manifest.channelAccountKeyPolicies,
     providers: params.manifest.providers ?? [],
