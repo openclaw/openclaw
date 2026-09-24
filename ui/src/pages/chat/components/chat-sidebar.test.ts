@@ -197,6 +197,13 @@ describe("markdown sidebar", () => {
       rawButton!.click();
       await panel.updateComplete;
 
+      expect(panel.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Source");
+      expect(panel.querySelector(".sidebar-markdown-shell__eyebrow")?.textContent?.trim()).toBe(
+        "Source",
+      );
+      expect(panel.querySelector(".sidebar-markdown-shell__hint")).toBeNull();
+      expect(panel.querySelector(".sidebar-markdown-shell__toolbar button")).toBeNull();
+
       const reader = panel.querySelector(".sidebar-markdown-reader");
       const copyButton = reader?.querySelector<HTMLButtonElement>(".code-block-copy");
       expect(copyButton).toBeInstanceOf(HTMLButtonElement);
@@ -210,6 +217,16 @@ describe("markdown sidebar", () => {
       expect.soft(reader?.querySelector("pre code")?.textContent).toBe(`${source}\n`);
       expect.soft(reader?.querySelector("strong")).toBeNull();
       expect.soft(writeText).toHaveBeenCalledWith(source);
+
+      panel.content = { kind: "markdown", content: "## Fresh preview" };
+      await panel.updateComplete;
+      expect(panel.querySelector(".sidebar-markdown-shell__eyebrow")?.textContent?.trim()).toBe(
+        "Rendered Markdown",
+      );
+      expect(panel.querySelector(".sidebar-markdown-reader h2")?.textContent).toBe("Fresh preview");
+      expect(
+        panel.querySelector(".sidebar-markdown-shell__toolbar button")?.textContent?.trim(),
+      ).toBe("View Raw Text");
     } finally {
       for (const [index, [, delay]] of schedule.mock.calls.entries()) {
         if (delay === 1_500) {

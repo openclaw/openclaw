@@ -227,6 +227,63 @@ describe("provider install catalog", () => {
     ]);
   });
 
+  it("keeps stable label order and installed-choice priority when merging official entries", () => {
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({ plugins: [{ ...vllmPluginWithPackageInstall(), origin: "bundled" }] }),
+    );
+    const choice = (choiceId: string, choiceLabel: string) => ({
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "api-key",
+      choiceId,
+      choiceLabel,
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      choice("last", "Zulu"),
+      choice("same-first", "Same"),
+      choice("same-second", "Same"),
+      choice("first", "Alpha"),
+    ]);
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/qwen-provider",
+        openclaw: {
+          plugin: { id: "qwen", label: "Qwen" },
+          install: { npmSpec: "@openclaw/qwen-provider" },
+          providers: [
+            {
+              id: "qwen",
+              name: "Qwen",
+              authChoices: [
+                { method: "api-key", choiceId: "same-official", choiceLabel: "Same" },
+                { method: "api-key", choiceId: "same-first", choiceLabel: "A shadow" },
+                {
+                  method: "local",
+                  choiceId: "unavailable-local",
+                  choiceLabel: "Unavailable local model",
+                  platforms: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(
+      resolveProviderInstallCatalogEntries().map(({ choiceId, pluginId }) => ({
+        choiceId,
+        pluginId,
+      })),
+    ).toEqual([
+      { choiceId: "first", pluginId: "vllm" },
+      { choiceId: "same-first", pluginId: "vllm" },
+      { choiceId: "same-second", pluginId: "vllm" },
+      { choiceId: "same-official", pluginId: "qwen" },
+      { choiceId: "last", pluginId: "vllm" },
+    ]);
+  });
+
   it("prefers durable install records over package-authored install intent", () => {
     loadPluginRegistrySnapshot.mockReturnValue(
       registrySnapshot({

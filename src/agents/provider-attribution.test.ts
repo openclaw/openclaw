@@ -1,5 +1,6 @@
-// Verifies provider attribution headers and endpoint classification policies.
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Verifies provider attribution headers and endpoint classification policies.
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -326,15 +327,7 @@ describe("provider attribution", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
     const providerMetadataOwners = {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
+      ...makeEmptyPluginMetadataOwners(),
       providerEndpoints: [
         {
           endpointClass: "anthropic-public" as const,

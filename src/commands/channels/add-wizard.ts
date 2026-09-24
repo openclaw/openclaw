@@ -9,6 +9,7 @@ import {
   resolveConfiguredAgentId,
   tryResolveAgentOperationAgentId,
 } from "../../agents/agent-scope-config.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
@@ -111,6 +112,7 @@ type ChannelsAddWizardFlowParams = {
   prompter: WizardPrompter;
   initialChannel?: ChannelChoice;
   beforePersistentEffect?: () => Promise<void>;
+  assertPersistentEffectCurrent?: () => void;
   /**
    * The controlling client completes device linking itself after config is
    * written (e.g. the Control UI renders the WhatsApp QR via web.login.*), so
@@ -148,6 +150,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     allowSignalInstall: true,
     ...(params.beforePersistentEffect
       ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
+    ...(params.assertPersistentEffectCurrent
+      ? { assertPersistentEffectCurrent: params.assertPersistentEffectCurrent }
       : {}),
     ...(params.deferDeviceLinkToClient ? { deferDeviceLinkToClient: true } : {}),
     onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
@@ -208,9 +213,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
         for (const channel of selection) {
           const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
           const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
-          const account = plugin?.config.resolveAccount(nextConfig, accountId) as
-            | { name?: string }
-            | undefined;
+          const account = (
+            plugin ? await resolveChannelAccount({ plugin, cfg: nextConfig, accountId }) : undefined
+          ) as { name?: string } | undefined;
           const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
           const existingName = snapshot?.name ?? account?.name;
           const name = await prompter.text({
@@ -320,6 +325,7 @@ export async function runChannelsSetupWizard(
     onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
     /** Revalidate/lock cancellation immediately before durable effects. */
     beforePersistentEffect?: () => Promise<void>;
+    assertPersistentEffectCurrent?: () => void;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -347,5 +353,8 @@ export async function runChannelsSetupWizard(
     deferDeviceLinkToClient: true,
     ...(opts.onConfigured ? { onConfigured: opts.onConfigured } : {}),
     ...(opts.beforePersistentEffect ? { beforePersistentEffect: opts.beforePersistentEffect } : {}),
+    ...(opts.assertPersistentEffectCurrent
+      ? { assertPersistentEffectCurrent: opts.assertPersistentEffectCurrent }
+      : {}),
   });
 }

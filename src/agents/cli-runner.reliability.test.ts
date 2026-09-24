@@ -75,7 +75,7 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -203,7 +203,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
-    started: Date.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -2016,7 +2016,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(
@@ -2050,7 +2050,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(
@@ -4569,72 +4569,6 @@ describe("runCliAgent reliability", () => {
       });
     } finally {
       historySpy.mockRestore();
-    }
-  });
-
-  it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
-    const { dir, sessionFile, sessionTarget } = createSessionFixture({
-      history: [{ role: "user", content: "earlier ask" }],
-    });
-    const manager = SessionManager.open(sessionTarget, dir);
-    manager.appendCompaction(
-      "compacted earlier ask",
-      expectDefined(manager.getLeafId(), "retained history entry"),
-      10_000,
-    );
-    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "codex-cli",
-          pluginId: "test-codex",
-          config: {
-            command: "codex",
-            args: ["exec"],
-            output: "text",
-            input: "arg",
-            sessionMode: "existing",
-          },
-        },
-      ],
-    });
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
-    };
-    setHookRunnerForTest(hookRunner);
-
-    const admission = prepareSystemAgentRunAdmission(
-      config,
-      "run-history-hook",
-      "main",
-      "cli-history-hook-fixture",
-    );
-    try {
-      const context = await prepareCliRunContext({
-        preparedRunAdmission: admission,
-        sessionId: "s1",
-        sessionFile,
-        sessionTarget,
-        workspaceDir: dir,
-        config,
-        prompt: "current ask",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-history-hook",
-        // This test supplies explicit memory; durable account provenance has separate coverage.
-        sessionManager: SessionManager.fromEntries(manager.getEntries(), dir),
-      });
-
-      expect(context.params.prompt).toBe("hook context\n\ncurrent ask");
-      expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
-      expect(context.openClawHistoryPrompt).toContain("hook context");
-      expect(context.openClawHistoryPrompt).toContain("current ask");
-    } finally {
-      admission.close();
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

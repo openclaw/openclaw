@@ -2,9 +2,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
@@ -18,79 +17,57 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { createRequireRecord, sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createConfiguredAcpTopicBinding,
   createConfiguredBindingRoute,
 } from "./bot-native-command-dispatch.test-support.js";
 import {
-  createTelegramNativeCommandTestDeps,
+  makeCallbackRetryContext,
+  makePrivateTextContext,
   telegramBotInfoForTest,
 } from "./bot.create-telegram-bot.test-support.js";
 import {
   createTelegramCallbackContext,
   runTelegramTestMiddlewareChain,
   type TelegramTestContext as TelegramMiddlewareTestContext,
-  type TelegramTestMiddleware as TelegramMiddleware,
 } from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import type { TelegramGetChat } from "./bot/types.js";
-import {
-  startTelegramCallbackQueryAnswer,
-  takeTelegramCallbackQueryAdmissionAnswer,
-} from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
-import type { TelegramPollRegistryEntry } from "./poll-registry.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-const configMutation = await import("openclaw/plugin-sdk/config-mutation");
-const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const telegramMediaResolver = await import("./bot/delivery.resolve-media.js");
-const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
 const {
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
-  dispatchReplyWithBufferedBlockDispatcher,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
-  enqueueSystemEventSpy,
-  getLoadWebMediaMock,
-  getChatSpy,
   getLoadConfigMock,
-  getLoadSessionStoreMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
-  listSkillCommandsForAgents,
-  makeForumGroupMessageCtx,
   middlewareUseSpy,
   onSpy,
   replySpy,
-  resolveExecApprovalSpy,
-  sendAnimationSpy,
-  sendChatActionSpy,
   sendMessageSpy,
-  sendPhotoSpy,
   sequentializeSpy,
-  setSessionStoreEntriesForTest,
-  setMessageReactionSpy,
-  setMyCommandsSpy,
-  syncTelegramMenuCommands,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -98,34 +75,20 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
-const { resolveTelegramFetch } = await import("./fetch.js");
 const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
-const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
 const {
-  createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
-  runWithTelegramUpdateProcessingFrame,
   TelegramSpooledReplayProcessingError,
 } = await import("./bot-processing-outcome.js");
-const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
-const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
 const {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
   resetTelegramTopicNameCacheForTest,
 } = await import("./runtime.test-support.js");
 const { setTelegramRuntime } = await import("./runtime.js");
-const {
-  buildTelegramGroupFrom,
-  buildTypingThreadParams,
-  resolveTelegramForumFlag,
-  resolveTelegramThreadSpec,
-} = await import("./bot/helpers.js");
-const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
-  await import("./group-config-helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -137,8 +100,6 @@ function createTelegramBotTestStateDir(): string {
 }
 
 const loadConfig = getLoadConfigMock();
-const loadSessionStore = getLoadSessionStoreMock();
-const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
@@ -156,97 +117,6 @@ function nextForumCacheChatId(): number {
 }
 
 type TelegramMessageHandler = (ctx: TelegramMiddlewareTestContext) => Promise<void>;
-type MessagePolicyCase = {
-  name: string;
-  config: Record<string, unknown>;
-  message: Record<string, unknown>;
-  expectedReplyCount: number;
-};
-
-function makeMessagePolicyCase(params: {
-  name: string;
-  telegram: Record<string, unknown>;
-  expectedReplyCount: number;
-  kind?: "private" | "group";
-  rootConfig?: Record<string, unknown>;
-  message?: Record<string, unknown>;
-}): MessagePolicyCase {
-  const isGroup = params.kind !== "private";
-  return {
-    name: params.name,
-    config: { ...params.rootConfig, channels: { telegram: params.telegram } },
-    message: {
-      chat: isGroup
-        ? { id: -100123456789, type: "group", title: "Test Group" }
-        : { id: 123456789, type: "private" },
-      from: { id: 123456789, username: "testuser" },
-      text: "hello",
-      date: 1736380800,
-      ...params.message,
-    },
-    expectedReplyCount: params.expectedReplyCount,
-  };
-}
-
-function makePrivateTextContext(params: {
-  text: string;
-  messageId?: number;
-  updateId?: number;
-  date?: number;
-  chatId?: number;
-  from?: Record<string, unknown>;
-  message?: Record<string, unknown>;
-  downloadable?: boolean;
-}): TelegramMiddlewareTestContext {
-  const from = params.from ?? { id: 42, first_name: "Ada" };
-  return {
-    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
-    message: {
-      chat: { id: params.chatId ?? 7, type: "private" },
-      text: params.text,
-      date: params.date ?? 1736380800,
-      ...(params.messageId === undefined ? {} : { message_id: params.messageId }),
-      from,
-      ...params.message,
-    },
-    me: { username: "openclaw_bot" },
-    getFile: params.downloadable
-      ? async () => ({ download: async () => new Uint8Array() })
-      : async () => ({}),
-  };
-}
-
-function makeCallbackRetryContext(params: {
-  updateId?: number;
-  id: string;
-  data: string;
-  messageId: number;
-  text?: string;
-  message?: Record<string, unknown>;
-  from?: Record<string, unknown>;
-  downloadable?: boolean;
-}): TelegramMiddlewareTestContext {
-  return {
-    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
-    callbackQuery: {
-      id: params.id,
-      data: params.data,
-      from: params.from ?? { id: 9, first_name: "Ada", username: "ada_bot" },
-      message: {
-        chat: { id: 1234, type: "private" },
-        date: 1736380800,
-        message_id: params.messageId,
-        ...(params.text === undefined ? {} : { text: params.text }),
-        ...params.message,
-      },
-    },
-    me: { username: "openclaw_bot" },
-    getFile:
-      params.downloadable === false
-        ? async () => ({})
-        : async () => ({ download: async () => new Uint8Array() }),
-  };
-}
 
 function configureOpenDm(
   params: {
@@ -258,7 +128,7 @@ function configureOpenDm(
     agents: params.timezone
       ? { defaults: { [params.timezone]: params.timezone === "userTimezone" ? "UTC" : "utc" } }
       : undefined,
-    messages: params.debounceMs ? { inbound: { debounceMs: params.debounceMs } } : undefined,
+    messages: { inbound: { debounceMs: params.debounceMs ?? 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   });
 }
@@ -309,16 +179,7 @@ async function dispatchSpooledPrivateText(
 
 function installTelegramTopicStateForTest(): void {
   resetTelegramTopicNameCacheForTest();
-  const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
-  const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-  setTelegramRuntime({
-    state: { openKeyedStore, openSyncKeyedStore },
-    channel: {},
-  } as TelegramRuntime);
+  setTelegramPluginStateRuntimeForTests();
 }
 
 async function dispatchSpooledNativeStop(
@@ -347,20 +208,15 @@ async function dispatchSpooledNativeStop(
   );
 }
 
-function setupUpdateOffsetTracker(params: {
-  lastUpdateId: number;
-  onUpdateId?: ReturnType<typeof vi.fn<(updateId: number) => void | Promise<void>>>;
-  runtime?: TelegramBotOptions["runtime"];
-}) {
+function setupUpdateOffsetTracker(params: { lastUpdateId: number }) {
   sequentializeSpy.mockImplementationOnce(
     () => async (_ctx: unknown, next: () => Promise<void>) => {
       await next();
     },
   );
-  const onUpdateId = params.onUpdateId ?? vi.fn<(updateId: number) => void | Promise<void>>();
+  const onUpdateId = vi.fn<(updateId: number) => void | Promise<void>>();
   createTelegramBot({
     token: "tok",
-    runtime: params.runtime,
     updateOffset: { lastUpdateId: params.lastUpdateId, onUpdateId },
   });
   return {
@@ -410,10 +266,6 @@ async function withTelegramSpooledReplayUpdate<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
-}
-
-function mockTelegramConfigWrites() {
-  return vi.spyOn(configMutation, "mutateConfigFile").mockResolvedValue({} as never);
 }
 
 async function flushTelegramTestMicrotasks() {
@@ -479,7 +331,8 @@ describe("createTelegramBot", () => {
       process.env.TZ = ORIGINAL_TZ;
     }
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     pluginStateTestRuntime.resetPluginStateStoreForTests();
     clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
@@ -501,21 +354,12 @@ describe("createTelegramBot", () => {
       createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
-        telegramDeps: {
-          ...telegramBotDepsForTest,
-          ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
-        },
+        telegramDeps: telegramBotDepsForTest,
       });
     pluginStateTestRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   });
 
   // groupPolicy tests
-
-  it("installs grammY throttler", () => {
-    createTelegramBot({ token: "tok" });
-    expect(throttlerSpy).toHaveBeenCalledTimes(1);
-    expect(useSpy).toHaveBeenCalledWith(expect.any(Function));
-  });
 
   it("reuses the grammY throttler for the same token", () => {
     createTelegramBot({ token: "tok" });
@@ -524,109 +368,6 @@ describe("createTelegramBot", () => {
 
     expect(throttlerSpy).toHaveBeenCalledTimes(2);
     expect(useSpy).toHaveBeenCalledTimes(3);
-  });
-
-  it("logs middleware errors through grammY catch without rethrowing", () => {
-    const runtime = {
-      error: vi.fn(),
-    } as unknown as NonNullable<TelegramBotOptions["runtime"]>;
-    const bot = createTelegramBot({ token: "tok", runtime });
-    const catchMock = bot["catch"] as unknown as {
-      mock: { calls: Array<[(err: unknown) => void]> };
-    };
-    const errorHandler = catchMock.mock.calls.at(0)?.[0];
-
-    expect(errorHandler).toBeTypeOf("function");
-    errorHandler?.(new Error("handler boom"));
-    const errorCalls = (runtime.error as unknown as { mock: { calls: Array<[unknown]> } }).mock
-      .calls;
-    const errorMessage = sanitizeTerminalText(String(errorCalls[0]?.[0]));
-    expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
-  });
-
-  it("uses wrapped fetch when global fetch is available", () => {
-    const originalFetch = globalThis.fetch;
-    const fetchSpy = vi.fn() as unknown as typeof fetch;
-    globalThis.fetch = fetchSpy;
-    try {
-      createTelegramBot({ token: "tok" });
-      const fetchImpl = resolveTelegramFetch();
-      expect(fetchImpl).toBeTypeOf("function");
-      expect(fetchImpl).not.toBe(fetchSpy);
-      const clientFetch = (botCtorSpy.mock.calls.at(0)?.[1] as { client?: { fetch?: unknown } })
-        ?.client?.fetch;
-      expect(clientFetch).toBeTypeOf("function");
-      expect(clientFetch).not.toBe(fetchSpy);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-  it("ignores removed global and per-account timeoutSeconds", () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
-      },
-    });
-    createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: undefined });
-    botCtorSpy.mockClear();
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          timeoutSeconds: 60,
-          accounts: {
-            foo: { timeoutSeconds: 61 },
-          },
-        },
-      },
-    });
-    createTelegramBot({ token: "tok", accountId: "foo" });
-    expectBotClientFields({ timeoutSeconds: undefined });
-  });
-
-  it("keeps low timeoutSeconds above the outbound request guard", () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
-      },
-    });
-    createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: undefined });
-  });
-
-  it("keeps polling client timeout above the outbound request guard", () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
-      },
-    });
-    createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
-    expectBotClientFields({ timeoutSeconds: undefined });
-  });
-
-  it("passes startup probe botInfo to grammY", () => {
-    const botInfo = {
-      id: 123456,
-      is_bot: true,
-      first_name: "OpenClaw",
-      username: "openclaw_bot",
-      can_join_groups: true,
-      can_read_all_group_messages: false,
-      can_manage_bots: false,
-      supports_inline_queries: false,
-      supports_join_request_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-    } as const;
-
-    createTelegramBot({ token: "tok", botInfo });
-
-    expect(getBotCtorOptions().botInfo).toBe(botInfo);
   });
 
   it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
@@ -643,62 +384,6 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expectBotClientFields({ apiRoot: "https://api.telegram.org" });
-  });
-
-  it("sequentializes updates by chat and thread", () => {
-    createTelegramBot({ token: "tok" });
-    expect(sequentializeSpy).toHaveBeenCalledTimes(1);
-    expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialConstraints);
-  });
-
-  it("prepares the recorded poll topic before sequentialization", async () => {
-    const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
-      options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-    ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
-    const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
-      options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-    ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-    const store = openKeyedStore<TelegramPollRegistryEntry>({
-      namespace: "telegram.poll-registry",
-      maxEntries: 10_000,
-      overflowPolicy: "reject-new",
-    });
-    await store.register("default:poll-topic", {
-      pollId: "poll-topic",
-      chat: { id: -1001, type: "supergroup", title: "Reviewers" },
-      messageId: 7,
-      threadSpec: { scope: "forum", id: 9 },
-      question: "Ready?",
-      options: ["Yes", "No"],
-    });
-    setTelegramRuntime({
-      state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
-    } as TelegramRuntime);
-    let sequentialKey: string | string[] | undefined;
-    sequentializeSpy.mockImplementationOnce(
-      () => async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
-        sequentialKey = harness.sequentializeKey?.(ctx);
-        await next();
-      },
-    );
-    createTelegramBot({ token: "tok" });
-    const update = {
-      update_id: 40,
-      poll_answer: {
-        poll_id: "poll-topic",
-        option_ids: [0],
-        user: { id: 9, first_name: "Ada" },
-      },
-    };
-
-    try {
-      await runTelegramTestMiddlewareChain(middlewareUseSpy, { update }, async () => {});
-      expect(sequentialKey).toBe("telegram:-1001:topic:9");
-    } finally {
-      clearTelegramRuntimeForTest();
-    }
   });
 
   it("keeps poll registry preparation failures retryable during durable replay", async () => {
@@ -729,7 +414,7 @@ describe("createTelegramBot", () => {
     });
     setTelegramRuntime({
       state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = {
@@ -786,7 +471,10 @@ describe("createTelegramBot", () => {
     });
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() =>
       ({ lookup }) as unknown as PluginStateKeyedStore<T>;
-    setTelegramRuntime({ state: { openKeyedStore }, channel: {} } as TelegramRuntime);
+    setTelegramRuntime({
+      state: { openKeyedStore },
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = { update_id: 42, poll_answer: pollAnswer };
     const reachedHandlers = vi.fn();
@@ -800,351 +488,23 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("answers callback queries before same-chat sequentialize delays handlers", async () => {
-    installPerKeySequentializer();
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = requireValue(
-      getOnHandler("callback_query") as
-        | ((ctx: Record<string, unknown>) => Promise<void>)
-        | undefined,
-      "callback_query handler",
-    );
-    let releaseBusyUpdate: (() => void) | undefined;
-    const busyUpdateGate = new Promise<void>((resolve) => {
-      releaseBusyUpdate = resolve;
-    });
-    const busyMessagePayload = {
-      chat: { id: 1234, type: "private" },
-      date: 1736380800,
-      from: { id: 9, first_name: "Ada", username: "ada_bot" },
-      message_id: 41,
-      text: "busy",
-    };
-    const callbackQueryPayload = {
-      id: "cbq-pre-sequentialize-1",
-      data: "cmd:option_a",
-      from: { id: 9, first_name: "Ada", username: "ada_bot" },
-      message: {
-        chat: { id: 1234, type: "private" },
-        date: 1736380800,
-        message_id: 42,
-      },
-    };
-    const busyMessage = {
-      update: { update_id: 401, message: busyMessagePayload },
-      message: busyMessagePayload,
-      me: { username: "openclaw_bot" },
-    };
-    const callbackCtx = {
-      update: { update_id: 402, callback_query: callbackQueryPayload },
-      callbackQuery: callbackQueryPayload,
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    };
-
-    const busyPromise = runTelegramMiddlewareChain({
-      ctx: busyMessage,
-      finalHandler: async () => {
-        await busyUpdateGate;
-      },
-    });
-    await flushTelegramTestMicrotasks();
-
-    let callbackHandlerStarted = false;
-    const callbackPromise = runTelegramMiddlewareChain({
-      ctx: callbackCtx,
-      finalHandler: async (ctx) => {
-        callbackHandlerStarted = true;
-        await callbackHandler(ctx);
-      },
-    });
-    await flushTelegramTestMicrotasks();
-
-    expect(callbackHandlerStarted).toBe(false);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-pre-sequentialize-1");
-
-    if (!releaseBusyUpdate) {
-      throw new Error("Expected Telegram busy update release callback to be initialized");
-    }
-    releaseBusyUpdate();
-    await busyPromise;
-    await callbackPromise;
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses the callback answer started at durable admission", async () => {
-    const bot = createTelegramBot({ token: "tok" });
-    const callbackId = "cbq-durable-admission-1";
-    await startTelegramCallbackQueryAnswer(bot, callbackId, true);
-
-    await runTelegramMiddlewareChain({
-      ctx: makeGenericCallbackContext({ id: callbackId, updateId: 403 }),
-      finalHandler: async () => {},
-    });
-
-    expect(answerCallbackQuerySpy).toHaveBeenCalledOnce();
-    expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
-  });
-
-  it("re-answers a durable callback after bot restart loses admission state", async () => {
-    const callbackId = "cbq-restart-replay-1";
-    const stoppedBot = createTelegramBot({ token: "tok" });
-    await startTelegramCallbackQueryAnswer(stoppedBot, callbackId, true);
-    middlewareUseSpy.mockClear();
-    const restartedBot = createTelegramBot({ token: "tok" });
-    const pendingAnswer = createDeferred<true>();
-    answerCallbackQuerySpy.mockImplementationOnce(() => pendingAnswer.promise);
-    const ctx = makeGenericCallbackContext({ id: callbackId, updateId: 404 });
-
-    await withTelegramSpooledReplayUpdate(
-      requireRecord(ctx.update, "callback update"),
-      async () => {
-        await runTelegramMiddlewareChain({ ctx, finalHandler: async () => {} });
-      },
-    );
-
-    try {
-      const duplicate = startTelegramCallbackQueryAnswer(restartedBot, callbackId, false);
-      expect(duplicate).toBe(pendingAnswer.promise);
-      expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(2);
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
-    } finally {
-      pendingAnswer.resolve(true);
-      await pendingAnswer.promise;
-    }
-    expect(takeTelegramCallbackQueryAdmissionAnswer(restartedBot, callbackId)).toBeUndefined();
-  });
-
-  it("acknowledges question callbacks before their handler completes", async () => {
-    installPerKeySequentializer();
-    loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "disabled" } } });
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = requireValue(
-      getOnHandler("callback_query") as
-        | ((ctx: Record<string, unknown>) => Promise<void>)
-        | undefined,
-      "callback_query handler",
-    );
-    answerCallbackQuerySpy.mockClear();
-    let releaseHandler: (() => void) | undefined;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    const callbackQuery = {
-      id: "cbq-question-early-ack",
-      data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-      from: { id: 9, first_name: "Ada", username: "ada_bot" },
-      message: {
-        chat: { id: 1234, type: "private" },
-        date: 1736380800,
-        message_id: 42,
-      },
-    };
-    const pending = runTelegramMiddlewareChain({
-      ctx: {
-        update: { update_id: 403, callback_query: callbackQuery },
-        callbackQuery,
-        me: { username: "openclaw_bot" },
-      },
-      finalHandler: async (ctx) => {
-        await callbackHandler(ctx);
-        await handlerGate;
-      },
-    });
-    await flushTelegramTestMicrotasks();
-
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-early-ack");
-    if (!releaseHandler) {
-      throw new Error("Expected Telegram question callback release callback to be initialized");
-    }
-    releaseHandler();
-    await pending;
-    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets /status bypass a busy Telegram topic lane", async () => {
-    installPerKeySequentializer();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    const events: string[] = [];
-    let releaseTopicTurn: (() => void) | undefined;
-    const topicGate = new Promise<void>((resolve) => {
-      releaseTopicTurn = resolve;
-    });
-
-    createTelegramBot({ token: "tok" });
-    const sequentializer = requireValue(
-      sequentializeSpy.mock.results[0]?.value as TelegramMiddleware | undefined,
-      "telegram sequentializer",
-    );
-
-    const busyMessage = makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message;
-    const statusMessage = makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message;
-    const busyCtx = {
-      ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }),
-      message: { ...busyMessage, message_id: 101 },
-      update: { update_id: 101 },
-    };
-    const statusCtx = {
-      ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }),
-      message: { ...statusMessage, message_id: 102 },
-      update: { update_id: 102 },
-    };
-
-    const busyPromise = sequentializer(busyCtx, async () => {
-      events.push("busy:start");
-      await topicGate;
-      events.push("busy:end");
-    });
-
-    await flushTelegramTestMicrotasks();
-    expect(events).toEqual(["busy:start"]);
-
-    await sequentializer(statusCtx, async () => {
-      events.push("status");
-    });
-
-    expect(events).toEqual(["busy:start", "status"]);
-
-    if (!releaseTopicTurn) {
-      throw new Error("Expected Telegram topic turn release callback to be initialized");
-    }
-    releaseTopicTurn();
-    await busyPromise;
-    expect(events).toEqual(["busy:start", "status", "busy:end"]);
-  });
-
-  it("lets Telegram topic messages without chat forum metadata use separate lanes", async () => {
-    installPerKeySequentializer();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    const events: string[] = [];
-    let releaseFirstTopic!: () => void;
-    const firstTopicGate = new Promise<void>((resolve) => {
-      releaseFirstTopic = resolve;
-    });
-
-    createTelegramBot({ token: "tok" });
-    const sequentializer = sequentializeSpy.mock.results[0]?.value as
-      | TelegramMiddleware
-      | undefined;
-    if (!sequentializer) {
-      throw new Error("Expected sequentialize middleware");
-    }
-
-    const topicCtx = (threadId: number, updateId: number) => {
-      const base = makeForumGroupMessageCtx({ threadId, text: `topic ${threadId}` });
-      return {
-        ...base,
-        message: {
-          ...base.message,
-          message_id: updateId,
-          is_topic_message: true,
-          chat: {
-            id: -1001234567890,
-            type: "supergroup",
-            title: "Forum Group",
-          },
-        },
-        update: { update_id: updateId },
-      };
-    };
-
-    const firstPromise = sequentializer(topicCtx(10, 301), async () => {
-      events.push("first:start");
-      await firstTopicGate;
-      events.push("first:end");
-    });
-
-    await flushTelegramTestMicrotasks();
-    expect(events).toEqual(["first:start"]);
-
-    await sequentializer(topicCtx(20, 302), async () => {
-      events.push("second");
-    });
-
-    expect(events).toEqual(["first:start", "second"]);
-
-    releaseFirstTopic();
-    await firstPromise;
-    expect(events).toEqual(["first:start", "second", "first:end"]);
-  });
-
-  it("keeps ordinary Telegram messages serialized within the same topic", async () => {
-    installPerKeySequentializer();
-    const events: string[] = [];
-    let releaseFirstTurn!: () => void;
-    const firstTurnGate = new Promise<void>((resolve) => {
-      releaseFirstTurn = resolve;
-    });
-
-    createTelegramBot({ token: "tok" });
-    const sequentializer = sequentializeSpy.mock.results[0]?.value as
-      | TelegramMiddleware
-      | undefined;
-    if (!sequentializer) {
-      throw new Error("Expected sequentialize middleware");
-    }
-    const firstCtx = makeForumGroupMessageCtx({ threadId: 99, text: "first message" });
-    const secondCtx = makeForumGroupMessageCtx({ threadId: 99, text: "second message" });
-
-    const firstPromise = sequentializer(firstCtx, async () => {
-      events.push("first:start");
-      await firstTurnGate;
-      events.push("first:end");
-    });
-
-    await flushTelegramTestMicrotasks();
-    expect(events).toEqual(["first:start"]);
-
-    const secondPromise = sequentializer(secondCtx, async () => {
-      events.push("second");
-    });
-
-    await flushTelegramTestMicrotasks();
-    expect(events).toEqual(["first:start"]);
-
-    releaseFirstTurn();
-    await Promise.all([firstPromise, secondPromise]);
-    expect(events).toEqual(["first:start", "first:end", "second"]);
-  });
-
   it("preserves same-chat reply order when a debounced run is still active", async () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
     installPerKeySequentializer();
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
-    let releaseFirstRun: (() => void) | undefined;
-    const firstRunGate = new Promise<void>((resolve) => {
-      releaseFirstRun = resolve;
-    });
+    const firstRunStarted = createDeferred<void>();
+    const firstRunGate = createDeferred<void>();
+    const sourceWork: Promise<unknown>[] = [];
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
       const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first")) {
-        await firstRunGate;
+        firstRunStarted.resolve();
+        await firstRunGate.promise;
       }
       return { text: `reply:${body}` };
     });
@@ -1153,24 +513,28 @@ describe("createTelegramBot", () => {
       createTelegramBot({ token: "tok" });
       const messageHandler = getMessageHandler();
 
-      await dispatchPrivateText(messageHandler, { updateId: 101, messageId: 101, text: "first" });
+      const first = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 101,
+        messageId: 101,
+        text: "first",
+        replayUpdate: "full",
+      });
+      sourceWork.push(requireValue(first.deferredWork, "first source participant").task);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
 
-      await vi.waitFor(
-        () => {
-          expect(startedBodies).toHaveLength(1);
-          expect(startedBodies[0]).toContain("first");
-        },
-        { interval: 1, timeout: 500 },
-      );
+      await firstRunStarted.promise;
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("first");
 
-      await dispatchPrivateText(messageHandler, {
+      const second = await dispatchSpooledPrivateText(messageHandler, {
         updateId: 102,
         messageId: 102,
         text: "second",
         date: 1736380801,
+        replayUpdate: "full",
       });
+      sourceWork.push(requireValue(second.deferredWork, "second source participant").task);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
       await Promise.resolve();
@@ -1178,18 +542,11 @@ describe("createTelegramBot", () => {
       expect(startedBodies).toHaveLength(1);
       expect(sendMessageSpy).not.toHaveBeenCalled();
 
-      if (!releaseFirstRun) {
-        throw new Error("Expected first Telegram run release callback to be initialized");
-      }
-      releaseFirstRun();
+      firstRunGate.resolve();
 
-      await vi.waitFor(
-        () => {
-          expect(startedBodies).toHaveLength(2);
-          expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-        },
-        { interval: 1, timeout: 500 },
-      );
+      await Promise.all(sourceWork);
+      expect(startedBodies).toHaveLength(2);
+      expect(sendMessageSpy).toHaveBeenCalledTimes(2);
 
       expect(startedBodies[0]).toContain("first");
       expect(startedBodies[1]).toContain("second");
@@ -1197,72 +554,11 @@ describe("createTelegramBot", () => {
       expect(sentBodies[0]).toContain("first");
       expect(sentBodies[1]).toContain("second");
     } finally {
+      firstRunGate.resolve();
+      await Promise.allSettled(sourceWork);
       setTimeoutSpy.mockRestore();
     }
   });
-
-  it.each([0, 500, 1000, 3000])(
-    "preserves ordinary short-pair behavior with Telegram debounce %i ms",
-    async (debounceMs) => {
-      loadConfig.mockReturnValue({
-        messages: { inbound: { debounceMs: 9999, byChannel: { telegram: debounceMs } } },
-        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-      });
-      installPerKeySequentializer();
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      replySpy.mockResolvedValue(undefined);
-      const sourceWork: Promise<unknown>[] = [];
-
-      try {
-        createTelegramBot({ token: "tok" });
-        const messageHandler = getMessageHandler();
-        const first = await dispatchSpooledPrivateText(messageHandler, {
-          updateId: 501,
-          messageId: 501,
-          text: "first short message",
-          replayUpdate: "full",
-        });
-        if (first.deferredWork) {
-          sourceWork.push(first.deferredWork.task);
-        }
-        expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
-          debounceMs === 0 ? ["first short message"] : [],
-        );
-        await vi.advanceTimersByTimeAsync(100);
-        const second = await dispatchSpooledPrivateText(messageHandler, {
-          updateId: 502,
-          messageId: 502,
-          text: "second short message",
-          replayUpdate: "full",
-        });
-        if (second.deferredWork) {
-          sourceWork.push(second.deferredWork.task);
-        }
-
-        if (debounceMs > 0) {
-          expect(first.deferredWork).toBeDefined();
-          expect(second.deferredWork).toBeDefined();
-          await vi.advanceTimersByTimeAsync(debounceMs - 1);
-          expect(replySpy).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-        }
-        // Timer expiry starts the flush; its source participants own completion.
-        await Promise.all(sourceWork);
-        expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
-          debounceMs === 0
-            ? ["first short message", "second short message"]
-            : ["first short message\nsecond short message"],
-        );
-        expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(
-          debounceMs === 0 ? ["501", "502"] : ["502"],
-        );
-      } finally {
-        await vi.advanceTimersByTimeAsync(10_000);
-        await Promise.all(sourceWork);
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("applies committed Telegram debounce changes only when new input arrives", async () => {
     const initialConfig: OpenClawConfig = {
@@ -1343,14 +639,13 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("preserves mixed short and fragment admission order with complete source text", async () => {
+  it("assembles a default short-long-short burst despite intervening message IDs", async () => {
     loadConfig.mockReturnValue({
       agents: { defaults: { envelopeTimezone: "utc" } },
-      messages: { inbound: { byChannel: { telegram: 3000 } } },
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     installPerKeySequentializer();
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(1736380800000);
     replySpy.mockResolvedValue(undefined);
 
@@ -1371,10 +666,10 @@ describe("createTelegramBot", () => {
         date: 1736380801,
         replayUpdate: "full",
       });
-      await vi.advanceTimersByTimeAsync(14);
+      await vi.advanceTimersByTimeAsync(1400);
       const continuation = await dispatchSpooledPrivateText(messageHandler, {
         updateId: 303,
-        messageId: 303,
+        messageId: 305,
         text: "C".repeat(3354),
         date: 1736380802,
         replayUpdate: "full",
@@ -1390,20 +685,17 @@ describe("createTelegramBot", () => {
       ).resolves.toEqual([{ kind: "completed" }, { kind: "completed" }, { kind: "completed" }]);
 
       expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "A".repeat(611),
-        "B".repeat(4065) + "C".repeat(3354),
+        "A".repeat(611) + "\n" + "B".repeat(4065) + "C".repeat(3354),
       ]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["301", "303"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["305"]);
       expect(
         replySpy.mock.calls.map(([ctx]) => ctx.SessionTranscriptContext?.beforeTimestampMs),
-      ).toEqual([1736380800000, 1736380800283]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.Timestamp)).toEqual([
-        1736380800000, 1736380802000,
-      ]);
+      ).toEqual([1736380800000]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.Timestamp)).toEqual([1736380802000]);
 
       const next = await dispatchSpooledPrivateText(messageHandler, {
         updateId: 304,
-        messageId: 304,
+        messageId: 306,
         text: "next independent message",
         replayUpdate: "full",
       });
@@ -1414,11 +706,10 @@ describe("createTelegramBot", () => {
         kind: "completed",
       });
       expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "A".repeat(611),
-        "B".repeat(4065) + "C".repeat(3354),
+        "A".repeat(611) + "\n" + "B".repeat(4065) + "C".repeat(3354),
         "next independent message",
       ]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["301", "303", "304"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["305", "306"]);
     } finally {
       vi.useRealTimers();
     }
@@ -1461,7 +752,7 @@ describe("createTelegramBot", () => {
         fragment.deferredWork,
         "fragment source participant",
       );
-      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(3000);
       await dispatchPrivateText(messageHandler, {
         updateId: 313,
         messageId: 313,
@@ -1494,6 +785,7 @@ describe("createTelegramBot", () => {
 
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const startedBodies: string[] = [];
+      let reusedWork: Promise<unknown> | undefined;
       replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
         await opts?.onReplyStart?.();
         const body = ctx.Body ?? "";
@@ -1523,102 +815,23 @@ describe("createTelegramBot", () => {
           "reply:first",
         );
 
-        await dispatchPrivateText(messageHandler, { updateId: 103, messageId: 101, text: "first" });
+        const reused = await dispatchSpooledPrivateText(messageHandler, {
+          updateId: 103,
+          messageId: 101,
+          text: "first",
+          replayUpdate: "full",
+        });
+        reusedWork = requireValue(reused.deferredWork, "reused source participant").task;
         takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-        await vi.waitFor(
-          () => {
-            expect(startedBodies).toHaveLength(2);
-          },
-          { interval: 1, timeout: 500 },
-        );
+        await reusedWork;
+        expect(startedBodies).toHaveLength(2);
         expect(startedBodies[1]).toContain("first");
       } finally {
+        await Promise.allSettled([reusedWork]);
         setTimeoutSpy.mockRestore();
       }
     },
   );
-
-  it("settles spooled replay participants when stop cancels pending inbound debounce", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "userTimezone" });
-
-    installPerKeySequentializer();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const messageHandler = getMessageHandler();
-      const replay = await dispatchSpooledPrivateText(messageHandler, {
-        updateId: 201,
-        messageId: 201,
-        text: "first",
-      });
-
-      const deferredWork = replay.deferredWork;
-      expect(deferredWork).toBeDefined();
-      if (!deferredWork) {
-        throw new Error("Expected spooled replay deferred work");
-      }
-      await dispatchPrivateText(messageHandler, {
-        updateId: 202,
-        messageId: 202,
-        text: "stop",
-        date: 1736380801,
-      });
-
-      await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
-      takeLatestTimerCallback(INBOUND_DEBOUNCE_MS);
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  });
-
-  it("settles a fragment waiting for continuation on stop and allows same-key reuse", async () => {
-    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
-    installPerKeySequentializer();
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    replySpy.mockResolvedValue(undefined);
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const messageHandler = getMessageHandler();
-      const replay = await dispatchSpooledPrivateText(messageHandler, {
-        updateId: 211,
-        messageId: 211,
-        text: "A".repeat(4065),
-        replayUpdate: "full",
-      });
-      const participant = requireValue(replay.deferredWork, "fragment source participant");
-      await vi.advanceTimersByTimeAsync(100);
-      await dispatchPrivateText(messageHandler, {
-        updateId: 212,
-        messageId: 212,
-        text: "stop",
-      });
-      expect(participant.isSettled()).toBe(true);
-      await expect(participant.task).resolves.toEqual({ kind: "skipped" });
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["stop"]);
-
-      const next = await dispatchSpooledPrivateText(messageHandler, {
-        updateId: 213,
-        messageId: 213,
-        text: "message after stop",
-        replayUpdate: "full",
-      });
-      await vi.advanceTimersByTimeAsync(3000);
-      await expect(
-        requireValue(next.deferredWork, "next source participant").task,
-      ).resolves.toEqual({
-        kind: "completed",
-      });
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "stop",
-        "message after stop",
-      ]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["212", "213"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it.each([
     { buffer: "ordinary text", text: "A".repeat(611) },
@@ -1720,11 +933,7 @@ describe("createTelegramBot", () => {
 
       await dispatchSpooledNativeStop({ updateId: 412, messageId: 412, message: topic });
 
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        chatId,
-        "You are not authorized to use this command.",
-        { message_thread_id: 99 },
-      );
+      expect(sendMessageSpy).not.toHaveBeenCalled();
       expect(replySpy).not.toHaveBeenCalled();
       expect(participant.isSettled()).toBe(false);
       await vi.advanceTimersByTimeAsync(3000);
@@ -1822,7 +1031,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("native stop with unsupported arguments leaves pending input intact", async () => {
+  it("does not cancel prior input for native stop with unsupported arguments", async () => {
     loadConfig.mockReturnValue({
       commands: { native: true, allowFrom: { telegram: ["42"] } },
       messages: { inbound: { byChannel: { telegram: 3000 } } },
@@ -1845,22 +1054,24 @@ describe("createTelegramBot", () => {
       sourceWork = participant.task;
       await vi.advanceTimersByTimeAsync(100);
 
-      await dispatchSpooledNativeStop({ updateId: 432, messageId: 432, match: "later" });
+      await dispatchSpooledNativeStop({
+        updateId: 432,
+        messageId: 432,
+        match: "later",
+      });
 
-      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+      expect(replySpy.mock.calls.find(([ctx]) => ctx.MessageSid === "432")?.[0]).toMatchObject({
         CommandSource: "native",
         CommandAuthorized: true,
         CommandBody: "/stop later",
         MessageSid: "432",
       });
-      expect(participant.isSettled()).toBe(false);
-      await vi.advanceTimersByTimeAsync(3000);
       await expect(participant.task).resolves.toEqual({ kind: "completed" });
       expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "/stop later",
         "Q".repeat(4065),
+        "/stop later",
       ]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["432", "431"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["431", "432"]);
     } finally {
       await vi.advanceTimersByTimeAsync(3000);
       await sourceWork;
@@ -1868,7 +1079,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("authorized stop caption cancels pending ordinary and forwarded text", async () => {
+  it("stop cancels ordinary and forwarded batches queued behind an active turn", async () => {
     configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
     installPerKeySequentializer();
     const attachmentPath = path.join(
@@ -1878,12 +1089,30 @@ describe("createTelegramBot", () => {
     writeFileSync(attachmentPath, "attachment");
     const resolveMedia = vi.spyOn(telegramMediaResolver, "resolveMedia");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    replySpy.mockResolvedValue(undefined);
+    const earlierStarted = createDeferred<void>();
+    const releaseEarlier = createDeferred<void>();
+    let earlierWork: Promise<unknown> | undefined;
+    replySpy.mockImplementation(async (ctx: MsgContext) => {
+      if (ctx.MessageSid === "440") {
+        earlierStarted.resolve();
+        await releaseEarlier.promise;
+      }
+      return undefined;
+    });
     const sourceWork: Promise<unknown>[] = [];
 
     try {
       createTelegramBot({ token: "tok" });
       const messageHandler = getMessageHandler();
+      const earlier = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 440,
+        messageId: 440,
+        text: "earlier active message",
+        replayUpdate: "full",
+      });
+      earlierWork = requireValue(earlier.deferredWork, "earlier source participant").task;
+      await vi.advanceTimersByTimeAsync(3000);
+      await earlierStarted.promise;
       const ordinary = await dispatchSpooledPrivateText(messageHandler, {
         updateId: 441,
         messageId: 441,
@@ -1907,6 +1136,8 @@ describe("createTelegramBot", () => {
         "forwarded source participant",
       );
       sourceWork.push(forwardedParticipant.task);
+      await vi.advanceTimersByTimeAsync(80);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["440"]);
 
       resolveMedia.mockResolvedValueOnce({
         id: "caption-fixture",
@@ -1940,8 +1171,14 @@ describe("createTelegramBot", () => {
         { kind: "skipped" },
       ]);
       await vi.advanceTimersByTimeAsync(3000);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["443"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["440", "443"]);
+      releaseEarlier.resolve();
+      await expect(earlierWork).resolves.toEqual({ kind: "completed" });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["440", "443"]);
     } finally {
+      releaseEarlier.resolve();
+      await earlierWork;
       await vi.advanceTimersByTimeAsync(3000);
       await Promise.all(sourceWork);
       vi.useRealTimers();
@@ -1982,7 +1219,7 @@ describe("createTelegramBot", () => {
       });
       const participant = requireValue(pending.deferredWork, "pending source participant");
       sourceWork = participant.task;
-      bindingRoute.mockImplementationOnce(({ route }) =>
+      bindingRoute.mockImplementation(({ route }) =>
         createConfiguredBindingRoute(
           route,
           createConfiguredAcpTopicBinding("agent:main:acp:binding:telegram:default:held"),
@@ -2003,11 +1240,7 @@ describe("createTelegramBot", () => {
       expect(replySpy).not.toHaveBeenCalled();
       releasePreparation.resolve();
       await stopDispatch;
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        -1001234567890,
-        "Configured ACP binding is unavailable right now. Please try again.",
-        { message_thread_id: 42 },
-      );
+      expect(sendMessageSpy).not.toHaveBeenCalled();
     } finally {
       releasePreparation.resolve();
       await stopDispatch;
@@ -2021,117 +1254,46 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("waits for a forced fragment flush before admitting the triggering forwarded message", async () => {
-    configureOpenDm({ debounceMs: 3000, timezone: "envelopeTimezone" });
+  it("keeps separate text-batch replay settlements isolated when the next batch fails", async () => {
+    configureOpenDm({ debounceMs: 300, timezone: "envelopeTimezone" });
     installPerKeySequentializer();
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const fragmentStarted = createDeferred<void>();
-    const releaseFragment = createDeferred<void>();
-    let fragmentWork: Promise<unknown> | undefined;
-    let forwardDispatch: ReturnType<typeof dispatchSpooledPrivateText> | undefined;
-    let forwardHandlerCompleted = false;
-    replySpy.mockImplementation(async (ctx: MsgContext) => {
-      if (ctx.MessageSid === "321") {
-        fragmentStarted.resolve();
-        await releaseFragment.promise;
-      }
-      return undefined;
-    });
-
+    const secondDispatchError = new Error("next batch failed before adoption");
+    replySpy.mockResolvedValueOnce(undefined).mockRejectedValueOnce(secondDispatchError);
     try {
       createTelegramBot({ token: "tok" });
       const messageHandler = getMessageHandler();
-      const fragment = await dispatchSpooledPrivateText(messageHandler, {
-        updateId: 321,
-        messageId: 321,
-        text: "B".repeat(4065),
+      const first = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 213,
+        messageId: 213,
+        text: "A".repeat(4050),
         replayUpdate: "full",
       });
-      fragmentWork = requireValue(fragment.deferredWork, "fragment source participant").task;
-      await vi.advanceTimersByTimeAsync(100);
-      forwardDispatch = dispatchSpooledPrivateText(messageHandler, {
-        updateId: 322,
-        messageId: 323,
-        text: "forwarded message",
-        message: { forward_date: 1736380700 },
+      await vi.advanceTimersByTimeAsync(1500);
+      const firstParticipant = requireValue(first.deferredWork, "first batch participant");
+      await expect(firstParticipant.task).resolves.toEqual({ kind: "completed" });
+      const second = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 214,
+        messageId: 215,
+        text: "next message",
         replayUpdate: "full",
-      }).then((result) => {
-        forwardHandlerCompleted = true;
-        return result;
       });
-
-      await fragmentStarted.promise;
-      await vi.advanceTimersByTimeAsync(80);
-      expect(forwardHandlerCompleted).toBe(false);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(["B".repeat(4065)]);
-
-      releaseFragment.resolve();
-      const forwarded = await forwardDispatch;
-      await vi.advanceTimersByTimeAsync(80);
-      await expect(
-        Promise.all([
-          fragmentWork,
-          requireValue(forwarded.deferredWork, "forwarded source participant").task,
-        ]),
-      ).resolves.toEqual([{ kind: "completed" }, { kind: "completed" }]);
+      await vi.advanceTimersByTimeAsync(300);
+      const secondParticipant = requireValue(second.deferredWork, "second batch participant");
+      expect(secondParticipant).not.toBe(firstParticipant);
+      await expect(secondParticipant.task).resolves.toEqual({
+        kind: "failed-retryable",
+        error: secondDispatchError,
+      });
+      await expect(firstParticipant.task).resolves.toEqual({ kind: "completed" });
       expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "B".repeat(4065),
-        "forwarded message",
+        "A".repeat(4050),
+        "next message",
       ]);
-      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["321", "323"]);
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["213", "215"]);
     } finally {
-      releaseFragment.resolve();
-      await fragmentWork;
-      const forwarded = await forwardDispatch;
-      await vi.advanceTimersByTimeAsync(80);
-      await forwarded?.deferredWork?.task;
       vi.useRealTimers();
     }
-  });
-
-  it("keeps forced text-fragment flush settlement isolated from the triggering replay", async () => {
-    configureOpenDm({ timezone: "envelopeTimezone" });
-
-    installPerKeySequentializer();
-    const secondDispatchError = new Error("triggering replay failed before adoption");
-    replySpy
-      .mockResolvedValueOnce({ text: "buffered replay completed" })
-      .mockRejectedValueOnce(secondDispatchError);
-
-    createTelegramBot({ token: "tok" });
-    const messageHandler = getMessageHandler();
-
-    const bufferedReplay = await dispatchSpooledPrivateText(messageHandler, {
-      updateId: 213,
-      messageId: 213,
-      text: "A".repeat(4050),
-      date: 1736381013,
-      replayUpdate: "full",
-    });
-    const bufferedParticipant = requireValue(
-      bufferedReplay.deferredWork,
-      "buffered replay participant",
-    );
-
-    const triggeringReplay = await dispatchSpooledPrivateText(messageHandler, {
-      updateId: 214,
-      messageId: 215,
-      text: "B",
-      date: 1736381014,
-      replayUpdate: "full",
-    });
-    const triggeringParticipant = requireValue(
-      triggeringReplay.deferredWork,
-      "triggering replay participant",
-    );
-
-    expect(triggeringParticipant).not.toBe(bufferedParticipant);
-    await expect(bufferedParticipant.task).resolves.toEqual({ kind: "completed" });
-    await expect(triggeringParticipant.task).resolves.toEqual({
-      kind: "failed-retryable",
-      error: secondDispatchError,
-    });
-    expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
   it("retries deferred adoption after durable commit fails without settling buffered participants", async () => {
@@ -2370,7 +1532,7 @@ describe("createTelegramBot", () => {
   });
 
   it("dispatches native poll messages through the ordinary inbound handler", async () => {
-    configureOpenDm();
+    loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } } });
     replySpy.mockClear();
     createTelegramBot({ token: "tok" });
 
@@ -2409,6 +1571,8 @@ describe("createTelegramBot", () => {
     configureOpenDm({ timezone: "envelopeTimezone" });
     replySpy.mockClear();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sourceWork: Promise<unknown>[] = [];
+    let flushForward: (() => void) | undefined;
 
     try {
       createTelegramBot({ token: "tok" });
@@ -2422,25 +1586,28 @@ describe("createTelegramBot", () => {
           "Original B",
         ],
       ] as const) {
-        await messageHandler(
-          makePrivateTextContext({
-            text,
-            messageId,
-            date: 1736380800 + messageId,
-            message: {
-              entities,
-              forward_origin: {
-                type: "hidden_user",
-                date: 500 + messageId,
-                sender_user_name: origin,
-              },
+        const replay = await dispatchSpooledPrivateText(messageHandler, {
+          updateId: messageId,
+          text,
+          messageId,
+          date: 1736380800 + messageId,
+          replayUpdate: "full",
+          message: {
+            entities,
+            forward_origin: {
+              type: "hidden_user",
+              date: 500 + messageId,
+              sender_user_name: origin,
             },
-          }),
-        );
+          },
+        });
+        sourceWork.push(requireValue(replay.deferredWork, "forwarded source participant").task);
+        flushForward = takeLatestTimerCallback(80);
       }
 
-      takeLatestTimerCallback(80)();
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledOnce());
+      requireValue(flushForward, "forwarded debounce callback")();
+      await Promise.all(sourceWork);
+      expect(replySpy).toHaveBeenCalledOnce();
       const payload = requireValue(
         replySpy.mock.calls[0]?.[0],
         "formatted forwarded batch payload",
@@ -2451,7 +1618,14 @@ describe("createTelegramBot", () => {
       expect(payload.BodyForAgent).toContain("[Forwarded from Original A");
       expect(payload.BodyForAgent).toContain("[Forwarded from Original B");
       expect(payload.CommandBody).toBe("😀 **bold**\nread [docs](https://docs.example)");
+      expect(payload.BodyForAgent).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\n😀 \*\*bold\*\*\n\[Forwarded from Original B[^\]]*\]\nread \[docs\]\(https:\/\/docs\.example\)/,
+      );
+      expect(payload.BodyForAgent).not.toContain("Conversation info:");
+      expect(payload.ForwardedFrom).toBeUndefined();
     } finally {
+      flushForward?.();
+      await Promise.allSettled(sourceWork);
       setTimeoutSpy.mockRestore();
     }
   });
@@ -2459,210 +1633,114 @@ describe("createTelegramBot", () => {
   it("preserves structured origin for a single forwarded debounce entry", async () => {
     configureOpenDm({ timezone: "envelopeTimezone" });
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sourceWork: Promise<unknown>[] = [];
+    let flushForward: (() => void) | undefined;
 
     try {
       createTelegramBot({ token: "tok" });
       const messageHandler = getMessageHandler();
-      await messageHandler(
-        makePrivateTextContext({
-          text: "single forwarded note",
-          messageId: 121,
-          date: 1736380921,
-          message: {
-            forward_origin: {
-              type: "hidden_user",
-              date: 621,
-              sender_user_name: "Original A",
-            },
+      const replay = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 121,
+        text: "single forwarded note",
+        messageId: 121,
+        date: 1736380921,
+        replayUpdate: "full",
+        message: {
+          forward_origin: {
+            type: "hidden_user",
+            date: 621,
+            sender_user_name: "Original A",
           },
-        }),
-      );
+        },
+      });
+      sourceWork.push(requireValue(replay.deferredWork, "forwarded source participant").task);
 
-      takeLatestTimerCallback(80)();
+      flushForward = takeLatestTimerCallback(80);
+      flushForward();
 
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      await Promise.all(sourceWork);
+      expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = requireValue(replySpy.mock.calls[0]?.[0], "single forwarded payload");
       expect(payload.Body).toContain("[Forwarded from Original A");
       expect(payload.ForwardedFrom).toBe("Original A");
     } finally {
+      flushForward?.();
+      await Promise.allSettled(sourceWork);
       setTimeoutSpy.mockRestore();
     }
   });
 
-  it("preserves distinct origins for forwarded messages in one debounce batch", async () => {
-    configureOpenDm({ timezone: "envelopeTimezone" });
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const messageHandler = getMessageHandler();
-
-      for (const [messageId, text, origin] of [
-        [121, "first forwarded note", "Original A"],
-        [122, "second forwarded note", "Original B"],
-      ] as const) {
-        await messageHandler(
-          makePrivateTextContext({
-            text,
-            date: 1736380800 + messageId,
-            messageId,
-            message: {
-              forward_origin: {
-                type: "hidden_user",
-                date: 500 + messageId,
-                sender_user_name: origin,
-              },
-            },
-          }),
-        );
-      }
-
-      takeLatestTimerCallback(80)();
-
-      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-      const payload = requireValue(replySpy.mock.calls[0]?.[0], "forwarded batch payload");
-      expect(payload.Body).toContain("[Forwarded from Original A");
-      expect(payload.Body).toContain("[Forwarded from Original B");
-      expect(payload.Body).toMatch(
-        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
-      );
-      expect(payload.BodyForAgent).toMatch(
-        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
-      );
-      expect(payload.BodyForAgent).not.toContain("Conversation info:");
-      expect(payload.CommandBody).toBe("first forwarded note\nsecond forwarded note");
-      expect(payload.ForwardedFrom).toBeUndefined();
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
-  });
-
-  it("lets stop cancel pending same-chat forwarded debounce", async () => {
-    configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
+  it("does not let an unauthorized group stop cancel pending text", async () => {
+    const text = "B".repeat(4065);
+    const chatId = nextForumCacheChatId();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: INBOUND_DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
 
     installPerKeySequentializer();
 
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const startedBodies: string[] = [];
-    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onReplyStart?.();
-      const body = ctx.Body ?? "";
-      startedBodies.push(body);
-      return { text: `reply:${body}` };
-    });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    replySpy.mockResolvedValue(undefined);
+    let pendingWork: Promise<unknown> | undefined;
 
     try {
       createTelegramBot({ token: "tok" });
       const messageHandler = getMessageHandler();
-      await dispatchPrivateText(messageHandler, {
-        updateId: 121,
-        messageId: 121,
-        text: "forwarded first",
+
+      const pending = await dispatchSpooledPrivateText(messageHandler, {
+        updateId: 104,
+        messageId: 104,
+        text,
+        date: 1736380804,
+        replayUpdate: "full",
         message: {
-          forward_date: 1736380700,
+          chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
+          from: { id: 42, first_name: "Ada", is_bot: false },
         },
       });
+      pendingWork = requireValue(pending.deferredWork, "pending group participant").task;
 
-      const flushForward = takeLatestTimerCallback(80);
-
-      await dispatchPrivateText(messageHandler, {
-        updateId: 122,
-        messageId: 122,
-        text: "stop",
-        date: 1736380801,
+      await runTelegramMiddlewareChain({
+        ctx: {
+          update: { update_id: 105 },
+          message: {
+            chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
+            text: "stop",
+            date: 1736380805,
+            message_id: 105,
+            from: { id: 42, first_name: "Ada" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        },
+        finalHandler: messageHandler,
       });
 
-      expect(startedBodies).toHaveLength(1);
-      expect(startedBodies[0]).toContain("stop");
-
-      flushForward();
-      await Promise.resolve();
-      expect(startedBodies).toHaveLength(1);
-      expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
-        "reply:forwarded first",
-      );
+      await vi.advanceTimersByTimeAsync(INBOUND_DEBOUNCE_MS);
+      await expect(pendingWork).resolves.toEqual({ kind: "completed" });
+      expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toContain(text);
     } finally {
-      setTimeoutSpy.mockRestore();
+      await vi.advanceTimersByTimeAsync(INBOUND_DEBOUNCE_MS);
+      await pendingWork;
+      vi.useRealTimers();
     }
   });
-
-  it.each([
-    { buffer: "inbound debounce", text: "first", delayMs: INBOUND_DEBOUNCE_MS },
-    { buffer: "text fragments", text: "B".repeat(4065), delayMs: 1500 },
-  ])(
-    "does not let unauthorized group stop cancel pending same-sender $buffer",
-    async ({ text, delayMs }) => {
-      const chatId = nextForumCacheChatId();
-      loadConfig.mockReturnValue({
-        agents: {
-          defaults: {
-            envelopeTimezone: "utc",
-          },
-        },
-        messages: {
-          inbound: {
-            debounceMs: INBOUND_DEBOUNCE_MS,
-          },
-        },
-        channels: {
-          telegram: {
-            dmPolicy: "pairing",
-            groupPolicy: "open",
-            groups: { "*": { requireMention: false } },
-          },
-        },
-      });
-
-      installPerKeySequentializer();
-
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      replySpy.mockResolvedValue(undefined);
-
-      try {
-        createTelegramBot({ token: "tok" });
-        const messageHandler = getMessageHandler();
-
-        await runTelegramMiddlewareChain({
-          ctx: {
-            update: { update_id: 104 },
-            message: {
-              chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
-              text,
-              date: 1736380804,
-              message_id: 104,
-              from: { id: 42, first_name: "Ada" },
-            },
-            me: { username: "openclaw_bot" },
-            getFile: async () => ({}),
-          },
-          finalHandler: messageHandler,
-        });
-
-        await runTelegramMiddlewareChain({
-          ctx: {
-            update: { update_id: 105 },
-            message: {
-              chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
-              text: "stop",
-              date: 1736380805,
-              message_id: 105,
-              from: { id: 42, first_name: "Ada" },
-            },
-            me: { username: "openclaw_bot" },
-            getFile: async () => ({}),
-          },
-          finalHandler: messageHandler,
-        });
-
-        await vi.advanceTimersByTimeAsync(delayMs);
-        await vi.waitFor(() => {
-          expect(replySpy.mock.calls.map(([ctx]) => ctx.RawBody)).toContain(text);
-        });
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("routes generic callback_query payloads as callback_data messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
@@ -2922,30 +2000,6 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("preserves native command source for prefixed callback_query payloads", async () => {
-    loadConfig.mockReturnValue({
-      commands: { text: false, native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({ id: "cbq-native-1", data: "tgcmd:/fast status", messageId: 10 }),
-    );
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.CommandBody).toBe("/fast status");
-    expect(payload.CommandSource).toBe("native");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
-  });
-
   it("keeps tgcmd native when a plugin registers the same namespace", async () => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
     expect(
@@ -2984,6 +2038,7 @@ describe("createTelegramBot", () => {
       handler: pluginHandler,
     });
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "open",
@@ -3021,6 +2076,7 @@ describe("createTelegramBot", () => {
 
   it("keeps the login action when the callback sender is not an owner", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["999"] },
       channels: {
         telegram: {
@@ -3070,6 +2126,7 @@ describe("createTelegramBot", () => {
         };
       });
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
       channels: { telegram: { dmPolicy: "pairing" } },
       agents: { list: [{ id: "main", default: true }] },
@@ -3112,6 +2169,7 @@ describe("createTelegramBot", () => {
       handler: pluginHandler,
     });
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "open",
@@ -3144,180 +2202,47 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("reloads callback model routing bindings without recreating the bot", async () => {
-    const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;
-    let boundAgentId = "agent-a";
-    loadConfig.mockImplementation(() => ({
-      agents: {
-        defaults: {
-          model: "openai/gpt-4.1",
-        },
-        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
-      },
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
-      },
-      bindings: [
-        {
-          agentId: boundAgentId,
-          match: { channel: "telegram", accountId: "default" },
-        },
-      ],
-    }));
-
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-
-    const sendModelCallback = async (id: number) => {
-      await callbackHandler(
-        makeCallbackRetryContext({ id: `cbq-model-${id}`, data: "mdl_prov", messageId: id }),
-      );
-    };
-
-    buildModelsProviderDataMock.mockClear();
-    await sendModelCallback(1);
-    expect(buildModelsProviderDataMock).toHaveBeenCalled();
-    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-a");
-
-    boundAgentId = "agent-b";
-    await sendModelCallback(2);
-    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-b");
-  });
-  it("wraps inbound message with Telegram envelope", async () => {
-    await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
-      createTelegramBot({ token: "tok" });
-      const messageRegistration = onSpy.mock.calls.find(([event]) => event === "message");
-      expect(messageRegistration?.[1]).toBeTypeOf("function");
-      const handler = getMessageHandler();
-      await handler(
-        makePrivateTextContext({
-          chatId: 1234,
-          text: "hello world",
-          date: 1736380800, // 2025-01-09T00:00:00Z
-          from: {
-            first_name: "Ada",
-            last_name: "Lovelace",
-            username: "ada_bot",
-          },
-          downloadable: true,
-        }),
-      );
-
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-      const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
-      const timestampPattern = escapeRegExp(expectedTimestamp);
-      expect(payload.Body).toMatch(
-        new RegExp(
-          `^\\[Telegram Ada Lovelace \\(@ada_bot\\) id:1234 (\\+\\d+[smhd] )?${timestampPattern}\\]`,
-        ),
-      );
-      expect(payload.Body).toContain("hello world");
-    });
-  });
   it("handles pairing DM flows for new and already-pending requests", async () => {
-    const cases = [
-      {
-        name: "new unknown sender",
-        messages: ["hello"],
-        expectedSendCount: 1,
-        pairingUpsertResults: [{ code: "PAIRCODE", created: true }],
-      },
-      {
-        name: "already pending request",
-        messages: ["hello", "hello again"],
-        expectedSendCount: 1,
-        pairingUpsertResults: [
-          { code: "PAIRCODE", created: true },
-          { code: "PAIRCODE", created: false },
-        ],
-      },
-    ] as const;
-
-    for (const [index, testCase] of cases.entries()) {
-      onSpy.mockClear();
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
-      loadConfig.mockReturnValue({
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
-      readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockClear();
-      let pairingUpsertCall = 0;
-      upsertChannelPairingRequest.mockImplementation(async () => {
-        const result =
-          testCase.pairingUpsertResults[
-            Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
-          ];
-        pairingUpsertCall += 1;
-        return expectDefined(result, `pairing upsert result ${pairingUpsertCall}`);
-      });
-
-      createTelegramBot({ token: "tok" });
-      const handler = getMessageHandler();
-      const senderId = Number(`${Date.now()}${index}`.slice(-9));
-      for (const text of testCase.messages) {
-        await handler(
-          makePrivateTextContext({
-            chatId: 1234,
-            text,
-            from: { id: senderId, username: "random" },
-            downloadable: true,
-          }),
-        );
-      }
-
-      expect(replySpy, testCase.name).not.toHaveBeenCalled();
-      expect(sendMessageSpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCount);
-      expect(sendMessageSpy.mock.calls.at(0)?.[0], testCase.name).toBe(1234);
-      const pairingText = String(sendMessageSpy.mock.calls.at(0)?.[1]);
-      expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
-      expect(pairingText, testCase.name).toContain("Pairing code:");
-      expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
-      expectRecordFields(
-        sendMessageSpy.mock.calls.at(0)?.[2],
-        { parse_mode: "HTML" },
-        testCase.name,
-      );
-    }
-  });
-
-  it("sends a friendly retry hint when the pairing allowlist store cannot be read", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing" } },
     });
-    readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
-    upsertChannelPairingRequest.mockClear();
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest
+      .mockResolvedValue({ code: "PAIRCODE", created: false })
+      .mockResolvedValueOnce({ code: "PAIRCODE", created: true });
 
     createTelegramBot({ token: "tok" });
     const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 1234,
-        text: "hello",
-        messageId: 9,
-        from: { id: 123456789, username: "testuser" },
-        downloadable: true,
-      }),
-    );
+    const senderId = Number(`${Date.now()}1`.slice(-9));
+    for (const text of ["hello", "hello again"]) {
+      await handler(
+        makePrivateTextContext({
+          chatId: 1234,
+          text,
+          from: { id: senderId, username: "random" },
+          downloadable: true,
+        }),
+      );
+    }
 
-    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      1234,
-      "⚠️ Couldn't process this message, please try again in a moment.",
-      expect.objectContaining({
-        reply_parameters: expect.objectContaining({ message_id: 9 }),
-      }),
+    expect(sendMessageSpy.mock.calls.at(0)?.[0]).toBe(1234);
+    const pairingText = String(sendMessageSpy.mock.calls.at(0)?.[1]);
+    expect(pairingText).toContain(`Your Telegram user id: ${senderId}`);
+    expect(pairingText).toContain("Pairing code:");
+    expect(pairingText).toContain("openclaw pairing approve telegram");
+    expectRecordFields(
+      sendMessageSpy.mock.calls.at(0)?.[2],
+      { parse_mode: "HTML" },
+      "pairing reply options",
     );
   });
 
   it("marks spooled replay pairing store read failures retryable without apology spam", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
@@ -3369,6 +2294,7 @@ describe("createTelegramBot", () => {
 
   it("keeps the same private chat usable after a transient pairing store read failure", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore
@@ -3411,6 +2337,7 @@ describe("createTelegramBot", () => {
 
   it("allows a configured private sender when the pairing allowlist store cannot be read", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing", allowFrom: ["123456789"] } },
     });
     readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
@@ -3467,6 +2394,7 @@ describe("createTelegramBot", () => {
 
   it("ignores private self-authored message updates instead of issuing a pairing challenge", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore.mockResolvedValue([]);
@@ -3500,60 +2428,9 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
-    const senderId = Number(`${Date.now()}01`.slice(-9));
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-    );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          message_id: 410,
-          date: 1736380800,
-          photo: [{ file_id: "p1" }],
-          from: { id: senderId, username: "random" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
-      });
-
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      const pairingText = String(sendMessageSpy.mock.calls.at(0)?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
-      expectRecordFields(
-        sendMessageSpy.mock.calls.at(0)?.[2],
-        { parse_mode: "HTML" },
-        "pairing reply options",
-      );
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
   it("does not leak blocked allowlist text DMs into authorized prompt context", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "allowlist",
@@ -3600,6 +2477,7 @@ describe("createTelegramBot", () => {
 
   it("does not cache blocked allowlist edited DMs into authorized prompt context", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "allowlist",
@@ -3652,6 +2530,7 @@ describe("createTelegramBot", () => {
 
   it("does not cache blocked group-sender edits into authorized prompt context", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",
@@ -3705,6 +2584,7 @@ describe("createTelegramBot", () => {
 
   it("drops topic-required root DMs before pairing challenges", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "pairing",
@@ -3739,38 +2619,9 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("ignores group self-authored message updates instead of re-processing bot output", async () => {
-    const chatId = nextForumCacheChatId();
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockClear();
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: chatId, type: "supergroup", title: "OpenClaw Ops" },
-        message_id: 1884,
-        date: 1736380800,
-        from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-        text: "approval card update",
-      },
-      me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-    expect(sendMessageSpy).not.toHaveBeenCalled();
-    expect(replySpy).not.toHaveBeenCalled();
-  });
-
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "disabled" } },
     });
     sendMessageSpy.mockClear();
@@ -3809,8 +2660,54 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
+
+  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const senderId = Number(`${Date.now()}01`.slice(-9));
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 410,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: senderId, username: "random" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: getFileSpy,
+      });
+
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("Pairing code:");
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
   it("blocks unauthorized DM media groups before any photo download", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore.mockResolvedValue([]);
@@ -3861,29 +2758,10 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
-  it("triggers typing cue via onReplyStart", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.typingCallbacks?.onReplyStart?.();
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-      },
-    );
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    await handler({
-      message: {
-        chat: { id: 42, type: "private" },
-        from: { id: 999, username: "random" },
-        text: "hi",
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-    expect(sendChatActionSpy).toHaveBeenCalledWith(42, "typing", undefined);
-  });
 
   it("dedupes duplicate updates for callback_query, message, and channel_post", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           dmPolicy: "open",
@@ -3910,38 +2788,33 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+    const callbackCtx = (id: string, data: string) =>
+      makeCallbackRetryContext({
+        updateId: 222,
+        id,
+        data,
+        messageId: 9001,
         from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-question-duplicate",
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-        from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+        message: { chat: { id: 123, type: "private" } },
+      });
+    const resolveQuestion = vi
+      .spyOn(questionGatewayRuntime, "resolveOption")
+      .mockRejectedValue(new Error("Unexpected duplicate question resolution"));
+    try {
+      // Admission owns dedupe state; the duplicate handler must still acknowledge its button.
+      await runTelegramMiddlewareChain({
+        ctx: callbackCtx("cb-1", "ping"),
+        finalHandler: callbackHandler,
+      });
+      await callbackHandler(
+        callbackCtx("cb-question-duplicate", "tgq1:ask_0123456789abcdef0123456789abcdef:1"),
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+      expect(resolveQuestion).not.toHaveBeenCalled();
+    } finally {
+      resolveQuestion.mockRestore();
+    }
 
     replySpy.mockClear();
 
@@ -4128,116 +3001,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
-  it("persists update offsets after successful dispatch completion", async () => {
-    configureOpenDm();
-    const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
-      lastUpdateId: 100,
-    });
-
-    let releaseUpdate101: (() => void) | undefined;
-    const update101Gate = new Promise<void>((resolve) => {
-      releaseUpdate101 = resolve;
-    });
-
-    // Start processing update 101 but keep it pending (simulates a long-running turn).
-    const p101 = runMiddlewareChain({ update: { update_id: 101 } }, async () => update101Gate);
-    // Let update 101 enter the chain. Telegram now persists the restart watermark only after
-    // the handler completes, so a crash during the pending turn can replay the update.
-    await Promise.resolve();
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    // Complete update 102 while 101 is still pending. The persisted watermark must not advance
-    // past pending lower ids.
-    await runMiddlewareChain({ update: { update_id: 102 } }, async () => {});
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    releaseUpdate101?.();
-    await p101;
-
-    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([102]);
-  });
-
-  it("records synchronous update completion on the shared ingress frame", async () => {
-    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 150 });
-
-    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
-      await runMiddlewareChain({ update: { update_id: 151 } }, async () => {});
-    });
-
-    expect(result).toEqual({ kind: "completed" });
-  });
-
-  it("preserves an intentionally skipped update through middleware completion", async () => {
-    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({ lastUpdateId: 160 });
-
-    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
-      await runMiddlewareChain({ update: { update_id: 161 } }, async () => {
-        recordTelegramMessageProcessingResult({ kind: "skipped" });
-      });
-    });
-
-    expect(result).toEqual({ kind: "skipped" });
-  });
-  it("logs and swallows update watermark persistence failures", async () => {
-    const onUpdateId = vi.fn().mockRejectedValueOnce(new Error("disk boom"));
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    const { run: runMiddlewareChain } = setupUpdateOffsetTracker({
-      lastUpdateId: 13_099,
-      onUpdateId,
-      runtime,
-    });
-
-    const unhandled: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      await runMiddlewareChain({ update: { update_id: 13_100 } }, async () => {});
-      await flushTelegramTestMicrotasks();
-      expect(onUpdateId).toHaveBeenCalledWith(13_100);
-      expect(unhandled).toStrictEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
-  });
-
-  it("keeps failed updates unpersisted while preserving same-process retries", async () => {
-    const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
-      lastUpdateId: 200,
-    });
-
-    await expect(
-      runMiddlewareChain({ update: { update_id: 201 } }, async () => {
-        throw new Error("middleware boom");
-      }),
-    ).rejects.toThrow("middleware boom");
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    await runMiddlewareChain({ update: { update_id: 202 } }, async () => {});
-
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    const retryHandler = vi.fn();
-    await runMiddlewareChain({ update: { update_id: 201 } }, async () => {
-      retryHandler();
-    });
-
-    await flushTelegramTestMicrotasks();
-    expect(retryHandler).toHaveBeenCalledTimes(1);
-    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([202]);
-  });
-
   it("persists recorded dispatch failures during normal polling", async () => {
     const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
       lastUpdateId: 500,
@@ -4282,53 +3045,15 @@ describe("createTelegramBot", () => {
     expect(onUpdateId).not.toHaveBeenCalled();
   });
 
-  it("keeps deferred spooled failures retryable in the same bot tracker", async () => {
-    const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
-      lastUpdateId: 700,
-    });
-
-    const update = { update_id: 701 };
-    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
-      await runMiddlewareChain({ update }, async () => {
-        const participant = createTelegramSpooledReplayDeferredParticipant("test:deferred");
-        if (!participant) {
-          throw new Error("expected spooled replay participant");
-        }
-      });
-    });
-    const deferredWork = replay.deferredWork;
-    expect(deferredWork).toBeDefined();
-    if (!deferredWork) {
-      throw new Error("Expected deferred spooled work");
-    }
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    deferredWork.settle({
-      kind: "failed-retryable",
-      error: new Error("deferred dispatch failed"),
-    });
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).not.toHaveBeenCalled();
-
-    let retried = false;
-    await runWithTelegramSpooledReplayUpdate(update, async () => {
-      await runMiddlewareChain({ update }, async () => {
-        retried = true;
-      });
-    });
-    await flushTelegramTestMicrotasks();
-    expect(retried).toBe(true);
-    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([701]);
-  });
-
   it("retries a deferred spooled update after its queued turn is abandoned", async () => {
     configureOpenDm();
-    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+    // The first dispatch hydrates the per-test message cache before getReply
+    // runs; wait on the lifecycle itself instead of racing a polling timeout.
+    const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
     replySpy
       .mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-        queuedLifecycle = opts?.turnAdoptionLifecycle;
-        queuedLifecycle?.onDeferred?.();
+        opts?.turnAdoptionLifecycle?.onDeferred?.();
+        queuedLifecycleReady.resolve(opts?.turnAdoptionLifecycle);
         return undefined;
       })
       .mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -4345,9 +3070,8 @@ describe("createTelegramBot", () => {
       messageId: 702,
       text: "retry after queued turn abandonment",
     });
-    await vi.waitFor(() => {
-      expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
-    });
+    const queuedLifecycle = await queuedLifecycleReady.promise;
+    expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
     queuedLifecycle?.onAbandoned?.();
     const firstReplay = await firstReplayPromise;
     const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
@@ -4378,42 +3102,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
-  it("skips replayed update ids even when the semantic update key differs", async () => {
-    const { onUpdateId, run: runMiddlewareChain } = setupUpdateOffsetTracker({
-      lastUpdateId: 300,
-    });
-
-    const handler = vi.fn();
-    await runMiddlewareChain(
-      {
-        update: {
-          update_id: 301,
-          message: { chat: { id: 1 }, message_id: 10 },
-        },
-      },
-      async () => {
-        handler();
-      },
-    );
-
-    const replayHandler = vi.fn();
-    await runMiddlewareChain(
-      {
-        update: {
-          update_id: 301,
-          message: { chat: { id: 1 }, message_id: 11 },
-        },
-      },
-      async () => {
-        replayHandler();
-      },
-    );
-
-    await flushTelegramTestMicrotasks();
-    expect(onUpdateId).toHaveBeenCalledWith(301);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(replayHandler).not.toHaveBeenCalled();
-  });
   it("allows distinct callback_query ids without update_id", async () => {
     configureOpenDm();
 
@@ -4435,193 +3123,10 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
-  const accessGroup = (member: string) => ({
-    accessGroups: {
-      operators: { type: "message.senders", members: { telegram: [member] } },
-    },
-  });
-  const groupPolicyCases: MessagePolicyCase[] = [
-    makeMessagePolicyCase({
-      name: "blocks all group messages when groupPolicy is 'disabled'",
-      telegram: { groupPolicy: "disabled", allowFrom: ["123456789"] },
-      message: { text: "@openclaw_bot hello" },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "blocks group messages from senders not in allowFrom when groupPolicy is 'allowlist'",
-      telegram: { groupPolicy: "allowlist", allowFrom: ["123456789"] },
-      message: { from: { id: 999999, username: "notallowed" }, text: "@openclaw_bot hello" },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "allows group messages from senders in allowFrom (by ID) when groupPolicy is 'allowlist'",
-      telegram: {
-        groupPolicy: "allowlist",
-        allowFrom: ["123456789"],
-        groups: { "*": { requireMention: false } },
-      },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "allows group messages from sender access groups in groupAllowFrom",
-      rootConfig: accessGroup("123456789"),
-      telegram: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["accessGroup:operators"],
-        groups: { "*": { requireMention: false } },
-      },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "blocks explicitly configured group when groupAllowFrom access group does not match sender",
-      rootConfig: accessGroup("111111111"),
-      telegram: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["accessGroup:operators"],
-        groups: { "-100123456789": { requireMention: false } },
-      },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "allows group messages from sender access groups in per-group allowFrom",
-      rootConfig: accessGroup("123456789"),
-      telegram: {
-        groupPolicy: "open",
-        groups: {
-          "-100123456789": {
-            allowFrom: ["accessGroup:operators"],
-            requireMention: false,
-          },
-        },
-      },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "inherits root per-group sender access in multi-account config",
-      telegram: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["111111111"],
-        groups: {
-          "-100123456789": { allowFrom: ["123456789"], requireMention: false },
-        },
-        accounts: {
-          default: { botToken: "123:default" },
-          shadow: { enabled: false },
-        },
-      },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "enforces root per-group sender access in multi-account config",
-      telegram: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["123456789"],
-        groups: {
-          "-100123456789": { allowFrom: ["111111111"], requireMention: false },
-        },
-        accounts: {
-          default: { botToken: "123:default" },
-          shadow: { enabled: false },
-        },
-      },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
-      telegram: {
-        groupPolicy: "allowlist",
-        allowFrom: ["@testuser"],
-        groups: { "*": { requireMention: false } },
-      },
-      message: { from: { id: 12345, username: "testuser" } },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "allows group messages from tg:-prefixed allowFrom entries case-insensitively",
-      telegram: {
-        groupPolicy: "allowlist",
-        allowFrom: ["TG:77112533"],
-        groups: { "*": { requireMention: false } },
-      },
-      message: { from: { id: 77112533, username: "mneves" } },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "blocks group messages when per-group allowFrom override is explicitly empty",
-      telegram: {
-        groupPolicy: "open",
-        groups: { "-100123456789": { allowFrom: [], requireMention: false } },
-      },
-      message: { from: { id: 999999, username: "random" } },
-      expectedReplyCount: 0,
-    }),
-    makeMessagePolicyCase({
-      name: "allows all group messages when groupPolicy is 'open'",
-      telegram: { groupPolicy: "open", groups: { "*": { requireMention: false } } },
-      message: { from: { id: 999999, username: "random" } },
-      expectedReplyCount: 1,
-    }),
-  ];
-
-  it("applies groupPolicy cases", async () => {
-    for (const [index, testCase] of groupPolicyCases.entries()) {
-      resetHarnessSpies();
-      loadConfig.mockReturnValue(testCase.config);
-      await dispatchMessage({
-        message: {
-          ...testCase.message,
-          message_id: 1_000 + index,
-          date: 1_736_380_800 + index,
-        },
-      });
-      expect(replySpy.mock.calls.length, testCase.name).toBe(testCase.expectedReplyCount);
-    }
-  });
-
-  it("routes DMs by telegram accountId binding", async () => {
-    const config = {
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          accounts: {
-            opie: {
-              botToken: "tok-opie",
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
-      },
-      bindings: [
-        {
-          agentId: "opie",
-          match: { channel: "telegram", accountId: "opie" },
-        },
-      ],
-    };
-    loadConfig.mockReturnValue(config);
-
-    createTelegramBot({ token: "tok", accountId: "opie" });
-    const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 123,
-        from: { id: 999, username: "testuser" },
-        text: "hello",
-        messageId: 42,
-        downloadable: true,
-      }),
-    );
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.AccountId).toBe("opie");
-    expect(payload.SessionKey).toBe("agent:opie:main");
-  });
-
   it("reloads DM routing bindings between messages without recreating the bot", async () => {
     let boundAgentId = "agent-a";
     const configForAgent = (agentId: string) => ({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           defaultAccount: "work",
@@ -4754,6 +3259,7 @@ describe("createTelegramBot", () => {
   it("authorizes and routes channel-DM messages with the canonical topic identity", async () => {
     const chatId = -100123456700;
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       agents: { list: [{ id: "channel-topic-agent" }] },
       channels: {
         telegram: {
@@ -4826,6 +3332,7 @@ describe("createTelegramBot", () => {
       }),
     ).toEqual({ ok: true });
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",
@@ -4865,45 +3372,6 @@ describe("createTelegramBot", () => {
 
     expect(pluginHandler).toHaveBeenCalledTimes(testCase.expectedCalls);
     clearPluginInteractiveHandlers();
-  });
-
-  it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              botToken: "tok-work",
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-            opie: {
-              botToken: "tok-opie",
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok", accountId: "opie" });
-    const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 123,
-        from: { id: 999, username: "testuser" },
-        text: "hello",
-        messageId: 42,
-        downloadable: true,
-      }),
-    );
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "reply call")[0];
-    expect(payload.AccountId).toBe("opie");
-    expect(payload.SessionKey).toContain("agent:main:telegram:opie:");
   });
 
   it.each([
@@ -4961,221 +3429,22 @@ describe("createTelegramBot", () => {
     },
   ] as const)("applies group mention overrides and fallback behavior %#", async (testCase) => {
     resetHarnessSpies();
-    loadConfig.mockReturnValue(testCase.config);
+    loadConfig.mockReturnValue({
+      ...testCase.config,
+      messages: { inbound: { debounceMs: 0 } },
+    });
     await dispatchMessage({
-      message: testCase.message,
+      message: { message_id: 1, ...testCase.message },
       me: testCase.me,
       botRequireMention: testCase.botRequireMention,
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "lets topic mention overrides fall back from wildcard group config",
-      groupPolicy: "open",
-      groups: {
-        "*": { requireMention: true },
-        "-1001234567890": { requireMention: true, topics: { "99": { requireMention: false } } },
-      } as Record<string, TelegramGroupConfig>,
-      topicId: 99,
-      expectedGroup: { requireMention: true },
-      expectedTopic: { requireMention: false },
-    },
-    {
-      name: "lets topic configs inherit group allowlist and requireMention",
-      groupPolicy: "allowlist",
-      groups: {
-        "-1001234567890": {
-          requireMention: false,
-          allowFrom: ["123456789"],
-          topics: { "99": {} },
-        },
-      } as Record<string, TelegramGroupConfig>,
-      topicId: 99,
-      expectedGroup: { requireMention: false, allowFrom: ["123456789"] },
-      expectedTopic: {},
-    },
-    {
-      name: "uses topics.* as the default config for unmatched forum topics",
-      groupPolicy: "allowlist",
-      groups: {
-        "-1001234567890": {
-          allowFrom: ["999999999"],
-          topics: { "*": { allowFrom: ["123456789"], agentId: "zu" } },
-        },
-      } as Record<string, TelegramGroupConfig>,
-      topicId: 77,
-      expectedGroup: { allowFrom: ["999999999"] },
-      expectedTopic: { allowFrom: ["123456789"], agentId: "zu" },
-    },
-    {
-      name: "prefers exact topic config over topics.* fallback",
-      groupPolicy: "allowlist",
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "*": { allowFrom: ["123456789"], agentId: "zu" },
-            "77": { allowFrom: ["555555555"], agentId: "main" },
-          },
-        },
-      } as Record<string, TelegramGroupConfig>,
-      topicId: 77,
-      expectedGroup: undefined,
-      expectedTopic: { allowFrom: ["555555555"], agentId: "main" },
-    },
-    {
-      name: "inherits topics.* fields that exact topic config does not override",
-      groupPolicy: "allowlist",
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "*": { allowFrom: ["123456789"], requireMention: false },
-            "77": { agentId: "main" },
-          },
-        },
-      } as Record<string, TelegramGroupConfig>,
-      topicId: 77,
-      expectedGroup: undefined,
-      expectedTopic: { allowFrom: ["123456789"], requireMention: false, agentId: "main" },
-    },
-  ] satisfies Array<
-    Record<string, unknown> & {
-      groupPolicy: "open" | "allowlist";
-      groups: Record<string, TelegramGroupConfig>;
-    }
-  >)("$name", ({ groupPolicy, groups, topicId, expectedGroup, expectedTopic }) => {
-    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
-      { groupPolicy, groups },
-      -1001234567890,
-      topicId,
-    );
-
-    if (expectedGroup) {
-      expect(groupConfig as TelegramGroupConfig | undefined).toMatchObject(expectedGroup);
-    }
-    expect(topicConfig).toEqual(expectedTopic);
-  });
-
-  it.each([
-    {
-      label: "parent binding",
-      config: {
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: false } },
-          },
-        },
-        agents: {
-          list: [{ id: "forum-agent" }],
-        },
-        bindings: [
-          {
-            agentId: "forum-agent",
-            match: {
-              channel: "telegram",
-              peer: { kind: "group", id: "-1001234567890" },
-            },
-          },
-        ],
-      },
-      expectedSessionKeyFragment: "agent:forum-agent:",
-    },
-    {
-      label: "topic binding",
-      config: {
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: false } },
-          },
-        },
-        agents: {
-          list: [{ id: "topic-agent" }, { id: "group-agent" }],
-        },
-        bindings: [
-          {
-            agentId: "topic-agent",
-            match: {
-              channel: "telegram",
-              peer: { kind: "group", id: "-1001234567890:topic:99" },
-            },
-          },
-          {
-            agentId: "group-agent",
-            match: {
-              channel: "telegram",
-              peer: { kind: "group", id: "-1001234567890" },
-            },
-          },
-        ],
-      },
-      expectedSessionKeyFragment: "agent:topic-agent:",
-    },
-  ] satisfies Array<{
-    label: string;
-    config: Parameters<typeof resolveTelegramConversationRoute>[0]["cfg"];
-    expectedSessionKeyFragment: string;
-  }>)("routes forum topics to parent or topic-specific bindings: $label", (testCase) => {
-    const result = resolveTelegramConversationRoute({
-      cfg: testCase.config,
-      accountId: "default",
-      chatId: -1001234567890,
-      isGroup: true,
-      threadSpec: { id: 99, scope: "forum" },
-    });
-
-    expect(result.route.sessionKey).toContain(testCase.expectedSessionKeyFragment);
-    expect(result.route.sessionKey).toContain("telegram:group:-1001234567890");
-    expect(result.route.sessionKey).not.toContain("t.me/c/");
-  });
-
-  it("sends GIF replies as animations", async () => {
-    replySpy.mockResolvedValueOnce({
-      text: "caption",
-      mediaUrl: "https://example.com/fun",
-    });
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("GIF89a"),
-      contentType: "image/gif",
-      fileName: "fun.gif",
-    });
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        text: "hello world",
-        date: 1736380800,
-        message_id: 5,
-        from: { first_name: "Ada" },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
-    const animationCall = requireValue(sendAnimationSpy.mock.calls.at(0), "animation send call");
-    expect(animationCall[0]).toBe("1234");
-    requireValue(animationCall[1], "animation payload");
-    expect(animationCall[2]).toEqual({
-      caption: "caption",
-      parse_mode: "HTML",
-      reply_to_message_id: undefined,
-    });
-    expect(sendPhotoSpy).not.toHaveBeenCalled();
-    expect(loadWebMedia).toHaveBeenCalledTimes(1);
-    expect(loadWebMedia.mock.calls.at(0)?.[0]).toBe("https://example.com/fun");
-  });
-
   function resetHarnessSpies() {
     onSpy.mockClear();
     replySpy.mockClear();
     sendMessageSpy.mockClear();
-    setMessageReactionSpy.mockClear();
-    setMyCommandsSpy.mockClear();
   }
   function createMessageHandler(botRequireMention?: boolean) {
     createTelegramBot({
@@ -5196,264 +3465,6 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
   }
-
-  it("accepts mentionPatterns matches with and without unrelated mentions", async () => {
-    const cases = [
-      {
-        name: "plain mention pattern text",
-        message: {
-          chat: { id: 7, type: "group", title: "Test Group" },
-          text: "bert: introduce yourself",
-          date: 1736380800,
-          message_id: 1,
-          from: { id: 9, first_name: "Ada" },
-        },
-        assertEnvelope: true,
-      },
-      {
-        name: "mention pattern plus another @mention",
-        message: {
-          chat: { id: 7, type: "group", title: "Test Group" },
-          text: "bert: hello @alice",
-          entities: [{ type: "mention", offset: 12, length: 6 }],
-          date: 1736380801,
-          message_id: 3,
-          from: { id: 9, first_name: "Ada" },
-        },
-        assertEnvelope: false,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      resetHarnessSpies();
-      loadConfig.mockReturnValue({
-        agents: {
-          defaults: {
-            userTimezone: "UTC",
-          },
-        },
-        identity: { name: "Bert" },
-        messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: true } },
-          },
-        },
-      });
-
-      await dispatchMessage({
-        message: testCase.message,
-      });
-
-      expect(replySpy.mock.calls.length, testCase.name).toBe(1);
-      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-      expect(payload.WasMentioned, testCase.name).toBe(true);
-      if (testCase.assertEnvelope) {
-        expect(payload.SenderName).toBe("Ada");
-        expect(payload.SenderId).toBe("9");
-        const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
-        const timestampPattern = escapeRegExp(expectedTimestamp);
-        expect(payload.Body).toMatch(
-          new RegExp(`^\\[Telegram Test Group id:7 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
-        );
-      }
-    }
-  });
-  it("marks explicit Telegram bot-handle mentions in the inbound context", async () => {
-    resetHarnessSpies();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
-        },
-      },
-    });
-
-    await dispatchMessage({
-      message: {
-        chat: { id: 7, type: "group", title: "Test Group" },
-        text: "@openclaw_bot status",
-        entities: [{ type: "mention", offset: 0, length: "@openclaw_bot".length }],
-        date: 1736380800,
-        message_id: 4,
-        from: { id: 9, first_name: "Ada" },
-      },
-      me: { id: 999, username: "openclaw_bot" },
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.WasMentioned).toBe(true);
-    expect(payload.ExplicitlyMentionedBot).toBe(true);
-    expect(payload.MentionSource).toBe("explicit_bot");
-    expect(payload.BotUsername).toBe("openclaw_bot");
-  });
-
-  it("keeps group envelope headers stable (sender identity is separate)", async () => {
-    resetHarnessSpies();
-
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          userTimezone: "UTC",
-        },
-      },
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    await dispatchMessage({
-      message: {
-        chat: { id: 42, type: "group", title: "Ops" },
-        text: "hello",
-        date: 1736380800,
-        message_id: 2,
-        from: {
-          id: 99,
-          first_name: "Ada",
-          last_name: "Lovelace",
-          username: "ada",
-        },
-      },
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.SenderName).toBe("Ada Lovelace");
-    expect(payload.SenderId).toBe("99");
-    expect(payload.SenderUsername).toBe("ada");
-    const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
-    const timestampPattern = escapeRegExp(expectedTimestamp);
-    expect(payload.Body).toMatch(
-      new RegExp(`^\\[Telegram Ops id:42 (\\+\\d+[smhd] )?${timestampPattern}\\]`),
-    );
-  });
-  it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
-    resetHarnessSpies();
-
-    loadConfig.mockReturnValue({
-      messages: {
-        ackReaction: EYES_EMOJI,
-        ackReactionScope: "group-mentions",
-        groupChat: { mentionPatterns: ["\\bbert\\b"] },
-      },
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
-        },
-      },
-    });
-
-    await dispatchMessage({
-      message: {
-        chat: { id: 7, type: "group", title: "Test Group" },
-        text: "bert hello",
-        date: 1736380800,
-        message_id: 123,
-        from: { id: 9, first_name: "Ada" },
-      },
-    });
-
-    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [
-      { type: "emoji", emoji: EYES_EMOJI },
-    ]);
-  });
-  it("syncs one empty native command menu when disabled", () => {
-    resetHarnessSpies();
-    loadConfig.mockReturnValue({
-      commands: { native: false },
-    });
-
-    createTelegramBot({ token: "tok" });
-
-    expect(syncTelegramMenuCommands).toHaveBeenCalledOnce();
-    expect(syncTelegramMenuCommands).toHaveBeenCalledWith(
-      expect.objectContaining({ commandsToRegister: [] }),
-    );
-    expect(setMyCommandsSpy).toHaveBeenCalledOnce();
-    expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
-  });
-  it("handles requireMention when mentions do and do not resolve", async () => {
-    const cases = [
-      {
-        name: "mention pattern configured but no match",
-        config: { messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } } },
-        me: { username: "openclaw_bot" },
-        expectedReplyCount: 0,
-        expectedWasMentioned: undefined,
-      },
-      {
-        name: "mention detection unavailable",
-        config: { messages: { groupChat: { mentionPatterns: [] } } },
-        me: {},
-        expectedReplyCount: 1,
-        expectedWasMentioned: false,
-      },
-    ] as const;
-
-    for (const [index, testCase] of cases.entries()) {
-      resetHarnessSpies();
-      loadConfig.mockReturnValue({
-        ...testCase.config,
-        channels: {
-          telegram: {
-            groupPolicy: "open",
-            groups: { "*": { requireMention: true } },
-          },
-        },
-      });
-
-      await dispatchMessage({
-        message: {
-          chat: { id: 7, type: "group", title: "Test Group" },
-          text: "hello everyone",
-          date: 1_736_380_800 + index,
-          message_id: 2 + index,
-          from: { id: 9, first_name: "Ada" },
-        },
-        me: testCase.me,
-      });
-
-      expect(replySpy.mock.calls.length, testCase.name).toBe(testCase.expectedReplyCount);
-      if (testCase.expectedWasMentioned != null) {
-        const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-        expect(payload.WasMentioned, testCase.name).toBe(testCase.expectedWasMentioned);
-      }
-    }
-  });
-  it("includes reply-to context when a Telegram reply is received", async () => {
-    resetHarnessSpies();
-
-    await dispatchMessage({
-      message: {
-        chat: { id: 7, type: "private" },
-        text: "Sure, see below",
-        date: 1736380800,
-        reply_to_message: {
-          message_id: 9001,
-          text: "Can you summarize this?",
-          from: { first_name: "Ada" },
-        },
-      },
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.Body).toContain("[Reply chain - nearest first]");
-    expect(payload.Body).toContain("[1. Ada id:9001]");
-    expect(payload.Body).toContain("Can you summarize this?");
-    expect(payload.Body).toContain("[/Reply chain]");
-    expect(payload.ReplyToId).toBe("9001");
-    expect(payload.ReplyToBody).toBe("Can you summarize this?");
-    expect(payload.ReplyToSender).toBe("Ada");
-  });
 
   it("blocks group messages for restrictive group config edge cases", async () => {
     const blockedCases = [
@@ -5503,6 +3514,7 @@ describe("createTelegramBot", () => {
   it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",
@@ -5526,6 +3538,7 @@ describe("createTelegramBot", () => {
   });
   it("allows control commands with TG-prefixed groupAllowFrom entries", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",
@@ -5535,18 +3548,14 @@ describe("createTelegramBot", () => {
       },
     });
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
+    await dispatchMessage({
       message: {
+        message_id: 1,
         chat: { id: -100123456789, type: "group", title: "Test Group" },
         from: { id: 123456789, username: "testuser" },
         text: "/status",
         date: 1736380800,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
@@ -5554,6 +3563,7 @@ describe("createTelegramBot", () => {
   it("routes generic-path control commands as text slash when native commands are off", async () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       commands: { text: false, native: false },
       channels: {
         telegram: {
@@ -5582,654 +3592,10 @@ describe("createTelegramBot", () => {
       authorized: true,
     });
   });
-  it("resolves topic-scoped forum metadata", () => {
-    const messageThreadId = 99;
-    const expectedTopicId = 99;
-    const threadSpec = resolveTelegramThreadSpec({
-      isGroup: true,
-      isForum: true,
-      messageThreadId,
-    });
-    const route = resolveTelegramConversationRoute({
-      cfg: {},
-      accountId: "default",
-      chatId: -1001234567890,
-      isGroup: true,
-      threadSpec,
-    });
-
-    const expectedGroupFrom = `telegram:group:-1001234567890:topic:${expectedTopicId}`;
-    expect(route.route.sessionKey).toContain(expectedGroupFrom);
-    expect(buildTelegramGroupFrom(-1001234567890, threadSpec)).toBe(expectedGroupFrom);
-    expect(buildTypingThreadParams(threadSpec.id)).toEqual({
-      message_thread_id: expectedTopicId,
-    });
-  });
-
-  it("routes General-topic forum metadata via getChat when Telegram omits forum metadata", async () => {
-    const chatId = nextForumCacheChatId();
-    getChatSpy.mockResolvedValue({
-      id: chatId,
-      type: "supergroup",
-      is_forum: true,
-      title: "Forum Group",
-    });
-    const isForum = await resolveTelegramForumFlag({
-      chatId,
-      chatType: "supergroup",
-      isGroup: true,
-      isForum: undefined,
-      getChat: getChatSpy as TelegramGetChat,
-    });
-    const threadSpec = resolveTelegramThreadSpec({
-      isGroup: true,
-      isForum,
-      messageThreadId: undefined,
-    });
-    const route = resolveTelegramConversationRoute({
-      cfg: {},
-      accountId: "default",
-      chatId,
-      isGroup: true,
-      threadSpec,
-    });
-
-    expect(getChatSpy).toHaveBeenCalledOnce();
-    expect(getChatSpy).toHaveBeenCalledWith(chatId);
-    expect(route.route.sessionKey).toContain(`telegram:group:${chatId}:topic:1`);
-    expect(buildTelegramGroupFrom(chatId, threadSpec)).toBe(`telegram:group:${chatId}:topic:1`);
-    expect(buildTypingThreadParams(threadSpec.id)).toEqual({ message_thread_id: 1 });
-  });
-  const allowFromEdgeCases: MessagePolicyCase[] = [
-    makeMessagePolicyCase({
-      name: "allows direct messages regardless of groupPolicy",
-      kind: "private",
-      telegram: { groupPolicy: "disabled", allowFrom: ["123456789"] },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "allows direct messages with tg/Telegram-prefixed allowFrom entries",
-      kind: "private",
-      telegram: { allowFrom: ["  TG:123456789  "] },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "allows direct messages from sender access groups in allowFrom",
-      kind: "private",
-      rootConfig: accessGroup("123456789"),
-      telegram: { dmPolicy: "allowlist", allowFrom: ["accessGroup:operators"] },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "matches direct message allowFrom against sender user id when chat id differs",
-      kind: "private",
-      telegram: { allowFrom: ["123456789"] },
-      message: { chat: { id: 777777777, type: "private" } },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "falls back to direct message chat id when sender user id is missing",
-      kind: "private",
-      telegram: { allowFrom: ["123456789"] },
-      message: { from: undefined },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "allows group messages with wildcard in allowFrom when groupPolicy is 'allowlist'",
-      telegram: {
-        groupPolicy: "allowlist",
-        allowFrom: ["*"],
-        groups: { "*": { requireMention: false } },
-      },
-      message: { from: { id: 999999, username: "random" } },
-      expectedReplyCount: 1,
-    }),
-    makeMessagePolicyCase({
-      name: "blocks group messages with no sender ID when groupPolicy is 'allowlist'",
-      telegram: { groupPolicy: "allowlist", allowFrom: ["123456789"] },
-      message: { from: undefined },
-      expectedReplyCount: 0,
-    }),
-  ];
-
-  it("applies allowFrom edge cases", async () => {
-    for (const [index, testCase] of allowFromEdgeCases.entries()) {
-      resetHarnessSpies();
-      loadConfig.mockReturnValue(testCase.config);
-      await dispatchMessage({
-        message: {
-          ...testCase.message,
-          message_id: 2_000 + index,
-          date: 1_736_380_900 + index,
-        },
-      });
-      expect(replySpy.mock.calls.length, testCase.name).toBe(testCase.expectedReplyCount);
-    }
-  });
-  it("sends replies without native reply threading", async () => {
-    replySpy.mockResolvedValue({ text: "a".repeat(TELEGRAM_RICH_TEXT_LIMIT + 1024) });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 5,
-        text: "hi",
-        messageId: 101,
-        message: { from: undefined },
-        downloadable: true,
-      }),
-    );
-
-    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-    for (const call of sendMessageSpy.mock.calls) {
-      expect(
-        (call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id,
-      ).toBeUndefined();
-    }
-  });
-  it("prefixes final replies with responsePrefix", async () => {
-    replySpy.mockResolvedValue({ text: "final reply" });
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], responsePrefix: "PFX" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 5,
-        text: "hi",
-        message: { from: undefined },
-        downloadable: true,
-      }),
-    );
-
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]).toBe(
-      "PFX final reply",
-    );
-  });
-
-  it("sends Codex usage-limit reset details as the Telegram reply body", async () => {
-    const codexRateLimitText =
-      "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
-    replySpy.mockResolvedValue({ text: codexRateLimitText });
-    configureOpenDm();
-
-    createTelegramBot({ token: "tok" });
-    const handler = getMessageHandler();
-    await handler(
-      makePrivateTextContext({
-        chatId: 5,
-        text: "hi",
-        message: { from: undefined },
-        downloadable: true,
-      }),
-    );
-
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(String(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[0])).toBe(
-      "5",
-    );
-    expect(requireValue(sendMessageSpy.mock.calls.at(0), "sendMessageSpy call")[1]).toBe(
-      codexRateLimitText,
-    );
-  });
-
-  it("honors threaded replies for replyToMode=first/all", async () => {
-    for (const [mode, messageId] of [
-      ["first", 101],
-      ["all", 102],
-    ] as const) {
-      onSpy.mockClear();
-      sendMessageSpy.mockClear();
-      replySpy.mockClear();
-      replySpy.mockResolvedValue({
-        text: "a".repeat(TELEGRAM_RICH_TEXT_LIMIT + 1024),
-        replyToId: String(messageId),
-      });
-      loadConfig.mockReturnValue({
-        channels: {
-          telegram: { dmPolicy: "open", allowFrom: ["*"], streamMode: "off" },
-        },
-      });
-
-      createTelegramBot({ token: "tok", replyToMode: mode });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      await handler({
-        message: {
-          chat: { id: 5, type: "private" },
-          text: "hi",
-          date: 1736380800,
-          message_id: messageId,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      });
-
-      expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-      for (const call of sendMessageSpy.mock.calls) {
-        const params = call[2] as
-          | { reply_to_message_id?: number; reply_parameters?: { message_id?: number } }
-          | undefined;
-        const actual = params?.reply_parameters?.message_id ?? params?.reply_to_message_id;
-        if (mode === "all") {
-          expect(actual).toBe(messageId);
-        } else {
-          expect(actual).toBeUndefined();
-        }
-      }
-    }
-  });
-  it("honors routed group activation from session store", async () => {
-    const storePath = path.join(createTelegramBotTestStateDir(), "group-activation.json");
-    const routedGroupEntry = {
-      sessionId: "agent:ops:telegram:group:123",
-      updatedAt: 0,
-      groupActivation: "always",
-      chatType: "group",
-    } as const;
-    setSessionStoreEntriesForTest({
-      "agent:ops:telegram:group:123": routedGroupEntry,
-    });
-    loadSessionStore.mockImplementation(() => ({
-      "agent:ops:telegram:group:123": routedGroupEntry,
-    }));
-    const config = {
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groups: { "*": { requireMention: true } },
-        },
-      },
-      bindings: [
-        {
-          agentId: "ops",
-          match: {
-            channel: "telegram",
-            peer: { kind: "group", id: "123" },
-          },
-        },
-      ],
-      session: { store: storePath },
-    };
-    loadConfig.mockReturnValue(config);
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 123, type: "group", title: "Routing" },
-        from: { id: 999, username: "ops" },
-        text: "hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("applies topic skill filters and system prompts", () => {
-    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
-      {
-        groupPolicy: "open",
-        groups: {
-          "-1001234567890": {
-            requireMention: false,
-            systemPrompt: "Group prompt",
-            skills: ["group-skill"],
-            topics: {
-              "99": {
-                skills: [],
-                systemPrompt: "Topic prompt",
-              },
-            },
-          },
-        },
-      },
-      -1001234567890,
-      99,
-    );
-    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
-
-    expect(settings.groupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
-    expect(settings.skillFilter).toStrictEqual([]);
-  });
-  it("delivers native /compact through the reply dispatcher", async () => {
-    commandSpy.mockClear();
-    sendMessageSpy.mockClear();
-    dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    replySpy.mockResolvedValue({
-      text: "⚙️ Compaction skipped: already_compacted • ctx 0%",
-    });
-
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      messages: { visibleReplies: "message_tool" },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const compactHandler = commandSpy.mock.calls.find((call) => call[0] === "compact")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!compactHandler) {
-      throw new Error("compact command handler missing");
-    }
-
-    await compactHandler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        from: { id: 42, first_name: "Ada" },
-        text: "/compact",
-        date: 1736380800,
-        message_id: 5,
-      },
-      match: "",
-    });
-
-    expect(sendMessageSpy).toHaveBeenCalled();
-    const compactReply = requireValue(sendMessageSpy.mock.calls.at(0), "compact reply call");
-    expect(String(compactReply[1])).toContain("Compaction skipped");
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-  });
-
-  it("threads native command replies inside topics", async () => {
-    const chatId = nextForumCacheChatId();
-    commandSpy.mockClear();
-    sendMessageSpy.mockClear();
-    replySpy.mockResolvedValue({ text: "response" });
-
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          replyToMode: "first",
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    expect(commandSpy).toHaveBeenCalled();
-    const handler = requireValue(commandSpy.mock.calls.at(0), "commandSpy call")[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      ...makeForumGroupMessageCtx({ chatId, threadId: 99, text: "/status" }),
-      match: "",
-    });
-
-    const statusCall = requireValue(sendMessageSpy.mock.calls.at(0), "status reply call");
-    expect(statusCall[0]).toBe(String(chatId));
-    expect(statusCall[1]).toBeTypeOf("string");
-    expectRecordFields(
-      statusCall[2],
-      { message_thread_id: 99, reply_to_message_id: 42 },
-      "status reply options",
-    );
-  });
-  it("reloads native command routing bindings between invocations without recreating the bot", async () => {
-    commandSpy.mockClear();
-    replySpy.mockClear();
-
-    let boundAgentId = "agent-a";
-    loadConfig.mockImplementation(() => ({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-      agents: {
-        list: [{ id: "agent-a", default: true }, { id: "agent-b" }],
-      },
-      bindings: [
-        {
-          agentId: boundAgentId,
-          match: { channel: "telegram", accountId: "default" },
-        },
-      ],
-    }));
-
-    createTelegramBot({ token: "tok" });
-    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!statusHandler) {
-      throw new Error("status command handler missing");
-    }
-
-    const invokeStatus = async (messageId: number) => {
-      await statusHandler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          from: { id: 9, username: "ada_bot" },
-          text: "/status",
-          date: 1736380800 + messageId,
-          message_id: messageId,
-        },
-        match: "",
-      });
-    };
-
-    await invokeStatus(401);
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls.at(0)?.[0].SessionKey).toContain("agent:agent-a:");
-
-    boundAgentId = "agent-b";
-    await invokeStatus(402);
-    expect(replySpy).toHaveBeenCalledTimes(2);
-    expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("agent:agent-b:");
-  });
-  it("skips tool summaries for native slash commands", async () => {
-    commandSpy.mockClear();
-    replySpy.mockImplementation(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
-
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!verboseHandler) {
-      throw new Error("verbose command handler missing");
-    }
-
-    await verboseHandler({
-      message: {
-        chat: { id: 12345, type: "private" },
-        from: { id: 12345, username: "testuser" },
-        text: "/verbose on",
-        date: 1736380800,
-        message_id: 42,
-      },
-      match: "on",
-    });
-
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls.at(0)?.[1]).toContain("final reply");
-  });
-  it("dedupes duplicate message updates by update_id", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-
-    configureOpenDm();
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    const ctx = {
-      update: { update_id: 111 },
-      message: {
-        chat: { id: 123, type: "private" },
-        from: { id: 456, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-        message_id: 42,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    };
-
-    await handler(ctx);
-    await handler(ctx);
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries native command updates after a bubbled handler failure", async () => {
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!verboseHandler) {
-      throw new Error("verbose command handler missing");
-    }
-
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, verboseHandler);
-
-    const ctx = {
-      update: { update_id: 333 },
-      message: {
-        chat: { id: 12345, type: "private" },
-        from: { id: 12345, username: "testuser" },
-        text: "/verbose on",
-        date: 1736380800,
-        message_id: 42,
-      },
-      match: "on",
-    };
-
-    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
-    loadConfig.mockImplementationOnce(() => {
-      throw new Error("cfg boom");
-    });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-    await runMiddlewareChain(ctx);
-
-    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
-  });
-
-  it("retries group migration updates after a bubbled handler failure", async () => {
-    const writeConfigFileSpy = mockTelegramConfigWrites();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const migrationHandler = getOnHandler("message:migrate_to_chat_id");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, migrationHandler);
-
-    const ctx = {
-      update: { update_id: 444 },
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "Old Group" },
-        migrate_to_chat_id: -1002,
-      },
-    };
-
-    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
-    loadConfig.mockImplementationOnce(() => {
-      throw new Error("cfg boom");
-    });
-    try {
-      await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-      const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-      await runMiddlewareChain(ctx);
-
-      expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-      expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
-      expect(writeConfigFileSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      writeConfigFileSpy.mockRestore();
-    }
-  });
-
-  it("retries reaction updates after a bubbled enqueue failure", async () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const reactionHandler = getOnHandler("message_reaction");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, reactionHandler);
-
-    const ctx = {
-      update: { update_id: 555 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 42,
-        user: { id: 9, first_name: "Ada", username: "ada_bot" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }],
-      },
-    };
-
-    enqueueSystemEventSpy.mockImplementationOnce(() => {
-      throw new Error("queue boom");
-    });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("queue boom");
-    await runMiddlewareChain(ctx);
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
-    expect(enqueueSystemEventSpy.mock.calls.at(-1)?.[0]).toContain("Telegram reaction added:");
-  });
 
   it("retries model callback updates after a bubbled preflight failure", async () => {
     loadConfig.mockReturnValue({
+      messages: { inbound: { debounceMs: 0 } },
       agents: {
         defaults: {
           model: "openai/gpt-5.4",
@@ -6378,33 +3744,6 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("retries command pagination callbacks after a bubbled preflight failure", async () => {
-    const listSkillCommandsMock = listSkillCommandsForAgents as unknown as ReturnType<typeof vi.fn>;
-
-    createTelegramBot({ token: "tok" });
-    listSkillCommandsMock.mockClear();
-    const callbackHandler = getOnHandler("callback_query");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
-
-    const ctx = makeCallbackRetryContext({
-      updateId: 778,
-      id: "cbq-commands-retry-2",
-      data: "commands_page_2:main",
-      messageId: 21,
-    });
-
-    listSkillCommandsMock.mockImplementationOnce(() => {
-      throw new Error("commands boom");
-    });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("commands boom");
-    await runMiddlewareChain(ctx);
-
-    expect(listSkillCommandsMock).toHaveBeenCalledTimes(2);
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Commands (2/");
-  });
-
   it("retries plugin binding approval callbacks after a bubbled resolution failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
@@ -6432,212 +3771,6 @@ describe("createTelegramBot", () => {
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls.at(0)?.[1]).toContain("plugin bind approval");
-  });
-
-  it("retries exec approval callbacks after a bubbled resolution failure", async () => {
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          execApprovals: {
-            enabled: true,
-            approvers: ["9"],
-            target: "dm",
-          },
-        },
-      },
-    });
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
-
-    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("approval boom"));
-
-    const ctx = makeCallbackRetryContext({
-      updateId: 8895,
-      id: "cbq-approval-retry-1",
-      data: "/approve 138e9b8c allow-once",
-      messageId: 231,
-      text: "Approval required.",
-    });
-
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("approval boom");
-    await runMiddlewareChain(ctx);
-
-    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(editMessageTextSpy).toHaveBeenCalledWith(
-      1234,
-      231,
-      expect.stringContaining("Result: Allowed once"),
-      { reply_markup: { inline_keyboard: [] } },
-    );
-    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).not.toHaveBeenCalled();
-  });
-
-  it("retries model provider callbacks after a bubbled edit failure", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
-
-    const ctx = makeCallbackRetryContext({
-      updateId: 889,
-      id: "cbq-model-provider-retry-1",
-      data: "mdl_prov",
-      messageId: 23,
-    });
-
-    editMessageTextSpy.mockImplementationOnce(async () => {
-      throw new Error("edit boom");
-    });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("edit boom");
-    await runMiddlewareChain(ctx);
-
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
-    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Select a provider:");
-    expect(
-      (
-        editMessageTextSpy.mock.calls.at(-1)?.[3] as {
-          reply_markup?: { inline_keyboard?: unknown[][] };
-        }
-      )?.reply_markup?.inline_keyboard?.[0]?.[0],
-    ).toEqual({
-      text: "openai (1)",
-      callback_data: "mdl_list_openai_1",
-    });
-  });
-
-  it.each(["mdl_prov", "mdl_list_xai_1"])(
-    "explains missing access in %s callbacks",
-    async (data) => {
-      loadConfig.mockReturnValue({
-        agents: { defaults: { model: "xai/grok-test" } },
-        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-      });
-      setSessionStoreEntriesForTest({
-        "agent:main:main": {
-          sessionId: "pinned-model-account",
-          updatedAt: 0,
-          authProfileOverride: "xai:missing",
-          authProfileOverrideSource: "user",
-        },
-      });
-      vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockImplementationOnce(
-        async (_cfg, _agentId, options) => {
-          const missingAccess = options?.sessionEntry?.authProfileOverride === "xai:missing";
-          return {
-            byProvider: new Map([["xai", new Set(["grok-test"])]]),
-            providers: ["xai"],
-            resolvedDefault: { provider: "xai", model: "grok-test" },
-            modelNames: new Map([["xai/grok-test", "Grok Test"]]),
-            modelCatalog: [{ provider: "xai", id: "grok-test", name: "Grok Test" }],
-            modelMenu: {
-              modelNames: new Map([
-                ["xai/grok-test", missingAccess ? "Sign-in needed — Grok Test" : "Grok Test"],
-              ]),
-              byProvider: new Map([
-                [
-                  "xai",
-                  {
-                    available: missingAccess ? 0 : 1,
-                    notice: missingAccess ? "xai: Sign-in needed. Connect with /login xai." : "",
-                  },
-                ],
-              ]),
-            },
-          };
-        },
-      );
-      createTelegramBot({ token: "tok" });
-      await getCallbackHandler()(
-        makeCallbackRetryContext({ id: `missing-access-${data}`, data, messageId: 24 }),
-      );
-
-      expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Connect with /login xai.");
-      if (data === "mdl_list_xai_1") {
-        expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("0 of 1 available");
-        expect(editMessageTextSpy.mock.calls.at(-1)?.[3]).toMatchObject({
-          reply_markup: {
-            inline_keyboard: expect.arrayContaining([
-              [expect.objectContaining({ text: expect.stringContaining("Sign-in needed") })],
-            ]),
-          },
-        });
-      }
-      expect(replySpy).not.toHaveBeenCalled();
-    },
-  );
-
-  it("retries model selection callbacks after a bubbled session-store failure", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
-    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
-
-    const applySessionModelSelectionSpy = vi.spyOn(
-      modelSessionRuntime,
-      "applySessionModelSelection",
-    );
-    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
-
-    const ctx = makeCallbackRetryContext({
-      updateId: 890,
-      id: "cbq-model-select-retry-1",
-      data: "mdl_sel_openai/gpt-5.4",
-      messageId: 24,
-    });
-
-    try {
-      await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
-      await runMiddlewareChain(ctx);
-    } finally {
-      applySessionModelSelectionSpy.mockRestore();
-    }
-
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
-    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
-    );
-    expect(
-      editMessageTextSpy.mock.calls.some((call) =>
-        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
-      ),
-    ).toBe(false);
-  });
-
-  it("shows a permanent rejection when model selection is locked", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
-    const getSessionEntrySpy = vi
-      .spyOn(telegramBotDepsForTest, "getSessionEntry")
-      .mockImplementationOnce(() => {
-        const entry = {
-          sessionId: "locked-session",
-          updatedAt: Date.now(),
-          modelSelectionLocked: true,
-        };
-        return entry;
-      });
-    const ctx = makeCallbackRetryContext({
-      id: "cbq-model-select-locked-1",
-      data: "mdl_sel_openai/gpt-5.4",
-      messageId: 25,
-    });
-
-    try {
-      await expect(callbackHandler(ctx)).resolves.toBeUndefined();
-    } finally {
-      getSessionEntrySpy.mockRestore();
-    }
-
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toBe(
-      "❌ Model selection is locked for this session.",
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

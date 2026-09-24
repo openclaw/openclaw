@@ -1,14 +1,19 @@
 /** Installed systemd scope discovery and dueling-manager diagnostics. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isGatewayServiceEnv } from "./constants.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import type { GatewayServiceEnv } from "./service-types.js";
-import { execSystemctl, isSystemdUnitActive, type SystemdUnitScope } from "./systemd-exec.js";
+import type {
+  GatewayServiceEnv,
+  SystemdGatewayInstallation,
+  SystemdServiceReadTarget,
+} from "./service-types.js";
+import { execSystemctl, isSystemdUnitActive } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
-import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
+import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 
 const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/etc/systemd/system",
@@ -107,12 +112,6 @@ async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string
   return null;
 }
 
-type InstalledSystemdGatewayScope = {
-  scope: SystemdUnitScope;
-  unitName: string;
-  unitPath: string;
-};
-
 export async function assertNoSystemGatewayOwnership(
   env: GatewayServiceEnv,
   timeoutMs?: number,
@@ -121,6 +120,42 @@ export async function assertNoSystemGatewayOwnership(
     return;
   }
   await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
+}
+
+/**
+ * Activation admission after the system-scope probe refused. An unverifiable
+ * probe cannot make a loaded user unit whose artifacts this account owns a
+ * competing manager; a proven system owner and an unloaded or foreign user unit
+ * still refuse with the original error.
+ */
+export async function admitUserUnitActivationPastUnverifiableOwnership(
+  env: GatewayServiceEnv,
+  error: unknown,
+  timeoutMs?: number,
+): Promise<void> {
+  if (!isSystemSystemdOwnershipError(error) || error.ownership.status !== "unverifiable") {
+    throw error;
+  }
+  const { readSystemdDefinitionMutationCapability } =
+    await import("./systemd-definition-mutation.js");
+  const capability = await readSystemdDefinitionMutationCapability(env, {
+    requireLoaded: true,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  }).catch(() => undefined);
+  if (capability?.kind !== "writable") {
+    throw error;
+  }
+}
+
+export async function assertNoSystemGatewayOwnershipForActivation(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  try {
+    await assertNoSystemGatewayOwnership(env, timeoutMs);
+  } catch (error) {
+    await admitUserUnitActivationPastUnverifiableOwnership(env, error, timeoutMs);
+  }
 }
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
@@ -154,29 +189,9 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   return null;
 }
 
-/**
- * The full installed-gateway picture across both systemd scopes.
- *
- * Modeled as a discriminated union so the "both a user-scope and a
- * system-scope unit are installed" (`dueling`) state is representable and
- * cannot be confused with the single-scope states. The old single-scope
- * detector could never surface this, which is the root cause of the
- * upgrade restart cascade in issue #79375: two supervisors bind the same
- * port and SIGTERM each other forever.
- */
-type SystemdGatewayInstallation =
-  | { kind: "none" }
-  | { kind: "user"; user: InstalledSystemdGatewayScope }
-  | { kind: "system"; system: InstalledSystemdGatewayScope }
-  | {
-      kind: "dueling";
-      user: InstalledSystemdGatewayScope;
-      system: InstalledSystemdGatewayScope;
-    };
-
 async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
   let userPath: string | null;
   try {
@@ -197,11 +212,14 @@ async function findUserSystemdGatewayScope(
 
 async function findSystemSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
   const systemPath = await findSystemSystemdUnitPath(env);
   if (systemPath) {
     return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  }
+  if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
+    return null;
   }
   // System-scope installs may use a non-canonical unit name; fall back to a
   // marker-owned lookup before declaring no system unit exists.
@@ -220,6 +238,13 @@ export async function findSystemdGatewayInstallation(
     findUserSystemdGatewayScope(env),
     findSystemSystemdGatewayScope(env),
   ]);
+  if (system) {
+    // A template is shared; native inspection needs this account's runnable instance.
+    system.unitName = system.unitName.replace(
+      /@\.service$/,
+      () => `@${os.userInfo().username}.service`,
+    );
+  }
   if (user && system) {
     // Only the SAME canonical gateway installed in both scopes is a dueling
     // conflict (issue #79375). A marker-owned system unit with a *different*
@@ -251,7 +276,7 @@ export async function findSystemdGatewayInstallation(
  */
 export async function findInstalledSystemdGatewayScope(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
+): Promise<SystemdServiceReadTarget | null> {
   const installation = await findSystemdGatewayInstallation(env);
   // User-first: dueling resolves to the user scope, same as a user-only install.
   if (installation.kind === "dueling" || installation.kind === "user") {

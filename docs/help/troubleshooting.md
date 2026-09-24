@@ -52,17 +52,20 @@ openclaw doctor
 
 Common causes:
 
-- `tools.profile: "minimal"` allows only `session_status`.
+- `tools.profile: "minimal"` allows `session_status` and update-only `gateway`.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
-- `tools.profile: "coding"` is the default for new local configs (repo, file,
-  shell, and runtime work).
-- `tools.profile: "full"` removes profile restrictions; limit to trusted
-  operator-controlled agents.
+- `tools.profile: "coding"` selects repo, file, shell, and runtime work.
+- `tools.profile: "full"` is the local onboarding default. It removes core profile
+  filtering and selects optional plugin tools, subject to independent restrictions.
+- An unset profile leaves core tools unfiltered but does not itself select optional
+  plugin tools. Existing configs stay unchanged unless onboarding is run again.
 - Per-agent `agents.entries.*.tools` overrides narrow or expand the root profile
   for one agent.
 
 Change the profile, restart or reload the Gateway, then recheck with
-`openclaw status --all`. Full profile/group table: [Tool profiles](/gateway/config-tools#tool-profiles).
+`openclaw status --all`. Check the chat **Execution permissions** menu separately;
+Full tool selection does not grant Full Access or configure missing plugins.
+Full profile/group table: [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 
 ## Anthropic long context 429
 

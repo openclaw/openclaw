@@ -1,11 +1,6 @@
 // Covers SCP remote host and path normalization.
 import { describe, expect, it } from "vitest";
-import {
-  isSafeScpRemoteHost,
-  isSafeScpRemotePath,
-  normalizeScpRemoteHost,
-  normalizeScpRemotePath,
-} from "./scp-host.js";
+import { isSafeScpRemoteHost, normalizeScpRemoteHost, normalizeScpRemotePath } from "./scp-host.js";
 
 describe("scp remote host", () => {
   it.each([
@@ -46,12 +41,10 @@ describe("scp remote path", () => {
       {
         value: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
         normalized: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
-        safe: true,
       },
       {
         value: " /Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg ",
         normalized: "/Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg",
-        safe: true,
       },
       null,
       undefined,
@@ -71,10 +64,9 @@ describe("scp remote path", () => {
     ].map((entry) =>
       typeof entry === "object" && entry !== null && "value" in entry
         ? entry
-        : { value: entry, normalized: undefined, safe: false },
+        : { value: entry, normalized: undefined },
     ),
-  )("classifies path token %j", ({ value, normalized, safe }) => {
+  )("classifies path token %j", ({ value, normalized }) => {
     expect(normalizeScpRemotePath(value)).toBe(normalized);
-    expect(isSafeScpRemotePath(value)).toBe(safe);
   });
 });

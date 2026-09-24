@@ -1,12 +1,44 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { FastMode } from "../../api/types.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.new-session.preferences.v1:";
 const IDENTITY_KEY_PREFIX = "new-session.v1:";
 export const PREFS_MIGRATION_KEY = "new-session.migration.v1";
+// users.prefs is already authenticated-user and Gateway scoped. Null deletes this key.
+export const PALETTE_PREFERENCE_KEY = "new-session.palette.v1";
+
+export type PaletteSessionPreference = {
+  agentId: string;
+  selection: NewSessionPreference;
+};
+
+export function decodePalettePreference(value: unknown): PaletteSessionPreference | null {
+  if (!isRecord(value) || typeof value.agentId !== "string" || !value.agentId.trim()) {
+    return null;
+  }
+  const selection = normalizePreference(value.selection);
+  if (!selection || !isRecord(value.selection)) {
+    return null;
+  }
+  // Empty placement fields are explicit overrides, not permission to inherit a /new choice.
+  for (const key of ["folder", "projectId", "baseRef"] as const) {
+    const field = value.selection[key];
+    if (typeof field === "string") {
+      selection[key] = field.trim();
+    }
+  }
+  // The palette owns placement knobs; model/thinking continue to follow ordinary defaults.
+  delete selection.model;
+  delete selection.agentRuntime;
+  delete selection.thinkingLevel;
+  delete selection.fastMode;
+  delete selection.worktreeName;
+  return { agentId: normalizeAgentId(value.agentId), selection };
+}
 
 export type NewSessionWhere =
   | { kind: "local" }
@@ -34,11 +66,41 @@ export type NewSessionPreference = {
   where?: NewSessionWhere;
   projectId?: string;
   worktree?: boolean;
+  freshWorkspace?: boolean;
   baseRef?: string;
   worktreeName?: string;
   model?: string;
+  agentRuntime?: string;
   thinkingLevel?: string;
+  fastMode?: FastMode;
 };
+
+export function hasNewSessionModelPreference(
+  preference: NewSessionPreference | null | undefined,
+): preference is NewSessionPreference {
+  return Boolean(
+    preference?.model || preference?.thinkingLevel || preference?.fastMode !== undefined,
+  );
+}
+
+export function resolveNewSessionFolderPreference(
+  preference: NewSessionPreference | null,
+  workspace: string,
+) {
+  const storedFolder = preference?.folder ?? "";
+  const workspaceMoved =
+    Boolean(storedFolder) &&
+    storedFolder === preference?.workspace &&
+    preference.workspace !== workspace;
+  const folder = storedFolder && !workspaceMoved ? storedFolder : workspace;
+  return {
+    folder,
+    workspaceMoved,
+    freshWorkspace:
+      preference?.freshWorkspace ??
+      !(preference?.worktree === true || preference?.projectId || (folder && folder !== workspace)),
+  };
+}
 
 type PersistedPreferences = {
   agents?: Record<string, NewSessionPreference>;
@@ -52,40 +114,42 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   if (!isRecord(value)) {
     return null;
   }
-  const record = value;
-  const workspace = normalizeOptionalString(record.workspace);
-  const folder = normalizeOptionalString(record.folder);
-  const projectId = normalizeOptionalString(record.projectId);
-  const baseRef = normalizeOptionalString(record.baseRef);
-  const worktreeName = normalizeOptionalString(record.worktreeName);
-  const model = normalizeOptionalString(record.model);
-  const thinkingLevel = normalizeOptionalString(record.thinkingLevel);
-  const worktree = typeof record.worktree === "boolean" ? record.worktree : undefined;
-  const where = normalizeWhere(record.where);
-  if (
-    !workspace &&
-    !folder &&
-    !where &&
-    !projectId &&
-    worktree === undefined &&
-    !baseRef &&
-    !worktreeName &&
-    !model &&
-    !thinkingLevel
-  ) {
-    return null;
+  const preference: NewSessionPreference = {};
+  for (const key of [
+    "workspace",
+    "folder",
+    "projectId",
+    "baseRef",
+    "worktreeName",
+    "model",
+    "thinkingLevel",
+  ] as const) {
+    const normalized = normalizeOptionalString(value[key]);
+    if (normalized) {
+      preference[key] = normalized;
+    }
   }
-  return {
-    ...(workspace ? { workspace } : {}),
-    ...(folder ? { folder } : {}),
-    ...(where ? { where } : {}),
-    ...(projectId ? { projectId } : {}),
-    ...(worktree !== undefined ? { worktree } : {}),
-    ...(baseRef ? { baseRef } : {}),
-    ...(worktreeName ? { worktreeName } : {}),
-    ...(model ? { model } : {}),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
-  };
+  const agentRuntime = normalizeOptionalString(value.agentRuntime);
+  if (preference.model && agentRuntime) {
+    preference.agentRuntime = agentRuntime;
+  }
+  if (typeof value.fastMode === "boolean" || value.fastMode === "auto") {
+    preference.fastMode = value.fastMode;
+  }
+  if (typeof value.worktree === "boolean") {
+    preference.worktree = value.worktree;
+  }
+  if (typeof value.freshWorkspace === "boolean") {
+    preference.freshWorkspace = value.freshWorkspace;
+  } else if (preference.worktree === true) {
+    // Preserve the legacy source choice before Git discovery clears worktree availability.
+    preference.freshWorkspace = false;
+  }
+  const where = normalizeWhere(value.where);
+  if (where) {
+    preference.where = where;
+  }
+  return Object.keys(preference).length ? preference : null;
 }
 
 function normalizeWhere(value: unknown): NewSessionWhere | undefined {
@@ -169,52 +233,29 @@ export function replaceBrowserPreference(
   gatewayUrl: string,
   agentId: string,
   preference: NewSessionPreference,
-): void {
-  const storage = getSafeLocalStorage();
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const normalized = normalizePreference(preference);
-  if (!storage || !gatewayUrl || !normalizedAgentId || !normalized) {
-    return;
-  }
-  const store = readStore(storage, gatewayUrl);
-  try {
-    storage.setItem(
-      storageKey(gatewayUrl),
-      JSON.stringify({
-        ...store,
-        agents: { ...store.agents, [normalizedAgentId]: normalized },
-      } satisfies PersistedPreferences),
-    );
-  } catch {
-    // Browser storage can be disabled or full; preferences are best effort.
-  }
-}
-
-export function patchNewSessionPreference(
-  gatewayUrl: string,
-  agentId: string,
-  patch: NewSessionPreference,
-): void {
+): boolean {
   const storage = getSafeLocalStorage();
   const normalizedAgentId = normalizeAgentId(agentId);
   if (!storage || !gatewayUrl || !normalizedAgentId) {
-    return;
+    return false;
   }
   const store = readStore(storage, gatewayUrl);
-  const current = normalizePreference(store.agents?.[normalizedAgentId]) ?? {};
-  const next = normalizePreference({ ...current, ...patch });
-  if (!next) {
-    return;
+  const agents = { ...store.agents };
+  const normalized = normalizePreference(preference);
+  if (normalized) {
+    agents[normalizedAgentId] = normalized;
+  } else {
+    // Clearing the final selection removes the preference; it is not an omitted patch.
+    delete agents[normalizedAgentId];
   }
   try {
     storage.setItem(
       storageKey(gatewayUrl),
-      JSON.stringify({
-        ...store,
-        agents: { ...store.agents, [normalizedAgentId]: next },
-      } satisfies PersistedPreferences),
+      JSON.stringify({ ...store, agents } satisfies PersistedPreferences),
     );
+    return true;
   } catch {
-    // Browser storage can be disabled or full; preferences are best effort.
+    // Browser storage can be disabled or full; callers can report unconfirmed writes.
+    return false;
   }
 }

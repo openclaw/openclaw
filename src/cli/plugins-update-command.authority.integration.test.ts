@@ -11,8 +11,8 @@ import {
   retainPluginInstallTransaction,
   withPluginInstallTransactions,
 } from "../plugins/install-transaction.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-row.js";
 import {
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
@@ -163,7 +163,7 @@ describe("plugin update metadata refusal and retained package settlement", () =>
             },
           ),
         );
-        const command = runPluginUpdateCommand({ id: pluginId, opts: {} });
+        const command = runPluginUpdateCommand({ ids: [pluginId], opts: {} });
         if (refuse) {
           await expect(command).rejects.toThrow();
           expect(failedReads).toBe(1);

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { generateMusic } from "../../music-generation/runtime.js";
 import type {
   MusicGenerationOutputFormat,
@@ -188,7 +188,7 @@ export async function executeMusicGenerationJob(params: {
     type: "audio",
     path: track.path,
     mimeType: track.contentType,
-    name: result.tracks[index]?.fileName,
+    name: extractOriginalFilename(track.path),
     sizeBytes: track.size,
     ...(typeof appliedDurationSeconds === "number"
       ? { durationMs: appliedDurationSeconds * 1000 }

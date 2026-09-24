@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { navigateToControlUiSession, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -14,6 +15,7 @@ import {
   WORKSPACE,
   captureUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   controlUiSessionUrl,
   createCloudAgentsListResponse,
@@ -93,6 +95,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start session" }).click();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "machine0" });
+      await pollLocatorText(page.locator(".chat-thread")).toContain(
+        "Use the configured machine size",
+      );
+      await pollLocatorText(
+        page.locator('.chat-thread .chat-working-indicator[role="status"]'),
+      ).toContain("Provisioning environment…");
+      expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await captureUiProof(suite, page, "cloud-provisioning.png");
     });
   });
 
@@ -242,9 +252,14 @@ suite.define(() => {
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
       expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await page.keyboard.press("Escape");
+      await page.locator("#new-session-project-trigger").click();
+      await page.locator('.new-session-page__project-popover [data-value="workspace"]').click();
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "Starting branch",
+      );
       await checkoutTrigger.click();
       const currentCheckout = checkout.locator('[data-value="checkout"]');
       expect(await currentCheckout.isDisabled()).toBe(true);
@@ -300,10 +315,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await checkoutTrigger.click();
-      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("main");
-      await checkout.getByLabel("From").fill("release");
-      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("release");
-      await checkout.getByLabel("From").fill("main");
+      const baseRef = checkoutBaseRefInput(checkout);
+      await expect.poll(() => baseRef.getAttribute("placeholder")).toBe("main");
+      expect(await baseRef.inputValue()).toBe("");
+      await baseRef.fill("release");
+      await expect.poll(() => baseRef.inputValue()).toBe("release");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "From release",
+      );
+      await baseRef.fill("main");
       await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the selected runner",
       );
@@ -334,7 +354,7 @@ suite.define(() => {
         "Syncs OpenClaw to the selected runner",
       );
       await captureUiProof(suite, page, "01-cloud-worker-target.png", {
-        surface: checkout.locator('wa-popup [part="popup"]'),
+        surface: checkout.locator(".new-session-page__picker-root"),
         content: [checkout.getByLabel("Name", { exact: true })],
       });
       await page.keyboard.press("Escape");
@@ -397,6 +417,8 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
         );
       }
+      // Hold each retry's deadline until the next deferred response is installed.
+      await pauseVirtualClock(page);
       await gateway.rejectDeferred("environments.list", profileCatalogError);
 
       // A recorded request is not a processed failure. Let the page settle and
@@ -452,11 +474,11 @@ suite.define(() => {
         titleSource: message,
         projectId: "openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
         worktreeName: "cloud-e2e",
         thinkingLevel: "high",
         fastMode: true,
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
@@ -466,6 +488,7 @@ suite.define(() => {
         gateway,
         sessionKey,
       );
+      await pollLocatorText(page.locator(".chat-thread")).toContain(message);
       runtimeLoad.resolve();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toMatchObject({
@@ -534,6 +557,12 @@ suite.define(() => {
         await pollLocatorText(startupStatus).toContain(label);
       };
 
+      const parentDescriptions = async () =>
+        (await gateway.getRequests("sessions.describe")).filter(
+          (request) => asNullableRecord(request.params)?.key === sessionKey,
+        );
+      let expectedParentReads = 1;
+      expect(await parentDescriptions()).toHaveLength(expectedParentReads);
       for (const [state, generation, label] of [
         ["requested", 1, "Provisioning environment…"],
         ["provisioning", 2, "Provisioning environment…"],
@@ -542,25 +571,17 @@ suite.define(() => {
       ] as const) {
         await publishPlacement(state, generation, label, state === "starting");
         await page.clock.runFor(250);
+        expectedParentReads += 1;
+        expect(await parentDescriptions()).toHaveLength(expectedParentReads);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      // Healthy parent and child reads are independent; placement updates must
-      // not add extra parent lookups regardless of which request starts first.
-      const parentReads = (await gateway.getRequests()).filter((request) => {
-        const params = asNullableRecord(request.params);
-        return (
-          (request.method === "sessions.describe" && params?.key === sessionKey) ||
-          (request.method === "sessions.list" && params?.spawnedBy === sessionKey)
-        );
-      });
-      const childReads = parentReads.filter((request) => request.method === "sessions.list");
-      expect(childReads.length).toBeGreaterThan(0);
-      expect(parentReads.filter((request) => request.method === "sessions.describe")).toHaveLength(
-        childReads.length,
+      // Parent lookups follow placement transitions; child reads coalesce independently.
+      const childReads = (await gateway.getRequests("sessions.list")).filter(
+        (request) => asNullableRecord(request.params)?.spawnedBy === sessionKey,
       );
-      const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
-      await neutralRow.waitFor();
-      await neutralRow.click();
+      expect(childReads.length).toBeGreaterThan(0);
+      expect(childReads.length).toBeLessThanOrEqual(expectedParentReads);
+      await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
       await expect.poll(() => page.url()).toContain("neutral-e2e");
       await page.evaluate((pathname) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -673,7 +694,7 @@ suite.define(() => {
       const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
       await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
-      await sessionRow.getByRole("button", { name: "Open session menu" }).click();
+      await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });

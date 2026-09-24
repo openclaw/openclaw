@@ -10,6 +10,41 @@ sidebarTitle: "Model helpers"
 
 Call a model, resolve model-selection policy, and resolve provider auth without importing host internals. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Protected model egress for standalone commands
+
+`withConfiguredModelEgress` from `openclaw/plugin-sdk/secret-egress-runtime`
+runs an explicit standalone command for an official plugin with a destination-bound credential
+sentinel. It resolves the selected provider's configured API-key SecretRef
+through the normal secret resolver, including file-backed keys, and uses the
+provider's model route policy for its HTTPS endpoint on port 443. It supports
+OpenAI-compatible Responses and Completions routes. OAuth, auth-profile
+references, custom request headers, and custom request transport are unsupported.
+This is a private JavaScript-only host binding for bundled and separately
+published official plugins, not a third-party plugin API.
+
+```typescript
+const { withConfiguredModelEgress } = await import("openclaw/plugin-sdk/secret-egress-runtime");
+await withConfiguredModelEgress({ config, provider, model, signal }, async (egress) => {
+  // Keep hostEnv on the credential-owning host for the authenticated bridge.
+  // Send only sentinel, baseUrl, model, and public caBundle to the remote app.
+  await runRemoteAppThroughBridge(egress, signal);
+});
+```
+
+The callback receives `sentinel`, `baseUrl`, `model`, `allowedHosts`, `hostEnv`,
+and the public `caBundle` contents. Supply `onOutput(text, stream)` to receive
+live output with resolved credentials redacted, including values split between
+chunks; pass the callback's `onOutputChunk` to the command runner. The caller owns its bridge and remote
+process, must honor cancellation, and must join both before its callback
+settles. Cancellation revokes proxy access immediately; callback completion or
+failure revokes access, stops the isolated proxy, and removes its private CA
+directory. Credentials and proxy grants never enter the shared secret store.
+
+This is an explicit command-scoped proxy using the existing secret egress
+implementation. It does not require enabling or restarting the Gateway's
+persistent egress proxy. Import the SDK module only in the command execution
+path; importing it alone does not load model or secret runtime code.
+
 ## Prepared simple completions
 
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
@@ -39,6 +74,24 @@ provider resources. Repeated
 compatible preparations share the existing generation's resources. A result from
 a closed host cannot start another completion; prepare again under the current
 host.
+
+## Low-level completions
+
+The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
+an optional fourth `assertCurrent` callback. It runs after transport setup and
+immediately before provider dispatch. A thrown error or an aborted
+`options.signal` prevents dispatch; the callback stays outside provider options.
+Existing three-argument calls remain supported.
+
+The `resolveOpenAIModelReasoningEfforts`, `resolveOpenAIReasoningEffortMap`, and
+`resolveOpenAIReasoningEffortMapping` helpers from the same SDK subpath read the
+OpenAI model's effort capabilities and configured native mappings.
+
+Native harnesses can use `selectSupportedReasoningEffort` from
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` with their validated effort order and
+supported efforts. It keeps a supported request, otherwise chooses the next
+higher supported effort, or the highest available effort when none is higher.
+Backend adapters retain protocol validation and special-mode handling.
 
 ## Model namespaces
 
@@ -128,6 +181,11 @@ host.
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    `usage.costUsd` is omitted when no recorded cost or configured/eligible catalog
+    pricing is available. Default-filled zero rates do not establish free usage.
+    Explicit operator zero pricing and provider-billed zero totals remain `0`;
+    recorded request costs retain their original pricing tiers.
+
     Direct completions can set `responseFormat` for provider-native constrained
     output. When the provider exposes them, the result also includes the concrete
     `responseModel` and terminal `stopReason`. Security-sensitive callers can set
@@ -136,10 +194,16 @@ host.
     direct-provider controls before dispatch.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
-    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
-    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
-    provider and model before dispatching the completion. `adaptive` becomes
-    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
+    host accepts the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`). Direct completions
+    map `adaptive` to `medium` and `ultra` to `max`; the selected provider transport
+    maps each effort to its supported wire value. Explicit `off` reaches the
+    provider's disabled-thinking policy; whether thinking can be disabled depends
+    on the selected model and auth route.
+
+    Codex isolated completions pass explicit reasoning levels through the native
+    model's supported-effort mapping. When reasoning is omitted, these bounded
+    calls keep their low-effort default.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.

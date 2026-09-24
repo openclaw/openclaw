@@ -51,6 +51,7 @@ export function createProfileResetOps({
       state: state(),
       runtime,
       reason: "profile reset requested",
+      managedChrome: "release-profile-data",
       afterCleanup: async () => {
         if (!fs.existsSync(userDataDir)) {
           return;

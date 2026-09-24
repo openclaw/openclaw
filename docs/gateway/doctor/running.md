@@ -23,7 +23,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept default non-service repairs without prompting and enter maintenance while preserving the installed gateway service definition.
+    Accept default non-service repairs without prompting and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +31,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance while preserving the installed gateway service definition.
+    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--lint">
@@ -49,7 +49,7 @@ openclaw doctor
     openclaw doctor --fix --force
     ```
 
-    Apply aggressive config/state repairs too. Repair maintenance preserves the installed service definition; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
+    Apply aggressive config/state repairs too. Repair maintenance uses the same service-preservation and installation-drift rules; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 
   </Tab>
   <Tab title="--non-interactive">
@@ -65,6 +65,11 @@ openclaw doctor
     migrations. Explicit repair checks ownership before database snapshots;
     another live owner must stop before repair can proceed. Malformed or
     conflicting retained files require the manual recovery named in the error.
+
+    When the shared database is already current, preparation leaves the running
+    Gateway's worker environments available. Actual schema repairs retire the old
+    database resources before later maintenance continues, including when repair
+    cleanup fails.
 
   </Tab>
   <Tab title="--deep">
@@ -128,6 +133,7 @@ openclaw doctor --lint --only core/doctor/gateway-config --json
 
 JSON output fields:
 
+- `schemaVersion`: version of the machine-readable lint envelope; branch on this before parsing other fields
 - `ok`: whether any finding met the selected severity threshold
 - `checksRun` / `checksSkipped`: counts (skipped by profile, `--only`, or `--skip`)
 - `findings`: structured diagnostics with `checkId`, `severity`, `message`, and optional `path`, `line`, `column`, `ocPath`, `source`, `target`, `requirement`, `fixHint`
@@ -141,6 +147,11 @@ Exit codes:
 | `2`  | command/runtime failure before findings could be emitted |
 
 These threshold-based exit codes belong to explicit `--lint` mode, with or without `--json`. Bare `openclaw doctor --json` preserves ordinary Doctor's advisory exit `0` after producing its payload; machine consumers should read `ok` and `findings`. Fatal errors before output remain nonzero.
+
+During `openclaw update`, failure to remove Doctor's disposable lint snapshot is
+recorded as an update warning and does not block the update. Standalone
+`doctor --lint` still reports that cleanup failure as an error. The update keeps
+the checks' actual findings; cleanup warnings do not hide other failures.
 
 Flags:
 

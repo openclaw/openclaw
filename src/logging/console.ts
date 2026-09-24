@@ -71,10 +71,6 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   return loggingState.cachedConsoleSettings as ConsoleSettings;
 }
 
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
-}
-
 // Route all console output (including tslog console writes) to stderr.
 // This keeps stdout clean for RPC/JSON modes.
 export function routeLogsToStderr(): void {
@@ -204,6 +200,7 @@ function writeFormattedConsoleOutput(params: {
           })
         : redactSensitiveText(stack ?? params.formatted);
     const line = timestamp ? `${timestamp} ${rendered}` : rendered;
+    clearActiveProgressLine();
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
     } else if (
@@ -230,7 +227,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (!rawConsole) {
     return false;
   }
-  clearActiveProgressLine();
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }

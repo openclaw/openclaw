@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
+import * as fsSafe from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
@@ -13,7 +14,7 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveHardening,
   failSecondScrubWrite,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -21,8 +22,6 @@ import {
 } from "./state-migrations.audit.test-support.js";
 
 describe("legacy core audit log migration", () => {
-  afterEach(resetPluginStateStoreForTests);
-
   it("imports config and system audit JSONL only through explicit doctor repair", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { source: configPath } = audit.config;
@@ -485,8 +484,7 @@ describe("legacy core audit log migration", () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, sanitized, source } = audit.config;
       await audit.writeJsonLines(source, [configAuditRecord("must-redact")]);
-      // fs-safe applies the write mode before the migration's explicit hardening checks.
-      const chmodSpy = await failChmodCall(audit, "chmod-probe", 4, "simulated chmod failure");
+      const chmodSpy = failArchiveHardening(audit, raw, "simulated chmod failure");
 
       let failed: Awaited<ReturnType<typeof audit.migrate>>;
       try {
@@ -554,27 +552,37 @@ describe("legacy core audit log migration", () => {
         argv: ["openclaw", "config", "set", "later", "value"],
       });
 
-      let settled = false;
-      const migration = audit.migrate().finally(() => {
-        settled = true;
-      });
-      for (let attempt = 0; attempt < 500; attempt += 1) {
-        try {
-          await fs.access(source);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            break;
-          }
-          throw error;
+      const recreateSource = vi.fn(() => audit.appendJsonLines(source, [retainedRecord]));
+      const openRoot = fsSafe.root;
+      const restorers: Array<() => void> = [];
+      const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+        const root = await openRoot(rootPath, defaults);
+        if (rootPath === audit.stateDir) {
+          const move = root.move.bind(root);
+          const moveSpy = vi.spyOn(root, "move").mockImplementation(async (...args) => {
+            const result = await move(...args);
+            if (
+              path.resolve(rootPath, args[0]) === source &&
+              path.resolve(rootPath, args[1]) === audit.config.claim
+            ) {
+              await recreateSource();
+            }
+            return result;
+          });
+          restorers.push(() => moveSpy.mockRestore());
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        return root;
+      });
+      let first: Awaited<ReturnType<typeof audit.migrate>>;
+      try {
+        first = await audit.migrate();
+      } finally {
+        for (const restore of restorers.toReversed()) {
+          restore();
+        }
+        rootSpy.mockRestore();
       }
-      expect(settled).toBe(false);
-      await audit.appendJsonLines(source, [retainedRecord]);
-
-      const first = await migration;
+      expect(recreateSource).toHaveBeenCalledOnce();
       expect(first.warnings.join("\n")).toContain("An old writer recreated config audit log");
       await expect(fs.readFile(source, "utf8")).resolves.toBe(
         `${JSON.stringify(retainedRecord)}\n`,

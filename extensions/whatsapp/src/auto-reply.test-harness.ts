@@ -11,6 +11,10 @@ import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -144,6 +148,8 @@ async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const attempts = opts?.attempts ?? 10;
   const delayMs = opts?.delayMs ?? 5;
   // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
@@ -199,6 +205,8 @@ export function installWebAutoReplyTestHomeHooks() {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     process.env.HOME = previousHome;
     tempHome = undefined;
   });

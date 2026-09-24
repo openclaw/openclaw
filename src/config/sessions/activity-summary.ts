@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { SessionEntry } from "./types.js";
 
+export const ACTIVITY_SUMMARY_FORMAT_REVISION = 2;
+
 const ActivitySummarySchema = z.object({
   version: z.literal(1),
+  formatRevision: z.number().int().positive().optional(),
   text: z.string().max(900),
   updatedAt: z.number().int().nonnegative(),
   sessionId: z.string().min(1),

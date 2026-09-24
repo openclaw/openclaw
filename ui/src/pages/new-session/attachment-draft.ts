@@ -3,11 +3,11 @@ import {
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
-import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachments.ts";
+import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 
 export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
-  private readonly reads: ChatAttachmentReadLifecycle;
+  readonly reads: ChatAttachmentReadLifecycle;
 
   constructor(
     private readonly notify: () => void,

@@ -122,7 +122,7 @@ describe("plugin npm security runner process limits", () => {
     const timeoutChild = join(root, "timeout.mjs");
     const oomChild = join(root, "oom.mjs");
     const rssChild = join(root, "rss.mjs");
-    writeFileSync(timeoutChild, "await new Promise(() => {});\n", "utf8");
+    writeFileSync(timeoutChild, "setInterval(() => {}, 1_000);\n", "utf8");
     writeFileSync(
       oomChild,
       "const values = [];\nwhile (true) values.push(new Array(100000).fill(Math.random()));\n",

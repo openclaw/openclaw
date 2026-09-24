@@ -12,6 +12,7 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -24,7 +25,7 @@ export function bindChatPageSession(
   const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
   if (parseCatalogSessionKey(routeKey)) {
     if (agentId) {
-      context.agentSelection.set(agentId);
+      context.agentSelection.set(agentId, { background: true });
     }
     return;
   }
@@ -43,6 +44,7 @@ export function bindChatPageSession(
       gateway: context.gateway,
       sessionKey,
       agentId,
+      background: true,
     });
   }
 }
@@ -53,7 +55,7 @@ export function canCreateChatSession(state: ChatPageHost) {
     !state.chatSending &&
     !state.chatRunId &&
     state.chatStream === null &&
-    state.chatQueue.length === 0
+    (state.chatQueue.length === 0 || isExpiredIncognitoSession(state))
   );
 }
 

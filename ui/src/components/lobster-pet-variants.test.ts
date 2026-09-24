@@ -57,6 +57,16 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
+function findLobsterLook(paletteId: LobsterPetPaletteId, now: Date) {
+  for (let seed = 0; seed < 20_000; seed++) {
+    const look = createLobsterPetLook(seed, now);
+    if (look.palette.id === paletteId) {
+      return look;
+    }
+  }
+  return undefined;
+}
+
 describe("lobster pet variants", () => {
   it("is deterministic per seed", () => {
     expect(createLobsterPetLook(1234)).toEqual(createLobsterPetLook(1234));
@@ -65,7 +75,6 @@ describe("lobster pet variants", () => {
   it("stays within the variant catalog for many seeds", () => {
     const palettes = new Set<string>();
     const personalities = new Set<string>();
-    const builds = new Set<string>();
     const clawSizes = new Set<string>();
     const tailFans = new Set<boolean>();
     const crusherSides = new Set<string | null>();
@@ -76,7 +85,6 @@ describe("lobster pet variants", () => {
       const look = createLobsterPetLook(seed, neutralDate);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
-      builds.add(look.build);
       clawSizes.add(look.clawSize);
       tailFans.add(look.tailFan);
       crusherSides.add(look.crusherSide);
@@ -86,7 +94,6 @@ describe("lobster pet variants", () => {
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
-      expect(["round", "squat", "slender"]).toContain(look.build);
       expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
       expect([null, "left", "right"]).toContain(look.crusherSide);
       expect([null, "#ffd166", "#ff8ac2", "#b79bff"]).toContain(look.glint);
@@ -96,7 +103,6 @@ describe("lobster pet variants", () => {
     }
     expect(palettes.size).toBeGreaterThan(2);
     expect(personalities.size).toBeGreaterThan(2);
-    expect(builds.size).toBe(3);
     expect(clawSizes.size).toBe(3);
     expect(tailFans.size).toBe(2);
     expect(crusherSides).toContain(null);
@@ -241,17 +247,13 @@ describe("lobster pet variants", () => {
 
   it("keeps Clawtron's LED on the perky antenna", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
-    const clawtron = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "clawtron");
+    const clawtron = findLobsterLook("clawtron", neutralDate);
     expect(clawtron?.antennae).toBe("perky");
   });
 
   it("keeps zombies' antennae droopy", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
-    const zombie = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
-    ).find((look) => look.palette.id === "zombie");
+    const zombie = findLobsterLook("zombie", neutralDate);
     expect(zombie?.antennae).toBe("droopy");
   });
 

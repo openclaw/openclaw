@@ -1,6 +1,6 @@
 /**
  * Extracts native Codex subagent completion notifications from trusted
- * inter-agent commentary messages emitted by the app-server.
+ * contextual and inter-agent messages emitted by the app-server.
  */
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
@@ -40,54 +40,82 @@ function extractCodexNativeSubagentCompletions(
   if (!item) {
     return [];
   }
-  const communication = readTrustedInterAgentCommunication(item);
-  const text = communication?.content;
-  if (typeof text !== "string" || !text) {
-    return [];
+  if (notification.method === "rawResponseItem/completed" && item.role === "user") {
+    return readTrustedContextualCompletions(item);
   }
-  return extractCodexNativeSubagentCompletionsFromText(text).filter(
-    (completion) => completion.agentPath === communication?.author,
-  );
+  return [];
 }
 
-/** Parses one or more tagged subagent completion payloads from commentary text. */
-function extractCodexNativeSubagentCompletionsFromText(
-  text: string,
+function readTrustedContextualCompletions(
+  item: JsonObject,
 ): CodexNativeSubagentNotificationCompletion[] {
-  const completions: CodexNativeSubagentNotificationCompletion[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const start = text.indexOf(CODEX_SUBAGENT_NOTIFICATION_START, cursor);
-    if (start < 0) {
-      break;
-    }
-    const bodyStart = start + CODEX_SUBAGENT_NOTIFICATION_START.length;
-    const end = text.indexOf(CODEX_SUBAGENT_NOTIFICATION_END, bodyStart);
-    if (end < 0) {
-      break;
-    }
-    const parsed = parseCodexNativeSubagentNotificationBody(text.slice(bodyStart, end));
-    if (parsed) {
-      completions.push(parsed);
-    }
-    cursor = end + CODEX_SUBAGENT_NOTIFICATION_END.length;
+  const content = item.content;
+  const metadata = item.internal_chat_message_metadata_passthrough;
+  const kinds = isJsonObject(metadata) ? metadata.content_item_kinds : undefined;
+  if (
+    item.type !== "message" ||
+    !Array.isArray(content) ||
+    !Array.isArray(kinds) ||
+    content.length !== kinds.length
+  ) {
+    return [];
   }
-  return completions;
+  // Codex classifies each contextual fragment separately. Adjacent user text
+  // cannot borrow the native fragment's classification or forge its receipt.
+  return content.flatMap((entry, index) => {
+    if (
+      kinds[index] !== "multi_agent.subagent_notification" ||
+      !isJsonObject(entry) ||
+      entry.type !== "input_text"
+    ) {
+      return [];
+    }
+    const text = readString(entry, "text")?.trim();
+    if (
+      !text?.startsWith(CODEX_SUBAGENT_NOTIFICATION_START) ||
+      !text.endsWith(CODEX_SUBAGENT_NOTIFICATION_END)
+    ) {
+      return [];
+    }
+    const completion = parseCodexNativeSubagentNotificationBody(
+      text.slice(CODEX_SUBAGENT_NOTIFICATION_START.length, -CODEX_SUBAGENT_NOTIFICATION_END.length),
+    );
+    return completion ? [completion] : [];
+  });
 }
 
 export const codexNativeSubagentNotifications = {
   fromNotification: extractCodexNativeSubagentCompletions,
-  fromText: extractCodexNativeSubagentCompletionsFromText,
   deliveredAgentPaths: readDeliveredNativeCompletionPaths,
 };
 
 /** Reads native delivery receipts, leaving status and result ownership with the child lifecycle. */
 function readDeliveredNativeCompletionPaths(notification: CodexServerNotification): string[] {
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  // V1 wait returns these exact terminal states to the foreground parent.
+  // The wait tool finishing alone says nothing about a still-running child.
+  if (
+    notification.method === "item/completed" &&
+    item?.type === "collabAgentToolCall" &&
+    item.tool === "wait" &&
+    (item.status === "completed" || item.status === "failed") &&
+    item.senderThreadId === params?.threadId &&
+    Array.isArray(item.receiverThreadIds) &&
+    isJsonObject(item.agentsStates)
+  ) {
+    const receivers = new Set(item.receiverThreadIds);
+    return Object.entries(item.agentsStates).flatMap(([threadId, state]) =>
+      receivers.has(threadId) &&
+      isJsonObject(state) &&
+      ["completed", "errored", "shutdown", "notFound"].includes(readString(state, "status") ?? "")
+        ? [threadId]
+        : [],
+    );
+  }
   if (notification.method !== "rawResponseItem/completed") {
     return [];
   }
-  const params = isJsonObject(notification.params) ? notification.params : undefined;
-  const item = isJsonObject(params?.item) ? params.item : undefined;
   if (!item || readString(item, "type") !== "agent_message") {
     return extractCodexNativeSubagentCompletions(notification).map(
       (completion) => completion.agentPath,
@@ -126,157 +154,34 @@ function parseCodexNativeSubagentNotificationBody(
     return undefined;
   }
   const agentPath = readString(payload, "agent_path")?.trim();
-  const status = isJsonObject(payload.status) ? payload.status : undefined;
-  if (!agentPath || !status) {
-    return undefined;
-  }
-  const statusEntry = readCompletionStatus(status);
-  if (!statusEntry) {
-    return undefined;
-  }
-  return {
-    agentPath,
-    status: statusEntry.status,
-    statusLabel: statusEntry.label,
-    result: statusEntry.result,
-  };
+  const completion = readCompletionStatus(payload.status);
+  return agentPath && completion ? { agentPath, ...completion } : undefined;
 }
 
-function readCompletionStatus(status: JsonObject):
-  | {
-      status: CodexNativeSubagentCompletionStatus;
-      label: string;
-      result: string;
-    }
-  | undefined {
-  for (const [rawKey, value] of Object.entries(status)) {
-    const normalized = normalizeStatusKey(rawKey);
-    const mappedStatus = mapCompletionStatus(normalized);
-    if (!mappedStatus) {
-      continue;
-    }
-    const result = stringifyResult(value, mappedStatus);
-    const noFinalAssistantMessage =
-      mappedStatus === "succeeded" && result.kind === "no_final_assistant_message";
+function readCompletionStatus(
+  status: JsonValue | undefined,
+): CodexNativeSubagentCompletionDetails | undefined {
+  if (status === "shutdown" || status === "not_found") {
     return {
-      status: mappedStatus,
-      label: noFinalAssistantMessage ? "completed_without_final_message" : rawKey,
-      result: result.text,
+      status: status === "shutdown" ? "cancelled" : "failed",
+      statusLabel: status,
+      result: "(no output)",
     };
   }
-  return undefined;
-}
-
-function mapCompletionStatus(value: string): CodexNativeSubagentCompletionStatus | undefined {
-  if (value === "completed" || value === "succeeded" || value === "success") {
-    return "succeeded";
-  }
-  if (
-    value === "cancelled" ||
-    value === "canceled" ||
-    value === "interrupted" ||
-    value === "shutdown"
-  ) {
-    return "cancelled";
-  }
-  if (
-    value === "failed" ||
-    value === "error" ||
-    value === "errored" ||
-    value === "systemerror" ||
-    value === "notfound"
-  ) {
-    return "failed";
-  }
-  return undefined;
-}
-
-function stringifyResult(
-  value: JsonValue | undefined,
-  status: CodexNativeSubagentCompletionStatus,
-): {
-  text: string;
-  kind?: "no_final_assistant_message";
-} {
-  if (typeof value === "string") {
-    const text = value.trim();
-    if (text) {
-      return { text };
-    }
-    return status === "succeeded"
-      ? completedWithoutFinalAssistantMessage()
-      : { text: "(no output)" };
-  }
-  if (value === null || value === undefined) {
-    return status === "succeeded"
-      ? completedWithoutFinalAssistantMessage()
-      : { text: "(no output)" };
-  }
-  try {
-    return { text: JSON.stringify(value) };
-  } catch {
-    return { text: "(unserializable output)" };
-  }
-}
-
-function completedWithoutFinalAssistantMessage(): {
-  text: string;
-  kind: "no_final_assistant_message";
-} {
-  return {
-    text: "Subagent completed without a final assistant message.",
-    kind: "no_final_assistant_message",
-  };
-}
-
-function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | undefined {
-  if (
-    readString(item, "type") !== "message" ||
-    readString(item, "role") !== "assistant" ||
-    readString(item, "phase") !== "commentary"
-  ) {
+  if (!isJsonObject(status)) {
     return undefined;
   }
-  const text = extractSingleTextPart(item);
-  if (!text) {
-    return undefined;
+  const completed = status.completed;
+  if (completed === null || typeof completed === "string") {
+    const result = completed?.trim();
+    return {
+      status: "succeeded",
+      statusLabel: result ? "completed" : "completed_without_final_message",
+      result: result || "Subagent completed without a final assistant message.",
+    };
   }
-  let parsed: JsonValue;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!isJsonObject(parsed)) {
-    return undefined;
-  }
-  if (
-    typeof parsed.author !== "string" ||
-    typeof parsed.recipient !== "string" ||
-    typeof parsed.content !== "string" ||
-    parsed.trigger_turn !== false
-  ) {
-    return undefined;
-  }
-  return parsed;
-}
-
-function extractSingleTextPart(item: JsonObject): string | undefined {
-  const content = item.content;
-  if (!Array.isArray(content) || content.length !== 1) {
-    return undefined;
-  }
-  const [entry] = content;
-  if (!isJsonObject(entry)) {
-    return undefined;
-  }
-  const type = readString(entry, "type");
-  if (type !== "output_text" && type !== "text") {
-    return undefined;
-  }
-  return readString(entry, "text")?.trim();
-}
-
-function normalizeStatusKey(value: string): string {
-  return value.replace(/[^a-z0-9]/giu, "").toLowerCase();
+  const error = readString(status, "errored");
+  return error === undefined
+    ? undefined
+    : { status: "failed", statusLabel: "errored", result: error.trim() || "(no output)" };
 }

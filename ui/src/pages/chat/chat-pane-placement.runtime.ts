@@ -8,34 +8,24 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
-import {
-  projectDevicePlacements,
-  type DevicePlacementRequirement,
-} from "../new-session/device-placement.ts";
+import { projectDevicePlacements } from "../new-session/device-placement.ts";
 import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery.ts";
-import { resolveChatPaneWorkerPresentation } from "./chat-pane-placement.ts";
+import {
+  repositorySessionNeedsWorker,
+  resolveChatPaneWorkerPresentation,
+} from "./chat-pane-placement.ts";
 
-async function loadPlacementMoveCatalog(
-  client: GatewayBrowserClient,
-  includeProfiles: boolean,
-  runtimeId: string | undefined,
-  requirement?: DevicePlacementRequirement,
-) {
-  const catalog = await requestPlaceCatalog(client, runtimeId);
-  return {
-    profiles: includeProfiles ? catalog.profiles : [],
-    devices: projectDevicePlacements(catalog.environments, requirement),
-  };
-}
+registerNewSessionSetupEnglish();
 
 async function selectChatPanePlacementTarget(params: {
   client: GatewayBrowserClient;
   gatewaySnapshot: ApplicationGatewaySnapshot;
-  mode: "move" | "restart";
+  mode: "dispatch" | "move" | "restart";
   row: GatewaySessionRow;
 }): Promise<SessionMoveTarget | null> {
   const { showSessionPlacementTargetDialog } =
@@ -46,7 +36,7 @@ async function selectChatPanePlacementTarget(params: {
     requiredScope: "operator.write",
   });
   const workerAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: params.mode === "restart" ? "sessions.dispatch" : "sessions.move",
+    method: params.mode === "move" ? "sessions.move" : "sessions.dispatch",
     requiredScope: "operator.write",
   });
   return await showSessionPlacementTargetDialog({
@@ -71,49 +61,63 @@ async function selectChatPanePlacementTarget(params: {
         ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
         : undefined;
     },
-    loadCatalog: async () =>
-      await loadPlacementMoveCatalog(
-        params.client,
-        hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
-        runtime?.id,
-        runtime?.devicePlacement,
-      ),
+    loadCatalog: async () => {
+      const catalog = await requestPlaceCatalog(params.client, runtime?.id);
+      return {
+        profiles: hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null)
+          ? catalog.profiles
+          : [],
+        devices: projectDevicePlacements(catalog.environments, runtime?.devicePlacement),
+      };
+    },
   });
 }
 
-export async function moveChatPanePlacement(params: {
+export async function changeChatPanePlacement(params: {
   client: GatewayBrowserClient | null;
   connectionGeneration: number;
   gatewaySnapshot: ApplicationGatewaySnapshot;
-  movingKey: string | null;
+  mode: "move" | "recover";
+  pendingKey: string | null;
   row: GatewaySessionRow;
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
-  onMovingChange: (movingKey: string | null) => void;
+  currentRow: () => GatewaySessionRow | undefined;
+  onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
+  reconcileMutation: SessionCapability["reconcileMutation"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const placement = params.row.placement;
+  const movingPlacement =
+    params.mode === "move" && placement?.state === "active" ? placement : undefined;
+  const restartPlacement =
+    placement?.state === "failed" && placement.recoveryAction === "restart" ? placement : undefined;
+  const dispatchRequired = repositorySessionNeedsWorker(params.row);
   if (
     !client ||
-    params.movingKey === params.row.key ||
-    (params.row.placementMove !== undefined && params.row.placementMove.error === undefined) ||
-    placement?.state !== "active"
+    params.pendingKey === params.row.key ||
+    (params.mode === "move"
+      ? !movingPlacement ||
+        (params.row.placementMove !== undefined && params.row.placementMove.error === undefined)
+      : params.row.archived === true || (!restartPlacement && !dispatchRequired))
   ) {
     return;
   }
   const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.move",
+    method: params.mode === "move" ? "sessions.move" : "sessions.dispatch",
     requiredScope: "operator.write",
   });
-  if (!access.allowed) {
+  const localAccess = readSessionMethodAccess(params.gatewaySnapshot, {
+    method: "sessions.reclaim",
+    requiredScope: "operator.write",
+  });
+  if (!access.allowed && (params.mode === "move" || !restartPlacement || !localAccess.allowed)) {
     params.publishError(access.reason);
     return;
   }
-  const agentId = parseAgentSessionKey(params.row.key)?.agentId;
   const abandonSource =
-    placement.runner?.kind === "device" && placement.runner.status === "offline";
+    movingPlacement?.runner?.kind === "device" && movingPlacement.runner.status === "offline";
   let target: SessionMoveTarget | null;
   if (abandonSource) {
     const confirmed = await showConfirmDialog({
@@ -128,7 +132,7 @@ export async function moveChatPanePlacement(params: {
     target = await selectChatPanePlacementTarget({
       client,
       gatewaySnapshot: params.gatewaySnapshot,
-      mode: "move",
+      mode: params.mode === "move" ? "move" : dispatchRequired ? "dispatch" : "restart",
       row: params.row,
     });
   }
@@ -139,97 +143,53 @@ export async function moveChatPanePlacement(params: {
     params.publishError(t("sessionsView.actionUnavailable"));
     return;
   }
-  params.onMovingChange(params.row.key);
-  try {
-    await client.request("sessions.move", {
-      key: params.row.key,
-      ...(agentId ? { agentId } : {}),
-      expected: {
-        generation: placement.generation,
-        environmentId: placement.environmentId,
-        ownerEpoch: placement.activeOwnerEpoch,
-      },
-      target,
-      ...(abandonSource ? { abandonSource: true } : {}),
-    });
-    if (params.isCurrent(client, params.connectionGeneration)) {
-      await params.refreshReplacement(agentId);
+  if (params.mode === "recover") {
+    const currentRow = params.currentRow();
+    const currentPlacement = currentRow?.placement;
+    const stillRestartable =
+      currentPlacement?.state === "failed" &&
+      currentPlacement.recoveryAction === "restart" &&
+      currentPlacement.generation === restartPlacement?.generation;
+    if (
+      !currentRow ||
+      currentRow.key !== params.row.key ||
+      currentRow.sessionId !== params.row.sessionId ||
+      currentRow.repositoryWorkspaceId !== params.row.repositoryWorkspaceId ||
+      currentRow.archived === true ||
+      (dispatchRequired ? !repositorySessionNeedsWorker(currentRow) : !stillRestartable)
+    ) {
+      params.publishError(t("sessionsView.actionUnavailable"));
+      return;
     }
-  } catch (error) {
-    if (params.isCurrent(client, params.connectionGeneration)) {
-      await params.refreshReplacement(agentId).catch(() => undefined);
-      params.publishError(error);
-    }
-  } finally {
-    params.onMovingChange(null);
-    params.requestUpdate();
-  }
-}
-
-export async function restartChatPanePlacement(params: {
-  client: GatewayBrowserClient | null;
-  connectionGeneration: number;
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  restartingKey: string | null;
-  row: GatewaySessionRow;
-  isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
-  onRestartingChange: (restartingKey: string | null) => void;
-  publishError: (error: unknown) => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
-  requestUpdate: () => void;
-}): Promise<void> {
-  const client = params.client;
-  const placement = params.row.placement;
-  if (
-    !client ||
-    params.restartingKey === params.row.key ||
-    placement?.state !== "failed" ||
-    placement.recoveryAction !== "restart"
-  ) {
-    return;
-  }
-  const access = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
-  const localAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
-  if (!access.allowed && !localAccess.allowed) {
-    params.publishError(access.reason);
-    return;
-  }
-  const target = await selectChatPanePlacementTarget({
-    client,
-    gatewaySnapshot: params.gatewaySnapshot,
-    mode: "restart",
-    row: params.row,
-  });
-  if (!target) {
-    return;
-  }
-  if (!params.isCurrent(client, params.connectionGeneration)) {
-    params.publishError(t("sessionsView.actionUnavailable"));
-    return;
   }
   const agentId = parseAgentSessionKey(params.row.key)?.agentId;
-  params.onRestartingChange(params.row.key);
+  const session = { key: params.row.key, ...(agentId ? { agentId } : {}) };
+  params.onPendingChange(params.row.key);
   try {
-    if (target.kind === "gateway") {
+    if (movingPlacement) {
+      await client.request("sessions.move", {
+        ...session,
+        expected: {
+          generation: movingPlacement.generation,
+          environmentId: movingPlacement.environmentId,
+          ownerEpoch: movingPlacement.activeOwnerEpoch,
+        },
+        target,
+        ...(abandonSource ? { abandonSource: true } : {}),
+      });
+    } else if (target.kind === "gateway") {
+      if (!restartPlacement) {
+        params.publishError(t("sessionsView.actionUnavailable"));
+        return;
+      }
       await client.request(
         "sessions.reclaim",
-        {
-          key: params.row.key,
-          ...(agentId ? { agentId } : {}),
-          recoverToGateway: { expectedGeneration: placement.generation },
-        },
+        { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
         { timeoutMs: null },
       );
     } else {
       await client.request("sessions.dispatch", {
-        key: params.row.key,
-        ...(agentId ? { agentId } : {}),
+        ...session,
         ...(target.kind === "profile"
           ? {
               profileId: target.profileId,
@@ -240,15 +200,20 @@ export async function restartChatPanePlacement(params: {
       });
     }
     if (params.isCurrent(client, params.connectionGeneration)) {
-      await params.refreshReplacement(agentId);
+      const outcome = await params.reconcileMutation(agentId);
+      if (outcome.status === "failed" && params.isCurrent(client, params.connectionGeneration)) {
+        params.publishError(outcome.error);
+      }
     }
   } catch (error) {
     if (params.isCurrent(client, params.connectionGeneration)) {
-      await params.refreshReplacement(agentId).catch(() => undefined);
-      params.publishError(error);
+      await params.reconcileMutation(agentId).catch(() => undefined);
+      if (params.isCurrent(client, params.connectionGeneration)) {
+        params.publishError(error);
+      }
     }
   } finally {
-    params.onRestartingChange(null);
+    params.onPendingChange(null);
     params.requestUpdate();
   }
 }
@@ -263,7 +228,7 @@ export async function reclaimChatPanePlacement(params: {
   isCurrent: (client: GatewayBrowserClient, generation: number) => boolean;
   onReclaimingChange: (reclaimingKey: string | null) => void;
   publishError: (error: unknown) => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
+  reconcileMutation: SessionCapability["reconcileMutation"];
   requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
@@ -317,7 +282,10 @@ export async function reclaimChatPanePlacement(params: {
       params.placementStartup,
     );
     if (params.isCurrent(client, connectionGeneration)) {
-      await params.refreshReplacement(agentId);
+      const outcome = await params.reconcileMutation(agentId);
+      if (outcome.status === "failed" && params.isCurrent(client, params.connectionGeneration)) {
+        params.publishError(outcome.error);
+      }
     }
   } catch (error) {
     if (params.isCurrent(client, connectionGeneration)) {

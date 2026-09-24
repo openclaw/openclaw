@@ -1,5 +1,6 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
@@ -38,6 +39,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "assistantTranscriptIdempotencyKey",
 ] as const;
 
 export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {
@@ -118,6 +120,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
     } else if (phase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(resultOrError);
       data.error =
+        renderAgentHarnessPreflightUserMessage(resultOrError) ??
         renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
         formatErrorMessage(resultOrError);

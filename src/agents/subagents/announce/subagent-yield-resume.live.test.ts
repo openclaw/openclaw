@@ -3,268 +3,358 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
-import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
-import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.js";
-import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { GatewayClient } from "../../../gateway/client.js";
-import { startGatewayServer, type GatewayServer } from "../../../gateway/server.js";
-import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
+import type {
+  TaskSummary,
+  TasksCancelResult,
+} from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
-import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
-import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../../../test-utils/ports.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
+import type { CommandLaneSnapshot } from "../../../process/command-queue.types.js";
+import { runCommandWithTimeout } from "../../../process/exec.js";
 import { isLiveTestEnabled } from "../../live-test-helpers.js";
+import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   countPendingDescendantRuns,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry.test-helpers.js";
+import {
+  boundedCount,
+  commandOutcomes,
+  finalReplies,
+  gateTask,
+  history,
+  runWithLiveSubagentGateway,
+  statusReport,
+  successfulYields,
+  until,
+} from "./subagent-challenges.live.test-support.js";
 
 const enabled = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_STRESS);
 const describeLive = enabled ? describe : describe.skip;
-const WAIT_MS = 8 * 60_000;
-
-function boundedCount(name: string, fallback: number, maximum: number): number {
-  const count = Number(process.env[name] ?? fallback);
-  if (!Number.isInteger(count) || count < 1 || count > maximum) {
-    throw new Error(`${name} must be an integer from 1 to ${maximum}`);
-  }
-  return count;
-}
-
-async function until<T>(
-  label: string,
-  read: () => Promise<T | undefined> | T | undefined,
-): Promise<T> {
-  const deadline = Date.now() + WAIT_MS;
-  while (Date.now() < deadline) {
-    const result = await read();
-    if (result !== undefined) {
-      return result;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
-  }
-  throw new Error(`Live subagent stress timed out: ${label}`);
-}
-
-function messageText(message: Record<string, unknown>): string {
-  if (typeof message.content === "string") {
-    return message.content.trim();
-  }
-  return Array.isArray(message.content)
-    ? message.content
-        .flatMap((part) => {
-          const block = asOptionalRecord(part);
-          return block?.type === "text" && typeof block.text === "string" ? [block.text] : [];
-        })
-        .join("\n")
-        .trim()
-    : "";
-}
-
-async function history(sessionKey: string): Promise<Record<string, unknown>[]> {
-  const sessionEntry = loadSessionEntry({ agentId: "main", sessionKey });
-  if (!sessionEntry?.sessionId) {
-    return [];
-  }
-  const messages = await readSessionMessagesAsync(
-    { agentId: "main", sessionEntry, sessionId: sessionEntry.sessionId, sessionKey },
-    { mode: "full", reason: "live yield stress completion verification" },
-  );
-  return messages.flatMap((message) => {
-    const record = asOptionalRecord(message);
-    return record ? [record] : [];
-  });
-}
-
-function finalReplies(messages: Record<string, unknown>[], marker: string): string[] {
-  return messages.flatMap((message) => {
-    if (
-      message.role !== "assistant" ||
-      message.phase === "commentary" ||
-      message.openclawMessageToolMirror ||
-      message.openclawDeliveryMirror ||
-      message.provider === "openclaw" ||
-      (Array.isArray(message.content) &&
-        message.content.some((part) => asOptionalRecord(part)?.type === "toolCall"))
-    ) {
-      return [];
-    }
-    const text = messageText(message);
-    return text.startsWith(marker) ? [text] : [];
-  });
-}
-
-function successfulYields(messages: Record<string, unknown>[]): number {
-  return messages.filter((message) => {
-    if (message.role !== "toolResult" || message.toolName !== "sessions_yield" || message.isError) {
-      return false;
-    }
-    if (asOptionalRecord(message.details)?.status === "yielded") {
-      return true;
-    }
-    try {
-      return asOptionalRecord(JSON.parse(messageText(message)))?.status === "yielded";
-    } catch {
-      return false;
-    }
-  }).length;
-}
-
-async function connect(port: number, token: string): Promise<GatewayClient> {
-  return await new Promise((resolve, reject) => {
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-      deviceIdentity: null,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin"],
-      requestTimeoutMs: WAIT_MS,
-      onHelloOk: () => resolve(client),
-      onConnectError: reject,
-    });
-    client.start();
-  });
-}
 
 describeLive("OpenAI subagent yield and operator resume stress", () => {
   it(
+    "limits siblings per spawning session while independent parents and nested children run",
+    async () => {
+      await runWithLiveSubagentGateway(
+        { maxConcurrent: 1 },
+        async ({ gateway, gates, start, record, waitForFinal }) => {
+          const id = randomUUID();
+          const parentA = `agent:main:live-capacity-a:${id}`;
+          const parentB = `agent:main:live-capacity-b:${id}`;
+          const markerA = `PARENT_A_${id}`;
+          const markerB = `PARENT_B_${id}`;
+          const siblingGates = [gates.create(), gates.create()];
+          const siblingResults = [randomUUID(), randomUUID()];
+          const leafGate = gates.create();
+          const leafResult = randomUUID();
+          const spawn = (taskName: string, task: string) => ({
+            taskName,
+            task,
+            cleanup: "keep",
+            context: "isolated",
+          });
+          const readSubagentLane = async () => {
+            const diagnostics = await gateway.request<{ lanes: CommandLaneSnapshot[] }>(
+              "diagnostics.lanes",
+              {},
+            );
+            return diagnostics.lanes.find((lane) => lane.lane === "subagent");
+          };
+          await start(
+            parentA,
+            [
+              "Spawn both workers below using sessions_spawn before waiting. Do not spawn any other workers or execute their commands yourself.",
+              ...siblingGates.map(
+                (gate, index) =>
+                  `sessions_spawn input: ${JSON.stringify(spawn(`sibling_${index}`, gateTask(gate.url)))}`,
+              ),
+              "After both spawns are accepted, call sessions_yield. Wait for both actual completion results.",
+              `Your only final reply must be ${markerA} on the first line, then each worker's exact result in task-name order, one result per line.`,
+            ].join("\n"),
+          );
+          const activeSibling = await until("one sibling running and one queued", async () => {
+            const children = listSubagentRunsForRequester(parentA);
+            const index = siblingGates.findIndex((gate) => gate.snapshot().waiting === 1);
+            const lane = await readSubagentLane();
+            return children.length === 2 && index >= 0 && lane?.queuedCount === 1
+              ? { index, lane }
+              : undefined;
+          });
+          const queuedIndex = 1 - activeSibling.index;
+          expect(activeSibling.lane).toMatchObject({
+            activeCount: 1,
+            maxConcurrent: 1,
+            concurrencyScope: "session",
+          });
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          record("sibling-capacity-held", {
+            parentA,
+            lane: activeSibling.lane,
+            gates: siblingGates.map((gate) => gate.snapshot()),
+          });
+
+          const orchestratorTask = [
+            `Call sessions_spawn exactly once with ${JSON.stringify(spawn("nested_leaf", gateTask(leafGate.url)))}.`,
+            'Call subagents with action="list" to find the child taskId, then action="wait" with taskIds containing that ID and timeoutSeconds=60. If the wait times out, wait again for the same task.',
+            "Keep this turn active until the child completes: do not call sessions_yield, execute commands, or spawn more work. When the child completes, reply with its exact result only.",
+          ].join("\n");
+          await start(
+            parentB,
+            [
+              `Call sessions_spawn exactly once with ${JSON.stringify(spawn("nested_orchestrator", orchestratorTask))}.`,
+              "After acceptance call sessions_yield and wait for the actual child completion. Do not execute commands yourself.",
+              `Your only final reply must be ${markerB} on the first line and the worker's exact result on the next line.`,
+            ].join("\n"),
+          );
+          const orchestrator = await until(
+            "independent nested worker holds its own capacity",
+            async () => {
+              const worker = listSubagentRunsForRequester(parentB)[0];
+              if (!worker || leafGate.snapshot().waiting !== 1) {
+                return undefined;
+              }
+              const messages = await history(worker.childSessionKey);
+              const waiting = messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  Array.isArray(message.content) &&
+                  message.content.some((part) => {
+                    const block = asOptionalRecord(part);
+                    return (
+                      block?.type === "toolCall" &&
+                      block.name === "subagents" &&
+                      asOptionalRecord(block.arguments)?.action === "wait"
+                    );
+                  }),
+              );
+              return waiting && worker.execution.status === "running" ? worker : undefined;
+            },
+          );
+          const concurrentLane = await readSubagentLane();
+          expect(concurrentLane).toMatchObject({
+            activeCount: 3,
+            queuedCount: 1,
+            maxConcurrent: 1,
+            concurrencyScope: "session",
+            saturatedLaneCount: 3,
+          });
+          expect(successfulYields(await history(orchestrator.childSessionKey))).toBe(0);
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          record("independent-parent-and-grandchild-running", {
+            parentA,
+            parentB,
+            orchestrator: orchestrator.childSessionKey,
+            lane: concurrentLane,
+            siblingGates: siblingGates.map((gate) => gate.snapshot()),
+            leafGate: leafGate.snapshot(),
+          });
+
+          leafGate.release(leafResult);
+          await waitForFinal(parentB, markerB, `${markerB}\n${leafResult}`);
+          expect(finalReplies(await history(orchestrator.childSessionKey), "")).toEqual([
+            leafResult,
+          ]);
+          expect(siblingGates[activeSibling.index]!.snapshot().waiting).toBe(1);
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          siblingGates[activeSibling.index]!.release(siblingResults[activeSibling.index]!);
+          await until("queued sibling admitted after its own sibling finishes", () =>
+            siblingGates[queuedIndex]!.snapshot().waiting === 1 ? true : undefined,
+          );
+          record("queued-sibling-admitted", {
+            lane: await readSubagentLane(),
+            gates: siblingGates.map((gate) => gate.snapshot()),
+          });
+          siblingGates[queuedIndex]!.release(siblingResults[queuedIndex]!);
+          await waitForFinal(parentA, markerA, [markerA, ...siblingResults].join("\n"));
+          const children = await until("all four child delivery acknowledgments committed", () => {
+            const runs = [
+              ...listSubagentRunsForRequester(parentA),
+              ...listSubagentRunsForRequester(parentB),
+              ...listSubagentRunsForRequester(orchestrator.childSessionKey),
+            ];
+            return runs.length === 4 && runs.every((run) => run.delivery?.status === "delivered")
+              ? runs
+              : undefined;
+          });
+          expect(
+            children.every((run) => run.execution.outcome?.status === "ok"),
+            "every child completed successfully",
+          ).toBe(true);
+          record("session-capacity-settled", { lane: await readSubagentLane() });
+        },
+      );
+    },
+    15 * 60_000,
+  );
+
+  it.each([false, true])(
+    "keeps CLI coordination in the task completion path for visible=%s children and later turns",
+    async (visible) => {
+      await runWithLiveSubagentGateway(
+        {},
+        async ({ gateway, state, start, record, sessionsSendCliArgs, waitForFinal }) => {
+          const id = randomUUID().replaceAll("-", "");
+          const parentKey = `agent:main:live-cli-parent:${id}`;
+          const targetKey = `agent:main:dashboard:live-cli-target-${id}`;
+          const parentMarker = `PARENT_${id}`;
+          const childMarker = `CHILD_${id}`;
+          const followupMarker = `FOLLOWUP_${id}`;
+          await gateway.request("sessions.create", { key: targetKey, agentId: "main" });
+          const untouchedTarget = await history(targetKey);
+          const repoDir = process.cwd();
+
+          const probeTask = async (round: string, finalMarker: string) => {
+            const probeFile = path.join(state.workspaceDir, `cli-probe-${round}.mjs`);
+            const resultFile = path.join(state.workspaceDir, `cli-probe-${round}.json`);
+            const argv = sessionsSendCliArgs({
+              key: targetKey,
+              message: `Reply exactly UNEXPECTED_${round}_${id}.`,
+              idempotencyKey: randomUUID(),
+            });
+            const source = [
+              'import { spawnSync } from "node:child_process";',
+              'import { writeFileSync } from "node:fs";',
+              `const result = spawnSync(${JSON.stringify(argv[0])}, ${JSON.stringify(argv.slice(1))}, { cwd: ${JSON.stringify(repoDir)}, env: { ...process.env, OPENCLAW_TEST_RUNTIME_LOG: "1" }, encoding: "utf8", timeout: 240000 });`,
+              `writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, marker: process.env.OPENCLAW_SUBAGENT_EXEC ?? null }));`,
+              'process.stdout.write(result.stdout ?? "");',
+              'process.stderr.write(result.stderr ?? "");',
+              "process.exitCode = result.status ?? 1;",
+            ].join("\n");
+            await fs.writeFile(probeFile, source);
+            const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+            return {
+              probeFile,
+              resultFile,
+              source,
+              task: [
+                "Run this intentional routing regression probe exactly once with exec, allowing 300 seconds:",
+                `${quote(process.execPath)} ${quote(probeFile)}`,
+                "If it backgrounds, use process to await its result. Do not edit or read the script, change its environment, retry it, or contact the target any other way.",
+                "The expected command outcome is a rejection directing subagents to the task completion path. Treat that rejection as the successful outcome of this probe.",
+                `After observing the command, return your ordinary final reply exactly ${finalMarker}. Do not use messaging or session tools to report it.`,
+              ].join("\n"),
+            };
+          };
+          const verifyProbe = async (
+            childKey: string,
+            probe: Awaited<ReturnType<typeof probeTask>>,
+            attempts: number,
+          ) => {
+            const result = asOptionalRecord(
+              JSON.parse(await fs.readFile(probe.resultFile, "utf8")),
+            );
+            record("child-cli-observed", { visible, childKey, result });
+            expect(result).toMatchObject({ marker: "1", status: 1, signal: null });
+            const output = [result?.stdout, result?.stderr]
+              .filter((value): value is string => typeof value === "string")
+              .join("\n");
+            expect(output).toContain("task completion path");
+            expect(await fs.readFile(probe.probeFile, "utf8")).toBe(probe.source);
+            expect(
+              commandOutcomes(await history(childKey)).filter(
+                (outcome) =>
+                  outcome.exitCode !== 0 && outcome.text.includes("task completion path"),
+              ),
+              "each child turn observed one actual CLI rejection",
+            ).toHaveLength(attempts);
+            expect(
+              await history(targetKey),
+              "the CLI attempt left the idle target untouched",
+            ).toEqual(untouchedTarget);
+            record("child-cli-rejected", { visible, childKey, result });
+          };
+
+          const firstProbe = await probeTask("first", childMarker);
+          await start(
+            parentKey,
+            [
+              `Call sessions_spawn exactly once with ${JSON.stringify({ taskName: "cli_completion_probe", task: firstProbe.task, cleanup: "keep", context: "isolated", ...(visible ? { visible: true } : {}) })}.`,
+              "The visible setting is intentional for this test. After acceptance call sessions_yield. Do not inspect child files or execute the probe yourself.",
+              `When the actual child completion arrives, reply exactly ${parentMarker} on the first line and ${childMarker} on the second.`,
+            ].join("\n"),
+          );
+          await waitForFinal(parentKey, parentMarker, `${parentMarker}\n${childMarker}`);
+          const children = listSubagentRunsForRequester(parentKey);
+          expect(children).toHaveLength(1);
+          const child = children[0]!;
+          expect(child.execution.outcome?.status).toBe("ok");
+          expect(child.delivery?.status).toBe("delivered");
+          expect(finalReplies(await history(child.childSessionKey), childMarker)).toEqual([
+            childMarker,
+          ]);
+          await verifyProbe(child.childSessionKey, firstProbe, 1);
+
+          const nextProbe = await probeTask("followup", followupMarker);
+          const followup = await gateway.request<{ runId: string }>("sessions.send", {
+            key: child.childSessionKey,
+            message: nextProbe.task,
+            idempotencyKey: randomUUID(),
+          });
+          const finished = await until("later child turn settles", async () => {
+            const outcome = await gateway.request<{ status: string }>("agent.wait", {
+              runId: followup.runId,
+              timeoutMs: 1000,
+            });
+            return outcome.status === "ok" || outcome.status === "error" ? outcome : undefined;
+          });
+          expect(finished.status).toBe("ok");
+          expect(finalReplies(await history(child.childSessionKey), followupMarker)).toEqual([
+            followupMarker,
+          ]);
+          await verifyProbe(child.childSessionKey, nextProbe, 2);
+          expect(
+            finalReplies(await history(parentKey), ""),
+            "no follow-up receipt or unlabelled child report reached the parent",
+          ).toEqual([`${parentMarker}\n${childMarker}`]);
+
+          const operatorMarker = `OPERATOR_${id}`;
+          const operator = await runCommandWithTimeout(
+            sessionsSendCliArgs({
+              key: targetKey,
+              message: `Do not call tools. Reply exactly ${operatorMarker}.`,
+              idempotencyKey: randomUUID(),
+            }),
+            {
+              cwd: repoDir,
+              env: { ...state.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
+              timeoutMs: 300000,
+              maxOutputBytes: 64000,
+            },
+          );
+          record("operator-cli-observed", {
+            visible,
+            targetKey,
+            exitCode: operator.code,
+            stdout: operator.stdout,
+            stderr: operator.stderr,
+          });
+          expect(operator.code, operator.stderr).toBe(0);
+          const operatorReply = await until(
+            "operator CLI reply",
+            async () => finalReplies(await history(targetKey), operatorMarker)[0],
+          );
+          expect(operatorReply).toBe(operatorMarker);
+          expect(finalReplies(await history(targetKey), operatorMarker)).toEqual([operatorMarker]);
+          record("operator-cli-accepted", {
+            visible,
+            targetKey,
+            exitCode: operator.code,
+            reply: operatorReply,
+          });
+        },
+      );
+    },
+    20 * 60_000,
+  );
+
+  it(
     "settles concurrent children and preserves a resumed worker's task and parent batch",
     async () => {
-      expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
-      const model = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
-      expect(model.startsWith("openai/"), "stress uses the OpenAI API provider").toBe(true);
       const batches = boundedCount("OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES", 2, 5);
       const childrenPerBatch = boundedCount("OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN", 3, 6);
-      const port = await getFreePort();
-      const token = `yield-stress-${randomUUID()}`;
-      const state = await createOpenClawTestState({
-        label: "openai-yield-resume-live",
-        layout: "split",
-        env: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
-          OPENCLAW_PLUGINS_PATHS: undefined,
-          OPENCLAW_DEBUG_MODEL_PAYLOAD: undefined,
-          OPENCLAW_DEBUG_SSE: undefined,
-        },
-      });
-      let server: GatewayServer | undefined;
-      let client: GatewayClient | undefined;
-      const gatePath = path.join(state.workspaceDir, "release.txt");
-      await runQaGatewayFixture(
-        async () => {
-          const cfg: OpenClawConfig = {
-            gateway: {
-              mode: "local",
-              port,
-              auth: { mode: "token", token },
-              controlUi: { enabled: false },
-            },
-            plugins: { enabled: false },
-            tools: {
-              codeMode: false,
-              allow: ["sessions_spawn", "sessions_yield", "read", "exec", "process"],
-              exec: { mode: "full", host: "gateway" },
-            },
-            models: {
-              providers: {
-                openai: {
-                  api: "openai-responses",
-                  agentRuntime: { id: "openclaw" },
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                  timeoutSeconds: 300,
-                  models: [
-                    {
-                      id: model.slice("openai/".length),
-                      name: "OpenAI live stress",
-                      input: ["text"],
-                      reasoning: true,
-                      contextWindow: 1_047_576,
-                      maxTokens: 8_192,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ],
-                },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: state.workspaceDir,
-                skipBootstrap: true,
-                model: { primary: model },
-                models: {
-                  [model]: { agentRuntime: { id: "openclaw" }, params: { maxTokens: 2_048 } },
-                },
-                sandbox: { mode: "off" },
-                subagents: {
-                  allowAgents: ["*"],
-                  maxSpawnDepth: 2,
-                  maxChildrenPerAgent: childrenPerBatch,
-                  maxConcurrent: Math.max(3, childrenPerBatch),
-                  runTimeoutSeconds: 300,
-                  announceTimeoutMs: 300_000,
-                  archiveAfterMinutes: 60,
-                },
-              },
-            },
-          };
-          await state.writeConfig(cfg);
-          clearRuntimeConfigSnapshot();
-          resetPluginRuntimeStateForTest();
-          server = await startGatewayServer(port, {
-            bind: "loopback",
-            auth: { mode: "token", token },
-            controlUiEnabled: false,
-          });
-          await server.startupSettled;
-          const gateway = await connect(port, token);
-          client = gateway;
-          const start = (sessionKey: string, message: string) =>
-            gateway.request("agent", {
-              sessionKey,
-              message,
-              idempotencyKey: randomUUID(),
-              deliver: false,
-              timeout: 300,
-            });
-          const waitForFinal = async (sessionKey: string, marker: string, expected: string) => {
-            await until("parent final", async () =>
-              finalReplies(await history(sessionKey), marker).some((text) => text === expected)
-                ? true
-                : undefined,
-            );
-            await until("descendant settlement", () =>
-              countPendingDescendantRuns(sessionKey) === 0 ? true : undefined,
-            );
-            const messages = await history(sessionKey);
-            expect(
-              messages.some(
-                (message) =>
-                  message.role === "toolResult" &&
-                  ["read", "exec", "process"].includes(String(message.toolName)),
-              ),
-              "parent did not inspect child data directly",
-            ).toBe(false);
-            expect(
-              finalReplies(messages, marker).length,
-              "one parent final after all descendants settle",
-            ).toBe(1);
-            expect(successfulYields(messages) > 0, "parent really yielded").toBe(true);
-            return successfulYields(messages);
-          };
+      await runWithLiveSubagentGateway(
+        { children: childrenPerBatch },
+        async ({ gateway, state, gates, start, record, interrogate, waitForFinal }) => {
           let parentYields = 0;
           for (let batch = 0; batch < batches; batch += 1) {
             const batchId = randomUUID().replaceAll("-", "");
@@ -327,20 +417,8 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           const parentKey = `agent:main:live-resume-stress:${resumeId}`;
           const parentMarker = `RESUME_PARENT_${resumeId}`;
           const operatorResult = `OPERATOR_RESULT_${randomUUID()}`;
-          const startedPath = path.join(state.workspaceDir, "gate-started.txt");
-          const gateScript = path.join(state.workspaceDir, "wait-for-release.cjs");
-          await fs.writeFile(
-            gateScript,
-            [
-              'const fs = require("node:fs"); const path = require("node:path");',
-              "const [gate, started] = process.argv.slice(2);",
-              "const timer = setTimeout(() => { watcher.close(); process.exitCode = 1; }, 240000);",
-              'function finish() { if (!fs.existsSync(gate)) return; const text = fs.readFileSync(gate, "utf8").trim(); if (!text) return; clearTimeout(timer); watcher.close(); process.stdout.write(text + "\\n"); }',
-              'const watcher = fs.watch(path.dirname(gate), finish); fs.writeFileSync(started, "started"); finish();',
-            ].join("\n"),
-          );
-          const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-          const leafTask = `Use exec to run exactly: ${[process.execPath, gateScript, gatePath, startedPath].map(quote).join(" ")}. Allow 240 seconds. If it runs in the background, use process to wait for its result. Reply with its exact stdout only.`;
+          const resumeGate = gates.create();
+          const leafTask = gateTask(resumeGate.url);
           const workerTask = `Call sessions_spawn exactly once with ${JSON.stringify({ taskName: "resume_gate_leaf", task: leafTask, cleanup: "keep", context: "isolated" })}. Immediately after acceptance call sessions_yield. On the child's completion reply with its exact result only.`;
           await start(
             parentKey,
@@ -350,13 +428,8 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
               `Your only final reply must be ${parentMarker} on one line and the worker's exact result on the next line.`,
             ].join("\n"),
           );
-          await until(
-            "gate process started",
-            async () =>
-              await fs.stat(startedPath).then(
-                () => true,
-                () => undefined,
-              ),
+          await until("external request held by gate", () =>
+            resumeGate.snapshot().waiting === 1 ? true : undefined,
           );
           const paused = await until("worker and parent yielded", () =>
             listSubagentRunsForRequester(parentKey).find(
@@ -366,6 +439,43 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
                 run.requesterSettleWake?.requesterYieldBatch === true,
             ),
           );
+          const waitingReport = await interrogate(parentKey, `STATUS_${resumeId}`);
+          expect(waitingReport.workComplete, "closed external gate means unfinished work").toBe(
+            false,
+          );
+          const waitingWorker = waitingReport.workers.find(
+            (worker) => worker.taskName === "resume_worker",
+          );
+          expect(waitingWorker?.state, "orchestrator is waiting for its leaf").toBe("waiting");
+          expect(waitingWorker?.waitingFor, "report identifies the actual dependency").toContain(
+            "resume_gate_leaf",
+          );
+          expect(waitingWorker?.result, "waiting worker has no final result").toBeNull();
+          expect(
+            waitingReport.workers.some(
+              (worker) =>
+                worker.taskName === "resume_gate_leaf" &&
+                ["running", "waiting"].includes(worker.state),
+            ),
+            "report includes the held external worker",
+          ).toBe(true);
+          expect(
+            resumeGate.snapshot(),
+            "status interrogation leaves gate and request untouched",
+          ).toEqual({ requests: 1, waiting: 1, released: false });
+          expect(
+            finalReplies(await history(parentKey), parentMarker),
+            "status is not task completion",
+          ).toEqual([]);
+          expect(
+            listSubagentRunsForRequester(parentKey).map((run) => run.runId),
+            "status creates no successor worker",
+          ).toEqual([paused.runId]);
+          record("external-wait", {
+            sessionKey: parentKey,
+            gate: resumeGate.snapshot(),
+            pending: countPendingDescendantRuns(parentKey),
+          });
           const tasks = await gateway.request<{ tasks: TaskSummary[] }>("tasks.list", {
             sessionKey: parentKey,
             limit: 100,
@@ -402,7 +512,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
           expect(replayed.runId === accepted.runId, "operator retry reuses its accepted run").toBe(
             true,
           );
-          await fs.writeFile(gatePath, `GATE_RESULT_${randomUUID()}\n`);
+          resumeGate.release(`GATE_RESULT_${randomUUID()}`);
           parentYields += await waitForFinal(
             parentKey,
             parentMarker,
@@ -429,22 +539,279 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
             `[subagent-handoff-stress] ${JSON.stringify({ phase: "passed", batches, childrenPerBatch, successfulFanoutChildren: batches * childrenPerBatch, parentYields, automaticParentFinals: batches + 1, operatorResumes: 1, operatorReplays: 1, sameTask: true, remappedBatch: true })}`,
           );
         },
-        async () => {
-          await fs.writeFile(gatePath, "CLEANUP_RELEASE\n");
-        },
-        async () => {
-          await client?.stopAndWait();
-        },
-        async () => {
-          await server?.close({ reason: "live subagent stress complete" });
-        },
-        async () => {
-          await state.cleanup();
-          clearRuntimeConfigSnapshot();
-          resetPluginRuntimeStateForTest();
-        },
       );
     },
     30 * 60_000,
+  );
+
+  it.each(["timeout", "cancellation", "service_failure"] as const)(
+    "reports a child's %s truthfully while preserving its successful sibling",
+    async (interruption) => {
+      await runWithLiveSubagentGateway(
+        {},
+        async ({ gateway, gates, start, record, interrogate }) => {
+          const id = randomUUID().replaceAll("-", "");
+          const parentKey = `agent:main:live-${interruption}:${id}`;
+          const marker = `OUTCOME_${id}`;
+          const goodGate = gates.create();
+          const interruptedGate = gates.create();
+          const goodResult = `RESULT_${randomUUID()}`;
+          const lateResult = `LATE_${randomUUID()}`;
+          const serviceError = `UPSTREAM_UNAVAILABLE_${randomUUID()}`;
+          const spawns = [
+            { taskName: "result_worker", task: gateTask(goodGate.url) },
+            {
+              taskName: "interrupted_worker",
+              task: gateTask(interruptedGate.url),
+              ...(interruption === "timeout" ? { runTimeoutSeconds: 90 } : {}),
+            },
+          ];
+          await start(
+            parentKey,
+            [
+              "Delegate the following two independent retrieval jobs. Start both before waiting. Do not read files, run commands, fetch results yourself, or create replacement workers.",
+              ...spawns.map(
+                (spawn) =>
+                  `sessions_spawn input: ${JSON.stringify({ ...spawn, cleanup: "keep", context: "isolated" })}`,
+              ),
+              "Call sessions_yield after both are accepted. Continue handling the existing jobs until both have settled, including any failure or cancellation.",
+              "Use state values queued, running, waiting, completed, failed, timed_out, cancelled, or unknown. Your final report must distinguish successful retrieval from any unsuccessful worker. workComplete means both requested results were successfully obtained. Never report a result you did not receive.",
+              "Copy received result values and error evidence verbatim, preserving every character of their identifiers in the JSON report.",
+              `Reply with ${marker} on the first line, then a JSON object with workComplete (boolean) and workers (array of {taskName, state, waitingFor, result, error}). result is the successfully retrieved value; error is the worker's failure evidence. Use null when absent or unknown.`,
+            ].join("\n"),
+          );
+          await until("both independent requests are held", () =>
+            goodGate.snapshot().waiting === 1 && interruptedGate.snapshot().waiting === 1
+              ? true
+              : undefined,
+          );
+          const children = listSubagentRunsForRequester(parentKey);
+          expect(
+            children
+              .map((run) => run.taskName ?? "")
+              .toSorted((left, right) => left.localeCompare(right)),
+          ).toEqual(["interrupted_worker", "result_worker"]);
+          expect(children.every((run) => run.execution.status === "running")).toBe(true);
+          expect(
+            finalReplies(await history(parentKey), marker),
+            "parent cannot complete before either gate opens",
+          ).toEqual([]);
+          record("both-waiting", {
+            interruption,
+            gates: [goodGate.snapshot(), interruptedGate.snapshot()],
+          });
+
+          goodGate.release(goodResult);
+          const goodRun = await until("successful sibling execution settled", () =>
+            listSubagentRunsForRequester(parentKey).find(
+              (run) => run.taskName === "result_worker" && run.execution.status === "terminal",
+            ),
+          );
+          record("successful-sibling-terminal", {
+            runId: goodRun.runId,
+            outcome: goodRun.execution.outcome,
+          });
+          expect(goodRun.execution.outcome?.status, "the retrieval sibling succeeded").toBe("ok");
+          const page = await gateway.request<{ tasks: TaskSummary[] }>("tasks.list", {
+            sessionKey: parentKey,
+            limit: 100,
+          });
+          const goodChild = children.find((run) => run.taskName === "result_worker")!;
+          const interruptedChild = children.find((run) => run.taskName === "interrupted_worker")!;
+          const goodTask = page.tasks.find(
+            (task) => task.childSessionKey === goodChild.childSessionKey,
+          )!;
+          const interruptedTask = page.tasks.find(
+            (task) => task.childSessionKey === interruptedChild.childSessionKey,
+          )!;
+          expect(goodTask.status, "child execution can finish while its parent is unfinished").toBe(
+            "completed",
+          );
+          expect(interruptedGate.snapshot().released).toBe(false);
+          expect(
+            finalReplies(await history(parentKey), marker),
+            "one child's execution success is not parent completion",
+          ).toEqual([]);
+          record("partial-completion", {
+            goodTask,
+            interruptedTask,
+            gate: interruptedGate.snapshot(),
+          });
+
+          if (interruption === "cancellation") {
+            let claimObserved:
+              | { runId: string; requestedAt: number; pendingRequests: number }
+              | undefined;
+            // The production persistence event observes the claim before admission draining.
+            const unsubscribe = onSubagentRegistryPersisted(() => {
+              if (claimObserved) {
+                return;
+              }
+              const current = listSubagentRunsForRequester(parentKey).find(
+                (run) => run.runId === interruptedChild.runId,
+              );
+              if (!current?.killIntent) {
+                return;
+              }
+              const observation = {
+                runId: current.runId,
+                requestedAt: current.killIntent.requestedAt,
+                pendingRequests: interruptedGate.snapshot().waiting,
+              };
+              interruptedGate.release(lateResult);
+              claimObserved = observation;
+            });
+            try {
+              const result = await gateway.request<TasksCancelResult>("tasks.cancel", {
+                taskId: interruptedTask.id,
+                reason: "operator cancelled retrieval",
+              });
+              record("cancel-response", {
+                taskId: interruptedTask.id,
+                claimObserved,
+                result,
+                gate: interruptedGate.snapshot(),
+              });
+              expect(result, "the active child accepts operator cancellation").toMatchObject({
+                found: true,
+                cancelled: true,
+              });
+              expect(
+                claimObserved,
+                "the real cancellation owner claims the run before late stdout is released",
+              ).toMatchObject({ runId: interruptedChild.runId, pendingRequests: 1 });
+            } finally {
+              unsubscribe();
+            }
+          } else if (interruption === "service_failure") {
+            interruptedGate.release(serviceError, 503);
+            record("service-error-released", { responseCode: 503, serviceError });
+          }
+          const expectedTaskStatus =
+            interruption === "timeout"
+              ? "timed_out"
+              : interruption === "cancellation"
+                ? "cancelled"
+                : "completed";
+          const terminalTask = await until("interrupted child task settles", async () => {
+            const { task } = await gateway.request<{ task: TaskSummary }>("tasks.get", {
+              taskId: interruptedTask.id,
+            });
+            return task.status === expectedTaskStatus ? task : undefined;
+          });
+          if (interruption === "service_failure") {
+            const failures = commandOutcomes(await history(interruptedChild.childSessionKey));
+            expect(
+              failures.some(
+                (outcome) => outcome.exitCode === 1 && outcome.text.includes(serviceError),
+              ),
+              "the child actually observes the service error through a failed command",
+            ).toBe(true);
+            const child = listSubagentRunsForRequester(parentKey).find(
+              (run) => run.runId === interruptedChild.runId,
+            );
+            expect(
+              child?.execution.outcome?.status,
+              "the agent turn completed normally even though retrieval failed",
+            ).toBe("ok");
+            record("service-failure-observed", { task: terminalTask, commands: failures });
+          }
+          const reply = await until(
+            "automatic parent outcome after mixed child outcomes",
+            async () => finalReplies(await history(parentKey), marker)[0],
+          );
+          record("primary-parent-reply", { sessionKey: parentKey, reply });
+          try {
+            const report = statusReport(reply);
+            expect(report.workComplete, "a missing child result prevents overall success").toBe(
+              false,
+            );
+            expect(report.workers).toHaveLength(2);
+            const success = report.workers.find((worker) => worker.taskName === "result_worker");
+            const failure = report.workers.find(
+              (worker) => worker.taskName === "interrupted_worker",
+            );
+            expect(success).toMatchObject({
+              state: "completed",
+              waitingFor: null,
+              result: goodResult,
+            });
+            expect(
+              interruption === "timeout"
+                ? ["failed", "timed_out"]
+                : interruption === "cancellation"
+                  ? ["cancelled"]
+                  : ["failed"],
+            ).toContain(failure?.state);
+            expect(
+              failure?.result,
+              "failed or cancelled worker has no successful retrieval",
+            ).toBeNull();
+            if (interruption === "service_failure") {
+              expect(
+                failure?.error,
+                "the parent carries the actual hidden service failure",
+              ).toContain(serviceError);
+            }
+            expect(reply, "late cancelled stdout is not a delivered result").not.toContain(
+              lateResult,
+            );
+            await until("all child obligations settled", () =>
+              countPendingDescendantRuns(parentKey) === 0 ? true : undefined,
+            );
+            const finalMessages = await history(parentKey);
+            expect(finalReplies(finalMessages, marker)).toHaveLength(1);
+            expect(successfulYields(finalMessages)).toBeGreaterThan(0);
+            expect(
+              finalMessages.some(
+                (message) =>
+                  message.role === "toolResult" &&
+                  ["read", "exec", "process"].includes(String(message.toolName)),
+              ),
+              "parent consumes child delivery rather than obtaining hidden data",
+            ).toBe(false);
+            const finalGoodTask = await gateway.request<{ task: TaskSummary }>("tasks.get", {
+              taskId: goodTask.id,
+            });
+            expect(finalGoodTask.task).toMatchObject({
+              id: goodTask.id,
+              status: "completed",
+              deliveryStatus: "delivered",
+            });
+            expect(listSubagentRunsForRequester(parentKey)).toHaveLength(2);
+            if (interruption === "service_failure") {
+              const deliveredFailure = await gateway.request<{ task: TaskSummary }>("tasks.get", {
+                taskId: interruptedTask.id,
+              });
+              expect(deliveredFailure.task).toMatchObject({
+                status: "completed",
+                deliveryStatus: "delivered",
+              });
+            }
+            record("mixed-outcome", {
+              interruption,
+              report,
+              terminalTask,
+              successfulTask: finalGoodTask.task,
+            });
+          } catch (error) {
+            // A diagnostic follow-up never turns a failed primary answer into a pass.
+            try {
+              const report = await interrogate(parentKey, `DIAGNOSTIC_${id}`, 90_000);
+              record("diagnostic-after-primary-failure", { sessionKey: parentKey, report });
+            } catch (diagnosticError) {
+              record("diagnostic-failed", {
+                error:
+                  diagnosticError instanceof Error
+                    ? diagnosticError.message
+                    : String(diagnosticError),
+              });
+            }
+            throw error;
+          }
+        },
+      );
+    },
+    15 * 60_000,
   );
 });

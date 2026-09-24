@@ -161,6 +161,7 @@ function checkSchemaWithCurrentFormats(
 
 function isDefaultActivatedConditionalFailure(params: {
   schema: JsonSchemaValue;
+  validate: TypeBoxValidator;
   originalValue: unknown;
   defaultedValue: unknown;
 }): boolean {
@@ -170,8 +171,7 @@ function isDefaultActivatedConditionalFailure(params: {
   if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
-  const originalValidator = compileSchema(params.schema);
-  return checkSchemaWithCurrentFormats(originalValidator, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -388,24 +388,26 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
-  cacheKey: string;
+  cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaError = findJsonSchemaShapeError(params.schema);
-  if (schemaError) {
-    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
-  }
-
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+  const schemaKey = params.cacheKey ?? fingerprintSchema(params.schema);
+  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+  if (!cached || cached.schema !== params.schema) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    if (schemaError) {
+      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+    }
+  }
   const schemaFingerprint =
     !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
   if (
@@ -441,6 +443,7 @@ export function validateJsonSchemaValue(params: {
         value !== originalValue &&
         isDefaultActivatedConditionalFailure({
           schema: params.schema,
+          validate: cached.validate,
           originalValue,
           defaultedValue: value,
         })

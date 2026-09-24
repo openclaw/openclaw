@@ -75,6 +75,20 @@ export function readImageProbeFromHeader(buffer: Buffer): ImageProbe | null {
   return readRastermillImageProbeFromHeader(buffer);
 }
 
+/** Detects animated WebP before a single-frame image transform can discard its frames. */
+export function isAnimatedWebpBuffer(buffer: Buffer): boolean {
+  // Rastermill's probe has no animation flag. RFC 9649 §2.7 defines this VP8X bit.
+  return (
+    buffer.length >= 30 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP" &&
+    buffer.toString("ascii", 12, 16) === "VP8X" &&
+    buffer.readUInt32LE(16) >= 10 &&
+    buffer.readUInt32LE(16) <= buffer.length - 20 &&
+    (buffer.readUInt8(20) & 0x02) !== 0
+  );
+}
+
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
   if (error instanceof RastermillUnavailableError) {
     throw new ImageProcessorUnavailableError(operation, error.message, error.causes);

@@ -31,7 +31,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -275,7 +274,7 @@ private fun DevicePairingConfirmationDialog(
       is DevicePairingConfirmation.Reject -> nativeString("Reject")
       is DevicePairingConfirmation.Remove -> nativeString("Remove")
     }
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(title) },
     text = {

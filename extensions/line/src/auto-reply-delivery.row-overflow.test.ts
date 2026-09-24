@@ -7,7 +7,7 @@ import { processLineMessage as processOrderedLineMessage } from "./markdown-to-l
 
 describe("row-overflow table delivery boundary", () => {
   it("delivers all rows as ordered text when a 15-row 2-column table overflows the receipt cap via reply token", async () => {
-    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+    const { replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
       chunkMarkdownText,
     });
@@ -18,7 +18,6 @@ describe("row-overflow table delivery boundary", () => {
       ...baseDeliveryParams,
       payload: { text: markdown },
       lineData: {},
-      deps,
     });
 
     expect(result.status).toBe("delivered");
@@ -42,7 +41,7 @@ describe("row-overflow table delivery boundary", () => {
   });
 
   it("delivers all rows as ordered text when an 11-row 3-column table overflows the generic cap via push path", async () => {
-    const { deps, pushMessagesLine } = createDeps({
+    const { pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
       chunkMarkdownText,
     });
@@ -56,7 +55,6 @@ describe("row-overflow table delivery boundary", () => {
       payload: { text: markdown },
       replyToken: null,
       lineData: {},
-      deps,
     });
 
     expect(result.status).toBe("delivered");
@@ -73,7 +71,7 @@ describe("row-overflow table delivery boundary", () => {
   });
 
   it("keeps small table as Flex alongside overflow table text in source order", async () => {
-    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+    const { replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
       chunkMarkdownText,
     });
@@ -88,7 +86,6 @@ describe("row-overflow table delivery boundary", () => {
       ...baseDeliveryParams,
       payload: { text: markdown },
       lineData: {},
-      deps,
     });
 
     const allMessages = [
@@ -108,7 +105,7 @@ describe("row-overflow table delivery boundary", () => {
   });
 
   it("delivers all rows when a 2-column table with inline markup overflows the generic cap", async () => {
-    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+    const { replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
       chunkMarkdownText,
     });
@@ -121,7 +118,6 @@ describe("row-overflow table delivery boundary", () => {
       ...baseDeliveryParams,
       payload: { text: markdown },
       lineData: {},
-      deps,
     });
 
     expect(result.status).toBe("delivered");

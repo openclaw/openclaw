@@ -1,6 +1,7 @@
 import { expect, vi } from "vitest";
-import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
+import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -9,6 +10,10 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import {
+  admitSubagentCompletionDelivery,
+  settleSubagentCompletionDelivery,
+} from "./subagent-completion-admission.store.js";
 
 export function records() {
   const now = Date.now();
@@ -150,4 +155,69 @@ export function failedRecords(
   input.subagent.endedReason = status === "cancelled" ? "subagent-killed" : "subagent-error";
   input.subagent.execution.outcome = outcome;
   return armRequesterWake(input);
+}
+
+export function expectLinkedGenerationTransaction({
+  database,
+  rowCount,
+  clearRows,
+}: {
+  database: OpenClawStateDatabase;
+  rowCount: (table: "delivery_queue_entries" | "subagent_runs" | "task_runs") => number;
+  clearRows: () => void;
+}): void {
+  const input = records();
+  const phases: string[] = [];
+  const first = admitSubagentCompletionDelivery({
+    ...input,
+    databaseOptions: { database },
+    testHooks: {
+      afterMutation: (phase, exactDatabase) => {
+        expect(exactDatabase).toBe(database);
+        expect(exactDatabase.db.isTransaction).toBe(true);
+        phases.push(phase);
+      },
+    },
+  });
+  expect(first).toMatchObject({ claimed: true, status: "pending" });
+  expect(phases).toEqual(["queue", "subagent", "task"]);
+  expect(rowCount("delivery_queue_entries")).toBe(1);
+  expect(rowCount("subagent_runs")).toBe(1);
+  expect(rowCount("task_runs")).toBe(1);
+
+  const second = admitSubagentCompletionDelivery({
+    ...input,
+    databaseOptions: { database },
+  });
+  expect(second).toMatchObject({ claimed: false, status: "pending" });
+  expect(rowCount("delivery_queue_entries")).toBe(1);
+
+  const settledSubagent: SubagentRunRecord = structuredClone(input.subagent);
+  settledSubagent.delivery!.status = "delivered";
+  settledSubagent.delivery!.disposition = "delivered";
+  const settledTask: TaskRecord = {
+    ...input.task,
+    deliveryStatus: "delivered",
+  };
+  settleSubagentCompletionDelivery({
+    subagent: settledSubagent,
+    task: settledTask,
+    databaseOptions: { database },
+  });
+  const storedTask = database.db
+    .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+    .get(input.task.taskId) as { delivery_status: string };
+  expect(storedTask.delivery_status).toBe("delivered");
+
+  clearRows();
+  expect(() =>
+    admitSubagentCompletionDelivery({
+      ...records(),
+      databaseOptions: { database },
+      testHooks: { afterMutation: async () => undefined },
+    }),
+  ).toThrow("transaction hooks must be synchronous");
+  expect(rowCount("delivery_queue_entries")).toBe(0);
+  expect(rowCount("subagent_runs")).toBe(0);
+  expect(rowCount("task_runs")).toBe(0);
 }

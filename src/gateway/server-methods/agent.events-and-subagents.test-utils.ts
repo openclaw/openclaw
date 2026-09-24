@@ -660,7 +660,7 @@ describe("gateway agent handler", () => {
     expect(error.message).not.toMatch(/^Error:/u);
   });
 
-  it("preserves requested delivery when best effort has no external channel", async () => {
+  it("preserves requested delivery without inventing a source channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
@@ -694,7 +694,12 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
-    expect(callArgs).toMatchObject({ deliver: true, channel: "webchat" });
+    expect(callArgs).toMatchObject({
+      deliver: true,
+      channel: undefined,
+      messageChannel: undefined,
+      runContext: { messageChannel: undefined },
+    });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
       "agent delivery unresolved (bestEffortDeliver); final delivery will report",

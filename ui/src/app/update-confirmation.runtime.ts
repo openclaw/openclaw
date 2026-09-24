@@ -9,11 +9,14 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
@@ -25,9 +28,8 @@ const UPDATE_ACCEPT_GRACE_MS = 4_000;
 const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
 
 type DialogPhase =
-  | { kind: "confirm" }
-  | { kind: "working"; connected: boolean }
-  | { kind: "run"; run: UpdateRunRecord; connected: boolean; readError?: string | null }
+  | { kind: "confirm" | "working" }
+  | { kind: "run"; run: UpdateRunRecord }
   | { kind: "failed"; message: string };
 
 let updateDialogOpen = false;
@@ -91,12 +93,14 @@ export async function confirmAndStartUpdateRuntime(
   const details = formatInstalledAndAvailable(params.updateAvailable, params.updateSchedule);
   await new Promise<void>((resolve) => {
     let phase: DialogPhase = params.existingRun
-      ? { kind: "run", run: params.existingRun, connected: true }
+      ? { kind: "run", run: params.existingRun }
       : { kind: "confirm" };
     let settled = false;
     let stopWatching: (() => void) | undefined;
     let acceptTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let sawBusy = false;
+    let latestProgress: UpdateProgress | undefined;
+    let statusCheck: "idle" | "pending" | "success" | { error: string } = "idle";
 
     const close = () => {
       if (settled) {
@@ -127,6 +131,7 @@ export async function confirmAndStartUpdateRuntime(
         if (settled) {
           return;
         }
+        latestProgress = progress;
         // Restart retains the scoped row; its removal retires permission to display it.
         if (phase.kind === "run" && !progress.run) {
           close();
@@ -149,19 +154,21 @@ export async function confirmAndStartUpdateRuntime(
       }
       const current = phase;
       const run = current.kind === "run" ? current.run : null;
-      const readError = current.kind === "run" ? current.readError : null;
+      const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
-      const failed =
-        current.kind === "failed" ||
-        (run !== null && run.status !== "running" && run.status !== "succeeded");
       const finished = run !== null && run.status !== "running";
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
+      const checkingStatus = statusCheck === "pending";
+      const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
+      const showRecovery = failed || Boolean(readError) || statusCheck !== "idle";
+      const disconnected = latestProgress?.connected === false;
       const body =
         current.kind === "run"
           ? (readError ?? "")
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? workingMessage(current.connected)
+              ? workingMessage(!disconnected)
               : `${route.message} ${t("updates.confirm.impact")}`;
       render(
         html`
@@ -173,30 +180,62 @@ export async function confirmAndStartUpdateRuntime(
                   <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
                 </div>
               </div>
+              <div role="status" aria-live="polite" class="exec-approval-sub">
+                ${
+                  disconnected && showRecovery
+                    ? t("updates.dialog.checkStatusDisconnected")
+                    : statusCheck === "success" && !readError
+                      ? t("updates.dialog.statusRefreshed")
+                      : nothing
+                }
+              </div>
+              ${statusCheckError ? html`<div role="alert" class="exec-approval-sub">${statusCheckError}</div>` : nothing}
               ${
                 details && current.kind === "confirm"
-                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                  ? html`<div class="exec-approval-command mono update-confirmation-details">
+                      <div>${details}</div>
+                      ${renderUpdateGitRevisions(params.updateSchedule, params.updateAvailable)}
+                    </div>`
                   : nothing
               }
               ${
                 current.kind === "run"
                   ? html`<openclaw-update-run-view
                       .run=${current.run}
-                      .connected=${current.connected}
+                      .connected=${!disconnected}
                     ></openclaw-update-run-view>`
                   : nothing
               }
               <div class="exec-approval-actions">
                 ${
-                  failed || finished || readError
-                    ? html` ${(failed || readError) && params.onCheckStatus ? html`<button type="button" class="btn" @click=${() => void params.onCheckStatus?.()}>${t("updates.dialog.checkStatus")}</button>` : nothing}
+                  finished || showRecovery
+                    ? html` ${
+                          showRecovery && params.onCheckStatus
+                            ? html`<button
+                                type="button"
+                                class="btn ${checkingStatus ? "btn--busy" : ""}"
+                                ?disabled=${checkingStatus || disconnected}
+                                @click=${checkStatus}
+                              >
+                                ${
+                                  checkingStatus
+                                    ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                          "updates.dialog.checkingStatus",
+                                        )}`
+                                    : t("updates.dialog.checkStatus")
+                                }
+                              </button>`
+                            : nothing
+                        }
                         ${
                           failed
                             ? html`<button
                                 type="button"
                                 class="btn primary"
+                                ?disabled=${checkingStatus || disconnected}
                                 @click=${() => {
                                   phase = { kind: "confirm" };
+                                  statusCheck = "idle";
                                   stopWatching?.();
                                   draw();
                                 }}
@@ -250,6 +289,29 @@ export async function confirmAndStartUpdateRuntime(
       );
     };
 
+    async function checkStatus() {
+      if (
+        statusCheck === "pending" ||
+        latestProgress?.connected === false ||
+        !params.onCheckStatus
+      ) {
+        return;
+      }
+      statusCheck = "pending";
+      draw();
+      try {
+        statusCheck = (await params.onCheckStatus())
+          ? "success"
+          : latestProgress?.readError
+            ? "idle"
+            : { error: t("updates.dialog.statusNotRefreshed") };
+      } catch (error) {
+        statusCheck = { error: formatUiError(error) };
+      } finally {
+        draw();
+      }
+    }
+
     function confirm() {
       if (phase.kind !== "confirm") {
         return;
@@ -268,7 +330,7 @@ export async function confirmAndStartUpdateRuntime(
       if (acceptTimer !== undefined) {
         globalThis.clearTimeout(acceptTimer);
       }
-      phase = { kind: "working", connected: true };
+      phase = { kind: "working" };
       draw();
       // Start before subscribing: an accepted run clears the retained banner
       // synchronously, before its first await. Producers then emit that fresh
@@ -285,23 +347,21 @@ export async function confirmAndStartUpdateRuntime(
         }
         if (progress.run && (!staleFailure || progress.run.status === "running")) {
           sawBusy = true;
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
+          phase = { kind: "run", run: progress.run };
           draw();
           return;
         }
-        const failure = progress.failure ?? progress.readError;
+        const failure =
+          progress.failure && progress.readError
+            ? `${progress.failure}\n${progress.readError}`
+            : (progress.failure ?? progress.readError);
         if (failure && !staleFailure) {
           phase = { kind: "failed", message: failure };
           draw();
           return;
         }
         sawBusy ||= progress.busy;
-        phase = { kind: "working", connected: progress.connected };
+        phase = { kind: "working" };
         draw();
       });
       if (settled) {
@@ -319,12 +379,7 @@ export async function confirmAndStartUpdateRuntime(
     if (params.existingRun && params.watchUpdateProgress) {
       watchProgress(params.watchUpdateProgress, (progress) => {
         if (progress.run) {
-          phase = {
-            kind: "run",
-            run: progress.run,
-            connected: progress.connected,
-            readError: progress.readError,
-          };
+          phase = { kind: "run", run: progress.run };
           draw();
         }
       });

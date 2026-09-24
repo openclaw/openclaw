@@ -11,6 +11,7 @@ import {
   resetCommandLane,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
+import { CommandLane } from "./lanes.js";
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
@@ -560,12 +561,27 @@ describe("command lane capacity groups", () => {
     expect(() => setCommandLaneGroup(GROUP, { budget: 2, members: ["cron", HOOK] })).toThrow(
       /cannot join a capacity group/,
     );
-    expect(() => setCommandLaneGroup(GROUP, { budget: 2, members: ["session:abc", HOOK] })).toThrow(
-      /cannot join a capacity group/,
-    );
+    for (const lane of ["session:abc", "subagent:agent:main:parent"]) {
+      expect(() => setCommandLaneGroup(GROUP, { budget: 2, members: [lane, HOOK] })).toThrow(
+        /cannot join a capacity group/,
+      );
+    }
     expect(() => setCommandLaneGroup(GROUP, { budget: 2, members: ["main", HOOK] })).toThrow(
       /cannot join a capacity group/,
     );
+    expect(() =>
+      setCommandLaneGroup(GROUP, {
+        budget: 2,
+        members: [CommandLane.SystemAgent, HOOK],
+      }),
+    ).toThrow(/cannot join a capacity group/);
+
+    expect(() =>
+      setCommandLaneGroup(GROUP, {
+        budget: 2,
+        members: [CommandLane.SystemAgentInference, HOOK],
+      }),
+    ).not.toThrow();
   });
 
   test("rejects a reservation for a non-member lane", () => {

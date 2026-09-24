@@ -8,12 +8,29 @@ import { renderInboundDocumentContext } from "./file-context.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("renderInboundDocumentContext", () => {
-  it.each([undefined, 13])(
-    "renders actual attachment text without mutating input (maxChars=%s)",
-    async (maxChars) => {
+  it.each([
+    {
+      text: "document body for the steered run",
+      maxChars: undefined,
+      expected: "document body for the steered run",
+      truncated: false,
+    },
+    {
+      text: "document body for the steered run",
+      maxChars: 13,
+      expected: "document body",
+      truncated: true,
+    },
+    { text: "雪🙂", maxChars: 4, expected: "雪🙂", truncated: false },
+    { text: "雪🙂!", maxChars: 4, expected: "雪🙂!", truncated: false },
+    { text: "雪🙂!tail", maxChars: 4, expected: "雪🙂!", truncated: true },
+    { text: "雪🙂tail", maxChars: 2, expected: "雪", truncated: true },
+    { text: "not empty", maxChars: 0, expected: "", truncated: true },
+  ])(
+    "renders actual attachment text without mutating input at limit $maxChars for $text",
+    async ({ text, maxChars, expected, truncated }) => {
       const workspaceDir = tempDirs.make("openclaw-document-context-");
       const mediaPath = path.join(workspaceDir, "steer-note.txt");
-      const text = "document body for the steered run";
       await fs.writeFile(mediaPath, text);
       const ctx: MsgContext = {
         Body: "see attached",
@@ -24,8 +41,10 @@ describe("renderInboundDocumentContext", () => {
       const context = await renderInboundDocumentContext({ ctx, cfg: {}, workspaceDir, maxChars });
 
       expect(context.text).toContain('<file name="steer-note.txt" mime="text/plain">');
-      expect(context.text).toContain(text.slice(0, maxChars));
-      if (maxChars === undefined) {
+      expect(context.text).toContain(`\n---\n${expected}\n`);
+      expect(context.text).not.toContain("[No extractable text]");
+      expect(context.text).not.toContain("\uFFFD");
+      if (!truncated) {
         expect(context.text).not.toContain("[Partial document:");
       } else {
         expect(context.text).toContain("[Partial document: text truncated.]");

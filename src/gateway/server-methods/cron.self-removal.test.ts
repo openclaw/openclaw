@@ -42,7 +42,7 @@ describe.each(
       });
       try {
         const admitted = await admission.admit("embedded");
-        executionIdentity?.onPostAdmission?.(admitted);
+        await executionIdentity?.onPostAdmission?.(admitted);
         const delegatedAuthority = expectDefined(
           getAdmittedRunDelegatedAuthority(admitted),
           "live scheduled admission",
@@ -123,17 +123,19 @@ describe.each(
         await cron.start();
         await vi.advanceTimersByTimeAsync(1_000);
       }
-      expect(events.filter((event) => event.action === "finished")).toEqual([
-        expect.objectContaining({
-          jobId: job.id,
-          status: "ok",
-          completionStatus: "succeeded",
-          summary: "final reply after self-cleanup",
-        }),
-      ]);
-      expect(abortedAfterRemoval).toBe(false);
-      expect(activeAfterRemoval).toBe(true);
-      expect(hasActiveCronJobs()).toBe(false);
+      await vi.waitFor(() => {
+        expect(events.filter((event) => event.action === "finished")).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            status: "ok",
+            completionStatus: "succeeded",
+            summary: "final reply after self-cleanup",
+          }),
+        ]);
+        expect(abortedAfterRemoval).toBe(false);
+        expect(activeAfterRemoval).toBe(true);
+        expect(hasActiveCronJobs()).toBe(false);
+      });
       expect(await cron.readJob(job.id)).toBeUndefined();
     } finally {
       cron.stop();

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -11,15 +14,18 @@ import type { WorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
-function seedAttached(environmentId: string) {
-  support.seedBootstrapping(environmentId);
-  support.testState.store.transition({
+async function seedAttached(environmentId: string) {
+  await support.seedBootstrapping(environmentId);
+  await support.testState.store.transition({
     environmentId,
     from: "bootstrapping",
     to: "ready",
     patch: support.readyPatch(environmentId, {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }),
   });
   return support.testState.store.transition({
@@ -63,15 +69,18 @@ describe("targeted worker placement recovery", () => {
   beforeEach(() => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     });
   });
 
   it("does not wait for a sibling provider inspection; full sweeps still inspect and maintain it", async () => {
     const targetId = "worker-target";
     const siblingId = "worker-sibling";
-    const identity = seedAttached(targetId);
-    support.seedReady(siblingId);
+    const identity = await seedAttached(targetId);
+    await support.seedReady(siblingId);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     seedActivePlacement(placements, {
       environmentId: targetId,
@@ -179,7 +188,7 @@ describe("targeted worker placement recovery", () => {
     async (match) => {
       const sourceId = "worker-move-source";
       const destinationId = "worker-move-destination";
-      const sourceIdentity = seedAttached(sourceId);
+      const sourceIdentity = await seedAttached(sourceId);
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const active = seedActivePlacement(placements, {
         environmentId: sourceId,
@@ -209,7 +218,7 @@ describe("targeted worker placement recovery", () => {
       const environments = support.createService(support.createProvider());
       await environments.destroy(sourceId);
       if (match === "destination") {
-        const destination = seedAttached(destinationId);
+        const destination = await seedAttached(destinationId);
         seedActivePlacement(placements, {
           environmentId: destinationId,
           ownerEpoch: destination.ownerEpoch,

@@ -13,6 +13,7 @@ import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
+import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 
 /**
  * Narrow structural view of the host's model compat config. packages/ai must stay
@@ -65,7 +66,9 @@ export type ToolParameterSchemaOptions = {
 };
 
 const MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-const toolParameterSchemaCache = new WeakMap<object, Array<{ key: string; value: TSchema }>>();
+const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>(
+  MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
+);
 
 function resolveToolParameterSchemaCacheKey(
   options: ToolParameterSchemaOptions | undefined,
@@ -86,22 +89,6 @@ function resolveToolParameterSchemaCacheKey(
     unsupportedKeywords,
     omitEmptyArrayItems,
   ]);
-}
-
-function getCachedToolParameterSchema(schema: object, key: string): TSchema | undefined {
-  return toolParameterSchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
-}
-
-function rememberCachedToolParameterSchema(schema: object, key: string, value: TSchema): TSchema {
-  const entries = toolParameterSchemaCache.get(schema) ?? [];
-  toolParameterSchemaCache.set(
-    schema,
-    [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
-      0,
-      MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-    ),
-  );
-  return value;
 }
 
 function isGeminiModelId(modelId: string): boolean {
@@ -870,14 +857,15 @@ export function normalizeToolParameterSchema(
     return normalizeToolParameterSchemaUncached(schema, options);
   }
   const cacheKey = resolveToolParameterSchemaCacheKey(options);
-  const cached = getCachedToolParameterSchema(schema, cacheKey);
+  const cached = toolParameterSchemaCache.get(schema, cacheKey);
   if (cached) {
     return cached;
   }
-  return rememberCachedToolParameterSchema(
+  return toolParameterSchemaCache.remember(
     schema,
     cacheKey,
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

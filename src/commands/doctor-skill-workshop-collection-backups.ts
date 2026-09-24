@@ -87,10 +87,25 @@ export async function listPendingLegacyCollectionBackupRoots(
           ),
         ),
       ].toSorted();
-      const ownerAgentId =
+      let ownerAgentId =
         workspaceDirs.size === 1 && workspaceDir && candidateAgentIds.length === 1
           ? candidateAgentIds[0]
           : undefined;
+      // Keep workspace admission for existing archive and same-pass relocation recovery.
+      if (workspaceDirs.size === 1 && candidateAgentIds.length === 0) {
+        const verifiedAgents = await verifyLegacyCollectionBackupOwners(backups, config, env);
+        const candidates = verifiedAgents.filter((agent) => agent.verified);
+        if (candidates.length === 1) {
+          ownerAgentId = candidates[0]?.agentId;
+        } else {
+          roots.push({
+            legacyRoot,
+            warning: `Preserved legacy collection backup root ${legacyRoot}: ${candidates.length === 0 ? "no verified owner" : "multiple verified owners"} after workspace move (candidate agents: ${candidates.map((agent) => agent.agentId).join(", ") || "none"}). ${verifiedAgents.map((agent) => agent.detail).join("; ")}. Pause Workshop writes and compare copies of the retained backup and current skills using https://docs.openclaw.ai/tools/skill-workshop/collection-review#when-an-older-backup-cannot-be-restored-automatically; keep the original manifest unchanged. Retry Doctor after resolving the ownership evidence.`,
+            recoverable: true,
+          });
+          continue;
+        }
+      }
       if (!ownerAgentId) {
         roots.push({
           legacyRoot,
@@ -340,6 +355,69 @@ async function readLegacyBackupSkillKey(
     return (await pathExists(skillDir)) ? undefined : fallbackKey;
   }
   return (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? frontmatter.name)?.trim();
+}
+
+async function verifyLegacyCollectionBackupOwners(
+  backups: readonly LegacyCollectionBackup[],
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<{ agentId: string; verified: boolean; detail: string }[]> {
+  const maxSkillFileBytes = resolveSkillDiscoveryLimits(config).maxSkillFileBytes;
+  const results = await Promise.all(
+    backups.flatMap((backup) =>
+      backup.manifest.resultSkillDirs.map(async (relativeDir) => ({
+        label: `${backup.manifest.id}/${relativeDir}`,
+        hash: backup.manifest.resultSkillHashes[relativeDir],
+        skillKey: await readLegacyBackupSkillKey(
+          backup,
+          relativeDir,
+          backup.manifest.skillDirs.includes(relativeDir) ? undefined : path.basename(relativeDir),
+          maxSkillFileBytes,
+        ),
+      })),
+    ),
+  );
+  const emptyBackups = backups.filter((backup) => backup.manifest.resultSkillDirs.length === 0);
+  return Promise.all(
+    listAgentIds(config)
+      .toSorted()
+      .map(async (agentId) => {
+        let matches = 0;
+        const failures = emptyBackups.map(
+          (backup) => `${backup.manifest.id}: no recorded result hashes`,
+        );
+        for (const result of results) {
+          try {
+            if (!result.skillKey) {
+              throw new Error("saved skill identity unavailable");
+            }
+            const target = resolveSkillProposalTarget({
+              skillName: result.skillKey,
+              config,
+              agentId,
+              env,
+            });
+            if (isUpdateRehearsalReadOnlyPath(target.skillDir, env)) {
+              throw new Error("Workshop target is outside the update rehearsal");
+            }
+            if (!(await pathExists(target.skillDir))) {
+              throw new Error("Workshop skill missing");
+            }
+            if ((await readSkillProposalTargetTreeSha256(target.skillDir)) !== result.hash) {
+              throw new Error("result hash differs");
+            }
+            matches += 1;
+          } catch (error) {
+            failures.push(`${result.label}: ${String(error)}`);
+          }
+        }
+        return {
+          agentId,
+          verified: results.length > 0 && failures.length === 0,
+          detail: `agent ${agentId}: ${matches}/${results.length} skills match${failures.length > 0 ? ` (${failures.join(", ")})` : ""}`,
+        };
+      }),
+  );
 }
 
 async function findUnownedLegacyCollectionBackupDirs(

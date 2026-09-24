@@ -21,6 +21,7 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 }
 export {
   callGatewayTool,
+  readGatewayToolOperatorScopes,
   describeImageFile,
   hasGatewayToolRoutingContext,
   imageResultFromFile,
@@ -62,7 +63,6 @@ export {
   browserDoctor,
   browserFocusTab,
   browserImportProfile,
-  normalizeBrowserTabsResult,
   browserOpenTab,
   browserProfiles,
   browserSystemProfiles,

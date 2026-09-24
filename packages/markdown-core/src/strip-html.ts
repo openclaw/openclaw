@@ -4,11 +4,22 @@ import { parseMarkdownOwnership } from "./reasoning-tag-parser.js";
 
 /** Removes authored HTML before block parsing while preserving code and escaped literals. */
 export function stripHtmlFromMarkdown(markdown: string): string {
+  const firstTagStart = markdown.indexOf("<");
+  if (firstTagStart === -1) {
+    return markdown;
+  }
   const { textSpans } = parseMarkdownOwnership(markdown, { includeText: true });
   let output = "";
   let cursor = 0;
-  for (let start = markdown.indexOf("<"); start !== -1; start = markdown.indexOf("<", start + 1)) {
-    if (!textSpans.some(([begin, end]) => start >= begin && start < end)) {
+  let textSpanIndex = 0;
+  for (let start = firstTagStart; start !== -1; start = markdown.indexOf("<", start + 1)) {
+    // Text spans and tag candidates follow source order, so each span is retired once.
+    let textSpan = textSpans[textSpanIndex];
+    while (textSpan && textSpan[1] <= start) {
+      textSpanIndex += 1;
+      textSpan = textSpans[textSpanIndex];
+    }
+    if (!textSpan || start < textSpan[0]) {
       continue;
     }
     let escaped = false;

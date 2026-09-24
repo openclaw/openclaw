@@ -21,7 +21,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { toRequestUrl } from "../../test-utils/provider-usage-fetch.js";
-import { readGitHubJsonResponse } from "../control-ui-github-api.js";
+import { gitHubPublicApi } from "../github-public-api.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -54,9 +54,10 @@ const commandResult = (value = "", code = 0) => ({
   termination: "exit" as const,
 });
 
+const getOrCreatePromise = lazyPromise.getOrCreatePromise;
+
 function observeSharedReadAdmission() {
   const joined = createDeferred();
-  const getOrCreatePromise = lazyPromise.getOrCreatePromise;
   vi.spyOn(lazyPromise, "getOrCreatePromise").mockImplementation((cache, key, create, options) => {
     const pending = cache.get(key);
     const shared = getOrCreatePromise(cache, key, create, options);
@@ -445,28 +446,43 @@ describe("board authenticated GitHub Actions", () => {
     expect(http).toHaveBeenCalledTimes(callsBeforeRead);
   });
 
-  it.each([
-    { repository: "../repo" },
-    { repository: "owner/repo/extra" },
-    { repository: "owner/.." },
-    { perPage: 0 },
-    { perPage: 31 },
-    { perPage: 1.5 },
-    { workflow: "../ci.yml" },
-    { branch: "main\n" },
-    { branch: `bad${String.fromCharCode(0)}branch` },
-    { branch: `bad${String.fromCharCode(0x7f)}branch` },
-    { created: "2026-02-30" },
-    { status: "unknown" },
-    { excludePullRequests: "true" },
-    ...["agentId", "profile", "token", "headers", "url", "method", "maxBytes"].map((field) => ({
-      [field]: "forbidden",
-    })),
-  ])("rejects malformed or authority-overriding params before credentials: %j", async (invalid) => {
-    const { read } = await reader();
+  it("rejects malformed or authority-overriding params without changing a usable board", async () => {
+    const { read, store } = await reader();
+    const target = { sessionKey: "agent:main:runs", agentId: "main" };
+    const before = await store.getSnapshot(target);
     const callsBeforeRead = http.mock.calls.length;
-    expect((await read({ repository: "owner/repo", ...invalid })).mock.calls[0]?.[0]).toBe(false);
-    expect(http).toHaveBeenCalledTimes(callsBeforeRead);
+    for (const invalid of [
+      { repository: "../repo" },
+      { repository: "owner/repo/extra" },
+      { repository: "owner/.." },
+      { perPage: 0 },
+      { perPage: 31 },
+      { perPage: 1.5 },
+      { workflow: "../ci.yml" },
+      { branch: "main\n" },
+      { branch: `bad${String.fromCharCode(0)}branch` },
+      { branch: `bad${String.fromCharCode(0x7f)}branch` },
+      { created: "2026-02-30" },
+      { status: "unknown" },
+      { excludePullRequests: "true" },
+      ...["agentId", "profile", "token", "headers", "url", "method", "maxBytes"].map((field) => ({
+        [field]: "forbidden",
+      })),
+    ]) {
+      const response = await read({ repository: "owner/repo", ...invalid });
+      expect(response.mock.calls[0], JSON.stringify(invalid)).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("Invalid GitHub Actions parameters"),
+        }),
+      ]);
+      expect(http).toHaveBeenCalledTimes(callsBeforeRead);
+    }
+    expect(await store.getSnapshot(target)).toEqual(before);
+    expect((await read()).mock.calls[0]).toEqual([true, result]);
+    expect(actionCalls()).toHaveLength(1);
   });
 
   it.each([23, "ci.yml"])(
@@ -518,7 +534,7 @@ describe("board authenticated GitHub Actions", () => {
     }));
     const raw = { total_count: 30, workflow_runs: runs };
     expect(Buffer.byteLength(JSON.stringify(raw))).toBeGreaterThan(256 * 1024);
-    await expect(readGitHubJsonResponse(json(raw))).rejects.toMatchObject({
+    await expect(gitHubPublicApi.readGitHubJsonResponse(json(raw))).rejects.toMatchObject({
       statusCode: 502,
       message: expect.stringContaining("size limit"),
     });
@@ -608,6 +624,8 @@ describe("board authenticated GitHub Actions", () => {
     delete config.tools!.github;
     native.mockImplementation(async () => commandResult(token));
     const { read, invoke } = await reader();
+    // Pinning warmed native auth; this case needs an actual delayed credential read.
+    clearGitHubCredentialVerificationCache();
     const started = createDeferred();
     const release = createDeferred();
     native.mockImplementationOnce(async () => {
@@ -617,7 +635,9 @@ describe("board authenticated GitHub Actions", () => {
     });
     const pending = read();
     try {
-      await started.promise;
+      expect(
+        await Promise.race([started.promise.then(() => "reading"), pending.then(() => "done")]),
+      ).toBe("reading");
       await invoke("board.update", {
         sessionKey: "agent:main:runs",
         ops: [{ kind: "widget_remove", name: "runs" }],
@@ -778,6 +798,7 @@ describe("board authenticated GitHub Actions", () => {
       sessionKey: "agent:main:runs",
       ops: [{ kind: "widget_remove", name: "leader" }],
     });
+    clearGitHubCredentialVerificationCache();
     native.mockImplementationOnce(async () => {
       rereading.resolve();
       await resume.promise;
@@ -785,9 +806,21 @@ describe("board authenticated GitHub Actions", () => {
     });
     release.resolve();
     try {
-      await rereading.promise;
+      expect(
+        await Promise.race([
+          rereading.promise.then(() => "reading"),
+          followerRead.then(() => "done"),
+        ]),
+      ).toBe("reading");
       expect((await leaderRead).mock.calls[0]?.[0]).toBe(false);
-      expect((await third.read()).mock.calls[0]).toEqual([true, result]);
+      const nativeJoined = observeSharedReadAdmission();
+      const thirdRead = third.read();
+      // Native revalidation is shared too; both surviving callers await this lookup.
+      expect(
+        await Promise.race([nativeJoined.then(() => "joined"), thirdRead.then(() => "done")]),
+      ).toBe("joined");
+      resume.resolve();
+      expect((await thirdRead).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
     } finally {
       resume.resolve();

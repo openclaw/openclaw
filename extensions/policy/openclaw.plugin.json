@@ -20,6 +20,20 @@
       "kind": "cli"
     }
   ],
+  "configGroups": [
+    {
+      "id": "workspace-checks",
+      "title": "Workspace checks",
+      "order": 10,
+      "properties": ["enabled", "workspaceRepairs", "path"]
+    },
+    {
+      "id": "approved-artifacts",
+      "title": "Approved artifacts",
+      "order": 20,
+      "properties": ["expectedHash", "expectedAttestationHash"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

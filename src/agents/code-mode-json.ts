@@ -326,7 +326,7 @@ export class CodeModeOutputState {
         fullError === undefined || errorBytes <= errorAllowance
           ? fullError
           : (errorFitter ??= createErrorFitter(fullError, this.maxBytes))(errorAllowance);
-      const remaining = maxBytes - (error === undefined ? 0 : jsonUtf8Bytes(error));
+      const remaining = maxBytes - (error === fullError ? errorBytes : jsonUtf8Bytes(error));
       const valueReservation = Math.max(
         Math.floor(remaining / 2),
         remaining >= referenceBytes + minimumOutputBytes ? referenceBytes : 0,
@@ -354,9 +354,7 @@ export class CodeModeOutputState {
       const saved = reference ? retainedMarker(reference, valueAllowance) : undefined;
       const valueTruncated =
         value !== undefined &&
-        (reference !== undefined ||
-          value.kind !== "complete" ||
-          sourceBytes(value) > valueAllowance);
+        (reference !== undefined || value.kind !== "complete" || valueBytes > valueAllowance);
       return {
         receipt,
         valueTruncated,

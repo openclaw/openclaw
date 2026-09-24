@@ -4,10 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as auditStore from "../secrets/audit-store.js";
+import { runSecretsAudit } from "../secrets/audit.js";
+import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -509,6 +517,92 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw secrets audit --check");
   });
 
+  it.each<{ name: string; provider: Partial<ModelProviderConfig>; paths: string[] }>([
+    { name: "local marker", provider: { apiKey: "ollama-local" }, paths: [] },
+    {
+      name: "plaintext key",
+      provider: { apiKey: "sk-synthetic-plaintext" },
+      paths: ["models.providers.ollama.apiKey"],
+    },
+    {
+      name: "SecretRef",
+      provider: { apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" } },
+      paths: [],
+    },
+    { name: "non-sensitive header", provider: { headers: { "X-Region": "local" } }, paths: [] },
+    {
+      name: "sensitive header",
+      provider: { headers: { Authorization: "Bearer synthetic-key" } },
+      paths: ["models.providers.ollama.headers.Authorization"],
+    },
+  ])("agrees with secrets audit for $name", async ({ provider, paths }) => {
+    await withExecApprovalsFile({ version: 1 }, async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+              ...provider,
+            },
+          },
+        },
+      };
+      const env = {
+        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+        OPENCLAW_CONFIG_PATH: path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json"),
+        OLLAMA_API_KEY: "synthetic-resolved-key",
+      };
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      const residueSpy = vi.spyOn(auditStore, "findSecretStorePlaintextResidueFindings");
+      try {
+        const report = await runSecretsAudit({ env });
+        const auditPaths = residueSpy.mock.calls.flatMap(([{ assignments }]) =>
+          assignments.map((assignment) => assignment.path),
+        );
+        expect(auditPaths).toEqual(paths);
+        expect(report.summary.plaintextCount).toBe(paths.length);
+        const findings = await collectSecurityWarnings(cfg, env);
+        const doctorPaths = findings
+          .filter((finding) => finding.checkId === "config.plaintext_secrets")
+          .flatMap(
+            (finding) => finding.remediation?.match(/^Paths: (.+)$/m)?.[1]?.split(", ") ?? [],
+          );
+        expect(doctorPaths).toEqual(auditPaths);
+      } finally {
+        residueSpy.mockRestore();
+      }
+    });
+  });
+
+  it("names non-generatable redacted store credentials and leaves them unavailable until replaced", async () => {
+    await withExecApprovalsFile({ version: 1 }, async () => {
+      const entry = { scope: { kind: "team" as const }, name: "SYNTHETIC_PROVIDER_KEY" };
+      writeSecretStoreEntry({
+        ...entry,
+        value: "synthetic-initial-key",
+        kind: "secret",
+        updatedBy: "fixture",
+      });
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE secret_store_entries SET value = ? WHERE name = ?")
+        .run(REDACTED_SENTINEL, entry.name);
+
+      const findings = await noteSecurityWarnings({});
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: "doctor.secret_store_redacted_value",
+          detail: expect.stringContaining(entry.name),
+          remediation: expect.stringContaining(`openclaw secrets store set ${entry.name}`),
+        }),
+      );
+      expect(lastMessage()).toContain("unavailable until replaced");
+      expect(readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+    });
+  });
+
   it("warns when sensitive model provider headers are stored as plaintext in config", async () => {
     await noteSecurityWarnings({
       models: {
@@ -761,25 +855,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
-  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
-    const cfg = {
+  it.each([
+    {
+      name: "list",
+      agents: { list: [{ id: "ops", heartbeat: { target: "last" as const } }] },
+      path: 'heartbeat.directPolicy for agent "ops"',
+    },
+    {
+      name: "keyed",
       agents: {
-        list: [
-          {
-            id: "ops",
-            heartbeat: {
-              target: "last",
-            },
-          },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { heartbeat: { target: "last" as const } },
+        },
       },
-    } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain('Heartbeat agent "ops"');
-    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
-    expect(message).toContain("direct/DM targets by default");
-  });
+      path: "agents.entries.ops.heartbeat.directPolicy",
+    },
+  ])(
+    "warns at the $name agent config path for implicit heartbeat directPolicy",
+    async (testCase) => {
+      await noteSecurityWarnings({ agents: testCase.agents } as OpenClawConfig);
+
+      const message = lastMessage();
+      expect(message).toContain('Heartbeat agent "ops"');
+      expect(message).toContain(testCase.path);
+      expect(message).toContain("direct/DM targets by default");
+    },
+  );
 
   it("degrades safely when channel account resolution fails in read-only security checks", async () => {
     pluginRegistry.list = [

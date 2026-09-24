@@ -23,53 +23,107 @@ describe("extractDocumentContent", () => {
     resolvePluginDocumentExtractorsMock.mockReset();
   });
 
-  it("passes only public extraction request fields to plugins", async () => {
-    const metadata = {
-      pages: {
-        processed: [1],
-        total: 2,
-        selection: "automatic",
-        truncated: true,
-      },
-      textTruncated: false,
-      imagesTruncated: false,
-    } as const;
-    const extract = vi.fn().mockResolvedValue({ text: "pdf text", images: [], metadata });
-    resolvePluginDocumentExtractorsMock.mockReturnValue([
-      {
-        id: "pdf",
-        pluginId: "document-extract",
-        label: "PDF",
-        mimeTypes: ["application/pdf"],
-        extract,
-      },
-    ]);
+  it.each([
+    {
+      name: "first-page extraction",
+      processed: [1],
+      total: 2,
+      maxPages: 1,
+      pageNumbers: undefined,
+      truncated: true,
+    },
+    {
+      name: "non-prefix automatic extraction",
+      processed: [2, 4],
+      total: 10,
+      maxPages: 2,
+      pageNumbers: undefined,
+      truncated: true,
+    },
+    {
+      name: "automatic extraction below its page budget",
+      processed: [2],
+      total: 10,
+      maxPages: 2,
+      pageNumbers: undefined,
+      truncated: true,
+    },
+    {
+      name: "partial explicit extraction",
+      processed: [4],
+      total: 10,
+      maxPages: 2,
+      pageNumbers: [2, 4],
+      truncated: true,
+    },
+    {
+      name: "non-prefix bounded explicit extraction",
+      processed: [2, 4],
+      total: 10,
+      maxPages: 2,
+      pageNumbers: [1, 2, 4],
+      truncated: true,
+    },
+    {
+      name: "complete explicit extraction",
+      processed: [2, 4],
+      total: 10,
+      maxPages: 2,
+      pageNumbers: [2, 4],
+      truncated: false,
+    },
+  ])(
+    "passes public request fields and preserves $name metadata",
+    async ({ processed, total, maxPages, pageNumbers, truncated }) => {
+      const metadata = {
+        pages: {
+          processed,
+          total,
+          selection: pageNumbers ? "explicit" : "automatic",
+          truncated,
+        },
+        textTruncated: false,
+        imagesTruncated: false,
+      } as const;
+      const extract = vi.fn().mockResolvedValue({ text: "pdf text", images: [], metadata });
+      resolvePluginDocumentExtractorsMock.mockReturnValue([
+        {
+          id: "pdf",
+          pluginId: "document-extract",
+          label: "PDF",
+          mimeTypes: ["application/pdf"],
+          extract,
+        },
+      ]);
 
-    await expect(
-      extractDocumentContent({
-        buffer: Buffer.from("pdf"),
-        mimeType: "application/pdf",
-        maxPages: 1,
-        maxPixels: 100,
-        minTextChars: 10,
-        config: {
-          env: {
-            vars: {
-              SECRET_VALUE: "do-not-pass",
+      await expect(
+        extractDocumentContent({
+          buffer: Buffer.from("pdf"),
+          mimeType: "application/pdf",
+          maxPages,
+          ...(pageNumbers ? { pageNumbers } : {}),
+          maxPixels: 100,
+          minTextChars: 10,
+          config: {
+            env: {
+              vars: {
+                SECRET_VALUE: "do-not-pass",
+              },
             },
           },
-        },
-      }),
-    ).resolves.toStrictEqual({ text: "pdf text", images: [], metadata, extractor: "pdf" });
+        }),
+      ).resolves.toStrictEqual({ text: "pdf text", images: [], metadata, extractor: "pdf" });
 
-    expect(extract).toHaveBeenCalledWith({
-      buffer: Buffer.from("pdf"),
-      mimeType: "application/pdf",
-      maxPages: 1,
-      maxPixels: 100,
-      minTextChars: 10,
-    });
-  });
+      expect(extract).toHaveBeenCalledWith({
+        buffer: Buffer.from("pdf"),
+        mimeType: "application/pdf",
+        maxPages,
+        ...(pageNumbers ? { pageNumbers } : {}),
+        maxPixels: 100,
+        minTextChars: 10,
+      });
+    },
+  );
 
   it("surfaces matching extractor failures instead of reporting disablement", async () => {
     const cause = new Error("password required");

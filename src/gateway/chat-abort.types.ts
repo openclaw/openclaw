@@ -1,8 +1,16 @@
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 
+type ChatTerminalProducer = {
+  sessionId: string;
+  sessionKey: string;
+  handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+};
+
 export type ChatAbortControllerEntry = {
   controller: AbortController;
+  /** Captures this run's canonical producer before cancellation releases its live slot. */
+  resolveTerminalProducer?: () => ChatTerminalProducer | undefined;
   sessionId: string;
   sessionKey: string;
   lifecycleGeneration?: string;
@@ -43,6 +51,8 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** Bounded private timeout settlement while the aborted producer unwinds. */
+  pendingTimeoutCompletion?: { expiresAtMs: number; settle: () => void };
   /** False after the owning reply run commits a terminal outcome. */
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   /** Runs once when this registration is actually removed. */

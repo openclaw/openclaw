@@ -1,4 +1,3 @@
-// Feishu plugin module implements tool account behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -56,8 +55,13 @@ function resolveImplicitToolAccountId(params: {
     return normalizedAccountId;
   }
 
-  const contextualAccountId = normalizeOptionalString(params.defaultAccountId);
-  if (contextualAccountId && listFeishuAccountIds(params.cfg).includes(contextualAccountId)) {
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  const hasContextualAccount =
+    contextualAccountId !== undefined &&
+    listFeishuAccountIds(params.cfg).some(
+      (accountId) => normalizeOptionalAccountId(accountId) === contextualAccountId,
+    );
+  if (hasContextualAccount) {
     const contextualAccount = resolveFeishuAccount({
       cfg: params.cfg,
       accountId: contextualAccountId,

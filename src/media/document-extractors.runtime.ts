@@ -7,11 +7,7 @@ import type {
   DocumentExtractionResult,
 } from "../plugins/document-extractor-types.js";
 import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
-import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
 
-const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
-  resolvePluginDocumentExtractors(config ? { config } : undefined),
-);
 const extractionIntegerSchema = z.number().int().max(Number.MAX_SAFE_INTEGER);
 const extractionMetadataSchema = z.object({
   pages: z
@@ -34,7 +30,7 @@ export async function extractDocumentContent(
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
   params.signal?.throwIfAborted();
-  const extractors = await documentExtractorLoader.load(params.config);
+  const extractors = resolvePluginDocumentExtractors({ config: params.config });
   params.signal?.throwIfAborted();
   // Keep config and loader-only fields out of plugin calls; extractors receive the SDK request shape.
   const request: DocumentExtractionRequest = {
@@ -66,29 +62,22 @@ export async function extractDocumentContent(
         const validatedMetadata = extractionMetadataSchema.safeParse(metadata);
         const parsedMetadata = validatedMetadata.success ? validatedMetadata.data : undefined;
         const pages = parsedMetadata?.pages;
-        const selectedPages = request.pageNumbers
-          ? request.pageNumbers
-              .filter((page) => pages && Number.isInteger(page) && page >= 1 && page <= pages.total)
-              .slice(0, request.maxPages)
-          : Array.from(
-              { length: Math.min(pages?.total ?? 0, request.maxPages) },
-              (_, index) => index + 1,
-            );
-        const selectedPageSet = new Set(selectedPages);
-        const expectedPageTruncation = request.pageNumbers
-          ? request.pageNumbers.length > selectedPages.length
-          : (pages?.total ?? 0) > request.maxPages;
-        // Completeness metadata becomes trusted prompt text; bind page claims to the
-        // request that produced them so plugin output cannot fabricate a notice.
+        const requestedPageSet = request.pageNumbers ? new Set(request.pageNumbers) : undefined;
+        const hasOmittedPages =
+          (pages?.processed.length ?? 0) < (requestedPageSet?.size ?? pages?.total ?? 0);
+        // Automatic page choice belongs to the extractor; maxPages only caps its count.
+        // Validate bounded completeness facts before rendering them as trusted prompt text.
         const trustedMetadata =
           parsedMetadata &&
           (!pages ||
             (pages.selection === (request.pageNumbers ? "explicit" : "automatic") &&
               pages.processed.length <= request.maxPages &&
               new Set(pages.processed).size === pages.processed.length &&
-              pages.processed.every((page) => page <= pages.total && selectedPageSet.has(page)) &&
-              pages.truncated === expectedPageTruncation &&
-              (parsedMetadata.textTruncated || pages.processed.length === selectedPageSet.size)))
+              pages.processed.every(
+                (page) => page <= pages.total && (!requestedPageSet || requestedPageSet.has(page)),
+              ) &&
+              (pages.truncated === hasOmittedPages ||
+                (hasOmittedPages && parsedMetadata.textTruncated))))
             ? parsedMetadata
             : undefined;
         return {

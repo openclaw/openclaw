@@ -122,7 +122,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       // The store already started auth publication. Await that owner so immediate status
       // is current, but do not report a committed write as failed if publication rejects.
       try {
-        await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, "update", scope.agentId);
+        await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
       } catch (err) {
         log.warn(`auth profile order saved but runtime publication failed: ${formatForLog(err)}`);
         result.warning =

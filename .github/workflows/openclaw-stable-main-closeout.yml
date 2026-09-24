@@ -40,6 +40,7 @@ jobs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
+      stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -73,8 +74,7 @@ jobs:
           }
           BASH
 
-      - name: Checkout pushed main
-        if: ${{ github.event_name == 'push' }}
+      - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -98,9 +98,25 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
-            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
-              --json tagName,isPrerelease,publishedAt \
-              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+            releases_file="$RUNNER_TEMP/published-releases.json"
+            gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
+              --json tagName,isPrerelease,publishedAt > "$releases_file"
+            tag="$(RELEASES_FILE="$releases_file" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const releases = JSON.parse(readFileSync(process.env.RELEASES_FILE, "utf8"));
+          const candidates = releases
+            .filter((release) => release?.isPrerelease === false)
+            .filter((release) => {
+              const tag = typeof release?.tagName === "string" ? release.tagName : "";
+              const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+              return parsed !== null && classifyReleaseTrain(parsed) === "stable";
+            })
+            .toSorted((left, right) => String(left.publishedAt).localeCompare(String(right.publishedAt)));
+          process.stdout.write(candidates.at(-1)?.tagName ?? "");
+          NODE
+            )"
             if [[ -z "$tag" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -108,12 +124,21 @@ jobs:
           else
             tag="$MANUAL_TAG"
           fi
-          if [[ ! "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+          if ! RELEASE_TAG="$tag" node --input-type=module <<'NODE'
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const tag = process.env.RELEASE_TAG ?? "";
+          const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+          if (parsed === null || classifyReleaseTrain(parsed) !== "stable") {
+            process.exitCode = 1;
+          }
+          NODE
+          then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "Stable main closeout accepts only a stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag, got $tag." >&2
+            echo "Stable main closeout accepts only a regular stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag below the extended-stable .33 boundary, got $tag." >&2
             exit 1
           fi
           release_asset_version="${tag#v}"
@@ -314,10 +339,12 @@ jobs:
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi
+          stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
             echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
+            echo "stable_soak_waiver=$stable_soak_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -406,10 +433,17 @@ jobs:
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
 
       - name: Verify release workflow evidence
         env:
+          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -462,15 +496,13 @@ jobs:
             .workflowName == "Full Release Validation" and
             .runId == $run_id and
             .runAttempt == $run_attempt and
-            .targetSha == $tag_sha and
-            .rerunGroup == "all" and
-            .runReleaseSoak == "true" and
-            .controls.performanceBlocking == true and
-            .childRuns.productPerformance.conclusion == "success"
+            .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          node .closeout-tooling/scripts/lib/release-publish-gates.mts \
+            --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
           if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
@@ -575,6 +607,28 @@ jobs:
               --jq '.content' | tr -d '\n' | base64 --decode > "$CLOSEOUT_DIR/published-appcast.xml"
             existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
               --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
+            if node --input-type=module -e '
+              import { requiresThinMacArtifacts } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+              process.exit(requiresThinMacArtifacts(process.argv[1]) ? 0 : 1);
+            ' "$RELEASE_TAG"; then
+              for appcast in appcast-arm64.xml appcast-x86_64.xml; do
+                published="$CLOSEOUT_DIR/published-${appcast}"
+                if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main" \
+                  --jq '.content' | tr -d '\n' | base64 --decode > "$published"; then
+                  case "$appcast" in
+                    appcast-arm64.xml)
+                      existing_manifest_args+=(--published-appcast-arm64 "$published")
+                      ;;
+                    appcast-x86_64.xml)
+                      existing_manifest_args+=(--published-appcast-x86-64 "$published")
+                      ;;
+                  esac
+                else
+                  rm -f "$published"
+                  echo "Thin appcast is not published yet: $appcast"
+                fi
+              done
+            fi
           fi
           recovery_args=()
           if [[ -f "$RUNNER_TEMP/stable-publish-recovery.json" ]]; then

@@ -157,7 +157,7 @@ export async function applyResetModelOverride(params: {
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
     agentId: params.agentId,
   });
   const allowedModelKeys = modelPolicy.allowedKeys;

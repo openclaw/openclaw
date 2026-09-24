@@ -1,6 +1,9 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  setGatewayPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "./current-plugin-metadata-snapshot.js";
 import {
   getCurrentPluginMetadataSnapshotState,
   selectCurrentPluginMetadataCache,
@@ -19,10 +22,57 @@ import {
   registerPluginMetadataProcessMemoLifecycleClear,
   retainGatewayPluginMetadata,
 } from "./plugin-metadata-lifecycle.js";
+import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
+
+it("retains running metadata readers through the final Gateway close after package replacement", async () => {
+  const readers = { ...snapshotReaderSlot };
+  const first = retainGatewayPluginMetadata();
+  const second = retainGatewayPluginMetadata();
+  const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
+  const scoped = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
+  const replacementReader = () => {
+    throw new TypeError("replacement installation cannot read the running scope state");
+  };
+  const closing = createDeferredCore();
+  const releaseClose = createDeferredCore();
+  let finalClose: Promise<unknown> | undefined;
+  try {
+    first.publish(snapshot);
+    second.publish(snapshot);
+    setGatewayPluginMetadataSnapshot(snapshot);
+    // Released modules register by assigning the shared slot directly.
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    expect(
+      withPluginMetadataSnapshotScope(scoped, () =>
+        getCurrentPluginMetadataSnapshotRequiredRuntime({}),
+      ),
+    ).toBe(scoped);
+    await first.close();
+    finalClose = second.close(async () => {
+      closing.resolve();
+      await releaseClose.promise;
+    });
+    await closing.promise;
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    releaseClose.resolve();
+    await finalClose;
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
+      "replacement installation cannot read the running scope state",
+    );
+  } finally {
+    releaseClose.resolve();
+    await Promise.all([first.close(), finalClose ?? second.close()]);
+    Object.assign(snapshotReaderSlot, readers);
+  }
+});
 
 it("joins owned cleanup and final shared teardown before admitting another Gateway", async () => {
   const cache = getPluginCache();
@@ -226,14 +276,18 @@ it("fences admission before retirement while an admitted sibling stays usable", 
 function retainDistinctMetadataOwners() {
   const firstCache = getPluginCache();
   const first = retainGatewayPluginMetadata();
-  onTestFinished(() => first.close());
+  onTestFinished(async () => {
+    await first.close();
+  });
   const firstSnapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
   first.publish(firstSnapshot);
   selectCurrentPluginMetadataCache(firstCache);
   setGatewayPluginMetadataSnapshot(firstSnapshot);
   const secondCache = createPluginCache();
   const second = withPluginCache(secondCache, () => retainGatewayPluginMetadata());
-  onTestFinished(() => second.close());
+  onTestFinished(async () => {
+    await second.close();
+  });
   const secondSnapshot = second.runBootstrap(() => createPluginMetadataSnapshotFixture());
   second.publish(secondSnapshot);
   selectCurrentPluginMetadataCache(secondCache);
@@ -260,7 +314,7 @@ it("keeps final inventory usable before joining concurrent cache retirements", a
   const useFinalDependency = secondInstance.wrap(() => "available");
   const firstFinal = vi.fn();
   let sharedClosed = false;
-  const lastFinal = vi.fn(async (retire: () => Promise<void>) => {
+  const lastFinal = vi.fn<NonNullable<Parameters<typeof second.close>[0]>>(async (retire) => {
     finalEntered.resolve();
     await finalReleased.promise;
     await retire();

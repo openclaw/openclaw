@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime agent behavior.
 export {
   createSession,
   readEffectiveTools,

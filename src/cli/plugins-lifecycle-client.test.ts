@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
-const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn() }));
+const mocks = vi.hoisted(() => ({ lock: vi.fn(), call: vi.fn(), config: vi.fn(), sleep: vi.fn() }));
 vi.mock("../infra/gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.lock }));
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: mocks.call,
+}));
+vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.config }));
 const { resolvePluginLifecycleGateway, resolvePluginBatchReload } =
   await import("./plugins-lifecycle-client.js");
@@ -16,6 +21,7 @@ describe("plugin lifecycle CLI transport", () => {
     mocks.lock.mockReset().mockResolvedValue({ port: 19001 });
     mocks.config.mockReset().mockReturnValue({ gateway: { port: 18789 } });
     mocks.call.mockReset().mockResolvedValue({ runtime: { generation: 2 } });
+    mocks.sleep.mockReset().mockResolvedValue(undefined);
   });
 
   it("uses the active local owner's port and requires hot lifecycle support", async () => {
@@ -101,6 +107,96 @@ describe("plugin lifecycle CLI transport", () => {
     expect(mocks.call).toHaveBeenCalledOnce();
   });
 
+  it("waits for rejected lifecycle admission without changing its owner, parameters or timeout budget", async () => {
+    let now = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocks.sleep.mockImplementation(async (ms: number) => {
+      now += ms;
+    });
+    const busy = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "lifecycle busy",
+      retryable: true,
+      retryAfterMs: 1000,
+    });
+    mocks.call.mockRejectedValueOnce(busy).mockRejectedValueOnce(busy);
+    try {
+      const gateway = await resolvePluginLifecycleGateway();
+      const params = {
+        plugins: [{ pluginId: "alpha" }, { pluginId: "beta" }],
+        acknowledgeCapabilities: { reviewToken: "a".repeat(64) },
+      };
+      await expect(gateway!("plugins.reload", params)).resolves.toEqual({
+        runtime: { generation: 2 },
+      });
+      expect(mocks.sleep.mock.calls).toEqual([[1000], [1000]]);
+      expect(
+        mocks.call.mock.calls.map(([call]) => ({
+          method: call.method,
+          params: call.params,
+          port: call.localPortOverride,
+          timeout: call.timeoutMs,
+        })),
+      ).toEqual(
+        [600000, 599000, 598000].map((timeout) => ({
+          method: "plugins.reload",
+          params,
+          port: 19001,
+          timeout,
+        })),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each(["delay exceeds remaining budget", "delay overshoots deadline"])(
+    "bounds admission waits when %s",
+    async (outcome) => {
+      let now = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const busy = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "lifecycle busy",
+        retryable: true,
+        retryAfterMs: 300000,
+      });
+      mocks.call.mockRejectedValue(busy);
+      mocks.sleep.mockImplementation(async (ms: number) => {
+        now += outcome === "delay overshoots deadline" ? 600001 : ms;
+      });
+      try {
+        const gateway = await resolvePluginLifecycleGateway();
+        await expect(gateway!("plugins.refresh", {})).rejects.toBe(busy);
+        expect(mocks.sleep).toHaveBeenCalledExactlyOnceWith(300000);
+        expect(mocks.call).toHaveBeenCalledTimes(outcome === "delay overshoots deadline" ? 1 : 2);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { code: "UNAVAILABLE", retryable: true },
+    {
+      code: "UNAVAILABLE",
+      retryable: false,
+      retryAfterMs: 1000,
+      details: { runtime: { generation: 2 } },
+    },
+    { code: "INVALID_REQUEST", retryable: true, retryAfterMs: 1000 },
+  ])(
+    "does not repeat an error without retryable admission metadata: $code $retryable",
+    async (response) => {
+      const failure = new GatewayClientRequestError({ ...response, message: "request failed" });
+      mocks.call.mockRejectedValue(failure);
+      const gateway = await resolvePluginLifecycleGateway();
+      await expect(gateway!("plugins.uninstall", { pluginId: "alpha" })).rejects.toBe(failure);
+      expect(mocks.call).toHaveBeenCalledOnce();
+      expect(mocks.sleep).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { method: "plugins.setEnabled", params: { pluginId: "demo", enabled: true } },
     { method: "plugins.reload", params: { plugins: [{ pluginId: "demo" }] } },
@@ -141,6 +237,66 @@ describe("plugin lifecycle CLI transport", () => {
           },
         }),
       );
+    },
+  );
+
+  it.each(["accepted", "declined", "rejected-again", "connection-lost"])(
+    "reviews successive batch capabilities without repeating uncertain mutations (%s)",
+    async (outcome) => {
+      const required = (pluginId: string, token: string) =>
+        Object.assign(new Error(`${pluginId} consent required`), {
+          details: buildCapabilityConsentErrorDetails({ pluginId, reviewToken: token }),
+        });
+      const firstToken = "a".repeat(64);
+      const secondToken = "b".repeat(64);
+      const secondFailure = required("beta", secondToken);
+      const finalFailure =
+        outcome === "connection-lost" ? new Error("connection lost") : secondFailure;
+      mocks.call
+        .mockRejectedValueOnce(required("alpha", firstToken))
+        .mockResolvedValueOnce({
+          plugin: { id: "alpha", name: "Alpha" },
+          reviewToken: firstToken,
+          declared: {},
+          grants: {},
+        })
+        .mockRejectedValueOnce(secondFailure)
+        .mockResolvedValueOnce({
+          plugin: { id: "beta", name: "Beta" },
+          reviewToken: secondToken,
+          declared: {},
+          grants: {},
+        });
+      if (outcome === "accepted") {
+        mocks.call.mockResolvedValueOnce({ runtime: { generation: 3 } });
+      } else {
+        mocks.call.mockRejectedValueOnce(finalFailure);
+      }
+      const consent = vi.fn(async (review: { pluginId: string; reviewToken: string }) =>
+        outcome === "declined" && review.pluginId === "beta"
+          ? undefined
+          : { reviewToken: review.reviewToken },
+      );
+      const gateway = await resolvePluginLifecycleGateway();
+      const params = { plugins: [{ pluginId: "alpha" }, { pluginId: "beta" }] };
+      const reload = gateway!("plugins.reload", params, consent);
+      if (outcome === "accepted") {
+        await expect(reload).resolves.toEqual({ runtime: { generation: 3 } });
+      } else {
+        await expect(reload).rejects.toBe(finalFailure);
+      }
+      expect(consent.mock.calls.map(([review]) => review.pluginId)).toEqual(["alpha", "beta"]);
+      expect(
+        mocks.call.mock.calls
+          .filter(([call]) => call.method === "plugins.reload")
+          .map(([call]) => call.params),
+      ).toEqual([
+        params,
+        { ...params, acknowledgeCapabilities: { reviewToken: firstToken } },
+        ...(outcome === "declined"
+          ? []
+          : [{ ...params, acknowledgeCapabilities: { reviewToken: secondToken } }]),
+      ]);
     },
   );
 });

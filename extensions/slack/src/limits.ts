@@ -1,4 +1,3 @@
-// Slack plugin module implements limits behavior.
 export const SLACK_TEXT_LIMIT = 8000;
 
 // Slack recommends no more than 4,000 characters for chat.postMessage text.

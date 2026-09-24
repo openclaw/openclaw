@@ -196,7 +196,7 @@ function setupApplyResult() {
 }
 
 function recommendationOutcome(config: OpenClawConfig) {
-  return { config, commitResult: vi.fn() };
+  return { config, commitResult: vi.fn(async () => undefined) };
 }
 
 function setupDeps(params: {

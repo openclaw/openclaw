@@ -1,32 +1,33 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
-import { threadId, Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect } from "vitest";
+import { threadId, type Worker } from "node:worker_threads";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.types.js";
 
 const waitTimeoutMs = 30_000;
 
 export function usePreparedCatalogWorkerFixtures() {
   const retirements = new Set<() => void | Promise<void>>();
   const workers = new Set<Worker>();
-  // Synchronous capture also covers failures before a worker request is awaited.
-  const workerChannel = channel("worker_threads");
-  function trackWorker(message: unknown): void {
-    if (!isRecord(message) || !(message.worker instanceof Worker)) {
-      throw new Error("worker_threads diagnostics omitted the created Worker");
+  let restoreWorkerFactory: (() => void) | undefined;
+  async function waitForWorkers(options?: { requireCreated?: boolean }): Promise<void> {
+    if (options?.requireCreated) {
+      expect(workers.size, "the catalog worker creation owner was observed").toBeGreaterThan(0);
     }
-    workers.add(message.worker);
-  }
-  async function waitForWorkers(): Promise<void> {
     // Retirement removes exit listeners; Node's threadId still records actual termination.
     await expect
       .poll(() => [...workers].map((worker) => worker.threadId).filter((id) => id !== -1), {
@@ -34,7 +35,21 @@ export function usePreparedCatalogWorkerFixtures() {
       })
       .toEqual([]);
   }
-  beforeEach(() => workerChannel.subscribe(trackWorker));
+  beforeEach(() => {
+    const createWorker = workerCpu.createCpuTrackedWorker;
+    const catalogWorkerUrl = resolveRuntimeWorkerUrl(
+      runtimeProcessEntrypoints.preparedModelCatalog,
+    ).href;
+    const tracking = vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
+      const worker = createWorker(...args);
+      // Compiler services also use Worker threads; this fixture owns only catalog computation.
+      if (String(args[0]) === catalogWorkerUrl) {
+        workers.add(worker);
+      }
+      return worker;
+    });
+    restoreWorkerFactory = () => tracking.mockRestore();
+  });
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(async () => {
       // Direct snapshots bypass registered owners. Fence them even when worker warmup times out,
@@ -49,7 +64,8 @@ export function usePreparedCatalogWorkerFixtures() {
       } finally {
         // Keep a failed retirement assertion, but never leave its threads in the next test.
         await Promise.all([...workers].map((worker) => worker.terminate()));
-        workerChannel.unsubscribe(trackWorker);
+        restoreWorkerFactory?.();
+        restoreWorkerFactory = undefined;
         workers.clear();
         clearRuntimeAuthProfileStoreSnapshots();
         closeOpenClawAgentDatabasesForTest();
@@ -137,6 +153,50 @@ export function readCatalogDiscoveryCaptures(root: string) {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { threadId: number; filename: string });
+}
+
+export async function refreshNativeCatalogDuringBoundedRead(params: {
+  snapshot: PreparedModelRuntimeSnapshot;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
+  harnessId: string;
+}): Promise<ModelCatalogSnapshot> {
+  const { snapshot, inventoryOwner } = params;
+  const previous = await snapshot.loadFullModelCatalog!({ refresh: true });
+  const previousInventory = inventoryOwner.catalogInventory;
+  const previousModels = snapshot.readPublishedModels?.();
+  const nativeHarness = snapshot.pluginRegistry?.agentHarnesses.find(
+    ({ harness }) => harness.id === params.harnessId,
+  )?.harness;
+  if (!nativeHarness?.loadModelCatalog) {
+    throw new Error("expected native catalog fixture harness");
+  }
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const loadNative = nativeHarness.loadModelCatalog.bind(nativeHarness);
+  nativeHarness.loadModelCatalog = async (context) => {
+    started.resolve();
+    await release.promise;
+    return loadNative(context);
+  };
+  const refresh = snapshot.loadFullModelCatalog!({ refresh: true });
+  try {
+    await started.promise;
+    // A bounded read must keep one published generation while its native source is held.
+    expect(await snapshot.loadFullModelCatalog!()).toBe(previous);
+    expect(snapshot.readFullModelCatalog!()).toBe(previous);
+    expect(snapshot.readPublishedModels?.()).toBe(previousModels);
+    expect(inventoryOwner.catalogInventory).toBe(previousInventory);
+  } finally {
+    release.resolve();
+    try {
+      await refresh;
+    } finally {
+      nativeHarness.loadModelCatalog = loadNative;
+    }
+  }
+  const completed = await refresh;
+  expect(completed).not.toBe(previous);
+  return completed;
 }
 
 /** Full-result assertions follow publication after the bounded foreground read returns. */

@@ -6,8 +6,8 @@ import {
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -20,6 +20,7 @@ import {
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
+import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList } from "./allow-list.js";
 import {
   isDangerousNameMatchingEnabled,
@@ -27,11 +28,29 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./config.runtime.js";
-import type { SlackMonitorContext } from "./context-types.js";
-import { assertEnterpriseSlackPolicyConfig } from "./enterprise-install.js";
+import {
+  assertEnterpriseSlackPolicyConfig,
+  type SlackInstallationIdentity,
+} from "./enterprise-install.js";
+import type { SlackEventScope } from "./event-scope.js";
 import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 import { formatUnknownError } from "./reconnect-policy.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
+
+type SlackRuntimePolicyContext = ReturnType<typeof resolveSlackMonitorPolicy> & {
+  cfg: OpenClawConfig;
+  installationIdentity: SlackInstallationIdentity;
+  accountId: string;
+  teamId: string;
+  runtime: RuntimeEnv;
+  recallSlackChannelType: (
+    channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => SlackMessageEvent["channel_type"] | undefined;
+  resolveSlackSystemEventRoute: ReturnType<typeof createSlackSystemEventRouteResolver>;
+  readRuntimeContext: () => Promise<unknown>;
+  isRuntimePolicyCurrent: () => boolean;
+};
 
 export function resolveSlackMonitorPolicy(
   cfg: OpenClawConfig,
@@ -51,11 +70,10 @@ export function resolveSlackMonitorPolicy(
     log: (message) => runtime?.log?.(warn(message)),
   });
   return {
-    historyLimit: Math.max(
-      0,
-      slack.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit: resolvePromptHistoryLimit(
+      slack.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
     ),
-    dmHistoryLimit: Math.max(0, slack.dmHistoryLimit ?? 0),
+    dmHistoryLimit: resolvePromptHistoryLimit(slack.dmHistoryLimit, 0),
     sessionScope: cfg.session?.scope ?? ("per-sender" as const),
     mainKey: normalizeMainKey(cfg.session?.mainKey),
     dmEnabled: slack.dm?.enabled ?? true,
@@ -79,13 +97,16 @@ export function resolveSlackMonitorPolicy(
   };
 }
 
-export function createSlackRuntimeContextReader(ctx: SlackMonitorContext, lookupToken: string) {
+export function createSlackRuntimeContextReader<T extends SlackRuntimePolicyContext>(
+  ctx: T,
+  lookupToken: string,
+): () => Promise<T> {
   const readConfig = createRuntimeConfigReader(ctx.cfg);
   let current:
     | {
         cfg: OpenClawConfig;
-        identity: SlackMonitorContext["installationIdentity"];
-        pending: Promise<SlackMonitorContext>;
+        identity: SlackInstallationIdentity;
+        pending: Promise<T>;
       }
     | undefined;
   return async () => {
@@ -96,9 +117,10 @@ export function createSlackRuntimeContextReader(ctx: SlackMonitorContext, lookup
         // Identity and transport caches stay monitor-owned; policy and name resolution
         // finish on an unpublished snapshot so later reloads cannot rewrite admitted work.
         // SAFETY: The prototype supplies the complete typed monitor; only policy fields are replaced.
-        const next = Object.create(ctx) as SlackMonitorContext;
+        const next = Object.create(ctx) as T;
+        const mutableNext: SlackRuntimePolicyContext = next;
         Object.assign(next, { cfg }, resolveSlackMonitorPolicy(cfg, ctx.accountId, ctx.runtime));
-        next.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
+        mutableNext.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
           cfg,
           accountId: ctx.accountId,
           getTeamId: () => ctx.teamId,
@@ -106,8 +128,8 @@ export function createSlackRuntimeContextReader(ctx: SlackMonitorContext, lookup
           threadInheritParent: next.threadInheritParent,
           recallSlackChannelType: ctx.recallSlackChannelType,
         });
-        next.readRuntimeContext = async () => next;
-        next.isRuntimePolicyCurrent = () =>
+        mutableNext.readRuntimeContext = async () => next;
+        mutableNext.isRuntimePolicyCurrent = () =>
           readConfig() === cfg && ctx.installationIdentity === identity;
         current = {
           cfg,
@@ -157,7 +179,7 @@ function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserRes
   return resolved;
 }
 
-async function resolveWorkspacePolicy(ctx: SlackMonitorContext, resolveToken: string) {
+async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveToken: string) {
   if (ctx.installationIdentity.kind === "enterprise") {
     assertEnterpriseSlackPolicyConfig({
       config: mergeSlackAccountConfig(ctx.cfg, ctx.accountId),

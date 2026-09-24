@@ -29,7 +29,13 @@ it.each([undefined, false])(
       },
     };
     const registry = createEmptyPluginRegistry();
-    registry.services.push({ pluginId: service.id, origin: "bundled", source: "test", service });
+    registry.services.push({
+      pluginId: service.id,
+      origin: "bundled",
+      source: "test",
+      id: service.id.trim(),
+      service,
+    });
     const handle = await startPluginServices({ registry, config: {} });
     try {
       expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);

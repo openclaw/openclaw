@@ -2,7 +2,7 @@ import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
-  resolveMemoryDreamingWorkspaces,
+  resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
@@ -32,6 +32,7 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
@@ -196,14 +197,10 @@ export async function runMemoryIndex(
   });
 }
 export async function runMemorySearch(
-  queryArg: string | undefined,
+  query: string,
   opts: MemorySearchCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const query = opts.query ?? queryArg;
-  if (!query) {
-    throw new Error("Missing search query. Provide a positional query or use --query <text>.");
-  }
   await withMemoryCommand({
     commandName: "memory search",
     agent: opts.agent,
@@ -281,11 +278,6 @@ export async function runMemorySearch(
 }
 
 export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
-  if (!opts.session?.length && !opts.hookSource?.length && !opts.participant?.length) {
-    throw new Error(
-      "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
-    );
-  }
   try {
     const cfg = getRuntimeConfig({ skipPluginValidation: true });
     const agentId = resolveMemoryAgent(cfg, opts.agent);
@@ -415,11 +407,12 @@ export async function runMemoryPromote(
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
       if (opts.apply) {
         try {
+          const workspaceAgentIds = resolveMemoryDreamingWorkspace(cfg, workspaceDir)?.agentIds ?? [
+            agentId,
+          ];
           applyResult = await applyShortTermPromotions({
             agentId,
-            workspaceAgentIds: resolveMemoryDreamingWorkspaces(cfg).find(
-              (workspace) => path.resolve(workspace.workspaceDir) === path.resolve(workspaceDir),
-            )?.agentIds,
+            workspaceAgentIds,
             workspaceDir,
             candidates,
             limit: opts.limit,
@@ -428,6 +421,11 @@ export async function runMemoryPromote(
             minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
             maxAgeDays: dreaming.maxAgeDays,
             maxPromotedSnippetTokens: dreaming.maxPromotedSnippetTokens,
+            maxPriorEntryLossFraction: dreaming.maxPriorEntryLossFraction,
+            memoryFileMaxChars: resolveMemoryPromotionFileMaxChars({
+              cfg,
+              agentIds: workspaceAgentIds,
+            }),
             timezone: dreaming.timezone,
           });
         } catch (err) {
@@ -542,14 +540,10 @@ export async function runMemoryPromote(
   });
 }
 export async function runMemoryPromoteExplain(
-  selectorArg: string | undefined,
+  selector: string,
   opts: MemoryPromoteExplainOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const selector = selectorArg?.trim();
-  if (!selector) {
-    throw new Error("Memory promote-explain requires a non-empty selector.");
-  }
   await withMemoryCommand({
     commandName: "memory promote-explain",
     agent: opts.agent,

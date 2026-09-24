@@ -5,9 +5,17 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
+import * as captureOperations from "../../transcripts/capture-operations.js";
 import { activeSessions, createTranscriptSessionId } from "../../transcripts/capture.js";
+import * as transcriptCapture from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
+import { readConfiguredTranscriptStarts } from "../../transcripts/configured-start-status.js";
+import * as configuredStartStatus from "../../transcripts/configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -17,11 +25,15 @@ import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
-  activeSessions.clear();
+const startTranscripts = transcriptCapture.startTranscripts;
+const beginConfiguredTranscriptStarts = configuredStartStatus.beginConfiguredTranscriptStarts;
+afterEach(async () => {
+  await clearTranscriptCapturesForTest();
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
+  vi.restoreAllMocks();
 });
 
 function harness() {
@@ -32,6 +44,33 @@ function harness() {
   const watches: TranscriptOccupancyWatchRequest[] = [];
   const unwatch = vi.fn();
   const logger = { warn: vi.fn() };
+  const startEvents: ReturnType<typeof createDeferred<void>>[] = [];
+  const startEvent = (count: number) => (startEvents[count - 1] ??= createDeferred());
+  const retryEvents: ReturnType<typeof createDeferred<void>>[] = [];
+  const retryEvent = (count: number) => (retryEvents[count - 1] ??= createDeferred());
+  let retries = 0;
+  vi.spyOn(configuredStartStatus, "beginConfiguredTranscriptStarts").mockImplementation(
+    (config) => {
+      const owner = beginConfiguredTranscriptStarts(config);
+      const record = owner.record.bind(owner);
+      vi.spyOn(owner, "record").mockImplementation((...args) => {
+        record(...args);
+        if (args[2] === "retrying") {
+          retryEvent(++retries).resolve();
+        }
+      });
+      return owner;
+    },
+  );
+  let completedStarts = 0;
+  // Provider entry precedes active publication; observe the real startup completion.
+  vi.spyOn(transcriptCapture, "startTranscripts").mockImplementation(async (params) => {
+    const result = await startTranscripts(params);
+    if (result.status === "active") {
+      startEvent(++completedStarts).resolve();
+    }
+    return result;
+  });
   const provider: TranscriptSourceProvider = {
     id: "room-capture",
     name: "Room capture",
@@ -82,10 +121,9 @@ function harness() {
       caller: { kind: "operator", source: "scheduled" },
     });
   const started = async (count: number) => {
-    await vi.waitFor(() => {
-      expect(requests).toHaveLength(count);
-      expect(activeSessions.get(requests[count - 1]!.session.sessionId)?.phase).toBe("active");
-    });
+    await startEvent(count).promise;
+    expect(requests).toHaveLength(count);
+    expect(activeSessions.get(requests[count - 1]!.session.sessionId)?.phase).toBe("active");
     return requests[count - 1]!;
   };
   return {
@@ -100,6 +138,7 @@ function harness() {
     store,
     service,
     started,
+    retrying: (count: number) => retryEvent(count).promise,
   };
 }
 
@@ -191,6 +230,7 @@ describe("occupancy-driven transcript lifecycle", () => {
         await h.store.writeSession(session);
         await h.store.appendUtteranceForSession(session, { text: "Archived speech" });
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await withPluginRuntimeRegistryScope(h.registry, async () => {
         const service = h.service();
@@ -293,18 +333,17 @@ describe("occupancy-driven transcript lifecycle", () => {
         return { ok: true, session: request.session };
       });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
-        const service = h.service([{ ...h.entry, whenOccupied, sessionId: configuredSessionId }]);
+        const autoStart = [{ ...h.entry, whenOccupied, sessionId: configuredSessionId }];
+        const service = h.service(autoStart);
         try {
           service.start();
           await entered[0]!.promise;
           for (let count = 1; count < 3; count++) {
-            await vi.waitFor(() => expect(identities).toHaveLength(count));
+            await h.retrying(count);
             expect(identities).toHaveLength(count);
-            if (whenOccupied) {
-              await vi.waitFor(async () =>
-                expect((await h.store.listSessionEntries())[0]?.session.stoppedAt).toBeDefined(),
-              );
-            }
+            expect(readConfiguredTranscriptStarts({ autoStart })?.get(0)?.diagnostic).toBe(
+              "retrying",
+            );
             await vi.advanceTimersByTimeAsync(5_000);
           }
           await entered[2]!.promise;
@@ -358,9 +397,8 @@ describe("occupancy-driven transcript lifecycle", () => {
           await vi.waitFor(() => expect(h.watches).toHaveLength(1));
           h.watches[0]!.onOccupied();
           const request = await failed.promise;
-          await vi.waitFor(async () =>
-            expect((await h.store.readSession(request.session.sessionId))?.stoppedAt).toBeDefined(),
-          );
+          await h.retrying(1);
+          expect((await h.store.readSession(request.session.sessionId))?.stoppedAt).toBeDefined();
           const restored = await h.store.readSession(request.session.sessionId);
           const revision = await h.store.readSummaryInputRevision(request.session);
           if (stop !== "omitted") {
@@ -421,7 +459,8 @@ describe("occupancy-driven transcript lifecycle", () => {
         service.start();
         await vi.waitFor(() => expect(h.watches).toHaveLength(1));
         h.watches[0]!.onOccupied();
-        await vi.waitFor(() => expect(failedId).toBeDefined());
+        await h.retrying(1);
+        expect(failedId).toBeDefined();
         h.watches[0]!.onEmpty();
         await vi.advanceTimersByTimeAsync(11 * 60_000);
         h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(
@@ -479,6 +518,13 @@ describe("occupancy-driven transcript lifecycle", () => {
 
   it("captures only occupied episodes, keeps reconnects together, and persists notes after grace", async () => {
     const h = harness();
+    const finalized = createDeferred();
+    const stopCapture = captureOperations.stopTranscriptCapture;
+    vi.spyOn(captureOperations, "stopTranscriptCapture").mockImplementation(async (params) => {
+      const result = await stopCapture(params);
+      finalized.resolve();
+      return result;
+    });
     await withPluginRuntimeRegistryScope(h.registry, async () => {
       const service = h.service();
       try {
@@ -500,11 +546,10 @@ describe("occupancy-driven transcript lifecycle", () => {
         expect(h.requests).toHaveLength(1);
         h.watches[0]!.onEmpty();
         await vi.advanceTimersByTimeAsync(30_000);
-        await vi.waitFor(async () => {
-          expect((await h.store.readSession(capture.session.sessionId))?.stoppedAt).toBeDefined();
-          expect(await h.store.readSummary(capture.session)).toMatchObject({
-            summary: { utteranceCount: 1 },
-          });
+        await finalized.promise;
+        expect((await h.store.readSession(capture.session.sessionId))?.stoppedAt).toBeDefined();
+        expect(await h.store.readSummary(capture.session)).toMatchObject({
+          summary: { utteranceCount: 1 },
         });
         expect(h.provider.stop).toHaveBeenCalledOnce();
       } finally {
@@ -518,6 +563,12 @@ describe("occupancy-driven transcript lifecycle", () => {
     "reopens only within the window after a %i ms gateway gap",
     async (gap) => {
       const h = harness();
+      const entered = Array.from({ length: 2 }, () => createDeferred());
+      h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
+        h.requests.push(request);
+        entered[h.requests.length - 1]!.resolve();
+        return { ok: true, session: request.session };
+      });
       await withPluginRuntimeRegistryScope(h.registry, async () => {
         const first = h.service([{ ...h.entry, title: "Original meeting" }]);
         let original: TranscriptStartRequest;
@@ -525,18 +576,21 @@ describe("occupancy-driven transcript lifecycle", () => {
           first.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(1));
           h.watches[0]!.onOccupied();
+          await entered[0]!.promise;
           original = await h.started(1);
           await original.onUtterance({ text: "Before restart" });
         } finally {
           await first.stop();
         }
         await vi.advanceTimersByTimeAsync(gap);
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         const second = h.service([{ ...h.entry, title: "Future meeting" }]);
         try {
           second.start();
           await vi.waitFor(() => expect(h.watches).toHaveLength(2));
           h.watches[1]!.onOccupied();
+          await entered[1]!.promise;
           const reopened = await h.started(2);
           const within = gap < 10 * 60_000;
           expect(reopened.session.sessionId === original.session.sessionId).toBe(within);
@@ -578,12 +632,15 @@ describe("occupancy-driven transcript lifecycle", () => {
           ok: false,
           error: "capture unavailable",
         }));
+        const exhausted = createDeferred();
+        h.logger.warn.mockImplementation(() => exhausted.resolve());
         await restarted.onStatus?.({ active: false });
         for (let attempt = 0; attempt < 12; attempt++) {
           await vi.advanceTimersByTimeAsync(5_000);
-          await vi.waitFor(() => expect(h.provider.start).toHaveBeenCalledTimes(attempt + 1));
+          await (attempt < 11 ? h.retrying(attempt + 1) : exhausted.promise);
+          expect(h.provider.start).toHaveBeenCalledTimes(attempt + 1);
         }
-        await vi.waitFor(() => expect(h.logger.warn).toHaveBeenCalledOnce());
+        expect(h.logger.warn).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(h.provider.start).toHaveBeenCalledTimes(12);
         h.provider.start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(
@@ -688,18 +745,22 @@ describe("occupancy-driven transcript lifecycle", () => {
     );
     await withPluginRuntimeRegistryScope(h.registry, async () => {
       const service = h.service();
-      service.start();
-      await vi.waitFor(() => expect(h.watches).toHaveLength(1));
-      h.watches[0]!.onOccupied();
-      const capture = await h.started(1);
-      h.watches[0]!.onEmpty();
-      await service.stop();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(order).toEqual(["unwatch", "stop"]);
-      expect(h.requests).toHaveLength(1);
-      expect(await h.store.readSummary(capture.session)).toMatchObject({
-        summary: { utteranceCount: 0 },
-      });
+      try {
+        service.start();
+        await vi.waitFor(() => expect(h.watches).toHaveLength(1));
+        h.watches[0]!.onOccupied();
+        const capture = await h.started(1);
+        h.watches[0]!.onEmpty();
+        await service.stop();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(order).toEqual(["unwatch", "stop"]);
+        expect(h.requests).toHaveLength(1);
+        expect(await h.store.readSummary(capture.session)).toMatchObject({
+          summary: { utteranceCount: 0 },
+        });
+      } finally {
+        await service.stop();
+      }
     });
   });
   it.each([

@@ -3,9 +3,18 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../../test-utils/env.js";
+import {
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnv,
+  withEnvAsync,
+} from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
 import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
 import {
   createDeliveryQueueMediaRetention,
@@ -19,6 +28,7 @@ import {
   enqueuePreparedDeliveryOnce,
   failDeliveryAfterPlatformSend,
   findDeliveryIntentOwner,
+  findDeliveryIntentOwners,
   loadPendingDelivery,
   markDeliveryPlatformSendDispatched,
   reserveDeliveryAttempt,
@@ -36,17 +46,16 @@ describe("captured delivery queue state", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
 
   function claimState(): DeliveryQueueStateContext {
-    const context: DeliveryQueueStateContext = {
-      stateDir: tmpDir(),
-      supervisorMode: "external",
-    };
+    const stateDir = tmpDir();
     claimOpenClawStateOwnership("queue-fixture", {
       env: {
-        OPENCLAW_STATE_DIR: context.stateDir,
+        OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_SUPERVISOR_MODE: "external",
       },
     });
-    return context;
+    return withEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
+      captureDeliveryQueueStateContext(stateDir),
+    );
   }
 
   it("keeps preparation, retry evidence, and ACK on the captured state after ambient changes", async () => {
@@ -62,8 +71,8 @@ describe("captured delivery queue state", () => {
             id,
             run: async (owner) => {
               await Promise.resolve();
-              owner.beforeFirstModifier();
-              owner.markPrepared();
+              await owner.beforeFirstModifier();
+              await owner.markPrepared();
               const queued = await enqueuePreparedDeliveryOnce(
                 {
                   channel: "matrix",
@@ -73,7 +82,7 @@ describe("captured delivery queue state", () => {
                   completionRetention: "permanent",
                 },
                 id,
-                owner.current(),
+                await owner.current(),
                 undefined,
                 undefined,
                 context,
@@ -117,15 +126,23 @@ describe("captured delivery queue state", () => {
           { expectedPlatformSendAttemptId: claim.producerClaimId },
           context,
         );
-        expect(findDeliveryIntentOwner(id, undefined, context)).toMatchObject({
-          status: "completed",
-        });
+        const mainSql = observeMainThreadSql();
+        try {
+          expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+            expect.objectContaining({ status: "completed" }),
+            null,
+            expect.objectContaining({ status: "completed" }),
+          ]);
+          mainSql.expectIdle();
+        } finally {
+          mainSql.restore();
+        }
         await expect(fs.stat(otherState)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
   });
 
-  it.each(["read", "ack"] as const)(
+  it.each(["read", "owners", "ack"] as const)(
     "does not gain external ownership from later ambient mode during %s",
     async (operation) => {
       const external = claimState();
@@ -135,12 +152,16 @@ describe("captured delivery queue state", () => {
         undefined,
         external,
       );
-      const captured: DeliveryQueueStateContext = { stateDir: external.stateDir };
+      const captured = withEnv({ OPENCLAW_SUPERVISOR_MODE: undefined }, () =>
+        captureDeliveryQueueStateContext(external.stateDir),
+      );
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         const result =
           operation === "read"
             ? loadPendingDelivery(id, undefined, captured)
-            : ackDelivery(id, undefined, undefined, captured);
+            : operation === "owners"
+              ? findDeliveryIntentOwner(id, undefined, captured)
+              : ackDelivery(id, undefined, undefined, captured);
         await expect(result).rejects.toBeInstanceOf(OpenClawStateExternalOwnershipError);
         expect(await loadPendingDelivery(id, undefined, external)).not.toBeNull();
       });
@@ -171,7 +192,17 @@ describe("captured delivery queue state", () => {
           const custom = vi.fn(send);
           const internal = vi.fn(
             async (params: Parameters<DeliverFn>[0], captured: DeliveryQueueStateContext) => {
-              expect(captured).toEqual(context);
+              expect(captured.stateDir).toBe(context.stateDir);
+              expect(captured.supervisorMode).toBe(context.supervisorMode);
+              expect(captured.workerContext.admission.databasePath).toBe(
+                context.workerContext.admission.databasePath,
+              );
+              expect(captured.workerContext.environment.OPENCLAW_STATE_DIR).toBe(
+                context.workerContext.environment.OPENCLAW_STATE_DIR,
+              );
+              expect(captured.workerContext.environment.OPENCLAW_SUPERVISOR_MODE).toBe(
+                context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
+              );
               return send(params);
             },
           );
@@ -235,7 +266,8 @@ describe("captured delivery queue state", () => {
         await release?.();
         expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
         expect(
-          loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context).stagedArtifacts,
+          (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context))
+            .stagedArtifacts,
         ).toEqual([]);
         await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       },

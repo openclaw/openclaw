@@ -14,6 +14,8 @@ import {
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
@@ -40,6 +42,7 @@ const MAX_CLI_DURABLE_CONTEXT_CHARS = 2_000;
 const CLI_DURABLE_CONTEXT_OMISSION = "[Session notes truncated; earlier notes may be omitted.]";
 
 type CliSessionHistoryParams = {
+  abortSignal?: AbortSignal;
   sessionManager?: SessionManager;
   sessionTarget?: SessionTranscriptRuntimeTarget;
 };
@@ -324,26 +327,44 @@ function loadCliMemoryEntries(sessionManager: SessionManager, hooks = false): Se
 async function loadCliSessionEntries({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<SessionEntry[]> {
+  abortSignal?.throwIfAborted();
   if (sessionManager) {
     return loadCliMemoryEntries(sessionManager);
   }
   if (!sessionTarget) {
     return [];
   }
+  const admission = resolveSessionTranscriptReadFence(sessionTarget);
   const { restoreSessionColdTranscript } =
     await import("../../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(sessionTarget);
-  await waitForSessionTranscriptProjection(sessionTarget);
+  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
   // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
-  return SessionManager.openBounded(sessionTarget, {
-    maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
-    maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
-    onTruncated: () =>
-      cliBackendLog.warn(
-        `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
-      ),
-  }).getBranch();
+  try {
+    return (
+      await SessionManager.openBoundedAsync(sessionTarget, {
+        signal: abortSignal,
+        maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
+        maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
+        onTruncated: () =>
+          cliBackendLog.warn(
+            `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
+          ),
+      })
+    ).getBranch();
+  } catch (error) {
+    if (
+      error instanceof SessionTranscriptStorageUnavailableError &&
+      error.reason === "database-missing" &&
+      !admission
+    ) {
+      // History precedes the approved user-turn writer, which owns first-store creation.
+      return [];
+    }
+    throw error;
+  }
 }
 
 /** Checks whether the transcript owner has any session events. */
@@ -363,7 +384,9 @@ export async function hasCliSessionTranscript({
 export async function loadCliSessionHistoryMessages({
   sessionManager,
   sessionTarget,
+  abortSignal,
 }: CliSessionHistoryParams): Promise<unknown[]> {
+  abortSignal?.throwIfAborted();
   if (sessionManager) {
     return loadCliMemoryEntries(sessionManager, true).flatMap((entry) =>
       entry.type === "message" ? [entry.message] : [],
@@ -374,8 +397,8 @@ export async function loadCliSessionHistoryMessages({
   }
   const { restoreSessionColdTranscript } =
     await import("../../config/sessions/session-cold-storage.js");
-  await restoreSessionColdTranscript(sessionTarget);
-  await waitForSessionTranscriptProjection(sessionTarget);
+  await restoreSessionColdTranscript(sessionTarget, () => abortSignal?.throwIfAborted());
+  await waitForSessionTranscriptProjection(sessionTarget, abortSignal);
   // Hooks retain history across compactions; only reset closes their history window.
   const page = readSessionTranscriptBoundedMessageTailPage(sessionTarget, {
     maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,

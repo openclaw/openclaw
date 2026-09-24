@@ -404,15 +404,18 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("rejects unsupported scheme references", async () => {
-    await withConfiguredPdfTool(async (tool) => {
-      const result = await tool.execute("t1", {
-        prompt: "test",
-        pdf: "ftp://example.com/doc.pdf",
+  it.each(["ftp://example.com/doc.pdf", "data:application/pdf;base64,JVBERi0xLjQ="])(
+    "rejects unsupported scheme reference %s",
+    async (pdf) => {
+      await withConfiguredPdfTool(async (tool) => {
+        const result = await tool.execute("t1", {
+          prompt: "test",
+          pdf,
+        });
+        expectFields(result.details, { error: "unsupported_pdf_reference" });
       });
-      expectFields(result.details, { error: "unsupported_pdf_reference" });
-    });
-  });
+    },
+  );
 
   it("resolves media://inbound PDF refs", async () => {
     await withManagedInboundPdf(async ({ mediaId }) => {
@@ -938,7 +941,7 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
+  it("reports omitted PDF images when the model only accepts text", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
@@ -949,6 +952,7 @@ describe("createPdfTool", () => {
       vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
+        metadata: { textTruncated: false, imagesTruncated: false },
       });
 
       completeMock.mockResolvedValue({
@@ -965,7 +969,13 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      const notice = "[Partial document: image rendering truncated.]";
+      expect(result.content).toEqual([{ type: "text", text: `${notice}\ncodex summary` }]);
+      const context = firstCompletionContext();
+      expect(context?.messages?.[0]?.content?.some((item) => item.type === "image")).toBe(false);
+      expect(context?.messages?.[0]?.content?.map((item) => item.text ?? "").join("\n")).toContain(
+        notice,
+      );
       expectFields(result.details, {
         native: false,
         model: CODEX_PDF_MODEL,

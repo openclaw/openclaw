@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
 import JSON5 from "json5";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -25,7 +26,7 @@ import type {
   FleetNetworkInspectResult,
 } from "./containers.runtime.js";
 import {
-  acquireFleetCellOperation,
+  withFleetCellOperationLease,
   getFleetCell,
   type FleetCellOperationName,
   type FleetCellRecord,
@@ -245,6 +246,21 @@ export function assertManagedInspection(
   return inspection;
 }
 
+export async function probeLoopbackPort(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      // The probe exists only to catch the one legible failure early (address in
+      // use). Anything else - e.g. EACCES on a privileged port an unprivileged CLI
+      // cannot bind but a rootful daemon can - defers to the authoritative runtime bind.
+      resolve(error.code !== "EADDRINUSE");
+    });
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
 export async function probeCellHealth(params: {
   port: number;
   fetchImpl: typeof fetch;
@@ -277,6 +293,25 @@ export async function probeCellHealth(params: {
   } finally {
     clearTimeout(timeout);
     await response?.body?.cancel().catch(() => undefined);
+  }
+}
+
+export async function canonicalizeForContainment(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+  for (;;) {
+    try {
+      const real = await fs.realpath(probe);
+      return path.join(real, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
   }
 }
 
@@ -317,17 +352,23 @@ export async function resolvePurgeTarget(
   return target;
 }
 
-export function requireCell(env: NodeJS.ProcessEnv, tenant: string): FleetCellRecord {
+export async function requireCell(
+  env: NodeJS.ProcessEnv,
+  tenant: string,
+): Promise<FleetCellRecord> {
   const tenantId = validateTenantId(tenant);
-  const record = getFleetCell(env, tenantId);
+  const record = await getFleetCell(env, tenantId);
   if (!record) {
     throw new Error(`Fleet cell not found: ${tenantId}`);
   }
   return record;
 }
 
-export function assertCurrentReservation(env: NodeJS.ProcessEnv, expected: FleetCellRecord): void {
-  const current = getFleetCell(env, expected.tenantId);
+export async function assertCurrentReservation(
+  env: NodeJS.ProcessEnv,
+  expected: FleetCellRecord,
+): Promise<void> {
+  const current = await getFleetCell(env, expected.tenantId);
   if (
     !current ||
     current.createdAtMs !== expected.createdAtMs ||
@@ -457,7 +498,7 @@ export async function verifyReplacementHealthy(params: {
   fetchImpl: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   timeoutMs: number;
   pollMs: number;
   context: "upgrade" | "restore" | "create";
@@ -489,7 +530,7 @@ export async function verifyReplacementHealthy(params: {
     if (params.now() >= deadline) {
       throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
     }
-    params.checkpoint();
+    await params.checkpoint();
     await params.sleep(params.pollMs);
   }
 }
@@ -498,7 +539,7 @@ export async function cleanupFailedCreateContainer(
   record: FleetCellRecord,
   containers: FleetContainerRuntime,
   attemptId: string,
-  checkpoint: () => void,
+  checkpoint: () => Promise<void>,
 ): Promise<boolean> {
   const inspection = await containers.inspect(record.runtime, record.containerName);
   if (inspection.kind === "missing") {
@@ -518,16 +559,21 @@ export async function cleanupFailedCreateContainer(
   if (inspection.labels[FLEET_ATTEMPT_LABEL] !== attemptId) {
     return false;
   }
-  checkpoint();
-  await containers.remove(record.runtime, record.containerName, true);
-  return (await containers.inspect(record.runtime, record.containerName)).kind === "missing";
+  await checkpoint();
+  // Pin the generation the attempt label just proved; the name may already
+  // point at the next attempt or at a foreign container.
+  await containers.remove(record.runtime, inspection.containerId, true);
+  // Confirm the same identity is gone rather than that the name is free: a
+  // foreign container taking the name must not make a completed cleanup look
+  // uncertain, which would strand a reservation no fleet command can recover.
+  return (await containers.inspect(record.runtime, inspection.containerId)).kind === "missing";
 }
 
 export async function cleanupFailedCreateNetwork(
   record: FleetCellRecord,
   containers: FleetContainerRuntime,
   attemptId: string,
-  checkpoint: () => void,
+  checkpoint: () => Promise<void>,
 ): Promise<boolean> {
   const networkName = cellNetworkName(record.tenantId);
   const inspection = await containers.inspectNetwork(record.runtime, networkName);
@@ -550,7 +596,7 @@ export async function cleanupFailedCreateNetwork(
   ) {
     return false;
   }
-  checkpoint();
+  await checkpoint();
   await containers.removeNetwork(record.runtime, networkName);
   return (await containers.inspectNetwork(record.runtime, networkName)).kind === "missing";
 }
@@ -603,7 +649,7 @@ export async function restorePreviousCell(params: {
   previousAttemptId: string;
   nextAttemptId: string;
   wasRunning: boolean;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
 }): Promise<void> {
   const current = await params.containers.inspect(
     params.record.runtime,
@@ -619,10 +665,10 @@ export async function restorePreviousCell(params: {
     const currentAttemptId = current.labels[FLEET_ATTEMPT_LABEL];
     if (currentAttemptId === params.previousAttemptId) {
       if (current.running !== params.wasRunning) {
-        params.checkpoint();
+        await params.checkpoint();
         await params.containers[current.running ? "stop" : "start"](
           params.record.runtime,
-          params.record.containerName,
+          current.containerId,
         );
       }
       return;
@@ -630,10 +676,12 @@ export async function restorePreviousCell(params: {
     if (currentAttemptId !== params.nextAttemptId) {
       throw new Error("container generation changed during upgrade recovery");
     }
-    params.checkpoint();
-    await params.containers.remove(params.record.runtime, params.record.containerName, true);
+    await params.checkpoint();
+    // Recovery removes the replacement generation the attempt label identified,
+    // never whatever currently answers to the cell name.
+    await params.containers.remove(params.record.runtime, current.containerId, true);
   }
-  params.checkpoint();
+  await params.checkpoint();
   await params.containers.run(params.oldProfile, params.wasRunning);
 }
 
@@ -641,50 +689,44 @@ export async function withFleetCellOperation<T>(params: {
   env: NodeJS.ProcessEnv;
   tenantId: string;
   operationName: FleetCellOperationName;
-  operation: (checkpoint: () => void) => Promise<T>;
+  operation: (checkpoint: () => Promise<void>) => Promise<T>;
 }): Promise<T> {
-  const lease = acquireFleetCellOperation({
-    env: params.env,
-    tenantId: params.tenantId,
-    operation: params.operationName,
-  });
-  let heartbeatError: unknown;
-  const checkpoint = () => {
-    try {
-      lease.heartbeat();
-      heartbeatError = undefined;
-    } catch (error) {
-      heartbeatError = error;
-      throw error;
-    }
-  };
-  const heartbeat = setInterval(() => {
-    try {
-      lease.heartbeat();
-      heartbeatError = undefined;
-    } catch (error) {
-      heartbeatError = error;
-    }
-  }, FLEET_OPERATION_HEARTBEAT_MS);
-  heartbeat.unref();
-  let result: T;
-  try {
-    result = await params.operation(checkpoint);
-    if (heartbeatError) {
-      checkpoint();
-    } else {
-      lease.heartbeat();
-    }
-  } catch (error) {
-    clearInterval(heartbeat);
-    try {
-      lease.release();
-    } catch {
-      // Preserve the operation or fencing error; a release failure is secondary.
-    }
-    throw error;
-  }
-  clearInterval(heartbeat);
-  lease.release();
-  return result;
+  return await withFleetCellOperationLease(
+    {
+      env: params.env,
+      tenantId: params.tenantId,
+      operation: params.operationName,
+    },
+    async (lease) => {
+      let pendingHeartbeat: Promise<void> | undefined;
+      const refresh = (): Promise<void> => {
+        if (!pendingHeartbeat) {
+          pendingHeartbeat = Promise.resolve()
+            .then(() => lease.heartbeat())
+            .finally(() => {
+              pendingHeartbeat = undefined;
+            });
+        }
+        return pendingHeartbeat;
+      };
+      const checkpoint = async () => {
+        // A timer result can predate awaited work; renew again at the effect boundary.
+        await pendingHeartbeat?.catch(() => undefined);
+        await refresh();
+      };
+      const heartbeat = setInterval(() => {
+        void refresh().catch(() => undefined);
+      }, FLEET_OPERATION_HEARTBEAT_MS);
+      heartbeat.unref();
+      try {
+        const result = await params.operation(checkpoint);
+        clearInterval(heartbeat);
+        await checkpoint();
+        return result;
+      } finally {
+        clearInterval(heartbeat);
+        await pendingHeartbeat?.catch(() => undefined);
+      }
+    },
+  );
 }

@@ -64,6 +64,22 @@ export type FileAttachmentOutcome =
   // Delivery is not verified here; delivery-derived claims are a tracked follow-up.
   | { kind: "claimed-elsewhere" };
 
+export function resolveFileExtractionOutcome(extraction: {
+  text?: string;
+  images?: DocumentExtractedImage[];
+  metadata?: DocumentExtractionMetadata;
+}): FileAttachmentOutcome {
+  const text = extraction.text ?? "";
+  const images = extraction.images ?? [];
+  const metadata = extraction.metadata ? { metadata: extraction.metadata } : {};
+  if (text.trim() || extraction.metadata?.textTruncated) {
+    return { kind: "extracted", text, images, ...metadata };
+  }
+  return images.length > 0
+    ? { kind: "rendered-to-images", images, ...metadata }
+    : { kind: "no-extractable-text", ...metadata };
+}
+
 function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
 }

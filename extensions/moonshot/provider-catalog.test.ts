@@ -1,4 +1,5 @@
 // Moonshot tests cover provider catalog plugin behavior.
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyMoonshotNativeStreamingUsageCompat,
@@ -6,6 +7,8 @@ import {
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
 } from "./api.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 type MoonshotProvider = ReturnType<typeof buildMoonshotProvider>;
 type MoonshotModel = MoonshotProvider["models"][number];

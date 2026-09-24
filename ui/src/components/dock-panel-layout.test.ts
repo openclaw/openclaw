@@ -117,6 +117,50 @@ describe("createDockPanelLayout", () => {
   });
 });
 
+describe("DockLayoutController open intent", () => {
+  it("reads saved intent once per attachment and preserves explicit choices across suppression", () => {
+    const layout = createLayout("right");
+    layout.save({ ...layout.defaults, open: true });
+    const load = vi.spyOn(layout, "load");
+    let available = false;
+    const controller = new DockLayoutController(createControllerHost(), {
+      layout,
+      reservationPrefix: "test-intent",
+      isAvailable: () => available,
+    });
+    controller.hostConnected();
+    expect(controller.open).toBe(false);
+
+    controller.setSuppressed(true);
+    available = true;
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(controller.setSuppressed(false)).toBe(true);
+    expect(controller.open).toBe(true);
+
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.setOpen(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    controller.setSuppressed(true);
+    expect(controller.setSuppressed(false)).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
+
+    controller.setOpen(true);
+    controller.hideWithoutPersisting();
+    expect(controller.restoreOpenState()).toBe(true);
+    controller.hostDisconnected();
+
+    // A new attachment captures the saved preference afresh.
+    layout.save({ ...layout.defaults, open: false });
+    controller.hostConnected();
+    expect(controller.open).toBe(false);
+    expect(controller.restoreOpenState()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(2);
+    controller.hostDisconnected();
+  });
+});
+
 describe("DockLayoutController inline columns", () => {
   it("does not reserve the viewport for an embedded dock", () => {
     const layout = createLayout("right");

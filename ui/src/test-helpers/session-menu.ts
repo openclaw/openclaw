@@ -1,6 +1,5 @@
 import { html, render } from "lit";
 import { afterEach } from "vitest";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionMenuData } from "../components/session-menu-actions.ts";
 import "../components/session-menu.ts";
@@ -44,7 +43,7 @@ export async function mountMenu(
     selectionCount?: number;
     lastActive?: string;
     groups?: readonly string[];
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     currentOwner?: SessionOwnerOption | null;
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;

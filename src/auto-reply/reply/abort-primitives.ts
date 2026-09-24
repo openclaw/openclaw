@@ -3,75 +3,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "../commands-registry.types.js";
+import { isAbortTrigger, normalizeAbortTriggerText } from "./abort-trigger-text.js";
 
-const ABORT_TRIGGERS = new Set([
-  "stop",
-  "esc",
-  "abort",
-  "exit",
-  "interrupt",
-  "detente",
-  "deten",
-  "detén",
-  "arrete",
-  "arrête",
-  "停止",
-  "停下来",
-  "暂停",
-  "やめて",
-  "止めて",
-  "रुको",
-  "توقف",
-  "стоп",
-  "остановись",
-  "останови",
-  "остановить",
-  "прекрати",
-  "halt",
-  "anhalten",
-  "aufhören",
-  "hoer auf",
-  "stopp",
-  "pare",
-  "stop openclaw",
-  "openclaw stop",
-  "stop action",
-  "stop current action",
-  "stop run",
-  "stop current run",
-  "stop agent",
-  "stop the agent",
-  "stop don't do anything",
-  "stop dont do anything",
-  "stop do not do anything",
-  "stop doing anything",
-  "do not do that",
-  "please stop",
-  "stop please",
-]);
 const ABORT_MEMORY = resolveGlobalMap<string, boolean>(
   Symbol.for("openclaw.abortMemory"),
   "close-and-restart",
 );
 const ABORT_MEMORY_MAX = 2000;
-const TRAILING_ABORT_PUNCTUATION_RE = /[.!?！？…,，。;；:：'"’”)\]}]+$/u;
-
-function normalizeAbortTriggerText(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[’`]/g, "'")
-    .replace(/\s+/g, " ")
-    .replace(TRAILING_ABORT_PUNCTUATION_RE, "")
-    .trim();
-}
-
-export function isAbortTrigger(text?: string): boolean {
-  if (!text) {
-    return false;
-  }
-  const normalized = normalizeAbortTriggerText(text);
-  return ABORT_TRIGGERS.has(normalized);
-}
-
 export function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean {
   if (!text) {
     return false;

@@ -39,6 +39,7 @@ export function buildEmbeddedForegroundPromptContext(
     messageChannel: run.messageChannel,
     messageProvider: run.messageProvider,
     clientCaps: run.clientCaps,
+    gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     toolBindings: run.toolBindings,
     chatType: run.chatType,
     agentAccountId: run.agentAccountId,

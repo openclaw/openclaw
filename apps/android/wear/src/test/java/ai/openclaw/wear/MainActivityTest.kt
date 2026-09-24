@@ -285,7 +285,8 @@ class MainActivityTest {
     assertTrue(snapshot?.sessions?.first()?.openOnWatch == true)
     assertTrue(snapshot?.sessions?.last()?.activeOnPhone == true)
     assertFalse(snapshot?.sessions?.last()?.openOnWatch == true)
-    assertEquals(phoneSession.key, snapshot?.phoneActiveSessionId)
+    assertEquals(session.key, snapshot?.activeSessionId)
+    assertNull(snapshot?.activeSessionTitle)
   }
 
   @Test

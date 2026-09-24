@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -51,11 +52,24 @@ suite.define(() => {
         .locator('.chat-bubble[data-entry-id="ime-reply-source"]')
         .click({ button: "right" });
       const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      const streamingText = "The active run updates while the reply menu is open.";
+      await gateway.emitGatewayEvent("chat", {
+        runId,
+        sessionKey,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: streamingText }] },
+      });
+      await pane
+        .locator(".chat-bubble.streaming")
+        .getByText(streamingText, { exact: true })
+        .waitFor();
       await menu.getByRole("menuitem", { name: "Reply to message", exact: true }).click();
       await menu.waitFor({ state: "detached" });
       const preview = pane.locator(".chat-reply-preview");
       await preview.waitFor({ state: "visible" });
       expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+      await captureUiProof(suite, page, "reply-focus", "reply-after-stream-rerender.png");
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       const draft = "Preserve this unsent reply draft.";
       await composer.fill(draft);

@@ -16,7 +16,7 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
+  closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   firstWrittenJsonArg,
@@ -32,6 +32,7 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
+  seedMemoryIndexWithOrphanedProvenance,
   shortTermTestState as shortTermTesting,
 } from "./test-helpers.js";
 
@@ -187,6 +188,7 @@ afterAll(async () => {
   // The agent close releases its leases through shared state and reopens it, so the
   // shared handle is released second; otherwise Windows fails the removal with EBUSY.
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await fs.rm(fixtureRoot, { recursive: true, force: true });
   resetMemoryCoreDreamingStateForTests();
@@ -301,7 +303,7 @@ describe("memory cli", () => {
     return output;
   }
 
-  function loggedOutput(spy: ReturnType<typeof vi.spyOn>) {
+  function loggedOutput(spy: ReturnType<typeof vi.spyOn>): string {
     return spy.mock.calls
       .map((call: unknown[]) => (typeof call[0] === "string" ? call[0] : ""))
       .join("\n")
@@ -1602,6 +1604,132 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "no changes",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: false,
+      expected: "no changes",
+    },
+    {
+      label: "rewrite without removals",
+      counts: [0, 0, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store",
+    },
+    {
+      label: "invalid only",
+      counts: [2, 0, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-2 invalid)",
+    },
+    {
+      label: "dangling only",
+      counts: [0, 3, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-3 dangling)",
+    },
+    {
+      label: "overflow only",
+      counts: [0, 0, 4],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-4 overflow)",
+    },
+    {
+      label: "nonadjacent counts",
+      counts: [2, 0, 4],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-2 invalid, -4 overflow)",
+    },
+    {
+      label: "all counts and lock",
+      counts: [2, 3, 4],
+      rewrite: true,
+      stale: true,
+      expected: "rewrote store (-2 invalid, -3 dangling, -4 overflow) · removed stale lock",
+    },
+    {
+      label: "stale lock only",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: true,
+      expected: "removed stale lock",
+    },
+    {
+      label: "synthetic counts without rewrite",
+      counts: [2, 3, 4],
+      rewrite: false,
+      stale: false,
+      expected: "no changes",
+    },
+  ] as const)(
+    "formats recall repair status: $label",
+    async ({ counts, rewrite, stale, expected }) => {
+      const producer = await import("./short-term-promotion-artifacts.js");
+      const repairSpy = vi.spyOn(producer, "repairShortTermPromotionArtifacts").mockResolvedValue({
+        changed: rewrite || stale,
+        removedInvalidEntries: counts[0],
+        removedDanglingEntries: counts[1],
+        removedOverflowEntries: counts[2],
+        rewroteStore: rewrite,
+        removedStaleLock: stale,
+      });
+      try {
+        await withTempWorkspace(async (workspaceDir) => {
+          mockManager({
+            status: () => makeMemoryStatus({ workspaceDir }),
+            close: vi.fn(async () => {}),
+          });
+          const log = spyRuntimeLogs(defaultRuntime);
+          await runMemoryCli(["status", "--fix"]);
+          expect(
+            loggedOutput(log)
+              .split("\n")
+              .filter((line) => line.startsWith("Repair:")),
+          ).toEqual([`Repair: ${expected}`]);
+        });
+      } finally {
+        repairSpy.mockRestore();
+      }
+    },
+  );
+
+  it("keeps the raw recall repair result in status --fix --json", async () => {
+    const producer = await import("./short-term-promotion-artifacts.js");
+    const repair = {
+      changed: true,
+      removedInvalidEntries: 2,
+      removedDanglingEntries: 3,
+      removedOverflowEntries: 4,
+      rewroteStore: true,
+      removedStaleLock: true,
+    };
+    const repairSpy = vi
+      .spyOn(producer, "repairShortTermPromotionArtifacts")
+      .mockResolvedValue(repair);
+    try {
+      await withTempWorkspace(async (workspaceDir) => {
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close: vi.fn(async () => {}),
+        });
+        const output = spyRuntimeJson(defaultRuntime);
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status", "--fix", "--json"]);
+        expect(firstWrittenJsonArg(output)).toEqual([expect.objectContaining({ repair })]);
+        expectNotLogged(log, "Repair:");
+      });
+    } finally {
+      repairSpy.mockRestore();
+    }
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -2240,22 +2368,7 @@ describe("memory cli", () => {
     const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
     const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const agentDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
-    agentDatabase.db.exec(`
-      PRAGMA foreign_keys = OFF;
-      INSERT INTO memory_index_chunks (
-        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      ) VALUES (
-        'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
-        'hash', 'none', 'orphaned memory', '[]', 1
-      );
-      INSERT INTO memory_index_chunk_provenance (
-        chunk_id, origin_class, session_kind, observed_at
-      ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
-      DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
-      PRAGMA foreign_keys = ON;
-    `);
-    closeOpenClawAgentDatabasesForTest();
+    const databasePath = await seedMemoryIndexWithOrphanedProvenance(env);
 
     const cfg = {
       memory: {
@@ -2285,7 +2398,7 @@ describe("memory cli", () => {
     const error = spyRuntimeErrors(defaultRuntime);
     await runMemoryCli(args);
 
-    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(agentDatabase.path);
+    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
     expect(process.exitCode).toBe(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
   });
@@ -2343,15 +2456,15 @@ describe("memory cli", () => {
     });
   });
 
-  it("accepts --query for memory search", async () => {
+  it.each(["deployment notes", "   "])("accepts --query %j for memory search", async (query) => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);
     mockManager({ search, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["search", "--query", "deployment notes"]);
+    await runMemoryCli(["search", "--query", query]);
 
-    expect(search).toHaveBeenCalledWith("deployment notes", {
+    expect(search).toHaveBeenCalledWith(query, {
       maxResults: undefined,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
@@ -2377,9 +2490,14 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it.each([false, true])("rejects queryless search before acquisition (json=%s)", async (json) => {
+  it.each([
+    { json: false, args: [] },
+    { json: true, args: [] },
+    { json: false, args: ["positional", "--query", ""] },
+    { json: true, args: ["positional", "--query", ""] },
+  ])("rejects queryless search before acquisition ($json, $args)", async ({ json, args }) => {
     const writeJson = spyRuntimeJson(defaultRuntime);
-    await expect(runMemoryCli(["search", ...(json ? ["--json"] : [])])).rejects.toThrow(
+    await expect(runMemoryCli(["search", ...args, ...(json ? ["--json"] : [])])).rejects.toThrow(
       "Missing search query. Provide a positional query or use --query <text>.",
     );
     expect(getMemorySearchManager).not.toHaveBeenCalled();
@@ -2394,7 +2512,7 @@ describe("memory cli", () => {
       message: "Memory promote-explain requires a non-empty selector.",
     },
     {
-      args: ["promote-explain", "unmatched fixture"],
+      args: ["promote-explain", "  unmatched fixture  "],
       acquires: true,
       message: 'No promotion candidate matched "unmatched fixture".',
     },
@@ -2622,7 +2740,7 @@ describe("memory cli", () => {
       });
 
       const writeJson = spyRuntimeJson(defaultRuntime);
-      await runMemoryCli(["promote-explain", "router", "--json", "--include-promoted"]);
+      await runMemoryCli(["promote-explain", "  router  ", "--json", "--include-promoted"]);
 
       const payload = firstWrittenJsonArg<{ candidate?: { snippet?: string } }>(writeJson);
       expect(payload?.candidate?.snippet).toContain("Configured VLAN 10");
@@ -3476,6 +3594,144 @@ describe("memory cli", () => {
       expect(close).toHaveBeenCalled();
     });
   });
+
+  it("honors the configured prior-entry loss limit during CLI promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const promotionSection = (date: string, index: number) =>
+        [
+          `## Promoted From Short-Term Memory (${date})`,
+          `<!-- openclaw-memory-promotion:legacy-${index} -->`,
+          `- ${"x".repeat(350)}`,
+          "",
+        ].join("\n");
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        [0, 1, 2, 3]
+          .map((index) => promotionSection(`2026-04-${String(index + 1).padStart(2, "0")}`, index))
+          .join("\n"),
+        "utf-8",
+      );
+      await writeDailyMemoryNote(workspaceDir, "2026-04-10", ["Retain the release checklist."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "release checklist",
+        results: [
+          {
+            path: "memory/2026-04-10.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Retain the release checklist.",
+            source: "memory",
+          },
+        ],
+      });
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          list: [{ id: "main", default: true, workspace: workspaceDir, bootstrapMaxChars: 1_400 }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: { dreaming: { phases: { deep: { maxPriorEntryLossFraction: 1 } } } },
+            },
+          },
+        },
+      });
+      const close = vi.fn(async () => {});
+      mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close });
+
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memory).toContain("Retain the release checklist.");
+      expect(memory.length).toBeLessThanOrEqual(1_400);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the smallest bootstrap cap across CLI workspace symlink aliases",
+    async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const workspaceAliasDir = `${workspaceDir}-alias`;
+        await fs.symlink(workspaceDir, workspaceAliasDir, "dir");
+        const existingMemory = `# Long-Term Memory\n\n${"x".repeat(9_100)}\n`;
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), existingMemory, "utf-8");
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Shared workspace fact."]);
+        await recordShortTermRecalls({
+          workspaceDir: workspaceAliasDir,
+          query: "shared workspace",
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.91,
+              snippet: "Shared workspace fact.",
+              source: "memory",
+            },
+          ],
+        });
+        getRuntimeConfig.mockReturnValue({
+          agents: {
+            list: [
+              {
+                id: "alpha",
+                default: true,
+                workspace: workspaceDir,
+                bootstrapMaxChars: 9_000,
+              },
+              { id: "beta", workspace: workspaceAliasDir, bootstrapMaxChars: 12_000 },
+            ],
+          },
+        });
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir: workspaceAliasDir }),
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        await runMemoryCli([
+          "promote",
+          "--agent",
+          "beta",
+          "--apply",
+          "--json",
+          "--min-score",
+          "0",
+          "--min-recall-count",
+          "0",
+          "--min-unique-queries",
+          "0",
+        ]);
+
+        const payload = firstWrittenJsonArg<{
+          candidates: unknown[];
+          apply: { appliedCandidates: unknown[]; rejectedCandidates: Array<{ reason: string }> };
+        }>(writeJson);
+        expect(payload?.candidates).toHaveLength(1);
+        expect(payload?.apply.appliedCandidates).toEqual([]);
+        expect(payload?.apply.rejectedCandidates).toEqual([
+          expect.objectContaining({ reason: expect.stringContaining("budget") }),
+        ]);
+        expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).toBe(
+          existingMemory,
+        );
+        expect(close).toHaveBeenCalled();
+      });
+    },
+  );
 
   it("names apply-time rejections without ranking blocked origins", async () => {
     await withTempWorkspace(async (workspaceDir) => {

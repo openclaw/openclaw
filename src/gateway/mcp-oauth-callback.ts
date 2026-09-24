@@ -7,6 +7,7 @@ import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 
 const MCP_OAUTH_CALLBACK_PATH = "/oauth/mcp/callback";
 const MCP_OAUTH_CALLBACK_MAX_URL_BYTES = 8 * 1024;
@@ -75,8 +76,9 @@ export async function handleMcpOAuthCallback(
   }
 
   const state = url.searchParams.get("state")?.trim();
-  const storeKey = state ? readMcpOAuthPendingAuthorization(state) : undefined;
-  const pending = storeKey ? readMcpOAuthStore(storeKey) : undefined;
+  const context = captureOpenClawStateWorkerContext();
+  const storeKey = state ? await readMcpOAuthPendingAuthorization(state, context) : undefined;
+  const pending = storeKey ? await readMcpOAuthStore(storeKey, context) : undefined;
   if (!storeKey || !state || readPendingState(pending?.lastAuthorizationUrl ?? "") !== state) {
     respondHtml(res, 404, EXPIRED_HTML);
     return true;
@@ -109,6 +111,8 @@ export async function handleMcpOAuthCallback(
       },
       configuredServer.resolved,
       { code, state },
+      undefined,
+      context,
     );
     if (result === "expired") {
       respondHtml(res, 404, EXPIRED_HTML);

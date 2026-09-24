@@ -1,4 +1,3 @@
-// Imessage plugin module implements deliver behavior.
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export {
   chunkMarkdownTextWithMode as chunkTextWithMode,

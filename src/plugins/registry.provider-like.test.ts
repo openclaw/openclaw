@@ -3,26 +3,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { registryContainsRuntimePluginIds } from "./active-runtime-registry.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type {
   OpenClawPluginApi,
   ProviderPluginCatalog,
   UnifiedModelCatalogProviderContext,
 } from "./types.js";
-
-function createTestRegistry() {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 describe("plugin registry provider-like registrations", () => {
   it("captures unified model catalog provider registrations", () => {

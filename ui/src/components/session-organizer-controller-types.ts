@@ -35,7 +35,10 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
-  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
+  reconciledSidebarZone(): {
+    sidebarEntries: readonly string[];
+    defaultPluginNavigationKeys: ReadonlySet<string>;
+  };
   selectSession(sessionKey: string): void;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
 }

@@ -2,7 +2,8 @@
  * Trusted diagnostics emitted around Codex dynamic tool execution lifecycle.
  */
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import type { CodexDynamicToolCallParams } from "./protocol.js";
 
 type DynamicToolDiagnosticContext = {
   call: CodexDynamicToolCallParams;
@@ -49,7 +50,7 @@ export function emitDynamicToolErrorDiagnostic(
 /** Emits the terminal event matching a dynamic tool response's diagnostic type. */
 export function emitDynamicToolTerminalDiagnostic(
   params: DynamicToolDiagnosticContext & {
-    response: CodexDynamicToolCallResponse;
+    response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   },
 ): void {

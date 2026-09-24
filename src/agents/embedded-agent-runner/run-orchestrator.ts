@@ -8,10 +8,10 @@ import {
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -58,11 +58,13 @@ import {
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
+import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
   resolveSessionSuspensionTarget,
   suspendSession,
@@ -88,6 +90,10 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import {
+  assertInitialOperatorModelPolicy,
+  resolveEmbeddedRunConfig,
+} from "./run/model-admission.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
@@ -107,13 +113,7 @@ const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 export function runEmbeddedAgent(
   internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
-  const requestedModel = normalizeOptionalString(internalParamsInput.model);
-  const needsConfiguredDefault =
-    !internalParamsInput.config && !requestedProvider && !requestedModel;
-  const config =
-    internalParamsInput.config ??
-    (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
+  const config = resolveEmbeddedRunConfig(internalParamsInput);
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
@@ -179,7 +179,7 @@ async function runEmbeddedAgentInternal(
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
+  const globalLane = resolveGlobalLane(params.lane, params);
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   // Detached runs neither write durable metadata nor claim the outer deferral.
@@ -255,8 +255,10 @@ async function runEmbeddedAgentInternal(
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAgentEvent = params.onAgentEvent;
+      const onAttemptStart = params.onAttemptStart;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
+        assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
         // Subscription-scoped claude-cli auth executes via the CLI backend;
         // resolved post-admission so dispatched runs obey the same lifecycle,
         // placement, and concurrency gates as native embedded runs.
@@ -349,6 +351,8 @@ async function runEmbeddedAgentInternal(
         const work = new AsyncWorkScope();
         let context = work.run(() => AsyncLocalStorage.snapshot());
         let preparedRuntimeResource: AsyncDisposable | undefined;
+        let initialWriterResource: AsyncDisposable | undefined;
+        let initialWriterCleanup = Promise.resolve();
         const runPreparedCandidate = async () => {
           // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
           // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
@@ -431,7 +435,9 @@ async function runEmbeddedAgentInternal(
                 sessionId: params.sessionId,
                 tracker: startupStages,
               });
-              params.onExecutionStarted?.({ lifecycleGeneration });
+              await params.onExecutionStarted?.({ lifecycleGeneration });
+              throwIfAborted();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
               notifyExecutionPhase("runner_entered");
               const canonicalWorkspace = resolveUserPath(
                 resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
@@ -540,10 +546,17 @@ async function runEmbeddedAgentInternal(
                     });
               const runTerminal = terminal;
               return await runPreparedEmbeddedLoop(refresh, {
+                onInitialWriterPrepared: (resource) => {
+                  initialWriterResource = resource;
+                },
                 runParams: {
                   ...params,
                   assistantErrorTranscript,
                   deferTerminalLifecycle: true,
+                  onAttemptStart: () => {
+                    runTerminal?.beginAttempt();
+                    onAttemptStart?.();
+                  },
                   onAgentEvent: runTerminal
                     ? (event) => {
                         runTerminal.note(event);
@@ -590,6 +603,13 @@ async function runEmbeddedAgentInternal(
                 )
               : await runWithPreparedRuntime();
           } finally {
+            const initialWriter = initialWriterResource;
+            if (initialWriter) {
+              initialWriterCleanup = context(() =>
+                work.track(async () => await initialWriter[Symbol.asyncDispose]()),
+              );
+              void initialWriterCleanup.catch(() => {});
+            }
             preparedLeaseActive = false;
           }
         };
@@ -612,7 +632,11 @@ async function runEmbeddedAgentInternal(
               );
             } finally {
               try {
-                await preparedRuntimeResource?.[Symbol.asyncDispose]();
+                try {
+                  await initialWriterCleanup;
+                } finally {
+                  await preparedRuntimeResource?.[Symbol.asyncDispose]();
+                }
               } finally {
                 parentSignal?.removeEventListener("abort", closeWork);
               }
@@ -673,16 +697,41 @@ async function runEmbeddedAgentInternal(
           }
         }
         refresh.mergeTerminalReceipt(result);
+        if (
+          result.meta.executionTrace?.runner !== "cli" &&
+          params.isFinalFallbackAttempt === undefined
+        ) {
+          settleRequesterRun(params, result, () => {
+            throwIfAborted();
+            params.preparedRunAdmission?.assertSourceCurrent();
+          });
+        }
         const error = result.meta.error?.message ?? terminal?.getDeferredError();
-        terminal?.emit(
-          error ? "error" : "end",
-          error ? new Error(error) : result,
-          resolveAgentLifecycleTerminalMetadata(result.meta),
-        );
+        terminal?.emit(error ? "error" : "end", error ? new Error(error) : result, {
+          ...resolveAgentLifecycleTerminalMetadata(result.meta),
+          ...(result.meta.agentMeta?.terminalReceipt
+            ? {
+                assistantTranscriptIdempotencyKey:
+                  result.meta.agentMeta.terminalReceipt.assistantTranscriptIdempotencyKey,
+              }
+            : {}),
+        });
         return result;
       } catch (error) {
-        terminal?.emit("error", error);
-        throw error;
+        // A fallback candidate is not the terminal owner, even if every later
+        // candidate is skipped. The outer entry releases its children in that case.
+        const failure =
+          params.isFinalFallbackAttempt === undefined
+            ? settleFailedRequesterRun(
+                params,
+                error,
+                // Internal loop stops end inference, not the parent's authority to
+                // release its children. Parent cancellation and placement closure still fence it.
+                resolveSessionPlacementTurnSettlementAssertion(),
+              )
+            : error;
+        terminal?.emit("error", failure);
+        throw failure;
       } finally {
         refresh.close();
       }

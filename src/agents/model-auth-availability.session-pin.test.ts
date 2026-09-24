@@ -158,8 +158,9 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
         state === "missing"
           ? expect.objectContaining({
               code: "selected_auth_profile_unavailable",
+              message: `Selected auth profile "${pin}" is unavailable.`,
               reason: "auth",
-              status: 401,
+              status: undefined,
               provider,
               profileId: pin,
             })

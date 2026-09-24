@@ -165,16 +165,56 @@ describe("format-duration", () => {
 
 describe("format-datetime", () => {
   describe("resolveTimezone", () => {
-    it.each([
-      { input: "America/New_York", expected: "America/New_York" },
-      { input: "Europe/London", expected: "Europe/London" },
-      { input: "UTC", expected: "UTC" },
-      { input: "Invalid/Timezone", expected: undefined },
-      { input: "garbage", expected: undefined },
-      { input: "", expected: undefined },
-    ] as const)("resolves $input", ({ input, expected }) => {
-      expect(resolveTimezone(input)).toBe(expected);
+    it("preserves exact timezone inputs across repeated and alternating resolutions", () => {
+      expectFormatterCases(resolveTimezone, [
+        { input: "America/New_York", expected: "America/New_York" },
+        { input: "Europe/London", expected: "Europe/London" },
+        { input: "UTC", expected: "UTC" },
+        { input: "UTC", expected: "UTC" },
+        { input: "Etc/UTC", expected: "Etc/UTC" },
+        { input: "Invalid/Timezone", expected: undefined },
+        { input: "garbage", expected: undefined },
+        { input: "", expected: undefined },
+        { input: " UTC ", expected: undefined },
+        { input: "America/New_York", expected: "America/New_York" },
+      ]);
     });
+
+    it.each(["constructor", "format"] as const)(
+      "returns undefined on %s failure and resolves again after restoration",
+      (failureSource) => {
+        expect(resolveTimezone("UTC")).toBe("UTC");
+        const failure = new Error("test timezone validation unavailable");
+        let restore: () => void;
+        if (failureSource === "constructor") {
+          const unavailable = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+            throw failure;
+          });
+          restore = () => unavailable.mockRestore();
+        } else {
+          const prototype = Intl.DateTimeFormat.prototype;
+          const descriptor = Object.getOwnPropertyDescriptor(prototype, "format");
+          if (!descriptor) {
+            throw new Error("Intl.DateTimeFormat.format descriptor is missing");
+          }
+          Object.defineProperty(prototype, "format", {
+            ...descriptor,
+            get: () => () => {
+              throw failure;
+            },
+          });
+          restore = () => Object.defineProperty(prototype, "format", descriptor);
+        }
+        try {
+          expect(resolveTimezone("UTC")).toBeUndefined();
+          expect(resolveTimezone("Europe/London")).toBeUndefined();
+        } finally {
+          restore();
+        }
+        expect(resolveTimezone("Europe/London")).toBe("Europe/London");
+        expect(resolveTimezone("UTC")).toBe("UTC");
+      },
+    );
   });
 
   describe("calendar days", () => {
@@ -309,7 +349,6 @@ describe("format-relative", () => {
         { input: 7200000, expected: "2h ago" },
         { input: 47 * 3600000, expected: "47h ago" },
         { input: 48 * 3600000, expected: "2d ago" },
-        { input: 172800000, expected: "2d ago" },
       ]);
     });
 

@@ -31,7 +31,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
     expect(alphaBefore).not.toBeNull();
     expect(betaBefore).not.toBeNull();
     expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/dashboard/main/release-board-11111111?nav=collapsed",
+      "/control/dashboard/main/release-board-11111111111141118111111111111111",
     );
 
     // A newly created session sorts first (createdAt desc) and shifts every
@@ -55,10 +55,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
     expect(rowFor(alphaKey)).toBe(alphaBefore);
     expect(rowFor("agent:main:beta")).toBe(betaBefore);
     expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/chat/main/renamed-board-11111111?nav=collapsed",
+      "/control/chat/main/renamed-board-11111111111141118111111111111111",
     );
-    expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/chat/main/beta?nav=collapsed",
-    );
+    expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe("/control/chat/main/beta");
   });
 });

@@ -18,6 +18,7 @@ import { withCliProcessScope } from "./cli/runtime-cleanup-scope.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
+  prepareGatewayStartupTraceConsoleFormatting,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -32,6 +33,11 @@ import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
+import {
+  getManagedNodeHostStatePath,
+  isNodeHostLauncherChild,
+  requestNodeHostLauncherBootstrap,
+} from "./node-host/launcher-client.js";
 import { defaultRuntime } from "./runtime.js";
 
 // Recovery must not select executables from workspace/global dotenv values.
@@ -123,7 +129,6 @@ if (
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
   installDistEsmResolveFastPath(import.meta.url);
-  process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
@@ -135,25 +140,33 @@ if (
   const startupEnv = { ...process.env };
   const { assertSupportedRuntime, isCurrentRuntimeSupported } =
     await import("./infra/runtime-guard.js");
-  if (!isCurrentRuntimeSupported()) {
+  if (!(await isCurrentRuntimeSupported())) {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
   await assertSupportedRuntime(undefined, undefined, process.argv, false, inheritedRuntimeEnv);
+  const { runNodeHostLauncher } = await import(
+    new URL("../node-host-launcher.mjs", import.meta.url).href
+  );
+  if (await runNodeHostLauncher({ entryPath: entryFile, packageRoot: installRoot })) {
+    process.exit(process.exitCode ?? 0);
+  }
   gatewayEntryStartupTrace.mark("bootstrap");
 
-  const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
-    currentFile: entryFile,
-    installRoot,
-    env: startupEnv,
-    prepareWriteError: async () => {
-      // The child environment was already snapshotted. Load dotenv only to format
-      // the parent trace; command-specific dotenv ordering remains child-owned.
-      const writeError = await prepareCliDiagnosticBlockWriter();
-      return (message) => writeError(message);
-    },
-  });
+  const waitingForCompileCacheRespawn =
+    !isNodeHostLauncherChild() &&
+    (await respawnWithoutOpenClawCompileCacheIfNeeded({
+      currentFile: entryFile,
+      installRoot,
+      env: startupEnv,
+      prepareWriteError: async () => {
+        // The child environment was already snapshotted. Load dotenv only to format
+        // the parent trace; command-specific dotenv ordering remains child-owned.
+        const writeError = await prepareCliDiagnosticBlockWriter();
+        return (message) => writeError(message);
+      },
+    }));
   if (!waitingForCompileCacheRespawn) {
     enableOpenClawCompileCache({
       installRoot,
@@ -173,6 +186,13 @@ if (
       if (!plan) {
         return false;
       }
+      if (isNodeHostLauncherChild()) {
+        await requestNodeHostLauncherBootstrap({
+          execArgv: plan.argv.slice(0, plan.argv.length - process.argv.length + 1),
+          env: plan.env,
+        });
+        process.exit(0);
+      }
 
       // The child environment was already snapshotted. Load dotenv only to format
       // the parent trace; command-specific dotenv ordering remains child-owned.
@@ -185,6 +205,8 @@ if (
     if (!(await ensureCliRespawnReady())) {
       // Only the final child emits the diagnostic warning; parents still enforce admission.
       await assertSupportedRuntime(undefined, undefined, process.argv, true, inheritedRuntimeEnv);
+      // Idle respawn parents retain argv so offline maintenance can identify its launchers.
+      process.title = "openclaw";
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         await writeCapturedCliArgumentError(parsedContainer.error);
@@ -211,7 +233,23 @@ if (
       gatewayEntryStartupTrace.mark("argv");
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
-        await withCliProcessScope(() => runMainOrRootHelp(process.argv));
+        const run = (finalize?: () => Promise<void>) =>
+          withCliProcessScope(() => runMainOrRootHelp(process.argv, { finalize }));
+        const managedNodeStatePath = getManagedNodeHostStatePath();
+        if (managedNodeStatePath) {
+          const { withExistingOpenClawStateSchema } =
+            await import("./state/openclaw-state-db-schema-policy.js");
+          await withExistingOpenClawStateSchema({ path: managedNodeStatePath }, async () => {
+            const { openOpenClawStateDatabase, closeOpenClawStateDatabaseByPathAsync } =
+              await import("./state/openclaw-state-db.js");
+            openOpenClawStateDatabase({ path: managedNodeStatePath });
+            await run(async () => {
+              await closeOpenClawStateDatabaseByPathAsync(managedNodeStatePath);
+            });
+          });
+        } else {
+          await run();
+        }
       }
     }
   }
@@ -286,6 +324,38 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
+async function prepareCliFailureHandler(argv: string[], commandStarted: () => boolean) {
+  const [
+    { loadCliDotEnvForEarlyDiagnostic },
+    { enableConsoleCapture },
+    { formatCliFailureLines, formatCliJsonFailure },
+    { isJsonOutputModeActive },
+    configureTrace,
+  ] = await Promise.all([
+    import("./cli/dotenv.js"),
+    import("./logging.js"),
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+    prepareGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace),
+  ]);
+  return async (error: unknown) => {
+    await loadCliDotEnvForEarlyDiagnostic(argv);
+    configureTrace();
+    enableConsoleCapture();
+    if (isJsonOutputModeActive(argv)) {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
+    }
+    for (const line of formatCliFailureLines({
+      title: commandStarted() ? "The CLI command failed." : "Could not start the CLI.",
+      error,
+      argv,
+    })) {
+      console.error(line);
+    }
+    process.exitCode = 1;
+  };
+}
+
 export async function runMainOrRootHelp(
   argv: string[],
   deps: RunMainOrRootHelpDeps = {},
@@ -293,7 +363,9 @@ export async function runMainOrRootHelp(
   // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
   // mode so the envelope is written here. Only failures before runCli are startup failures.
   let commandStarted = false;
+  let failureHandler: Awaited<ReturnType<typeof prepareCliFailureHandler>> | undefined;
   await runCliWithExitFinalization({
+    finalize: deps.finalize,
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
         const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
@@ -314,6 +386,8 @@ export async function runMainOrRootHelp(
         "run-main-import",
         deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
+      // Commands can replace their own installation. Retain diagnostics before old chunks vanish.
+      failureHandler = await prepareCliFailureHandler(argv, () => commandStarted);
       commandStarted = true;
       await runCli(argv, {
         additionalStartupTrace: gatewayEntryStartupTrace,
@@ -322,29 +396,12 @@ export async function runMainOrRootHelp(
         retainConsoleRoutingUntilProcessExit: true,
       });
     },
-    onError: async (error) => {
-      const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
-      await loadCliDotEnvForEarlyDiagnostic(argv);
-      await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
-      const { enableConsoleCapture } = await import("./logging.js");
-      enableConsoleCapture();
-      const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
-        await Promise.all([import("./cli/failure-output.js"), import("./cli/json-output-mode.js")]);
-      if (isJsonOutputModeActive(argv)) {
-        defaultRuntime.writeJson(formatCliJsonFailure(error));
-      }
-      for (const line of formatCliFailureLines({
-        title: commandStarted ? "The CLI command failed." : "Could not start the CLI.",
-        error,
-        argv,
-      })) {
-        console.error(line);
-      }
-      process.exitCode = 1;
-    },
+    onError: async (error) =>
+      (failureHandler ?? (await prepareCliFailureHandler(argv, () => commandStarted)))(error),
   });
 }
 
 type RunMainOrRootHelpDeps = {
   loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+  finalize?: () => Promise<void>;
 };

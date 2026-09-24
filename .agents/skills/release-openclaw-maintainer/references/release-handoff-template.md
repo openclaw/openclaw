@@ -13,15 +13,20 @@ operator steering. Do not preserve superseded scope.
 ## Immutable state
 
 - track: `<regular beta/stable | extended-stable>`
-- branch: `<release/YYYY.M.PATCH | extended-stable/YYYY.M.33>`
+- branch: `<release/YYYY.M.PATCH exactly, no -cutN | extended-stable/YYYY.M.33>`
 - cut SHA: `<full sha>`
+- cut time: `<UTC timestamp>`
 - Code SHA: `<regular release full sha | not applicable>`
 - Tooling SHA: `<trusted workflow full sha>`
-- Release SHA: `<regular release full sha | exact extended-stable branch tip>`
+- Release SHA: `<same as Code SHA | notes-only descendant | exact extended-stable branch tip>`
 - tag: `v<version>`
-- workflow ref: `<release-ci ref | canonical branch>`
+- validation workflow ref: `<release-ci ref | canonical branch>`
+- publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
+- publication selection: `<normal/prepared route, npm dist-tag, package roster>`
 - publication inventory: `<exact surfaces>`
+- already-published plugin skips: `<none or package@version with metadata-only delta>`
 - approved backports: `<none or exact PRs/commits>`
+- cherry-picked blockers: `<none or commit / PR / reason per entry; re-cut only on Peter's request>`
 - approved main changes: `<none or exact blocker>`
 - admitted release blockers: `<confirmed product/package/provenance/security blockers only>`
 - frozen-target compatibility repairs: `<none or exact PRs/invariants>`
@@ -30,9 +35,12 @@ operator steering. Do not preserve superseded scope.
 
 - Full Release Validation parent: `<run id / attempt / URL or none>`
 - npm preflight: `<run id / URL or none>`
+- qualified npm/OCI descriptors: `<exact producer run/attempt and artifact identities>`
+- candidate acceptance: `<green untagged-SHA evidence | pending>`
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
+- GitHub Release: `<public URL / non-Latest readback or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
@@ -41,7 +49,8 @@ operator steering. Do not preserve superseded scope.
 Keep one row per selected surface, with its exact run/attempt or immutable
 receipt, current state, and next action. Remove unselected rows rather than
 reporting them as passed. Stable/full includes macOS unless explicitly scoped
-out; extended-stable does not inherit ClawHub, GitHub Release, or native apps.
+out; extended-stable carries non-Latest GitHub Release evidence but does not inherit
+ClawHub or native apps.
 
 | Surface                   | Evidence and state                                                       | Next action or blocker |
 | ------------------------- | ------------------------------------------------------------------------ | ---------------------- |
@@ -70,15 +79,22 @@ reference for commands rather than redispatching the release parent.
 - current: `<one phase>`
 - next action: `<one concrete action>`
 - roles: `<one operator | one transition watcher | zero or one current-failure investigator>`
-- retry budget: `<one diagnosis/fix/narrow retry, then reassess>`
+- retry budget: `<per-child failed-job reruns used: n/2 | then one diagnosis/fix/narrow retry, then reassess>`
+- wall-clock budget: `<stable on npm by cut time + 6h | elapsed h:mm | if exceeded: blocking lane and decision taken>`
 
 ## Failure policy
 
-- confirmed product/code failure: fix the release branch, freeze a new Code
-  SHA, and invalidate downstream product evidence
-- regular changelog-only failure: change the selected release entry and only
+- confirmed product defect that a required lane blocks on (update/install
+  path, publish bytes, or another required gate proven by diagnosis): fix the
+  release branch, freeze a new Code SHA, and invalidate downstream product
+  evidence; any other failure keeps the Code SHA
+- flaky lane (fails twice on a test the candidate did not touch, no product
+  cause in the delta): record it, fix `main` in parallel, never re-cut
+- regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof
+- source fix after a pushed beta tag: use the next beta number; never move the
+  old tag or rerun fresh candidate acceptance against it
 - extended-stable branch change: land the approved product/changelog change or
   smallest frozen-target repair by PR, record its source/invariant, and replace
   all exact-head evidence

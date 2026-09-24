@@ -15,6 +15,7 @@ import {
   getChatAttachmentVideoPosterUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
+  replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
@@ -281,3 +282,26 @@ it("retains a pending video poster when a local message projects the same payloa
   releaseChatAttachmentPayloads([attachment]);
   expect(new Set(revoked)).toEqual(new Set(created.keys()));
 });
+
+it.each([64, 1024 * 1024, 5 * 1024 * 1024 - 1, 5 * 1024 * 1024])(
+  "restores supported inline images of %i bytes",
+  (bytes) => {
+    const data = Buffer.alloc(bytes, 0xab).toString("base64");
+    const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
+    owned.push(...restored);
+    expect(restored).toHaveLength(1);
+    expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
+  },
+);
+
+it("rejects a restored image one decoded byte over the cap without throwing", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64");
+  expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
+});
+
+it.each(["", "AAA", "AB=A", "A===", "====", "YWJ$", "aW1h Z2U=", "QQ==QQ=="])(
+  "skips malformed restored image bytes %j",
+  (data) => {
+    expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
+  },
+);

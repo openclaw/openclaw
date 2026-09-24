@@ -13,7 +13,8 @@ export function isLocalAssistantAttachmentSource(source: string): boolean {
     /^file:/iu.test(trimmed) ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
-    /^[a-zA-Z]:[\\/]/.test(trimmed)
+    /^[a-zA-Z]:[\\/]/.test(trimmed) ||
+    (Boolean(trimmed) && !/^[a-z][a-z0-9+.-]*:/iu.test(trimmed))
   );
 }
 

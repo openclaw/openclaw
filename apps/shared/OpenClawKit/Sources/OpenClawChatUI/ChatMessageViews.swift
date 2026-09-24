@@ -288,6 +288,10 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View {
     let message: OpenClawChatMessage
+    var sourcePreviews: [ChatSourcePreview] = []
+    var sourceContextRevision = UUID()
+    var sourceFaviconsEnabled = false
+    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
@@ -342,6 +346,10 @@ struct ChatMessageBubble: View {
     private var messageBody: some View {
         ChatMessageBody(
             message: self.message,
+            sourcePreviews: self.sourcePreviews,
+            sourceContextRevision: self.sourceContextRevision,
+            sourceFaviconsEnabled: self.sourceFaviconsEnabled,
+            loadSourceFavicon: self.loadSourceFavicon,
             isUser: self.isUser,
             style: self.style,
             markdownVariant: self.markdownVariant,
@@ -398,6 +406,10 @@ private struct ChatMessageBody: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
+    var sourcePreviews: [ChatSourcePreview] = []
+    var sourceContextRevision = UUID()
+    var sourceFaviconsEnabled = false
+    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let isUser: Bool
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
@@ -479,7 +491,15 @@ private struct ChatMessageBody: View {
                     textColor: textColor)
             }
 
-            if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
+            if !self.sourcePreviews.isEmpty {
+                ChatSourcePreviewsView(
+                    sources: self.sourcePreviews,
+                    contextRevision: self.sourceContextRevision,
+                    faviconsEnabled: self.sourceFaviconsEnabled,
+                    loadFavicon: self.loadSourceFavicon)
+            }
+
+            if let previewURL = self.linkPreviewURL {
                 ChatLinkPreview(url: previewURL)
             }
 
@@ -586,7 +606,7 @@ private struct ChatMessageBody: View {
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
             !self.inlineWidgets.isEmpty ||
-            (self.showsLinkPreview && chatFirstPreviewURL(in: self.primaryText) != nil)
+            self.linkPreviewURL != nil
     }
 
     private var toolActivityItems: [ChatToolActivityItem] {
@@ -601,16 +621,28 @@ private struct ChatMessageBody: View {
                 arguments: nil,
                 details: self.message.details,
                 resultText: self.primaryText,
-                state: self.message.isError == true ? .failed : .finished,
-                liveDiffStat: nil)]
+                state: ChatToolActivity
+                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
+                liveDiffStat: nil,
+                activity: self.message.activity?.first,
+                activityPrepared: self.message.activity != nil)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
+        return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults).map { item in
+            var prepared = item
+            prepared.activity = self.message.activity?.first { $0.toolCallId == item.id }
+            prepared.activityPrepared = self.message.activity != nil
+            return prepared
+        }
     }
 
-    private var showsLinkPreview: Bool {
+    private var linkPreviewURL: URL? {
         let role = self.message.role.lowercased()
-        return role == "user" || role == "assistant"
+        guard role == "user" || role == "assistant",
+              let url = chatFirstPreviewURL(in: self.primaryText),
+              role != "assistant" || !self.sourcePreviews.contains(where: { $0.represents(url) })
+        else { return nil }
+        return url
     }
 
     private var primaryText: String {
@@ -648,20 +680,11 @@ private struct ChatMessageBody: View {
     }
 
     private var toolCalls: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            let kind = (content.type ?? "").lowercased()
-            if ["toolcall", "tool_call", "tooluse", "tool_use"].contains(kind) {
-                return true
-            }
-            return content.name != nil && content.arguments != nil
-        }
+        self.message.content.filter(\.isToolCall)
     }
 
     private var inlineToolResults: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
-            let kind = (content.type ?? "").lowercased()
-            return kind == "toolresult" || kind == "tool_result"
-        }
+        self.message.content.filter(\.isToolResult)
     }
 
     private var isToolResultMessage: Bool {
@@ -769,6 +792,13 @@ private struct AttachmentRow: View {
     var body: some View {
         if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
             switch kind {
+            case .file:
+                ChatFileAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    fileName: self.att.fileName ?? self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .file, nil) })
             case .image:
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
@@ -1121,8 +1151,11 @@ struct ChatPendingToolsBubble: View {
                 arguments: call.args,
                 details: nil,
                 resultText: nil,
-                state: .running,
-                liveDiffStat: call.diffStat)
+                state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+                    call.activity?.status == "completed" ? .finished :
+                    call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+                liveDiffStat: call.diffStat,
+                activity: call.activity)
         }
     }
 }

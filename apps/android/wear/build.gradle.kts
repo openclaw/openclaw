@@ -87,10 +87,6 @@ android {
     }
   }
 
-  testOptions {
-    unitTests.isIncludeAndroidResources = true
-  }
-
   lint {
     lintConfig = rootProject.file("app/lint.xml")
     warningsAsErrors = true
@@ -145,6 +141,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.compose.ui.test.junit4)
 
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)

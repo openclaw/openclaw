@@ -599,12 +599,12 @@ public struct ChatNewSessionOptionsPopover: View {
                 Picker(selection: self.$selectedAgentID) {
                     ForEach(self.agents) { agent in
                         Text(verbatim: agent.displayName)
-                            .font(self.formFont)
+                            .font(OpenClawChatTypography.formControl)
                             .tag(agent.id)
                     }
                 } label: {
                     Text("Agent")
-                        .font(self.formFont)
+                        .font(OpenClawChatTypography.formControl)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -616,7 +616,7 @@ public struct ChatNewSessionOptionsPopover: View {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle(isOn: self.$usesWorktree) {
                     Text("Separate working copy")
-                        .font(self.formFont.weight(.medium))
+                        .font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .toggleStyle(.switch)
                 .disabled(self.isLoading || self.isCreating || self.selectedAgent?.workspaceGit == false)
@@ -628,11 +628,14 @@ public struct ChatNewSessionOptionsPopover: View {
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
                 if self.usesWorktree {
-                    TextField(text: self.$baseRef, prompt: Text("Repository default").font(self.formFont)) {
+                    TextField(
+                        text: self.$baseRef,
+                        prompt: Text("Repository default").font(OpenClawChatTypography.formControl))
+                    {
                         Text("Base branch or commit")
-                            .font(self.formFont)
+                            .font(OpenClawChatTypography.formControl)
                     }
-                    .font(self.formFont)
+                    .font(OpenClawChatTypography.formControl)
                     .textFieldStyle(.roundedBorder)
                     .disabled(self.isCreating)
                     .help("Leave empty to use the repository's default base.")
@@ -657,18 +660,18 @@ public struct ChatNewSessionOptionsPopover: View {
                     Button {
                         Task { await self.loadOptions() }
                     } label: {
-                        Text("Retry").font(self.formFont)
+                        Text("Retry").font(OpenClawChatTypography.formControl)
                     }
                     .disabled(self.isLoading)
                 }
                 Spacer()
                 Button(action: self.onComplete) {
-                    Text("Cancel").font(self.formFont)
+                    Text("Cancel").font(OpenClawChatTypography.formControl)
                 }
                 .keyboardShortcut(.cancelAction)
                 .disabled(self.isCreating)
                 Button(action: self.createThread) {
-                    Text("Create Thread").font(self.formFont.weight(.medium))
+                    Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -684,14 +687,6 @@ public struct ChatNewSessionOptionsPopover: View {
                 self.usesWorktree = false
             }
         }
-    }
-
-    private var formFont: Font {
-        #if os(macOS)
-        OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body)
-        #else
-        OpenClawChatTypography.body
-        #endif
     }
 
     private func createThread() {

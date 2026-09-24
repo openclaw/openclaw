@@ -380,6 +380,17 @@ describe("parseSystemAgentOperation", () => {
 
   it("parses agent creation requests", () => {
     expect(
+      parseSystemAgentOperation(
+        'create agent qa-writer name "QA Writer" role writer workspace /tmp/qa-writer',
+      ),
+    ).toEqual({
+      kind: "create-agent",
+      agentId: "qa-writer",
+      name: "QA Writer",
+      role: "writer",
+      workspace: "/tmp/qa-writer",
+    });
+    expect(
       parseSystemAgentOperation("create agent editor role writer workspace /tmp/editor"),
     ).toEqual({
       kind: "create-agent",

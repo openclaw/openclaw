@@ -204,10 +204,14 @@ class ChatControllerMessageIdentityTest {
                   { "role": "user", "content": "boolean sender", "senderLabel": true, "runId": 42, "__openclaw": { "steerTargetRunId": true } },
                   { "role": "user", "content": "blank sender", "senderLabel": "  " },
                   { "role": "user", "content": "null sender", "senderLabel": null },
-                  { "role": "toolResult", "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
+                  { "role": "toolResult", "__openclaw": { "id": "tool-result" }, "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
+                  { "role": "Assistant", "__openclaw": { "id": "answer" }, "content": "reply", "senderLabel": "Spoofed sender" }
+                ],
+                "activity": [
+                  { "messageId": "tool-result", "items": [] },
+                  { "messageId": "answer", "items": [{ "itemId": "tool:read", "kind": "tool", "phase": "end", "title": "Read", "status": "blocked" }] }
                 ]
               }
               """.trimIndent()
@@ -227,6 +231,16 @@ class ChatControllerMessageIdentityTest {
       assertEquals(
         listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", null, "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(null, controller.messages.value[0].activity)
+      assertEquals(emptyList<Any>(), controller.messages.value[5].activity)
+      assertEquals(
+        "blocked",
+        controller.messages.value
+          .last()
+          .activity
+          ?.single()
+          ?.status,
       )
       assertEquals("canonical", controller.messages.value[0].runId)
       assertEquals("active-run", controller.messages.value[0].steerTargetRunId)

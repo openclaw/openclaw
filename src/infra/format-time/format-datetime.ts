@@ -5,12 +5,35 @@
  * Consolidates duplicated formatUtcTimestamp / formatZonedTimestamp / resolveExplicitTimezone
  * that previously lived in envelope.ts and session-updates.ts.
  */
+let timezoneValidationFormatter:
+  | {
+      timeZone: string;
+      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
+      formatter: Intl.DateTimeFormat;
+    }
+  | undefined;
+
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */
 export function resolveTimezone(value: string): string | undefined {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const cached = timezoneValidationFormatter;
+    const formatter =
+      typeof value === "string" &&
+      cached?.timeZone === value &&
+      cached.dateTimeFormatConstructor === DateTimeFormat
+        ? cached.formatter
+        : new DateTimeFormat("en-US", { timeZone: value });
+    formatter.format(new Date());
+    if (typeof value === "string" && formatter !== cached?.formatter) {
+      timezoneValidationFormatter = {
+        timeZone: value,
+        dateTimeFormatConstructor: DateTimeFormat,
+        formatter,
+      };
+    }
     return value;
   } catch {
     return undefined;

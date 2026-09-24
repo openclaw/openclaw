@@ -1,7 +1,10 @@
 // Builds CLI runtime dispatch inputs for agent runner executions.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { Value } from "typebox/value";
+import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
@@ -21,7 +24,7 @@ import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agent
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
-import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
@@ -31,6 +34,7 @@ import {
   createAgentEventDeliveryStartOrder,
 } from "./agent-event-bridge.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
+import { createAssistantTextBridge } from "./cli-assistant-bridge.js";
 
 type RunCliAgentInternalParams = RunCliAgentParams & {
   mediaImageLayout?: MediaImageLayout;
@@ -48,32 +52,6 @@ async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Prom
   for (const bridge of bridges) {
     await bridge.drain();
   }
-}
-
-function createAssistantTextBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (text: string) => Promise<boolean | void>;
-  startOrder?: AgentEventDeliveryStartOrder;
-}) {
-  let lastText: string | undefined;
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    startOrder: params.startOrder,
-    read: (evt) => {
-      if (evt.stream !== "assistant") {
-        return undefined;
-      }
-      const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
-      if (text === undefined || text === lastText) {
-        return undefined;
-      }
-      lastText = text;
-      return text;
-    },
-  });
 }
 
 type ReasoningTextPayload = {
@@ -296,7 +274,10 @@ export function createCliToolSummaryTracker(params: {
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (payload.isError !== true && isAgentPlanProgressToolName(toolName)) {
+      if (
+        payload.isError !== true &&
+        isAgentPlanProgressToolName(stripOpenClawMcpToolPrefix(toolName ?? ""))
+      ) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {
@@ -406,11 +387,13 @@ type RunCliAgentWithLifecycleParams = {
   onActivity?: () => void;
   preserveProgressCallbackStartOrder?: boolean;
   onAssistantText?: (text: string) => Promise<boolean | void>;
+  onCompletedReply?: (text: string, assistantMessageIndex: number) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onCompactionStart?: GetReplyOptions["onCompactionStart"];
   onCompactionEnd?: GetReplyOptions["onCompactionEnd"];
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
+  onItemEvent?: GetReplyOptions["onItemEvent"];
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
   onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
@@ -523,13 +506,14 @@ async function runCliAgentWithLifecycleInternal(
         },
       })
     : undefined;
-  const progressStartOrder = params.preserveProgressCallbackStartOrder
-    ? createAgentEventDeliveryStartOrder()
-    : undefined;
+  const progressStartOrder = createAgentEventDeliveryStartOrder({
+    preserveCallbackStartOrder: params.preserveProgressCallbackStartOrder === true,
+  });
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: params.onAssistantText,
+    deliverCompleted: params.onCompletedReply,
     startOrder: progressStartOrder,
   });
   let finalReasoningText: string | undefined;
@@ -585,6 +569,22 @@ async function runCliAgentWithLifecycleInternal(
     deliver: params.onCommentaryText,
     startOrder: progressStartOrder,
   });
+  const itemBridge = createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    startOrder: progressStartOrder,
+    read: (evt) =>
+      evt.stream === "item" &&
+      evt.data.kind !== "preamble" &&
+      Value.Check(AgentActivityItemSchema, evt.data)
+        ? evt.data
+        : undefined,
+    deliver: params.onItemEvent
+      ? async (item) => {
+          await params.onItemEvent?.(item);
+        }
+      : undefined,
+  });
   const planBridge = createPlanUpdateBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -604,6 +604,7 @@ async function runCliAgentWithLifecycleInternal(
     compactionBridge,
     toolBridge,
     commentaryBridge,
+    itemBridge,
     planBridge,
     toolBoundaryBridge,
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
@@ -620,7 +621,10 @@ async function runCliAgentWithLifecycleInternal(
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
-    const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
+    const cliText = result.payloads?.length
+      ? (normalizeOptionalString(result.meta.finalAssistantVisibleText) ??
+        normalizeOptionalString(result.payloads[0]?.text))
+      : undefined;
     const durableReasoningText = normalizeOptionalString(finalReasoningText);
     const resultWithReasoning = durableReasoningText
       ? {

@@ -47,7 +47,7 @@ export function assertLockedTranscriptWriteAllowed(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   scope: SessionTranscriptWriteScope,
-): void {
+): InternalSessionEntry | undefined {
   assertSessionTranscriptHot(database.db, resolved.sessionId);
   const fencedScope = {
     ...scope,
@@ -59,11 +59,12 @@ export function assertLockedTranscriptWriteAllowed(
     fencedScope.expectedLifecycleRevision === undefined &&
     fencedScope.expectedWriterRunId === undefined
   ) {
-    return;
+    return undefined;
   }
   const fresh = readSessionEntryRow(database, resolved.sessionKey);
   const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
   if (refusal) {
     throw new SessionTranscriptWriterClaimReboundError(refusal);
   }
+  return fresh?.entry;
 }

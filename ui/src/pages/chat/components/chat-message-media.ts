@@ -1,11 +1,9 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
-import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+import type { MessageContentItem, MessageImageSource } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
@@ -17,23 +15,22 @@ import {
 } from "../../../lib/media-file-extension.ts";
 
 export type ImageBlock = {
-  url: string;
   factIndex?: number;
-  artifactId?: string;
   fileName?: string;
   openUrl?: string;
   alt?: string;
   sizeBytes?: number;
   width?: number;
   height?: number;
-};
+} & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
-export type ArtifactDownloadResolver = (params: {
-  sessionKey: string;
-  artifactId: string;
-}) => Promise<{ url: string; expiresAt?: string } | null>;
+export type ArtifactDownloadResolver = (
+  params: { sessionKey: string; artifactId: string },
+  signal?: AbortSignal,
+) => Promise<{ url: string; expiresAt?: string; blob?: Blob } | null>;
 
 export type ImageRenderOptions = {
+  galleryImages?: readonly ImageBlock[];
   sessionKey?: string;
   agentId?: string;
   policyKey?: string;
@@ -72,6 +69,10 @@ export function assistantMediaPolicyKey(
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;
 export type AssistantAttachmentItem = AttachmentItem | AttachmentFailureItem;
+export type ProjectedMessageContent =
+  | { type: "text"; text: string }
+  | { type: "image"; image: ImageBlock }
+  | AssistantAttachmentItem;
 
 type ChatMediaResourceKind =
   | "assistant-attachment"
@@ -92,6 +93,7 @@ export type ChatMediaResource<Value> = {
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
   retainUntil: number | undefined;
+  releaseAuthRecovery?: () => void;
 };
 
 type ChatMediaSubscriber = {
@@ -139,10 +141,9 @@ function detachChatMediaResourceSubscriber(
   if (resource.subscribers.size > 0) {
     return;
   }
-  if (resource.refresh) {
-    clearTimeout(resource.refresh.timer);
-    resource.refresh = undefined;
-  }
+  resource.releaseAuthRecovery?.();
+  resource.releaseAuthRecovery = undefined;
+  clearChatMediaResourceRefresh(resource);
   const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
   if (chatMediaResources.get(resourceKey) === resource) {
     chatMediaResources.delete(resourceKey);
@@ -179,9 +180,7 @@ export function observeChatMediaResource<Value>(
   ) {
     chatMediaResources.delete(resourceKey);
     resource.abortController?.abort();
-    if (resource.refresh) {
-      clearTimeout(resource.refresh.timer);
-    }
+    clearChatMediaResourceRefresh(resource);
     resource = undefined;
   }
   if (!resource) {
@@ -199,7 +198,7 @@ export function observeChatMediaResource<Value>(
       refresh: undefined,
       retainUntil: undefined,
     };
-    chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
+    chatMediaResources.set(resourceKey, resource);
   }
   const newObservation = !subscriber || !resource.subscribers.has(subscriber);
   if (subscriber) {
@@ -211,7 +210,7 @@ export function observeChatMediaResource<Value>(
     if (previous && previous !== resource) {
       detachChatMediaResourceSubscriber(previous, subscriber);
     }
-    subscriptions.set(subscriptionKey, resource as ChatMediaResource<unknown>);
+    subscriptions.set(subscriptionKey, resource);
   }
   if (cacheScope !== undefined && newObservation) {
     // Policy changes can replace the directive. Let active readers finish, but
@@ -261,6 +260,13 @@ export function notifyChatMediaResourceSubscribers<Value>(resource: ChatMediaRes
   }
 }
 
+export function clearChatMediaResourceRefresh(resource: ChatMediaResource<unknown>) {
+  if (resource.refresh) {
+    clearTimeout(resource.refresh.timer);
+    resource.refresh = undefined;
+  }
+}
+
 export function scheduleChatMediaResourceRefresh<Value>(
   resource: ChatMediaResource<Value>,
   refreshAt: number | undefined,
@@ -269,10 +275,7 @@ export function scheduleChatMediaResourceRefresh<Value>(
   if (resource.refresh?.at === refreshAt) {
     return;
   }
-  if (resource.refresh) {
-    clearTimeout(resource.refresh.timer);
-    resource.refresh = undefined;
-  }
+  clearChatMediaResourceRefresh(resource);
   if (refreshAt === undefined || resource.subscribers.size === 0) {
     return;
   }
@@ -420,17 +423,37 @@ function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
     !images.some((entry) =>
       block.factIndex !== undefined
         ? entry.factIndex === block.factIndex
-        : entry.factIndex === undefined && entry.url === block.url && entry.alt === block.alt,
+        : entry.factIndex === undefined &&
+          entry.url === block.url &&
+          entry.artifactId === block.artifactId &&
+          entry.alt === block.alt,
     )
   ) {
     images.push(block);
+    return true;
   }
+  return false;
 }
 
-function buildBase64ImageUrl(data: string, mediaType: unknown): string {
-  return data.startsWith("data:")
-    ? data
-    : `data:${typeof mediaType === "string" ? mediaType : "image/png"};base64,${data}`;
+export function resolveAttachmentImageKind(
+  attachment: AttachmentItem["attachment"],
+): "raster" | "svg" | undefined {
+  const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const inferExtension = !mimeType || mimeType === "application/octet-stream";
+  const image =
+    attachment.kind === "image" ||
+    (attachment.kind === "document" &&
+      (isImageMediaPath(attachment.url, mimeType) ||
+        (inferExtension && isImageMediaPath(attachment.label, undefined))));
+  if (!image) {
+    return undefined;
+  }
+  return mimeType === "image/svg+xml" ||
+    (inferExtension &&
+      (isSvgImageMediaPath(attachment.url, undefined) ||
+        isSvgImageMediaPath(attachment.label, undefined)))
+    ? "svg"
+    : "raster";
 }
 
 export function projectMessageMedia(
@@ -439,9 +462,12 @@ export function projectMessageMedia(
   nowMs = Date.now(),
 ) {
   const record = asNonArrayRecord(message);
-  const blocks = Array.isArray(record.content) ? record.content : [];
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];
+  const orderedContent: ProjectedMessageContent[] = [];
+  const supplementalImages: ImageBlock[] = [];
+  const supplementalAttachments: AssistantAttachmentItem[] = [];
+  const positionedSources = new Set<string>();
   const attachmentUrls = new Set<string>();
   let expiredPairingQrCount = 0;
   let nextPairingQrExpiresAt: number | undefined;
@@ -451,48 +477,36 @@ export function projectMessageMedia(
       if (item.type === "attachment") {
         attachmentUrls.add(item.attachment.url);
       }
+      return true;
     }
+    return false;
   };
-  for (const item of content) {
-    if (item.type === "attachment" || item.type === "attachment_error") {
-      appendAttachment(item);
-    }
-  }
-  const appendSvgAttachment = (
-    source: unknown,
-    mediaType?: unknown,
-    metadata?: Record<string, unknown>,
-  ): boolean => {
-    if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
-      return false;
+  const projectSvgAttachment = (source: MessageImageSource): AttachmentItem | undefined => {
+    if (!source.url || !isSvgImageMediaPath(source.url, source.mimeType)) {
+      return undefined;
     }
     try {
-      const url = new URL(source, window.location.href);
+      const url = new URL(source.url, window.location.href);
       if (
         (url.protocol !== "http:" && url.protocol !== "https:") ||
         url.origin === window.location.origin
       ) {
-        return false;
+        return undefined;
       }
     } catch {
-      return false;
+      return undefined;
     }
-    const sizeBytes = asFiniteNumber(metadata?.sizeBytes);
-    appendAttachment({
+    return {
       type: "attachment",
       attachment: {
-        url: source,
+        url: source.url,
         kind: "image",
-        label:
-          (typeof metadata?.fileName === "string" && metadata.fileName.trim()) ||
-          (typeof metadata?.alt === "string" && metadata.alt.trim()) ||
-          labelForMediaPath(source),
-        mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
-        ...(typeof metadata?.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
-        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+        label: source.fileName?.trim() || source.alt?.trim() || labelForMediaPath(source.url),
+        mimeType: source.mimeType ?? "image/svg+xml",
+        ...(source.artifactId !== undefined ? { artifactId: source.artifactId } : {}),
+        ...(source.sizeBytes !== undefined ? { sizeBytes: source.sizeBytes } : {}),
       },
-    });
-    return true;
+    };
   };
   const layout = asNonArrayRecord(asNonArrayRecord(record["__openclaw"]).mediaImageLayout);
   const slots = Array.isArray(layout.slots) ? layout.slots.map(asNonArrayRecord) : [];
@@ -513,80 +527,82 @@ export function projectMessageMedia(
   const inlineSlots = validLayout ? slots.filter((slot) => slot.kind === "inline") : [];
   let inlineIndex = 0;
 
-  for (const value of blocks) {
-    const block = asOptionalRecord(value);
-    if (!block) {
+  for (const item of content) {
+    if (item.type === "text" && typeof item.text === "string") {
+      const previous = orderedContent.at(-1);
+      if (previous?.type === "text") {
+        previous.text += `\n${item.text}`;
+      } else {
+        orderedContent.push({ type: "text", text: item.text });
+      }
       continue;
     }
-    const source = asOptionalRecord(block.source);
-    if (block.type === "image") {
-      const factIndex = inlineSlots[inlineIndex++]?.factIndex;
-      // The structured SVG reference is independent of inline data in the same block.
-      const imageUrl = normalizeOptionalString(block.url) ?? normalizeOptionalString(source?.url);
-      const svg = appendSvgAttachment(imageUrl, block.mimeType ?? source?.media_type, block);
-      const base64Source =
-        source?.type === "base64" && typeof source.data === "string" ? source : undefined;
-      const data = base64Source ? base64Source.data : block.data;
-      const url =
-        typeof data === "string"
-          ? buildBase64ImageUrl(data, base64Source ? base64Source.media_type : block.mimeType)
-          : !svg && imageUrl !== undefined
-            ? imageUrl
-            : undefined;
-      if (url !== undefined) {
-        images.push({
-          url,
-          ...(typeof factIndex === "number" ? { factIndex } : {}),
-          artifactId: typeof block.artifactId === "string" ? block.artifactId : undefined,
-          alt: typeof block.alt === "string" ? block.alt : undefined,
-          fileName: typeof block.fileName === "string" ? block.fileName : undefined,
-          openUrl: typeof block.openUrl === "string" ? block.openUrl : undefined,
-          sizeBytes: asFiniteNumber(block.sizeBytes),
-          width: typeof block.width === "number" ? block.width : undefined,
-          height: typeof block.height === "number" ? block.height : undefined,
-        });
-      }
-    } else if (block.type === "image_url") {
-      const url = normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
-      if (url !== undefined && !appendSvgAttachment(url)) {
-        images.push({ url });
-      }
-    } else if (block.type === "input_image") {
-      const blockImages: ImageBlock[] = [];
-      const url =
-        normalizeOptionalString(block.image_url) ??
-        normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
-      if (url !== undefined && !appendSvgAttachment(url)) {
-        blockImages.push({ url });
-      }
-      const sourceUrl = normalizeOptionalString(source?.url);
-      const svg = appendSvgAttachment(sourceUrl, source?.media_type);
-      if (sourceUrl !== undefined && !svg) {
-        appendImageBlock(blockImages, { url: sourceUrl });
-      } else if (typeof source?.data === "string") {
-        appendImageBlock(blockImages, {
-          url: buildBase64ImageUrl(source.data, source.media_type),
-        });
-      }
-      // Separate blocks are separate attachments, including identical uploads.
-      images.push(...blockImages);
-    } else if (block.type === "openclaw_pairing_qr") {
-      const expiresAt = asFiniteNumber(block.expiresAtMs);
-      if (expiresAt !== undefined) {
-        if (expiresAt <= nowMs) {
-          expiredPairingQrCount += 1;
+    if (item.type === "attachment" || item.type === "attachment_error") {
+      if (item.type === "attachment") {
+        positionedSources.add(item.attachment.url);
+        if (resolveAttachmentImageKind(item.attachment) === "raster") {
+          // Tiles and their gallery must share the same projected image identity.
+          const image = {
+            ...item.attachment,
+            alt: item.attachment.label,
+            fileName: item.attachment.label,
+          };
+          images.push(image);
+          orderedContent.push({ type: "image", image });
           continue;
         }
-        nextPairingQrExpiresAt = Math.min(nextPairingQrExpiresAt ?? expiresAt, expiresAt);
       }
-      const imageUrl = normalizeOptionalString(block.image_url);
-      if (imageUrl !== undefined) {
-        images.push({
-          url: imageUrl,
-          alt: typeof block.alt === "string" ? block.alt : undefined,
+      appendAttachment(item);
+      orderedContent.push(item);
+      continue;
+    }
+    if (item.type === "omitted_media") {
+      inlineIndex += 1;
+      continue;
+    }
+    if (item.type !== "image") {
+      continue;
+    }
+    if (item.expiresAtMs !== undefined) {
+      if (item.expiresAtMs <= nowMs) {
+        expiredPairingQrCount += 1;
+        continue;
+      }
+      nextPairingQrExpiresAt = Math.min(
+        nextPairingQrExpiresAt ?? item.expiresAtMs,
+        item.expiresAtMs,
+      );
+    }
+    const factIndex = item.inlineSlot ? inlineSlots[inlineIndex++]?.factIndex : undefined;
+    const blockImages: ImageBlock[] = [];
+    const blockAttachments = new Set<string>();
+    for (const source of item.sources) {
+      const { url: sourceUrl, dataUrl, preferData, mimeType: _mimeType, ...metadata } = source;
+      if (sourceUrl !== undefined) {
+        positionedSources.add(sourceUrl);
+      }
+      const svg = projectSvgAttachment(source);
+      if (svg && !blockAttachments.has(svg.attachment.url)) {
+        appendAttachment(svg);
+        orderedContent.push(svg);
+        blockAttachments.add(svg.attachment.url);
+      }
+      const url = preferData
+        ? (dataUrl ?? (svg ? undefined : sourceUrl))
+        : ((svg ? undefined : sourceUrl) ?? dataUrl);
+      if (url !== undefined) {
+        appendImageBlock(blockImages, {
+          ...metadata,
+          url,
+          ...(typeof factIndex === "number" ? { factIndex } : {}),
         });
+      } else if (metadata.artifactId) {
+        appendImageBlock(blockImages, { ...metadata, artifactId: metadata.artifactId });
       }
     }
+    // Separate blocks are separate attachments, including identical uploads.
+    images.push(...blockImages);
+    orderedContent.push(...blockImages.map((image) => ({ type: "image" as const, image })));
   }
   // Only a complete inline layout may lend its fact positions to mounted previews.
   if (inlineIndex !== inlineSlots.length) {
@@ -598,44 +614,70 @@ export function projectMessageMedia(
     path: mediaPath,
     mediaType,
     fileName,
+    origin,
     sizeBytes,
     durationMs,
     width,
     height,
     factIndex,
   } of readTranscriptMediaEntries(message)) {
-    const image = isImageMediaPath(mediaPath, mediaType);
-    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
-    if (image && !svg) {
-      appendImageBlock(images, {
+    // Without slot identity, a persisted fact mirrors the already-positioned media.
+    // Valid layouts still distinguish separate uploads of the same source.
+    if (!validLayout && positionedSources.has(mediaPath)) {
+      continue;
+    }
+    const imageKind = resolveAttachmentImageKind({
+      kind: "document",
+      url: mediaPath,
+      label: fileName?.trim() || labelForMediaPath(mediaPath),
+      mimeType: mediaType,
+    });
+    if (imageKind === "raster") {
+      const projected: ImageBlock = {
         url: mediaPath,
         fileName,
         sizeBytes,
         ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
-      });
+      };
+      if (appendImageBlock(images, projected) && !positionedSources.has(mediaPath)) {
+        supplementalImages.push(projected);
+      }
     } else {
-      appendAttachment({
+      const projected: AttachmentItem = {
         type: "attachment",
         attachment: {
           url: mediaPath,
-          kind: svg
-            ? "image"
-            : isAudioTranscriptMediaPath(mediaPath, mediaType)
-              ? "audio"
-              : isVideoTranscriptMediaPath(mediaPath, mediaType)
-                ? "video"
-                : "document",
+          kind:
+            imageKind === "svg"
+              ? "image"
+              : isAudioTranscriptMediaPath(mediaPath, mediaType)
+                ? "audio"
+                : isVideoTranscriptMediaPath(mediaPath, mediaType)
+                  ? "video"
+                  : "document",
           label: fileName?.trim() || labelForMediaPath(mediaPath),
+          ...(origin ? { origin } : {}),
           ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
           ...(sizeBytes !== undefined ? { sizeBytes } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           ...(width !== undefined ? { width } : {}),
           ...(height !== undefined ? { height } : {}),
         },
-      });
+      };
+      if (appendAttachment(projected) && !positionedSources.has(mediaPath)) {
+        supplementalAttachments.push(projected);
+      }
     }
   }
-  return { images, attachments, expiredPairingQrCount, nextPairingQrExpiresAt };
+  return {
+    images,
+    attachments,
+    orderedContent,
+    supplementalImages,
+    supplementalAttachments,
+    expiredPairingQrCount,
+    nextPairingQrExpiresAt,
+  };
 }
 
 export function schedulePairingQrExpiryRefresh(

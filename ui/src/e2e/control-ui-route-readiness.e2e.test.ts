@@ -1,11 +1,14 @@
 import path from "node:path";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI route readiness" });
@@ -34,8 +37,22 @@ suite.define(() => {
           const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
             ? suite.artifactDir
             : undefined;
+          if (width > 400) {
+            const scope = gatewayOriginScope(suite.server.baseUrl.replace(/^http/u, "ws"));
+            await page.addInitScript(
+              (key) => localStorage.setItem(key, "involving-me"),
+              `openclaw.control.sidebarSessionOwnerFilter.v1:${scope}:history-profile`,
+            );
+          }
           const gateway = await installMockGateway(page, {
             sessionKey,
+            ...(width > 400
+              ? {
+                  presenceUsers: [{ self: true, id: "history-profile", name: "Fixture user" }],
+                  featureMethods: [...defaultControlUiFeatureMethods, "system.info"],
+                  methodResponses: { "system.info": { platform: "darwin" } },
+                }
+              : {}),
             sessions: [
               {
                 key: sessionKey,
@@ -108,6 +125,16 @@ suite.define(() => {
           );
           const before = await composer.boundingBox();
 
+          if (width > 400) {
+            expect(
+              (await gateway.getRequests("sessions.list")).filter(
+                (request) => requireRecord(request.params).involvingMe === true,
+              ),
+            ).toHaveLength(0);
+            expect(await gateway.getRequests("cron.list")).toHaveLength(0);
+            expect(await gateway.getRequests("cron.status")).toHaveLength(0);
+            expect(await gateway.getRequests("system.info")).toHaveLength(0);
+          }
           await gateway.resolveDeferred("chat.startup");
           await expect.poll(() => pane.locator(".loading-skeleton").count()).toBe(0);
           await expect.poll(() => pane.textContent()).toContain("The conversation is ready.");
@@ -143,6 +170,26 @@ suite.define(() => {
           }
           expect(await composer.inputValue()).toBe(pendingDraft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+          if (width > 400) {
+            await expect
+              .poll(async () =>
+                (await gateway.getRequests("sessions.list")).some(
+                  (request) => requireRecord(request.params).involvingMe === true,
+                ),
+              )
+              .toBe(true);
+            await Promise.all([
+              gateway.waitForRequest("cron.list"),
+              gateway.waitForRequest("cron.status"),
+              gateway.waitForRequest("system.info"),
+            ]);
+            expect(await composer.inputValue()).toBe(pendingDraft);
+            if (artifactDir) {
+              await page.screenshot({
+                path: path.join(artifactDir, "03-ready-with-next-draft.png"),
+              });
+            }
+          }
         },
       );
     },

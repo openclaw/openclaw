@@ -7,6 +7,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case running
         case finished
         case failed
+        case blocked
         case unavailable
 
         var title: LocalizedStringResource {
@@ -14,6 +15,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .running: "Working"
             case .finished: "Finished"
             case .failed: "Failed"
+            case .blocked: "Blocked"
             case .unavailable: "No result"
             }
         }
@@ -26,17 +28,53 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let resultText: String?
     let state: State
     let liveDiffStat: ChatToolDiffStat?
+    var activity: OpenClawAgentActivityItem?
+    var activityPrepared = false
+
+    var isVisible: Bool {
+        self.activity?.isVisible ?? !self.activityPrepared
+    }
+
+    var displayState: State {
+        guard let activity = self.activity else { return self.state }
+        switch activity.status {
+        case "running": return .running
+        case "completed": return .finished
+        case "failed": return .failed
+        case "blocked": return .blocked
+        default: return .unavailable
+        }
+    }
 
     var isError: Bool {
-        self.state == .failed
+        self.displayState == .failed
     }
 
     var isPending: Bool {
-        self.state == .running
+        self.displayState == .running
     }
 }
 
 enum ChatToolActivity {
+    static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
+        if let flag { return flag }
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        if ["tool not found", "tool not found."].contains(text.lowercased()) { return true }
+        guard text.utf16.count <= 20000,
+              text.hasPrefix("{"), text.hasSuffix("}"),
+              let data = text.data(using: .utf8),
+              let result = try? JSONDecoder().decode(AnyCodable.self, from: data).dictionaryValue
+        else { return false }
+        if let flag = result["isError"]?.boolValue ?? result["is_error"]?.boolValue { return flag }
+        if let error = result["error"] {
+            if let text = error.stringValue,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+            if error.boolValue == true || error.dictionaryValue != nil || error.arrayValue != nil { return true }
+        }
+        return ["error", "failed", "timeout"].contains(
+            result["status"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")
+    }
+
     static func items(
         calls: [OpenClawChatMessageContent],
         results: [OpenClawChatMessageContent]) -> [ChatToolActivityItem]
@@ -54,7 +92,8 @@ enum ChatToolActivity {
                 arguments: call.arguments,
                 details: result?.details,
                 resultText: result?.text,
-                state: result.map { $0.isError == true ? .failed : .finished } ?? .unavailable,
+                state: result
+                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ?? .unavailable,
                 liveDiffStat: nil)
         }
 
@@ -65,7 +104,7 @@ enum ChatToolActivity {
                 arguments: nil,
                 details: result.details,
                 resultText: result.text,
-                state: result.isError == true ? .failed : .finished,
+                state: Self.resultIsError(result.isError, text: result.text) ? .failed : .finished,
                 liveDiffStat: nil)
         })
         return items
@@ -114,7 +153,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        let status = String(localized: self.item.state.title)
+        let status = String(localized: self.item.displayState.title)
         return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
@@ -269,7 +308,7 @@ private struct ChatToolActivityRowContent: View {
             Spacer(minLength: 0)
 
             if self.isDesktopLayout {
-                Text(self.item.state.title)
+                Text(self.item.displayState.title)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
                     .fixedSize()
@@ -279,7 +318,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var toolTitle: some View {
-        Text(self.display.title)
+        Text(self.item.activity?.title ?? self.display.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
             .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
             .lineLimit(1)
@@ -505,10 +544,17 @@ struct ChatToolActivityList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
-            // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
-            ForEach(self.items.indices, id: \.self) { index in
+            ForEach(self.items.indices.filter { self.items[$0].isVisible }, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
                     .equatable()
+            }
+            let quiet = self.items.indices.filter { !self.items[$0].isVisible }
+            if !quiet.isEmpty {
+                DisclosureGroup("Tool details") {
+                    ForEach(quiet, id: \.self) { index in
+                        ChatToolActivityRow(item: self.items[index]).equatable()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

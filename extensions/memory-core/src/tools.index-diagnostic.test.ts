@@ -1,6 +1,6 @@
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { readMemoryDatabaseRevision } from "./memory/manager-db.js";
+import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
 import { createMemorySearchTool, testing } from "./tools.js";

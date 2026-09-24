@@ -597,10 +597,7 @@ export async function runSetupMigrationImport(params: {
               workspaceDir: stage.staged.workspaceDir,
               agentDir: stage.staged.agentDir,
               stateDir: stage.staged.stateDir,
-              writeConfig: async (config) => {
-                stage.replaceStagedConfig(config);
-                return stage.getStagedConfig();
-              },
+              configTarget: stage.inferenceConfigTarget,
               required: true,
             });
             if (!verification.verified || !verification.modelRef) {

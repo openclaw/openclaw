@@ -12,8 +12,21 @@ import {
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
-import type { MemoryIndexEntry } from "./manager-sync-base.js";
 import type { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+
+export type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  kind?: "markdown" | "multimodal";
+  content?: string;
+  contentText?: string;
+  lineMap?: number[];
+  lineProvenance?: MemoryEntryProvenance[];
+  sessionId?: string;
+};
 
 export type MemoryIndexPreparationInput = {
   entry: Pick<MemoryIndexEntry, "path" | "mtimeMs" | "lineMap" | "lineProvenance">;

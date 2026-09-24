@@ -1,5 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it } from "vitest";
+import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
@@ -218,4 +219,25 @@ describe("recovered assistant errors", () => {
       });
     },
   );
+});
+
+describe("appended history recovery", () => {
+  it("drops only old announce pairs when the adjacent assistant starts a later chunk", () => {
+    const announce = {
+      role: "user",
+      timestamp: 10,
+      provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      content: "Earlier child finished",
+    };
+    const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
+    const newReply = { ...oldReply, timestamp: 30 };
+    const rows = [announce, oldReply, announce, newReply, user];
+    for (let split = 1; split < rows.length; split++) {
+      const filter = createPreSessionStartAnnouncePairFilter(20);
+      expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
+        newReply,
+        user,
+      ]);
+    }
+  });
 });

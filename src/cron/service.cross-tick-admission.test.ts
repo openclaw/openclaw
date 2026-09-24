@@ -20,9 +20,9 @@ import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
-  type CronRunReceiptHandle,
 } from "./store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
 const fixtures = setupCronRegressionFixtures({

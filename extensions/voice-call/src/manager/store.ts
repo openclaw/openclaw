@@ -1,8 +1,8 @@
-// Voice Call plugin module implements store behavior.
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
+import type { VoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 import {
   MAX_CALL_REPLAY_KEYS,
@@ -72,8 +72,11 @@ function resolvePluginStateEnv(storePath: string): NodeJS.ProcessEnv {
 }
 
 /** Open the plugin state stores when the runtime is available. */
-function createCallRecordStateStores(storePath: string): CallRecordStateStores {
-  const runtime = getOptionalVoiceCallStateRuntime();
+function createCallRecordStateStores(
+  storePath: string,
+  stateRuntime?: VoiceCallStateRuntime["state"],
+): CallRecordStateStores {
+  const runtime = stateRuntime ? { state: stateRuntime } : getOptionalVoiceCallStateRuntime();
   if (!runtime) {
     throw new Error("Voice Call state runtime not initialized");
   }
@@ -93,9 +96,12 @@ function createCallRecordStateStores(storePath: string): CallRecordStateStores {
 }
 
 /** Open call stores and log failures instead of breaking restore paths. */
-function tryCreateCallRecordStateStores(storePath: string): CallRecordStateStores | null {
+function tryCreateCallRecordStateStores(
+  storePath: string,
+  stateRuntime?: VoiceCallStateRuntime["state"],
+): CallRecordStateStores | null {
   try {
-    return createCallRecordStateStores(storePath);
+    return createCallRecordStateStores(storePath, stateRuntime);
   } catch (err) {
     console.error("[voice-call] Failed to open SQLite call record store:", err);
     return null;
@@ -391,9 +397,13 @@ async function readCallRecordEvents(stores: CallRecordStateStores): Promise<Call
 }
 
 /** Persist one call record event to plugin state. */
-export async function persistCallRecord(storePath: string, call: CallRecord): Promise<void> {
+export async function persistCallRecord(
+  storePath: string,
+  call: CallRecord,
+  stateRuntime?: VoiceCallStateRuntime["state"],
+): Promise<void> {
   try {
-    const stores = createCallRecordStateStores(storePath);
+    const stores = createCallRecordStateStores(storePath, stateRuntime);
     const order = nextCallRecordOrder();
     await registerCallRecordEvent(stores, buildNewEventKey(order), call, order);
   } catch (err) {
@@ -403,12 +413,15 @@ export async function persistCallRecord(storePath: string, call: CallRecord): Pr
 }
 
 /** Restore nonterminal active calls and provider/event indexes from persisted records. */
-export async function loadActiveCallsFromStore(storePath: string): Promise<{
+export async function loadActiveCallsFromStore(
+  storePath: string,
+  stateRuntime?: VoiceCallStateRuntime["state"],
+): Promise<{
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
 }> {
-  const stores = tryCreateCallRecordStateStores(storePath);
+  const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
   let calls: CallRecord[] = [];
   try {
     calls = stores ? await readCallRecordEvents(stores) : [];
@@ -450,8 +463,11 @@ export async function loadActiveCallsFromStore(storePath: string): Promise<{
   return { activeCalls, providerCallIdMap, processedEventIds };
 }
 
-async function readCallHistoryFromStore(storePath: string): Promise<CallRecord[]> {
-  const stores = tryCreateCallRecordStateStores(storePath);
+async function readCallHistoryFromStore(
+  storePath: string,
+  stateRuntime?: VoiceCallStateRuntime["state"],
+): Promise<CallRecord[]> {
+  const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
   if (stores) {
     try {
       return await readCallRecordEvents(stores);
@@ -466,9 +482,10 @@ async function readCallHistoryFromStore(storePath: string): Promise<CallRecord[]
 export async function findCallInStore(
   storePath: string,
   callId: string,
+  stateRuntime?: VoiceCallStateRuntime["state"],
 ): Promise<CallRecord | undefined> {
   // Admission and status must distinguish unavailable history from an absent call.
-  const calls = await readCallRecordEvents(createCallRecordStateStores(storePath));
+  const calls = await readCallRecordEvents(createCallRecordStateStores(storePath, stateRuntime));
   const match =
     calls.findLast((call) => call.callId === callId) ??
     calls.findLast((call) => call.providerCallId === callId);
@@ -479,9 +496,10 @@ export async function findCallInStore(
 export async function getCallHistoryFromStore(
   storePath: string,
   limit = 50,
+  stateRuntime?: VoiceCallStateRuntime["state"],
 ): Promise<CallRecord[]> {
   if (limit <= 0) {
     return [];
   }
-  return (await readCallHistoryFromStore(storePath)).slice(-limit);
+  return (await readCallHistoryFromStore(storePath, stateRuntime)).slice(-limit);
 }

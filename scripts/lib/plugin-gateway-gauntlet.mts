@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import {
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-  collectBundledPluginBuildEntries,
-} from "./bundled-plugin-build-entries.mjs";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
+import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
 import { isRecord } from "./record-shared.mjs";
 

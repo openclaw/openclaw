@@ -23,12 +23,14 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
   return runManagedCommand({
     bin: process.execPath,
-    args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
-      "-b",
-      config,
-      "--builders",
-      "1",
-    ]),
+    shell: false,
+    args: distArtifactEntryArgs(
+      path.join(repoRoot, "scripts/run-tsgo.mts"),
+      // These graphs have no project references. Project mode rechecks root
+      // membership even when a restored build-info file is newer than a new root.
+      ["-p", config, "--incremental"],
+      { native: true },
+    ),
     cwd: repoRoot,
     env,
     requireProcessTreeExit: process.platform !== "win32",
@@ -54,10 +56,14 @@ async function runTsgoCoreTestShards(
         if (!shard || failureCode !== 0) {
           return;
         }
+        const startedAt = performance.now();
         const code = await runShard(shard.config, env).catch((error: unknown) => {
           failureCode = 1;
           throw error;
         });
+        console.error(
+          `[tsgo:${shard.name}] ${code === 0 ? "passed" : `failed (exit ${code})`} in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+        );
         if (code !== 0 && failureCode === 0) {
           failureCode = code;
         }
@@ -142,7 +148,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       const stripeSpec = process.argv[stripeFlagIndex + 1] ?? "";
       shards = selectTsgoCoreTestStripe(stripeSpec);
       if (!shards) {
-        console.error(`Invalid core test stripe (expected i/n): ${stripeSpec}`);
+        console.error(`Invalid core test stripe (expected i/n or first-last/n): ${stripeSpec}`);
         process.exit(1);
       }
     } else {

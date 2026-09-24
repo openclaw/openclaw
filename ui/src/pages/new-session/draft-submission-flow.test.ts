@@ -1,14 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../chat/attachment-payload-store.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -20,7 +23,6 @@ import {
 } from "./draft-submission-flow.test-support.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
-import * as terminalStart from "./terminal-start.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -32,6 +34,47 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {
+    const { context, flow } = createDraftFixture();
+    let accept!: (value: { key: string; initialRun: { status: "started"; runId: string } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const clear = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft");
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.selectRoute("original-route");
+    flow.setMessage("  @Alex submitted prompt  ", [{ profileId: "alex", start: 2, end: 7 }]);
+    stubObjectUrls("blob:submitted-file");
+    const attachment = registerTextPayload("submitted-file");
+    flow.attachmentDraft.replace([attachment]);
+    const pending = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    if (mode === "navigation") {
+      flow.disconnect();
+      flow.resetDraft();
+      flow.draftPersistence.selectRoute("replacement-route");
+      flow.setMessage("a newer prompt");
+    }
+    accept({ key: "agent:main:created", initialRun: { status: "started", runId: "created-run" } });
+    await pending;
+    expect(flow.message).toBe(mode === "navigation" ? "a newer prompt" : "");
+    expect(flow.submitting).toBe(false);
+    expect(flow.pendingMessage).toBeNull();
+    expect(clear).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ scopeKey: "original-route" }),
+        writeIds: expect.any(Set),
+      }),
+      expect.any(Function),
+    );
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"] as const)(
     "consumes an accepted draft before asynchronous cleanup and %s",
     async (next) => {
@@ -45,12 +88,14 @@ describe("DraftSubmissionFlow", () => {
         throw new Error("Chat route failed to load");
       });
       let finishCleanup!: () => void;
-      const cleanup = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft").mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
+      const cleanup = vi
+        .spyOn(flow.draftPersistence, "clearSubmittedDraft")
+        .mockImplementation((_submitted, consume) => {
+          consume?.();
+          return new Promise<void>((resolve) => {
             finishCleanup = resolve;
-          }),
-      );
+          });
+        });
       flow.setMessage("@Alex keep the accepted prompt", [
         { profileId: "profile-alex", start: 0, end: 5 },
       ]);
@@ -80,11 +125,11 @@ describe("DraftSubmissionFlow", () => {
         sessionKey,
         context.gateway.snapshot.client,
       );
-      expect(retained?.message.content).toContainEqual({
+      expect(retained?.message?.content).toContainEqual({
         type: "text",
         text: "@Alex keep the accepted prompt",
       });
-      expect(retained?.message["__openclaw"]).toMatchObject({
+      expect(retained?.message?.["__openclaw"]).toMatchObject({
         humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       });
       if (next === "reconnect") {
@@ -123,7 +168,7 @@ describe("DraftSubmissionFlow", () => {
       },
     });
     Object.assign(context, { basePath: "/openclaw", replace: vi.fn() });
-    vi.spyOn(terminalStart, "startNewSessionInTerminal").mockResolvedValue({
+    vi.spyOn(terminalStart, "startCatalogSessionInTerminal").mockResolvedValue({
       sessionId: "terminal-created",
       cwd: "/workspace",
       shell: "codex",
@@ -254,10 +299,10 @@ describe("DraftSubmissionFlow", () => {
       "agent:main:dashboard:background",
       context.gateway.snapshot.client,
     );
-    expect(retained?.message["__openclaw"]).toMatchObject({
+    expect(retained?.message?.["__openclaw"]).toMatchObject({
       humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
     });
-    expect(retained?.message.content).toContainEqual({
+    expect(retained?.message?.content).toContainEqual({
       type: "attachment",
       attachment: {
         url: `data:text/plain;base64,${btoa("background-note")}`,
@@ -698,9 +743,14 @@ describe("DraftSubmissionFlow", () => {
         return {};
       }),
     };
+    const router = createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    });
     const context = {
       basePath: "",
+      router,
       gateway: {
+        subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
         connection: { gatewayUrl: "ws://gateway.example" },
         snapshot: {
@@ -739,6 +789,7 @@ describe("DraftSubmissionFlow", () => {
       config: { current: {} },
       navigateAndWait,
     } as unknown as ApplicationContext;
+    await router.navigate("chat", context);
     const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
       host,
@@ -800,7 +851,7 @@ describe("DraftSubmissionFlow", () => {
       {
         requestUpdate: vi.fn(),
         onError: (error) => flow?.setError(error),
-        onClearError: (error) => flow?.clearErrorIf(error),
+        onClearError: (error) => flow?.clearError(error),
       },
     );
     const flow = new DraftSubmissionFlow(
@@ -844,9 +895,13 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
+    if (background) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     const submission = flow.submit(undefined, background);
     if (background) {
-      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      await submission;
+      expect(start).toHaveBeenCalledOnce();
       expect(navigateAndWait).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
@@ -862,13 +917,7 @@ describe("DraftSubmissionFlow", () => {
     await submission;
     if (background) {
       context.gateway.snapshot.phase = "connected";
-      await vi.waitFor(
-        () =>
-          expect(
-            client.request.mock.calls.filter(([method]) => method === "agent.wait"),
-          ).toHaveLength(4),
-        { timeout: 4_000 },
-      );
+      await vi.advanceTimersByTimeAsync(3_000);
     }
 
     expect(start).toHaveBeenCalledOnce();
@@ -879,6 +928,11 @@ describe("DraftSubmissionFlow", () => {
       phase: "dispatching",
     });
     expect(flow.pendingPlacement.capture()).toBeNull();
+    expect(flow.completedSubmission?.key).toBe(start.mock.calls[0]?.[0].recovery.sessionKey);
+    expect(flow.pendingMessage?.content).toContainEqual({
+      type: "text",
+      text: "@Alex keep this cloud task",
+    });
     expect(flow.message).toBe("");
     expect(flow.mentions).toEqual([]);
     expect(flow.attachmentDraft.attachments).toHaveLength(0);

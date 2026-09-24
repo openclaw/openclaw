@@ -7,7 +7,6 @@ import {
   projectChatDisplayMessages,
   sanitizeChatHistoryMessages,
 } from "./chat-display-projection.js";
-import { mirrorMessageToolVisibleReplies } from "./chat-display-projection.message-tool.js";
 import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
@@ -949,52 +948,6 @@ describe("current user profile display projection", () => {
     };
     const projected = projectChatDisplayMessages([message]);
     expect(projected[0]).toBe(message);
-  });
-});
-
-describe("chat display message-tool projection", () => {
-  it("mirrors an automatic-mode send confirmed for the current source", () => {
-    const sourceReply = "Visible reply delivered to Slack.";
-    const projected = mirrorMessageToolVisibleReplies([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call-message-current-source",
-            name: "message",
-            arguments: {
-              action: "send",
-              channel: "slack",
-              target: "channel:C123",
-              message: sourceReply,
-            },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolName: "message",
-        toolCallId: "call-message-current-source",
-        content: { ok: true, messageId: "slack-242" },
-        details: {
-          ok: true,
-          messageId: "slack-242",
-          sourceReplyRoute: "current-source",
-        },
-      },
-      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
-    ]);
-
-    expect(projected).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: sourceReply }],
-        openclawMessageToolMirror: expect.objectContaining({
-          toolCallId: "call-message-current-source",
-        }),
-      }),
-    );
   });
 });
 

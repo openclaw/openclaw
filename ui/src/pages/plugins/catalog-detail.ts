@@ -1,56 +1,52 @@
+import "./install-action.ts";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
-import { imageWithFallback } from "../../components/image-with-fallback.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatDateMs } from "../../lib/format.ts";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
+import { renderArtTile } from "./consent-dialog.ts";
 import "../../styles/sidebar-markdown.css";
-import { clawHubPackageUrl } from "./catalog-links.ts";
-import { formatCompactCount } from "./catalog-results.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
-import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
-import { renderPluginSecurityAudit } from "./security-audit.ts";
-
-export type PluginCatalogDetailTab =
-  | "readme"
-  | "skills"
-  | "configuration"
-  | "compatibility"
-  | "versions"
-  | "advanced";
+import type { PluginInstallProgress } from "./install-progress.ts";
+import {
+  renderPluginCapabilitySection,
+  renderPluginMetadata,
+  renderPluginPublisher,
+  renderPluginAskAction,
+} from "./overview.ts";
+import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
 
 export type PluginCatalogDetailProps = {
+  onAskPlugin?: () => void;
+  busy?: boolean;
+  installProgress?: PluginInstallProgress;
+  message?: PluginRowMessage;
+  onContinueInstall?: (request: PluginInstallRequest) => void;
+  skillsSection?: TemplateResult;
   connected: boolean;
   result: PluginDiscoveryDetailResult | null;
   error: string | null;
-  tab: PluginCatalogDetailTab;
   backHref: string;
   onBack: () => void;
   onRetry: () => void;
-  onTabChange: (tab: PluginCatalogDetailTab) => void;
   canInstall: boolean;
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
 };
 
-function tabLabel(tab: PluginCatalogDetailTab): string {
-  return t(`pluginsPage.detailTabs.${tab}`);
-}
-
-export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): TemplateResult {
-  const readmeHtml = result.detail.readme
-    ? toSanitizedMarkdownHtml(result.detail.readme, { mode: "document" })
+export function renderPluginReadme(readme: string | undefined): TemplateResult {
+  const readmeHtml = readme
+    ? toSanitizedMarkdownHtml(readme, { mode: "document" })
         .replaceAll("<h1", "<h2")
         .replaceAll("</h1>", "</h2>")
     : null;
-  return result.detail.readme
+  return readme
     ? html`<article
         class="plugin-catalog-detail__readme sidebar-markdown"
         @click=${handleMarkdownCodeBlockClick}
@@ -60,168 +56,13 @@ export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): T
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoReadme")}</p>`;
 }
 
-function renderPluginDetailSkills(result: PluginDiscoveryDetailResult): TemplateResult {
-  return result.detail.skills.length
-    ? html`<div class="plugin-catalog-detail__rows">
-        ${result.detail.skills.map(
-          (skill) => html`<article class="plugin-catalog-detail__row">
-            <h3>${skill.name}</h3>
-            ${skill.description ? html`<p>${skill.description}</p>` : nothing}
-          </article>`,
-        )}
-      </div>`
-    : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoSkills")}</p>`;
-}
-
-function renderConfiguration(result: PluginDiscoveryDetailResult): TemplateResult {
-  return result.detail.configuration.length
-    ? html`<div class="plugin-catalog-detail__rows">
-        ${result.detail.configuration.map(
-          (field) => html`<article class="plugin-catalog-detail__row">
-            <div class="plugin-catalog-detail__row-title">
-              <h3><code>${field.name}</code></h3>
-              <span class="plugin-catalog-detail__tag">
-                ${
-                  field.required ? t("pluginsPage.detailRequired") : t("pluginsPage.detailOptional")
-                }
-              </span>
-              ${
-                field.sensitive
-                  ? html`<span class="plugin-catalog-detail__tag">
-                      ${t("pluginsPage.detailSensitive")}
-                    </span>`
-                  : nothing
-              }
-            </div>
-            ${field.description ? html`<p>${field.description}</p>` : nothing}
-          </article>`,
-        )}
-      </div>`
-    : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoConfiguration")}</p>`;
-}
-
-export function pluginDetailCompatibilityRows(
-  result: PluginDiscoveryDetailResult,
-): Array<[string, string]> {
-  const compatibility = result.detail.compatibility;
-  if (!compatibility) {
-    return [];
-  }
-  return [
-    [t("pluginsPage.detailMinimumGateway"), compatibility.minGatewayVersion],
-    [t("pluginsPage.detailPluginApi"), compatibility.pluginApiRange],
-    [t("pluginsPage.detailBuiltWith"), compatibility.builtWithOpenClawVersion],
-    [t("pluginsPage.detailSdkVersion"), compatibility.pluginSdkVersion],
-  ].filter((row): row is [string, string] => Boolean(row[1]));
-}
-
-export function renderPluginDetailCompatibility(
-  result: PluginDiscoveryDetailResult,
-): TemplateResult {
-  const rows = pluginDetailCompatibilityRows(result);
-  return rows.length
-    ? html`<dl class="plugin-catalog-detail__definition-list">
-        ${rows.map(
-          (row) =>
-            html`<div>
-              <dt>${row[0]}</dt>
-              <dd>${row[1]}</dd>
-            </div>`,
-        )}
-      </dl>`
-    : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoCompatibility")}</p>`;
-}
-
-export function renderPluginDetailVersions(result: PluginDiscoveryDetailResult): TemplateResult {
-  return result.detail.versions.length
-    ? html`<div class="plugin-catalog-detail__rows">
-        ${result.detail.versions.map(
-          (version) => html`<article class="plugin-catalog-detail__row">
-            <div class="plugin-catalog-detail__row-title">
-              <h3>${version.version}</h3>
-              ${version.tags.map(
-                (tag) => html`<span class="plugin-catalog-detail__tag">${tag}</span>`,
-              )}
-              <time datetime=${new Date(version.createdAt).toISOString()}>
-                ${formatDateMs(version.createdAt, { dateStyle: "medium" })}
-              </time>
-            </div>
-            ${version.changelog ? html`<p>${version.changelog}</p>` : nothing}
-          </article>`,
-        )}
-      </div>`
-    : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoVersions")}</p>`;
-}
-
-function renderAdvanced(result: PluginDiscoveryDetailResult): TemplateResult {
-  const detail = result.detail;
-  const verification = detail.verification;
-  const rows: Array<[string, string | undefined]> = [
-    [t("pluginsPage.detailOrigin"), detail.origin],
-    [t("pluginsPage.detailPackage"), detail.packageName],
-    [t("pluginsPage.detailSourceCommit"), verification?.sourceCommit],
-    [t("pluginsPage.detailSourcePath"), verification?.sourcePath],
-    [t("pluginsPage.detailMcpServers"), detail.mcpServers.join(", ") || undefined],
-  ];
-  return html`<dl class="plugin-catalog-detail__definition-list">
-    ${rows
-      .filter((row): row is [string, string] => Boolean(row[1]))
-      .map(
-        (row) =>
-          html`<div>
-            <dt>${row[0]}</dt>
-            <dd><code>${row[1]}</code></dd>
-          </div>`,
-      )}
-  </dl>`;
-}
-
-function renderTabPanel(
-  result: PluginDiscoveryDetailResult,
-  tab: PluginCatalogDetailTab,
-): TemplateResult {
-  if (tab === "skills") {
-    return renderPluginDetailSkills(result);
-  }
-  if (tab === "configuration") {
-    return renderConfiguration(result);
-  }
-  if (tab === "compatibility") {
-    return renderPluginDetailCompatibility(result);
-  }
-  if (tab === "versions") {
-    return renderPluginDetailVersions(result);
-  }
-  if (tab === "advanced") {
-    return renderAdvanced(result);
-  }
-  return renderPluginDetailReadme(result);
-}
-
 function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogDetailProps) {
   const { plugin, detail } = result;
-  const authorHandle = detail.author?.handle ?? plugin.catalog.author;
-  const packageUrl =
-    detail.origin === "clawhub" || plugin.catalog.publishedToClawHub === true
-      ? clawHubPackageUrl(detail.packageName, authorHandle)
-      : undefined;
+  const installing = Boolean(
+    props.installProgress && props.installProgress.finishedAt === undefined,
+  );
   const packageIcon = plugin.catalog.imageUrl ? props.iconUrls[plugin.catalog.imageUrl] : undefined;
-  const publisherIcon = detail.author?.imageUrl
-    ? props.iconUrls[detail.author.imageUrl]
-    : undefined;
-  const publisherName = detail.author?.displayName ?? authorHandle ?? plugin.catalog.name;
-  const tabs: PluginCatalogDetailTab[] = ["readme"];
-  if (detail.configuration.length) {
-    tabs.push("configuration");
-  }
-  if (detail.skills.length) {
-    tabs.push("skills");
-  }
-  if (pluginDetailCompatibilityRows(result).length) {
-    tabs.push("compatibility");
-  }
-  tabs.push("versions", "advanced");
-
+  const authorIcon = detail.author?.imageUrl ? props.iconUrls[detail.author.imageUrl] : undefined;
   return renderPluginDetailShell({
     id: "plugin-catalog-detail",
     name: plugin.catalog.name,
@@ -229,88 +70,44 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     backHref: props.backHref,
     backLabel: t("tabs.plugins"),
     onBack: props.onBack,
-    titleAction:
-      plugin.local.action === "install"
+    icon: renderArtTile(
+      plugin.id,
+      plugin.catalog.name,
+      packageIcon,
+      undefined,
+      "plugins-tile",
+      authorIcon,
+    ),
+    titleAction: html`${
+      plugin.local.action === "install" || installing
         ? renderReasonedDisabledControl(
             props.installBlockedReason,
-            html`<button
-              type="button"
-              class="btn primary oc-action oc-action-primary plugin-catalog-detail__install"
-              ?disabled=${!props.installBlockedReason && !props.canInstall}
-              aria-disabled=${!props.canInstall ? "true" : nothing}
-              @click=${() => {
-                if (props.canInstall) {
-                  props.onInstall();
-                }
-              }}
-            >
-              ${t("pluginsPage.install")}
-            </button>`,
+            html`<openclaw-plugin-install-action
+              .buttonClass=${"btn oc-action plugin-catalog-detail__install"}
+              .primary=${true}
+              .disabled=${!props.canInstall}
+              .busy=${Boolean(props.busy)}
+              .progress=${props.installProgress}
+              .onInstall=${props.onInstall}
+            ></openclaw-plugin-install-action>`,
           )
-        : undefined,
-    identity: html`<div class="plugin-catalog-detail__publisher">
-      <span class="plugin-catalog-detail__publisher-icon" aria-hidden="true">
-        ${imageWithFallback(publisherIcon ?? packageIcon, (url, onError) =>
-          url ? html`<img src=${url} alt="" @error=${onError} />` : icons.box,
-        )}
-      </span>
-      <div>
-        <div class="plugin-catalog-detail__publisher-name">
-          <strong>${publisherName}</strong>
-          ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
-        </div>
-        ${renderPluginAuthor(authorHandle, { linked: true })}
-      </div>
-    </div>`,
-    sidebar: html`<dl>
-        ${
-          plugin.catalog.downloads === undefined
-            ? nothing
-            : html`<div>
-                <dt>${t("pluginsPage.catalogDownloadsColumn")}</dt>
-                <dd>${icons.download} ${formatCompactCount(plugin.catalog.downloads)}</dd>
-              </div>`
-        }
-        ${
-          plugin.catalog.latestVersion
-            ? html`<div>
-                <dt>${t("pluginsPage.version")}</dt>
-                <dd>${plugin.catalog.latestVersion}</dd>
-              </div>`
-            : nothing
-        }
-        ${
-          detail.updatedAt
-            ? html`<div>
-                <dt>${t("pluginsPage.detailUpdated")}</dt>
-                <dd>${formatDateMs(detail.updatedAt, { dateStyle: "medium" })}</dd>
-              </div>`
-            : nothing
-        }
-      </dl>
-      ${
-        detail.security
-          ? renderPluginSecurityAudit(
-              detail.security.status,
-              detail.security.auditUrl ?? (packageUrl ? `${packageUrl}/security-audit` : undefined),
-            )
-          : nothing
-      }
-      ${
-        packageUrl
-          ? html`<a
-              class="btn plugin-catalog-detail__clawhub"
-              href=${packageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              >${t("pluginsPage.detailViewOnClawHub")}</a
-            >`
-          : nothing
-      }`,
-    tabs: tabs.map((tab) => ({ value: tab, label: tabLabel(tab) })),
-    activeTab: props.tab,
-    onTabChange: props.onTabChange,
-    panel: renderTabPanel(result, props.tab),
+        : nothing
+    }${renderPluginAskAction(props.onAskPlugin, plugin.local.action !== "install" && !installing)}`,
+    identity: renderPluginPublisher(result),
+    sidebar: renderPluginMetadata(result),
+    panel: html`${renderPluginRowMessage(props.message, { busy: props.busy, onContinue: props.canInstall ? props.onContinueInstall : undefined })}
+    ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.bookOpenText)}
+    ${renderPluginCapabilitySection(
+      t("pluginsPage.detailTools"),
+      (detail.contracts?.tools ?? []).map((name) => ({ name })),
+      icons.wrench,
+    )}
+    ${renderPluginCapabilitySection(
+      t("pluginsPage.detailMcpServers"),
+      detail.mcpServers.map((name) => ({ name })),
+      icons.plug,
+    )}`,
+    readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }
 
@@ -333,18 +130,22 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): Temp
             >
               <div class="plugin-catalog-detail__back skeleton"></div>
               <div class="plugin-catalog-detail__hero">
-                <main>
+                <div class="plugin-catalog-detail__icon skeleton"></div>
+                <div>
                   <div class="plugin-catalog-detail__loading-title skeleton"></div>
-                  <div class="plugin-catalog-detail__loading-summary skeleton"></div>
                   <div class="plugin-catalog-detail__loading-publisher skeleton"></div>
-                </main>
+                  <div class="plugin-catalog-detail__loading-summary skeleton"></div>
+                </div>
+              </div>
+              <div class="plugin-catalog-detail__content">
+                <div class="plugin-catalog-detail__panel" aria-hidden="true">
+                  <div class="plugin-catalog-detail__loading-card skeleton"></div>
+                  <div class="plugin-catalog-detail__loading-card skeleton"></div>
+                </div>
                 <aside class="plugin-catalog-detail__sidebar">
-                  <div class="plugin-catalog-detail__loading-card skeleton"></div>
-                  <div class="plugin-catalog-detail__loading-card skeleton"></div>
+                  ${renderPluginMetadata(undefined, undefined, undefined, true)}
                 </aside>
               </div>
-              <div class="plugin-catalog-detail__loading-tabs skeleton"></div>
-              <div class="plugin-catalog-detail__loading-readme skeleton"></div>
             </section>`,
     { wide: true, carapace: true },
   );

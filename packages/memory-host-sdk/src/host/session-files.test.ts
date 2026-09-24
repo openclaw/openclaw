@@ -1,5 +1,6 @@
 // Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -15,8 +16,8 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
@@ -51,11 +52,11 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
-  // Agent close releases leases through shared state; close agent handles first while the fixture
-  // env is active, then close shared state before removing the Windows-owned directory.
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Join native workers before removing their files; agent leases still need shared state
+  // and the fixture environment while they close.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -129,7 +130,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
       throw scanError;
     });
 
@@ -337,6 +338,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       absPath: sessionKey,
       path: liveEntry.path,
       mtimeMs: liveEntry.mtimeMs,
+      revisionMs: liveEntry.revisionMs,
       size: liveEntry.size,
     });
     expect(archiveEntry.path).toBe(

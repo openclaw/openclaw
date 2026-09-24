@@ -9,6 +9,50 @@ import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
+/** Compare resolved runtime paths using the declared root's syntax, never the host OS. */
+export function relativePathInsideSandboxRoot(root: string, target: string): string | null {
+  const windows = !root.startsWith("/") && path.win32.isAbsolute(root);
+  const syntax = windows ? path.win32 : path.posix;
+  const normalize = windows ? normalizeWindowsPathPreservingCase : path.posix.normalize;
+  const normalizedRoot = normalize(root);
+  const normalizedTarget = normalize(target);
+  if (
+    !syntax.isAbsolute(normalizedRoot) ||
+    !syntax.isAbsolute(normalizedTarget) ||
+    (windows &&
+      (path.win32.parse(normalizedRoot).root === "\\" ||
+        path.win32.parse(normalizedTarget).root === "\\"))
+  ) {
+    return null;
+  }
+  const relative = syntax.relative(normalizedRoot, normalizedTarget);
+  return relative === ".." || relative.startsWith(`..${syntax.sep}`) || syntax.isAbsolute(relative)
+    ? null
+    : relative;
+}
+
+/** Select the deepest admitted mapping without replacing a supplied miss with a host fallback. */
+export function resolveSandboxPathMapping<
+  T extends { readonly hostRoot: string; readonly containerRoot: string },
+>(mappings: readonly T[], target: string): { mapping: T; hostPath: string } | null {
+  let selected: { mapping: T; hostPath: string; relative: string } | undefined;
+  for (const mapping of mappings) {
+    const relative = relativePathInsideSandboxRoot(mapping.containerRoot, target);
+    // A shorter relative suffix means a deeper root after normalization. Equal
+    // roots retain the backend's ordering, including protected mount precedence.
+    if (relative === null || (selected && relative.length >= selected.relative.length)) {
+      continue;
+    }
+    const separator = mapping.containerRoot.startsWith("/") ? "/" : "\\";
+    selected = {
+      mapping,
+      relative,
+      hostPath: path.resolve(mapping.hostRoot, ...relative.split(separator)),
+    };
+  }
+  return selected ? { mapping: selected.mapping, hostPath: selected.hostPath } : null;
+}
+
 // Shared path boundary helpers for workspace and sandbox-facing agent inputs.
 // Callers get normalized relative paths only after the candidate proves it stays
 // within the named root.

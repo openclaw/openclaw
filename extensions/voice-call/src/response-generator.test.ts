@@ -52,6 +52,9 @@ type EmbeddedAgentArgs = {
   senderIsOwner?: boolean;
   toolsAllow?: string[];
   blockReplyBreak?: "text_end" | "message_end";
+  resolveReplyDelivery?: (
+    minimumAssistantMessageIndex?: number,
+  ) => Promise<"delivered" | "pending" | "missing">;
   onBlockReply?: (
     payload: Record<string, unknown>,
     context?: { assistantMessageIndex?: number },
@@ -374,7 +377,10 @@ describe("generateVoiceResponse", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
     runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
       args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
+      expect(await args.resolveReplyDelivery?.()).toBe("missing");
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      expect(await args.resolveReplyDelivery?.()).toBe("pending");
+      expect(await args.resolveReplyDelivery?.(1)).toBe("missing");
       return await runFinished;
     });
     let reportEarlyDelivery: () => void = () => {};

@@ -156,8 +156,8 @@ async function commitConfiguredMcpServers(params: {
     baseHash: params.loaded.baseHash,
     writeOptions: {
       ...params.writeOptions,
-      assertConfigPathForWrite: () => {
-        params.writeOptions.assertConfigPathForWrite?.();
+      assertCurrent: () => {
+        params.writeOptions.assertCurrent?.();
         params.assertCurrent?.();
       },
     },
@@ -276,6 +276,7 @@ async function setConfiguredMcpServer(
     createOnly?: boolean;
     recordIndependentOwner?: boolean;
     expectedServer?: Record<string, unknown>;
+    assertCurrent?: () => void;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
@@ -356,6 +357,7 @@ async function setConfiguredMcpServer(
     servers,
     errorLabel: "set",
     independentlyOwnedName: params.recordIndependentOwner === false ? undefined : name,
+    assertCurrent: params.assertCurrent,
     mutation: { name, onCommitted },
   });
 }

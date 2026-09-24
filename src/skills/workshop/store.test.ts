@@ -4,6 +4,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -12,6 +13,7 @@ import {
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { listSkillProposalEvents, listSkillProposals, proposeCreateSkill } from "./service.js";
 import { parseSkillProposalEvaluation } from "./store-record.js";
+import { appendSkillProposalEvent } from "./store-sqlite-event.js";
 import {
   commitPendingSkillProposalTransition,
   readCommittedSkillProposalTransition,
@@ -33,6 +35,68 @@ afterEach(async () => {
 });
 
 describe("Skill Workshop SQLite store", () => {
+  it("preserves event ownership, proposal filters, exclusive cursors, and row limits", async () => {
+    const create = (name: string) =>
+      proposeCreateSkill({
+        workspaceDir: testState.stateDir,
+        config: workshopConfig,
+        agentId: "main",
+        name,
+        description: "Replay filtering fixture",
+        content: `# ${name}\n`,
+      });
+    const primary = await create("Primary Events");
+    const sibling = await create("Sibling Events");
+    const foreign = await create("Foreign Events");
+    const ownerless = await create("Ownerless Events");
+    const { db: fixtureDatabase } = openOpenClawStateDatabase();
+    const assignOwner = fixtureDatabase.prepare(
+      "UPDATE skill_workshop_proposals SET owner_agent_id = ? WHERE proposal_id = ?",
+    );
+    assignOwner.run("other", foreign.record.id);
+    assignOwner.run(null, ownerless.record.id);
+    const revision = runOpenClawStateWriteTransaction(({ db }) =>
+      appendSkillProposalEvent(
+        db,
+        createSkillProposalEvent({ record: primary.record, type: "revised" }),
+      ),
+    );
+    const query = { config: workshopConfig, agentId: "main", proposalId: primary.record.id };
+    const first = await listSkillProposalEvents({ ...query, limit: 0 });
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]?.type).toBe("created");
+    expect(first.nextSequence).toBe(first.events[0]?.sequence);
+    const next = await listSkillProposalEvents({ ...query, afterSequence: first.nextSequence });
+    expect(next).toEqual({ events: [revision] });
+    expect(
+      (await listSkillProposalEvents({ config: workshopConfig, agentId: "main" })).events.map(
+        (event) => event.proposalId,
+      ),
+    ).toEqual([primary.record.id, sibling.record.id, primary.record.id]);
+    expect(
+      (await listSkillProposalEvents({ config: workshopConfig })).events.map(
+        (event) => event.proposalId,
+      ),
+    ).toEqual([primary.record.id, sibling.record.id, foreign.record.id, primary.record.id]);
+    runOpenClawStateWriteTransaction(({ db }) => {
+      for (let index = 0; index < 205; index += 1) {
+        appendSkillProposalEvent(
+          db,
+          createSkillProposalEvent({ record: primary.record, type: "revised" }),
+        );
+      }
+    });
+    const capped = await listSkillProposalEvents({ ...query, limit: 1_000 });
+    expect(capped.events).toHaveLength(200);
+    expect(capped.nextSequence).toBe(capped.events.at(-1)?.sequence);
+    const remainder = await listSkillProposalEvents({
+      ...query,
+      afterSequence: capped.nextSequence,
+    });
+    expect(remainder.events).toHaveLength(7);
+    expect(remainder.nextSequence).toBeUndefined();
+  });
+
   it("commits a pending transition once and rejects stale record facts", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
@@ -151,10 +215,12 @@ describe("Skill Workshop SQLite store", () => {
     });
 
     expect(
-      listSkillProposalEvents({
-        config: workshopConfig,
-        proposalId: proposal.record.id,
-      }).events[1],
+      (
+        await listSkillProposalEvents({
+          config: workshopConfig,
+          proposalId: proposal.record.id,
+        })
+      ).events[1],
     ).toMatchObject({
       payload: { evaluation: "manual", outcomeCount: 0 },
       evaluation: { id: evaluation.id },
@@ -217,7 +283,7 @@ describe("Skill Workshop SQLite store", () => {
       });
     }
 
-    const firstPage = listSkillProposalEvents({
+    const firstPage = await listSkillProposalEvents({
       config: workshopConfig,
       proposalId: proposal.record.id,
       limit: 200,
@@ -227,7 +293,7 @@ describe("Skill Workshop SQLite store", () => {
     expect(Buffer.byteLength(JSON.stringify(firstPage), "utf8")).toBeLessThanOrEqual(
       2 * 1024 * 1024 + 1_024,
     );
-    const secondPage = listSkillProposalEvents({
+    const secondPage = await listSkillProposalEvents({
       config: workshopConfig,
       proposalId: proposal.record.id,
       afterSequence: firstPage.nextSequence,
@@ -251,11 +317,11 @@ describe("Skill Workshop SQLite store", () => {
       )
       .run("x".repeat(600 * 1024), proposal.record.id);
 
-    expect(() =>
+    await expect(
       listSkillProposalEvents({
         config: workshopConfig,
         proposalId: proposal.record.id,
       }),
-    ).toThrow(/Stored Skill Workshop event .* cannot be replayed safely/);
+    ).rejects.toThrow(/Stored Skill Workshop event .* cannot be replayed safely/);
   });
 });

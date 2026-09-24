@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Called after the canonical source build, before the app is signed. The
-# complete npm artifact owns dependency selection; this is not a dist closure.
+# Called after the canonical source build, before the app is signed. The npm
+# artifact is only an installation source; the private entry owns its closure.
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
@@ -23,7 +23,11 @@ mkdir -p "$SCRATCH/home" "$SCRATCH/package"
 # Lifecycle hooks must never see operator config, credentials, or state;
 # installer main discovers launchd by UID even with a new HOME.
 # Use the build's pinned pnpm packer, not the host npm's expanding file globs.
+# Forward only its existing phase budgets; the packager owns defaults/validation.
 TARBALL="$(env -i HOME="$SCRATCH/home" PATH="$PATH" TMPDIR="$SCRATCH" \
+  OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS:-}" \
+  OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS:-}" \
+  OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS="${OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS:-}" \
   node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
   --skip-build --pnpm-pack --allow-unreleased-changelog --output-dir "$SCRATCH/package" \
   --output-name openclaw.tgz)"
@@ -53,6 +57,9 @@ for arch in "$@"; do
       install_openclaw
       mv "$(node_dir)" "$2/installed"
     ' bash "$ROOT_DIR" "$STAGE/$arch" "$TARBALL" "$node_arch"
+  env -i HOME="$SCRATCH/$arch/home" PATH="$PATH" TMPDIR="$SCRATCH/$arch/tmp" \
+    node --import "$ROOT_DIR/scripts/tsx.mjs" "$ROOT_DIR/scripts/prune-mac-node-worker.ts" \
+    "$STAGE/$arch/installed"
   # Unused Intel prebuilds can trigger macOS compatibility warnings even when
   # the app and its selected worker are native Apple silicon.
   env -i HOME="$SCRATCH/$arch/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \

@@ -25,11 +25,7 @@ export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      await refreshModelAuthStateAfterMutation(
-        context.getRuntimeConfig,
-        params.operation,
-        scope.agentId,
-      );
+      await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
       respond(true, { refreshed: true }, undefined);
     });
   },

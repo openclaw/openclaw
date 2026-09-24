@@ -32,6 +32,8 @@ const snapshotLocation = closedObject({
   directory: text,
 });
 const snapshotBytes = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const destinationPath = Type.String({ maxLength: 240 });
+const nullableDestinationPath = Type.Union([destinationPath, Type.Null()]);
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -50,6 +52,7 @@ export const UpdateRunRecordSchema = closedObject({
         channel: Type.Optional(text),
         accountId: Type.Optional(text),
         senderId: Type.Optional(text),
+        authorizationSource: Type.Optional(text),
       }),
     ),
     sessionKey: Type.Optional(text),
@@ -71,6 +74,12 @@ export const UpdateRunRecordSchema = closedObject({
     kind: Type.Optional(Type.Enum(["package", "git"])),
     version: Type.Optional(text),
     sha: Type.Optional(text),
+    installationMethod: Type.Optional(
+      Type.Union([
+        Type.Enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"]),
+        Type.Null(),
+      ]),
+    ),
   }),
   before: version,
   after: version,
@@ -80,6 +89,7 @@ export const UpdateRunRecordSchema = closedObject({
       status: Type.Enum(UPDATE_RUN_STEP_STATUSES),
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
+      exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
       detail: Type.Optional(text),
       failureFacts: Type.Optional(
         Type.Array(
@@ -89,6 +99,27 @@ export const UpdateRunRecordSchema = closedObject({
             message: Type.Optional(Type.String({ maxLength: 200 })),
             affectedKey: Type.Optional(Type.String({ maxLength: 128 })),
             pluginId: Type.Optional(Type.String({ maxLength: 80 })),
+            errorName: Type.Optional(Type.Union([Type.String({ maxLength: 80 }), Type.Null()])),
+            location: Type.Optional(Type.Union([Type.String({ maxLength: 160 }), Type.Null()])),
+            destination: Type.Optional(
+              closedObject({
+                ownership: Type.Enum(["foreign", "unknown"]),
+                cause: Type.Enum([
+                  "package-mismatch",
+                  "launcher-mismatch",
+                  "permission",
+                  "probe-failure",
+                  "unreadable-layout",
+                ]),
+                destinationKind: Type.Enum(["npm-global", "unknown"]),
+                prefix: nullableDestinationPath,
+                packageRoot: nullableDestinationPath,
+                runningRoot: destinationPath,
+                runningPrefix: nullableDestinationPath,
+                launcher: nullableDestinationPath,
+                launcherTarget: nullableDestinationPath,
+              }),
+            ),
           }),
           { maxItems: 5 },
         ),
@@ -133,6 +164,41 @@ export const UpdateRunRecordSchema = closedObject({
     { maxItems: 128 },
   ),
   verification: closedObject({
+    rollbackOutcome: Type.Optional(
+      Type.Union([
+        closedObject({
+          status: Type.Enum(["not-needed", "not-attempted", "succeeded", "failed"]),
+          reason: Type.String({ maxLength: 512 }),
+        }),
+        Type.Null(),
+      ]),
+    ),
+    recovery: Type.Optional(
+      Type.Union([
+        closedObject({
+          serviceRestartSafe: Type.Literal(true),
+          packageRollbackVerified: Type.Optional(Type.Literal(true)),
+          version: Type.String({ minLength: 1 }),
+          buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+          service: Type.Optional(Type.Enum(["healthy", "failed"])),
+          reason: Type.Optional(Type.String({ minLength: 1 })),
+        }),
+        closedObject({
+          serviceRestartSafe: Type.Literal(false),
+          packageRollbackVerified: Type.Optional(Type.Boolean()),
+          reason: Type.Enum([
+            "source-rollback-failed",
+            "state-migration-started",
+            "manager-unavailable",
+            "deps-install-failed",
+            "build-failed",
+            "rollback-checkout-dirty",
+            "runtime-verification-failed",
+          ]),
+        }),
+        Type.Null(),
+      ]),
+    ),
     booted: Type.Optional(Type.Boolean()),
     runningVersion: Type.Optional(text),
     runningBuildId: Type.Optional(text),
@@ -186,6 +252,8 @@ export const UpdateRunResultSchema = closedObject({
   ok: Type.Boolean(),
   result: Type.Unknown(),
   ackDelivered: Type.Optional(Type.Boolean()),
+  ackQueued: Type.Optional(Type.Boolean()),
+  acknowledgement: Type.Optional(Type.String()),
   code: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   handoff: Type.Optional(Type.Unknown()),

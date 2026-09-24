@@ -1,5 +1,5 @@
 /** Local recovery retirement. This handler never invokes update or Doctor repair. */
-import { confirm, isCancel } from "@clack/prompts";
+import { confirm } from "@clack/prompts";
 import {
   inspectSessionSqliteRecovery,
   type RecoveryCleanupReport,
@@ -60,7 +60,7 @@ export async function updateCleanupCommand(options: {
               initialValue: false,
               output: process.stderr,
             });
-            return !isCancel(answer) && answer;
+            return answer === true;
           },
         });
       }

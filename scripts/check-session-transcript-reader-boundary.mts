@@ -54,8 +54,6 @@ const storageSpecificTranscriptReaderAliasNames = new Set(["readSessionMessagesF
 const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-abort.ts",
   "src/gateway/server-methods/sessions-compact.ts",
-  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-  "src/gateway/server-methods/sessions-compaction-queries.ts",
   "src/gateway/server-methods/sessions-compaction-runner.ts",
   "src/gateway/server-methods/sessions-create.ts",
   "src/gateway/server-methods/sessions-delete.ts",

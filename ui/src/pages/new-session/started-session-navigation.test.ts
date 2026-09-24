@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -10,6 +11,54 @@ afterEach(() => {
 });
 
 describe("confirmed session navigation", () => {
+  it.each(["leave", "stop"] as const)(
+    "settles a pending composer handoff when its route retires (%s)",
+    async (retire) => {
+      const { context } = createDraftFixture();
+      await context.router.navigate("chat", context);
+      const lifecycle = new AbortController();
+      Object.defineProperty(context, "lifecycleAbortSignal", { value: lifecycle.signal });
+      const navigation = new StartedSessionNavigation();
+      let committed!: Promise<void>;
+      vi.mocked(context.navigateAndWait).mockImplementation((routeId, options) => {
+        committed = context.router.navigate(
+          routeId,
+          context,
+          {},
+          {
+            pathname: options?.pathname ?? "/chat",
+            search: options?.search ?? "",
+            hash: options?.hash ?? "",
+          },
+        );
+        return committed;
+      });
+      const opening = navigation.navigate(context, {
+        client: context.gateway.snapshot.client!,
+        key: "agent:main:dashboard:pending-composer",
+        agentId: "main",
+      });
+      await committed;
+      if (retire === "stop") {
+        lifecycle.abort();
+      } else {
+        await context.router.navigate(
+          "chat",
+          context,
+          {},
+          {
+            pathname: "/chat/main/another-session",
+            search: "",
+            hash: "",
+          },
+        );
+      }
+      await opening;
+      expect(navigation.current).toBeNull();
+      expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    },
+  );
+
   it("hands off the confirmed session without waiting for speculative preloading", async () => {
     const { context, flow } = createDraftFixture();
     const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
@@ -24,10 +73,13 @@ describe("confirmed session navigation", () => {
       }),
     );
     vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
-      expect(options?.pathname).toBe("/chat/main/0f403cb8");
-      expect(consumeSessionNavigationHandoff(context.gateway, "/chat/main/0f403cb8")).toBe(
-        sessionKey,
-      );
+      expect(options?.pathname).toBe("/chat/main/0f403cb839204cf18eb779f2f00ce488");
+      expect(
+        consumeSessionNavigationHandoff(
+          context.gateway,
+          "/chat/main/0f403cb839204cf18eb779f2f00ce488",
+        ),
+      ).toBe(sessionKey);
       queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
     });
     flow.setMessage("start this task");
@@ -62,6 +114,8 @@ describe("confirmed session navigation", () => {
     expect(context.navigateAndWait).toHaveBeenCalledOnce();
     expect(flow.error).toBe("Chat route failed to load");
     expect(flow.submitting).toBe(false);
+    expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: "start this task" });
+    expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:created");
 
     const readSignal = flow.attachmentDraft.readSignal;
     flow.attachmentDraft.updatePending(readSignal, 1);
@@ -73,12 +127,63 @@ describe("confirmed session navigation", () => {
     flow.attachmentDraft.updatePending(readSignal, -1);
 
     expect(flow.canSubmit()).toBe(true);
-    await flow.submit();
+    await flow.openSubmittedSession();
 
     expect(context.navigateAndWait).toHaveBeenCalledTimes(2);
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(flow.error).toBeNull();
   });
+
+  it.each(["ready", "hello-known", "scope-pending"])(
+    "keeps a background prompt readable and opens it without another create (%s)",
+    async (scopeState) => {
+      const { context, flow } = createDraftFixture({
+        request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
+      });
+      const key = "agent:main:dashboard:background-visible";
+      if (scopeState !== "ready") {
+        Object.assign(context.gateway.snapshot.client!, {
+          recoveryScope: "",
+          recoveryScopeReady: false,
+        });
+        if (scopeState === "scope-pending") {
+          delete context.gateway.snapshot.hello!.auth!.recoveryScope;
+        }
+      }
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key,
+        initialRun: { status: "started", runId: "background-run" },
+      });
+      flow.setMessage("keep this background prompt visible");
+      await flow.submit(undefined, true);
+      expect(flow.message).toBe("");
+      expect(flow.pendingMessage?.content).toContainEqual({
+        type: "text",
+        text: "keep this background prompt visible",
+      });
+      expect(flow.submitting).toBe(false);
+      expect(context.navigateAndWait).not.toHaveBeenCalled();
+      Object.assign(context.gateway.snapshot.client!, {
+        recoveryScope: "principal-a",
+        recoveryScopeReady: true,
+      });
+      expect(flow.pendingMessage?.content).toContainEqual({
+        type: "text",
+        text: "keep this background prompt visible",
+      });
+      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      });
+      await flow.openSubmittedSession();
+      expect(context.navigateAndWait).toHaveBeenCalledOnce();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const auth = context.gateway.snapshot.hello!.auth!;
+      auth.recoveryScope = "another-account";
+      expect(flow.pendingMessage).toBeNull();
+      await flow.openSubmittedSession();
+      expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     {
@@ -124,7 +229,10 @@ describe("confirmed session navigation", () => {
       await flow.submit();
 
       expect(
-        consumeSessionNavigationHandoff(context.gateway, "/chat/main/0f403cb8"),
+        consumeSessionNavigationHandoff(
+          context.gateway,
+          "/chat/main/0f403cb839204cf18eb779f2f00ce488",
+        ),
       ).toBeUndefined();
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       expect(context.sessions.createResult).toHaveBeenCalledOnce();

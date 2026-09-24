@@ -395,8 +395,8 @@ describe("sessions cleanup applied summary", () => {
         cleanupRace.postCommitFailureStorePath = failing.storePath;
       } else {
         openOpenClawAgentDatabase({ agentId: failing.agentId, path: failingSqlitePath }).db.exec(`
-          CREATE TRIGGER fail_second_store_delete
-          BEFORE DELETE ON session_windows
+          CREATE TEMP TRIGGER fail_second_store_delete
+          BEFORE DELETE ON main.session_windows
           WHEN OLD.session_id = '${failing.sessionId}'
           BEGIN
             SELECT RAISE(ABORT, 'injected second-store lifecycle failure');
@@ -421,6 +421,11 @@ describe("sessions cleanup applied summary", () => {
         failure: expect.objectContaining({
           target: expect.objectContaining({ agentId: "work" }),
           lifecycleCommitted,
+          message: expect.stringContaining(
+            lifecycleCommitted
+              ? "injected post-commit artifact failure"
+              : "injected second-store lifecycle failure",
+          ),
         }),
       });
     },

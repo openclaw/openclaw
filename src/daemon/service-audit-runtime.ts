@@ -8,7 +8,9 @@ import {
   resolveNodeRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
+import { readDaemonRuntimePin } from "./runtime-pin-state.js";
 import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
+import { normalizeServicePathEntry } from "./service-path-policy.js";
 
 export const SERVICE_RUNTIME_AUDIT_CODES = {
   gatewayRuntimeBun: "gateway-runtime-bun",
@@ -74,7 +76,14 @@ export async function auditGatewayRuntime(
     });
   }
 
-  if (isVersionManagedNodePath(execPath, platform)) {
+  const pinnedPath = command
+    ? readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path
+    : undefined;
+  const explicitlyPinned =
+    pinnedPath &&
+    normalizeServicePathEntry(pinnedPath, platform) ===
+      normalizeServicePathEntry(execPath, platform);
+  if (!explicitlyPinned && isVersionManagedNodePath(execPath, platform)) {
     issues.push({
       code: SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
       message: "Gateway service uses Node from a version manager; it can break after upgrades.",

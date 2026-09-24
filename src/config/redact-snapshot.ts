@@ -12,6 +12,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { containsEnvVarReference } from "./env-substitution.js";
+import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -81,7 +82,7 @@ function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: s
  * sentinel and restore the original value from the on-disk config, so a
  * round-trip through the Web UI does not corrupt credentials.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export { REDACTED_SENTINEL } from "./redact-sentinel.js";
 
 function isSecretRefWithProvider(
   value: Record<string, unknown>,
@@ -284,9 +285,10 @@ export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
 export function redactConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   uiHints?: ConfigUiHints,
-): ConfigFileSnapshot {
+): Omit<ConfigFileSnapshot, "authoredConfig" | "sourceConfigBeforeMigrations"> {
   // Internal migration inputs can contain resolved secrets; never expose them in public snapshots.
   const {
+    authoredConfig: _authoredConfig,
     sourceConfigBeforeMigrations: _sourceConfigBeforeMigrations,
     pluginMetadataSnapshot: _pluginMetadataSnapshot,
     ...publicSnapshot

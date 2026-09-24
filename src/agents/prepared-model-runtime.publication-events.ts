@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import type {
+  PreparedModelCatalogAcquisitionKind,
   PreparedModelCatalogAttempt,
   PreparedModelRuntimeOwner,
 } from "./prepared-model-runtime.types.js";
@@ -11,8 +12,40 @@ import type {
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 type PreparedModelRuntimePublicationEvent =
-  | { phase: "catalog-published" | "invalidated" | "published" }
-  | { phase: "catalog-failed" | "failed"; error: Error };
+  | { phase: "invalidated"; modelFactsChanged?: false; replacement?: Promise<void> }
+  | { phase: "published"; modelFactsChanged?: false }
+  | { phase: "failed"; error: Error }
+  // Publication owners alone can prove that model facts stayed unchanged.
+  | {
+      phase: "catalog-published";
+      modelFactsChanged?: boolean;
+      refreshStatusChanged?: boolean;
+    }
+  | { phase: "catalog-failed"; error: Error; modelFactsChanged?: boolean };
+
+type CatalogPublication = {
+  catalog: ModelCatalogSnapshot | undefined;
+};
+type CatalogPublicationChange = {
+  previous: CatalogPublication;
+  current: CatalogPublication;
+  staticCatalog: ModelCatalogSnapshot;
+};
+
+/** Reports model changes only after the catalog owner commits its complete publication. */
+export function notifyPreparedModelCatalogPublication(
+  change: CatalogPublicationChange | undefined,
+  refreshStatusChanged = false,
+): void {
+  notifyPreparedModelRuntimePublication({
+    phase: "catalog-published",
+    modelFactsChanged:
+      change !== undefined &&
+      (change.previous.catalog ?? change.staticCatalog) !==
+        (change.current.catalog ?? change.staticCatalog),
+    ...(refreshStatusChanged ? { refreshStatusChanged: true } : {}),
+  });
+}
 
 const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
 
@@ -22,23 +55,70 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
 ): {
-  started: (providers: readonly string[]) => void;
-  published: (providers?: readonly string[]) => void;
-  failed: (error: unknown) => never;
+  started: (providers: readonly string[], kind?: PreparedModelCatalogAcquisitionKind) => void;
+  published: (
+    providers?: readonly string[],
+    kind?: PreparedModelCatalogAcquisitionKind,
+    publication?: CatalogPublicationChange,
+  ) => void;
+  failed: (
+    error: unknown,
+    providers?: readonly string[],
+    kind?: PreparedModelCatalogAcquisitionKind,
+  ) => void;
+  createFailureHandler: (
+    providers: readonly string[],
+    beforeProviderFailure: (providerIds?: readonly string[]) => void,
+  ) => (
+    error: unknown,
+    providerIds?: readonly string[],
+    kind?: PreparedModelCatalogAcquisitionKind,
+  ) => void;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 } {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
     owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
       ? owner.catalogAttempt
-      : { source, failedProviders: new Set() };
+      : { source, failedProviders: { provider: new Set(), native: new Set() } };
   let pendingProviders: readonly string[] = [];
+  let pendingKind: PreparedModelCatalogAcquisitionKind = "provider";
+  const failed = (
+    error: unknown,
+    providers: readonly string[] = pendingProviders,
+    kind: PreparedModelCatalogAcquisitionKind = pendingKind,
+    beforePublish?: () => void,
+  ) => {
+    if (isCurrent() && !(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      beforePublish?.();
+      const attemptError = toStringifiedError(error);
+      for (const provider of providers.length ? providers : [undefined]) {
+        attempt.failedProviders[kind].add(provider);
+      }
+      pendingProviders = [];
+      owner.catalogAttempt = attempt;
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-failed",
+        error: attemptError,
+        modelFactsChanged: false,
+      });
+    }
+  };
+  const hasFailedProviders = () =>
+    attempt.failedProviders.provider.size > 0 || attempt.failedProviders.native.size > 0;
   return {
-    started: (providers) => {
+    started: (providers, kind = "provider") => {
       pendingProviders = providers;
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      pendingKind = kind;
     },
     withRefreshStatus: (catalog) => {
+      const nativeFailed = Object.values(catalog.nativeProviderOutcomes ?? {}).some((outcomes) =>
+        outcomes.some((outcome) => outcome.status !== "ready"),
+      );
+      // Provider renewal does not retry a failed native inventory.
+      if (attempt.failedProviders.native.size > 0 || nativeFailed) {
+        catalog.authoritative = false;
+      }
       Object.defineProperty(catalog, "pendingProviders", {
         enumerable: true,
         configurable: true,
@@ -49,37 +129,49 @@ export function createCatalogAttemptReporter(
         enumerable: true,
         configurable: true,
         get: () =>
-          attempt.failedProviders.size > 0 ||
+          hasFailedProviders() ||
+          nativeFailed ||
           catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
           undefined,
       });
       return catalog;
     },
-    published: (providers) => {
+    published: (providers, kind, publication) => {
+      const previouslyFailed = hasFailedProviders();
+      const previouslyPendingCount = pendingProviders.length;
+      const acquisitionKind = kind ?? "provider";
       pendingProviders = providers
         ? pendingProviders.filter((provider) => !providers.includes(provider))
         : [];
       if (providers) {
         for (const provider of providers) {
-          attempt.failedProviders.delete(provider);
+          attempt.failedProviders[acquisitionKind].delete(provider);
         }
       } else {
-        attempt.failedProviders.clear();
+        attempt.failedProviders[acquisitionKind].clear();
       }
       owner.catalogAttempt = attempt;
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      notifyPreparedModelCatalogPublication(
+        publication,
+        previouslyPendingCount !== pendingProviders.length ||
+          previouslyFailed !== hasFailedProviders(),
+      );
     },
-    failed: (error) => {
-      if (isCurrent() && !(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        const attemptError = toStringifiedError(error);
-        for (const provider of pendingProviders.length ? pendingProviders : [undefined]) {
-          attempt.failedProviders.add(provider);
+    failed,
+    createFailureHandler: (providers, beforeProviderFailure) => {
+      let settled = false;
+      return (error, providerIds, kind) => {
+        if (settled) {
+          return;
         }
-        pendingProviders = [];
-        owner.catalogAttempt = attempt;
-        notifyPreparedModelRuntimePublication({ phase: "catalog-failed", error: attemptError });
-      }
-      throw error;
+        settled = true;
+        failed(
+          error,
+          kind === "provider" ? (providerIds ?? providers) : providerIds,
+          kind,
+          kind === "provider" ? () => beforeProviderFailure(providerIds) : undefined,
+        );
+      };
     },
   };
 }

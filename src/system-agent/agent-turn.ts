@@ -8,15 +8,17 @@ import {
   extractAgentRunText,
   type AgentRunResultView,
 } from "../agents/agent-run-result.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
+import { CommandLane } from "../process/lanes.js";
 import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
-import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
+import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
@@ -316,6 +318,12 @@ async function runSystemAgentTurnWithDeps(
   // Conversation identity owns runner continuity; the main key remains policy-only.
   // Sharing the runner key lets another conversation replace its generation.
   const policySessionKey = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
+  const systemPrompt = buildSystemAgentSystemPrompt(
+    plan.modelTarget === "utility" &&
+      !resolveAgentEffectiveModelPrimary(plan.sourceConfig, plan.agentId)
+      ? plan.modelLabel
+      : undefined,
+  );
   const shared = {
     sessionId: params.session.sessionId,
     sessionKey: toAgentStoreSessionKey({
@@ -374,8 +382,8 @@ async function runSystemAgentTurnWithDeps(
           model: plan.model,
           agentDir: plan.agentDir,
           ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-          extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
-          extraSystemPromptStatic: SYSTEM_AGENT_SYSTEM_PROMPT,
+          extraSystemPrompt: systemPrompt,
+          extraSystemPromptStatic: systemPrompt,
           systemAgentTool,
           ...(cliToolAvailability ? { cliToolAvailability } : {}),
           ...(previousBinding ? { cliSessionBinding: previousBinding } : {}),
@@ -405,8 +413,9 @@ async function runSystemAgentTurnWithDeps(
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
         ...shared,
+        lane: CommandLane.SystemAgentInference,
         preparedRunAdmission,
-        extraSystemPrompt: SYSTEM_AGENT_SYSTEM_PROMPT,
+        extraSystemPrompt: systemPrompt,
         toolsAllow: ["openclaw"],
         // The helper cannot read workspace skills; skip their discovery and environment setup.
         toolExecutionAllow: ["openclaw"],

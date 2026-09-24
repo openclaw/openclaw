@@ -1,3 +1,4 @@
+import { clampThinkingLevel, type Model } from "openclaw/plugin-sdk/llm";
 // Kimi Coding tests cover provider catalog plugin behavior.
 import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,28 @@ import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-
 import { isKimiK3ModelId, KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 describe("kimi provider catalog", () => {
+  it.each(["k3", "k3-256k"])("keeps documented off thinking selectable for %s", (id) => {
+    const provider = manifest.modelCatalog.providers.kimi;
+    const row = provider.models.find((model) => model.id === id);
+    if (!row) {
+      throw new Error(`Missing catalog model ${id}`);
+    }
+    const model: Model<"anthropic-messages"> = {
+      id: row.id,
+      name: row.name,
+      reasoning: row.reasoning,
+      thinkingLevelMap: row.thinkingLevelMap,
+      contextWindow: row.contextWindow,
+      maxTokens: row.maxTokens,
+      cost: row.cost,
+      api: "anthropic-messages",
+      provider: "kimi",
+      baseUrl: provider.baseUrl,
+      input: ["text", "image"],
+    };
+    expect(clampThinkingLevel(model, "off")).toBe("off");
+  });
+
   it("builds the bundled Kimi coding defaults", () => {
     const provider = buildKimiCodingProvider();
 
@@ -22,7 +45,6 @@ describe("kimi provider catalog", () => {
       name: "Kimi K3",
       reasoning: true,
       thinkingLevelMap: {
-        off: null,
         minimal: "low",
         low: "low",
         medium: "high",
@@ -39,7 +61,6 @@ describe("kimi provider catalog", () => {
       name: "Kimi K3 (256k)",
       reasoning: true,
       thinkingLevelMap: {
-        off: null,
         minimal: "low",
         low: "low",
         medium: "high",

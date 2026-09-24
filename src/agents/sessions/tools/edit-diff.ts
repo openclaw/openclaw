@@ -5,7 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch, type StructuredPatchHunk } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { normalizeToLF } from "../../line-endings.js";
 import {
@@ -612,15 +612,19 @@ export function generateUnifiedPatch(
 /**
  * Generate a display-oriented diff string with line numbers and context.
  * Returns both the diff string and the first changed line number (in the new file).
+ * Prepared hunks must describe these exact contents with the requested context.
  */
 export function generateDiffString(
   oldContent: string,
   newContent: string,
   contextLines = 4,
+  preparedHunks?: StructuredPatchHunk[],
 ): { diff: string; firstChangedLine: number | undefined } {
-  const hunks = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
-    context: contextLines,
-  }).hunks;
+  const hunks =
+    preparedHunks ??
+    structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+      context: contextLines,
+    }).hunks;
   const oldLineCount = oldContent.split("\n").length;
   const newLineCount = newContent.split("\n").length;
   const lastNewLine = newContent === "" ? 0 : newLineCount - Number(newContent.endsWith("\n"));

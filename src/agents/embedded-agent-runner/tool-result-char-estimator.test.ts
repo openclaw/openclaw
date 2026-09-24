@@ -80,6 +80,34 @@ describe("tool-result-char-estimator", () => {
     expect(estimateMessageCharsCached(msg, cache)).toBe(8);
   });
 
+  it("uses current text when a tool-result block is reused across guard passes", () => {
+    const block = { type: "text" as const, text: "" };
+    for (const [text, expected] of [
+      ["a".repeat(16_000), 32_000],
+      ["你".repeat(16_000), 64_000],
+      ["𠀀".repeat(8_000), 128_000],
+      ["😀".repeat(8_000), 32_000],
+      ["\ud800".repeat(16_000), 32_000],
+      ["ok", 4],
+      ["", 0],
+    ] as const) {
+      block.text = text;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const message: AgentMessage = {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [block],
+          isError: false,
+          timestamp: 0,
+        };
+        expect(estimateMessageCharsCached(message, createMessageCharEstimateCache())).toBe(
+          expected,
+        );
+      }
+    }
+  });
+
   it("estimates a large bashExecution near its rendered size", () => {
     const bigOutput = "build log line\n".repeat(60000);
     const msg = {

@@ -28,7 +28,7 @@ import { withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
-const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
+const TSX_PRELOAD = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 const testNodeExecPath = resolveTestNodeExecPath();
 
@@ -217,7 +217,7 @@ describe("scripts/profile-extension-memory", () => {
       expected: [{ dir: "internal", file: "dist/extensions/internal/index.js" }],
     },
   ])("profiles $name", ({ files, selected, expected }) => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-")));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {
       for (const relativeFile of [
         ...files,

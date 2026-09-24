@@ -202,7 +202,11 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
           throw failure;
         }
       });
-      if (completion === "reject") {
+      if (identity === "reused-after-exit") {
+        await expect(running).rejects.toMatchObject({
+          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
+        });
+      } else if (completion === "reject") {
         await expect(running).rejects.toBe(failure);
       } else {
         await running;

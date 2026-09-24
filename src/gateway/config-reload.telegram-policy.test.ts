@@ -1,9 +1,8 @@
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -12,12 +11,10 @@ import {
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
 
-const { telegramSetupPlugin } = loadPluginPublicArtifactModuleSync<{
+const { telegramSetupPlugin } = await loadBundledPluginFacade<{
   telegramSetupPlugin: ChannelPlugin;
 }>({
-  pluginRoot: fileURLToPath(new URL("../../extensions/telegram", import.meta.url)),
   artifactBasename: "setup-plugin-api",
-  origin: "bundled",
   pluginId: "telegram",
 });
 
@@ -83,12 +80,27 @@ describe("Telegram live policy reload", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it.each([true, false])("refreshes account creation/removal (add: %s)", (add) => {
-    const empty = { channels: { telegram: { accounts: {} } } };
-    const configured = {
-      channels: { telegram: { accounts: { support: { dmPolicy: "disabled" as const } } } },
-    };
-    const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
-  });
+  it.each([
+    { add: true, decisionAgent: false },
+    { add: false, decisionAgent: false },
+    { add: true, decisionAgent: true },
+    { add: false, decisionAgent: true },
+  ])(
+    "refreshes account creation/removal (add: $add, decision agent: $decisionAgent)",
+    ({ add, decisionAgent }) => {
+      const empty: OpenClawConfig = {
+        channels: { telegram: { accounts: {} } },
+        ...(decisionAgent ? { agents: { entries: {} } } : {}),
+      };
+      const configured: OpenClawConfig = {
+        channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } },
+        ...(decisionAgent
+          ? { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } }
+          : {}),
+      };
+      const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
+      expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+      expect(plan.reloadPlugins).toBe(decisionAgent);
+    },
+  );
 });

@@ -2,12 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -16,12 +21,17 @@ import {
   requireNodeWorkerProcessIdentity,
 } from "../../node-host/node-worker-process-identity.js";
 import * as commandRunner from "../../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entrypoint.test-support.js";
 
 // Vitest cancellation ends its wrapper before the body unwinds. Keep the
 // authority database and scratch inputs until that original body has joined.
 const fixture = createFixtureLifetime();
+const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => fixture.cleanup());
 
 async function closeLegacyFixture(
@@ -40,7 +50,18 @@ function assertLegacyCommandJoined(
   result: Awaited<ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>> | undefined,
 ) {
   if (result?.cleanup === "uncertain") {
-    throw new Error("Legacy finalizer process cleanup is unverified");
+    throw new Error("Legacy finalizer process cleanup is unverified", {
+      cause: {
+        pid: result.pid,
+        code: result.code,
+        signal: result.signal,
+        termination: result.termination,
+        cleanup: result.cleanup,
+        killed: result.killed,
+        stdoutTail: result.stdout.slice(-8192),
+        stderrTail: result.stderr.slice(-8192),
+      },
+    });
   }
 }
 
@@ -55,6 +76,20 @@ const scenarios = [
   "grantless-scratch-incumbent",
   "grantless-scratch-owned",
   "grantless-scratch-owned-incumbent",
+  "grantless-scratch-owned-parent-git",
+  "grantless-scratch-owned-parent-completed",
+  "grantless-scratch-owned-parent-npm",
+  "grantless-scratch-owned-parent-pnpm-root-move",
+  "grantless-scratch-owned-parent-git-root-switch",
+  "grantless-scratch-owned-parent-wrong-handoff",
+  "grantless-scratch-owned-parent-wrong-run",
+  "grantless-scratch-owned-parent-wrong-root",
+  "grantless-scratch-owned-parent-wrong-version",
+  "grantless-scratch-owned-parent-wrong-scratch",
+  "grantless-scratch-owned-parent-wrong-parent",
+  "grantless-scratch-owned-parent-registered-child",
+  "grantless-scratch-owned-parent-revoked",
+  "grantless-scratch-owned-parent-retargeted",
 ] as const;
 
 it.for(scenarios)(
@@ -63,17 +98,92 @@ it.for(scenarios)(
   (scenario, { signal }) => runLegacyFinalizationScenario(scenario, signal),
 );
 
+it(
+  "reports migrated finalizer capabilities through its real validation entrypoint",
+  { timeout: 90_000 },
+  ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
+      const configPath = path.join(scratch, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+      let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+      try {
+        command = commandRunner.runUtf8CommandWithTimeout(
+          [
+            testNodeExecPath,
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+              testNodeExecPath,
+            ),
+            JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+            "--check",
+          ],
+          {
+            env: {
+              ...process.env,
+              HOME: scratch,
+              USERPROFILE: scratch,
+              OPENCLAW_HOME: scratch,
+              OPENCLAW_STATE_DIR: scratch,
+              OPENCLAW_CONFIG_PATH: configPath,
+              TMPDIR: scratch,
+              TMP: scratch,
+              TEMP: scratch,
+            },
+            baseEnv: {},
+            cwd: process.cwd(),
+            timeoutMs: 60_000,
+            signal,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+          },
+        );
+        const result = await command;
+        assertLegacyCommandJoined(result);
+        signal.throwIfAborted();
+        const details = result.stderr + "\n" + result.stdout;
+        expect(result.termination, details).toBe("exit");
+        expect(result.code, details).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          executorDelegation: "pid-start-v1",
+          retainedOwnerBinding: true,
+          doctorConfigWrites: "pid-start-v1",
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      } finally {
+        await closeLegacyFixture(command, () => {});
+      }
+    }),
+);
+
 function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], signal: AbortSignal) {
   return fixture.run(async () => {
     signal.throwIfAborted();
     const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-finalize-"));
     const root = fs.realpathSync(process.cwd());
+    const switchedRoot = scenario.endsWith("-git-root-switch");
+    const movedRoot = switchedRoot || scenario.endsWith("-pnpm-root-move");
+    const parentRoot = movedRoot ? path.join(scratch, "previous-installation") : root;
+    const candidateRoot = movedRoot ? path.join(scratch, "candidate-installation") : root;
+    if (movedRoot) {
+      fs.mkdirSync(parentRoot);
+      fs.mkdirSync(candidateRoot);
+      fs.writeFileSync(
+        path.join(candidateRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.4", type: "module" }),
+      );
+    }
     const configPath = path.join(scratch, "openclaw.json");
     const scratchEnvironment = scenario.includes("-scratch");
     const ownedEnvironment = scenario.includes("-owned");
     const incumbent = scenario.endsWith("-incumbent");
+    const legacyParent = scenario.includes("-parent-");
+    const completedByGateway = scenario.endsWith("-completed");
+    const refusedParent = scenario.includes("-wrong-") || scenario.endsWith("-registered-child");
     const normalTemp = path.join(scratch, "normal-temp");
-    const workerTemp = path.join(scratch, "worker-temp");
+    const workerTemp = path.join(scratch, "openclaw-update-migrated-fixture");
     const unsafePreferred = path.join(scratch, "unavailable-preferred");
     if (scratchEnvironment) {
       fs.mkdirSync(normalTemp);
@@ -91,6 +201,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
             TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
@@ -113,6 +224,23 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     try {
       fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      if (completedByGateway) {
+        const candidateState = new DatabaseSync(path.join(scratch, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          // The shipped v2026.9.3 producer supports state schema 16. The real
+          // candidate below must own all access to this genuinely newer state.
+          const version = candidateState.prepare("PRAGMA user_version").get()?.user_version;
+          expect(version).toBeGreaterThan(16);
+        } finally {
+          candidateState.close();
+        }
+      }
+      if (legacyParent) {
+        env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
+        env.OPENCLAW_UPDATE_RUN_ID = runId;
+      }
       const originalEnvironment = ownedEnvironment
         ? { ...env, TMPDIR: normalTemp, TMP: normalTemp, TEMP: normalTemp }
         : env;
@@ -124,16 +252,17 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         : scratch;
       const databasePath = path.join(leaseDirectory, "managed-update-handoffs.sqlite");
       const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: env });
-      const acquired = store.acquire(root, randomUUID(), { kind: "update" });
+      const acquired = store.acquire(parentRoot, randomUUID(), { kind: "update" });
       if (acquired.kind !== "acquired") {
         throw new Error("Missing original owner");
       }
+      let parentLease = acquired.lease;
       releaseParent = () => {
-        store.release(acquired.lease);
+        store.release(parentLease);
       };
       // Exact v2026.9.4 producer format (3a9d69db): real UUID child registration,
       // parent row and private input, with no later lineage or database-pin fields.
-      const child = store.acquire(`${root}/.openclaw-update-child-${randomUUID()}`, runId, {
+      const child = store.acquire(`${parentRoot}/.openclaw-update-child-${randomUUID()}`, runId, {
         kind: "update",
       });
       if (child.kind !== "acquired") {
@@ -155,22 +284,39 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       // Both receiver imports share the same graph and service-authority scope.
       const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor);
       const exec = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href;
+      const receiverUrl = movedRoot
+        ? pathToFileURL(path.join(candidateRoot, `native-receiver${path.extname(owner.pathname)}`))
+        : owner;
+      if (movedRoot) {
+        // Keep the receiver's real package-root check, sharing its dependencies
+        // with the effect owner so both use the same authority scope.
+        fs.copyFileSync(fileURLToPath(owner), fileURLToPath(receiverUrl));
+      }
       fs.writeFileSync(
         entry,
         `
       ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(loader)});` : ""}
       const fs=await import("node:fs");
       const {DatabaseSync}=await import("node:sqlite");
-      const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(owner.href)});
+      ${
+        movedRoot
+          ? `const {registerHooks}=await import("node:module");
+      registerHooks({resolve(specifier,context,nextResolve){
+        return nextResolve(specifier,context.parentURL===${JSON.stringify(receiverUrl.href)}
+          ? {...context,parentURL:${JSON.stringify(owner.href)}} : context);
+      }});`
+          : ""
+      }
+      const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(receiverUrl.href)});
       const {execFileUtf8}=await import(${JSON.stringify(exec)});
       const mode=process.argv[process.argv.indexOf("--update-executor")+1];
       await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
         fs.writeFileSync(${JSON.stringify(scratch + "/receiver-pid")},JSON.stringify({pid:process.pid,parent:process.ppid}));
-        if(${JSON.stringify(scenario)}==="revoked") {
+        if(${JSON.stringify(scenario)}.endsWith("revoked")) {
           const db=new DatabaseSync(${JSON.stringify(databasePath)});
           db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run("revoked",${JSON.stringify(root)});db.close();
         }
-        if(${JSON.stringify(scenario)}==="retargeted") {
+        if(${JSON.stringify(scenario)}.endsWith("retargeted")) {
           fs.copyFileSync(${JSON.stringify(databasePath)},${JSON.stringify(databasePath + ".copy")});
           fs.renameSync(${JSON.stringify(databasePath + ".copy")},${JSON.stringify(databasePath)});
         }
@@ -195,19 +341,34 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         legacyIssues: [],
       };
       const grantless = scenario.startsWith("grantless");
-      if (grantless && !incumbent) {
+      if (legacyParent) {
+        // v2026.9.3 has no child grant: its managed updater keeps the root lease
+        // while awaiting the candidate's private result.json (migrated.ts:176).
+        if (!scenario.endsWith("-registered-child")) {
+          expect(store.release(bound)).toBe(true);
+        }
+      } else if (grantless && !incumbent) {
         expect(store.release(bound)).toBe(true);
         expect(store.release(acquired.lease)).toBe(true);
+      }
+      if (switchedRoot) {
+        // The shipped package-to-Git publisher retargets the old package path.
+        fs.renameSync(parentRoot, path.join(scratch, "retained-installation"));
+        fs.symlinkSync(
+          candidateRoot,
+          parentRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
       }
       const input = {
         ...(grantless ? {} : { executor }),
         bufferedSteps: [],
-        resultPath: path.join(scratch, "result.json"),
+        resultPath: path.join(legacyParent ? workerTemp : scratch, "result.json"),
         params: {
-          root,
+          root: parentRoot,
           ...(ownedEnvironment ? { ownedManagedUpdateEnv: originalEnvironment } : {}),
           mutationStarted: true,
-          installKindChanged: false,
+          installKindChanged: switchedRoot,
           configSnapshot: snapshot,
           requestedChannel: null,
           storedChannel: "stable",
@@ -215,11 +376,37 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           downgradeRisk: false,
           shouldRestart: true,
           opts: { json: true, yes: true, run: { runId, env } },
-          result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
-          controlPlaneUpdateSentinelMeta: null,
+          result: {
+            status: "ok",
+            ...(completedByGateway
+              ? { after: { version: "2026.9.5", buildId: "verified-migrated-candidate" } }
+              : {}),
+            mode: switchedRoot || scenario.endsWith("-git") ? "git" : movedRoot ? "pnpm" : "npm",
+            ...(legacyParent
+              ? {
+                  before: {
+                    version: scenario.endsWith("-wrong-version") ? "2026.9.4" : "2026.9.3",
+                  },
+                }
+              : {}),
+            root: candidateRoot,
+            steps: [],
+            durationMs: 0,
+          },
+          controlPlaneUpdateSentinelMeta: legacyParent
+            ? {
+                runId: scenario.endsWith("-wrong-run") ? randomUUID() : runId,
+                handoffId: scenario.endsWith("-wrong-handoff")
+                  ? randomUUID()
+                  : acquired.lease.owner,
+                root: scenario.endsWith("-wrong-root")
+                  ? path.join(root, "other-installation")
+                  : parentRoot,
+              }
+            : null,
           preUpdatePluginInstallRecords: {},
           startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
+          packageUpdateNodeRunner: testNodeExecPath,
           updateStepTimeoutMs: 20000,
           rollbackBlockedReason:
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
@@ -227,17 +414,22 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       };
       command = commandRunner.runUtf8CommandWithTimeout(
         [
-          process.execPath,
-          "--import",
-          loader,
-          fileURLToPath(
-            new URL("./update-command-legacy-finalize.test-support.ts", import.meta.url),
+          testNodeExecPath,
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+            testNodeExecPath,
           ),
+          JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
         ],
         {
           input: JSON.stringify(input),
           env: scratchEnvironment
-            ? { ...originalEnvironment, TMPDIR: workerTemp, TMP: workerTemp, TEMP: workerTemp }
+            ? {
+                ...originalEnvironment,
+                TMPDIR: workerTemp,
+                TMP: scenario.endsWith("-wrong-scratch") ? normalTemp : workerTemp,
+                TEMP: workerTemp,
+              }
             : env,
           baseEnv: {},
           cwd: root,
@@ -246,6 +438,13 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           killProcessTree: true,
           requireProcessTreeExtinction: true,
           beforeInput(pid) {
+            if (scenario.endsWith("-wrong-parent")) {
+              const reassigned = store.bind(parentLease, pid);
+              if (!reassigned) {
+                throw new Error("Parent reassignment failed");
+              }
+              parentLease = reassigned;
+            }
             if (grantless) {
               return;
             }
@@ -261,21 +460,27 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       assertLegacyCommandJoined(result);
       signal.throwIfAborted();
       const details = result.stderr + "\n" + result.stdout;
-      if (incumbent) {
+      expect(result.termination, details).toBe("exit");
+      if (incumbent || refusedParent) {
         expect(result.code, details).not.toBe(0);
         expect(fs.existsSync(path.join(scratch, "receiver-pid"))).toBe(false);
-        expect(store.current(acquired.lease)).toBe(true);
+        expect(store.current(parentLease)).toBe(true);
         expect(fs.existsSync(path.join(scratch, "native-effect"))).toBe(false);
-      } else if (scenario === "revoked" || scenario === "retargeted") {
+        expect(fs.existsSync(input.resultPath)).toBe(false);
+        expect(getUpdateRun(runId, { env })?.status).toBe("running");
+      } else if (scenario.endsWith("revoked") || scenario.endsWith("retargeted")) {
         expect(fs.existsSync(path.join(scratch, "receiver-pid")), details).toBe(true);
         expect(fs.existsSync(path.join(scratch, "native-effect")), details).toBe(false);
         expect(result.code, details).not.toBe(0);
       } else {
-        expect(result.code, details).toBe(0);
+        expect(
+          result.code,
+          `${details}\nresult.json exists: ${fs.existsSync(input.resultPath)}`,
+        ).toBe(0);
         expect(JSON.parse(fs.readFileSync(input.resultPath, "utf8")), details).toMatchObject({
           exitCode: 0,
           terminalRunId: runId,
-          result: { status: "ok" },
+          result: { status: "ok", root: candidateRoot, runId },
         });
         expect(fs.readFileSync(path.join(scratch, "native-effect"), "utf8")).toBe("restarted");
         const receiver = JSON.parse(fs.readFileSync(path.join(scratch, "receiver-pid"), "utf8"));
@@ -284,11 +489,16 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         );
         expect(receiver.pid).not.toBe(receiver.parent);
         expect(getUpdateRun(runId, { env })).toMatchObject({ status: "succeeded" });
-        if (!grantless) {
+        if (legacyParent) {
+          expect(store.current(acquired.lease)).toBe(true);
+          expect(store.hasUnsettledChildren(acquired.lease)).toBe(false);
+          expect(store.release(acquired.lease)).toBe(true);
+        } else if (!grantless) {
           expect(store.release(bound)).toBe(true);
           expect(store.release(acquired.lease)).toBe(true);
         }
-        expect(store.read(root).kind).toBe("absent");
+        expect(store.read(parentRoot).kind).toBe("absent");
+        expect(store.read(candidateRoot).kind).toBe("absent");
       }
       if (scratchEnvironment) {
         // Neither healthy completion nor refusal may create a worker-private

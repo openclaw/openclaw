@@ -4,21 +4,34 @@ import {
   type SessionsPatchManyResult,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
-import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../src/shared/session-archive-timeout.ts";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  sessionAccessRowForBatch,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { requestSessionInvolvement } from "../lib/sessions/session-requests.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import { formatBatchSessionRemovalError } from "./session-workspace-recovery.runtime.ts";
 
 export type SessionActionRow = Pick<
   SidebarRecentSession,
-  "key" | "agentId" | "sessionId" | "label" | "pinned" | "archived" | "active" | "category"
+  | "key"
+  | "agentId"
+  | "sessionId"
+  | "label"
+  | "pinned"
+  | "archived"
+  | "active"
+  | "category"
+  | "sharingRole"
 > & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
@@ -39,11 +52,7 @@ export type SessionActionHost = Pick<
 export function requireSessionMutationAccess(
   host: SessionActionHost,
   scope: SidebarSessionMutationScope,
-  request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  },
+  request: SessionMethodAccessRequest,
 ): boolean {
   const access = readSessionMethodAccess(scope.gateway.snapshot, request);
   if (access.allowed) {
@@ -61,13 +70,11 @@ export function sessionRowAgentId(
 }
 
 /**
- * One list refresh per owning agent, replacing the per-row refreshes a batch
- * defers; each deferred row skipped a full `sessions.list` round trip and rode
- * pushed `sessions.changed` events instead. Agents come from the rows, not the
- * scope, because `patchSession` routes every mutation by its own key. The
- * result carries the stale/failed reporting the per-row refresh owed its caller.
+ * Refresh each owning agent once after deferred mutations. Rows determine the
+ * agent because mutations route by session key; stale scopes and failed reads
+ * remain visible to the caller.
  */
-export async function refreshSessionsAfterBatch(
+async function refreshSessionsAfterBatch(
   host: SessionActionHost,
   scope: SidebarSessionMutationScope,
   rows: readonly SessionActionRow[],
@@ -79,8 +86,17 @@ export async function refreshSessionsAfterBatch(
       return "stale";
     }
     try {
-      await scope.sessions.refreshReplacement(agentId);
-      if (refreshSidebar && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      const outcome = await scope.sessions.reconcileMutation(agentId);
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return "stale";
+      }
+      if (outcome.status !== "refreshed") {
+        if (outcome.status === "failed") {
+          host.sessionData.publishSessionMutationError(scope, outcome.error);
+        }
+        return outcome.status;
+      }
+      if (refreshSidebar) {
         await host.sessionData.refreshSidebarSessions(agentId);
       }
     } catch (error) {
@@ -101,7 +117,7 @@ export async function patchSessionRows(
   scope: SidebarSessionMutationScope,
   options: {
     deferListRefresh?: boolean;
-    fallback?: () => Promise<SessionActionRow[] | null>;
+    sessionScope?: boolean;
   } = {},
 ): Promise<SessionActionRow[] | null> {
   if (typeof patch.archived === "boolean" && rows.some((row) => !row.sessionId?.trim())) {
@@ -132,16 +148,10 @@ export async function patchSessionRows(
     const access = readSessionMethodAccess(scope.gateway.snapshot, {
       method: "sessions.patchMany",
       params,
+      sessionScope: options.sessionScope,
+      session: sessionAccessRowForBatch(chunkRows),
     });
     if (!access.allowed) {
-      if (
-        dispatched.length === 0 &&
-        access.cause === "method-unavailable" &&
-        isGatewayMethodAdvertised(scope.gateway.snapshot, "sessions.patchMany") === false &&
-        options.fallback
-      ) {
-        return options.fallback();
-      }
       terminalError = access.reason;
       if (dispatched.length === 0) {
         host.sessionData.publishSessionMutationError(scope, access.reason);
@@ -149,15 +159,8 @@ export async function patchSessionRows(
       break;
     }
     try {
-      const result =
-        patch.archived === true
-          ? await scope.client.request<SessionsPatchManyResult>(
-              "sessions.patchMany",
-              params,
-              SESSION_ARCHIVE_REQUEST_OPTIONS,
-            )
-          : await scope.client.request<SessionsPatchManyResult>("sessions.patchMany", params);
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      const result = await scope.sessions.patchMany(params.targets, params.patch);
+      if (!result || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return null;
       }
       dispatched.push({ rows: chunkRows, result });
@@ -185,7 +188,9 @@ export async function patchSessionRows(
   const successful = dispatched.flatMap(({ rows: chunkRows, result }) =>
     result.outcomes.flatMap((outcome, index) => {
       if (!outcome.ok) {
-        errors.push(`${outcome.key}: ${formatUiError(outcome.error.message)}`);
+        errors.push(
+          `${outcome.key}: ${formatBatchSessionRemovalError(new GatewayRequestError(outcome.error))}`,
+        );
         return [];
       }
       const row = chunkRows[index];
@@ -203,4 +208,49 @@ export async function patchSessionRows(
     host.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
   return successful;
+}
+
+/** A personal list choice is not an archive or a shared-session mutation. */
+export async function setSessionInvolvement(
+  host: SessionActionHost,
+  session: SessionActionRow,
+  hidden: boolean,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope) || !session.sessionId) {
+    return;
+  }
+  const agentId = sessionRowAgentId(session, scope);
+  const access = readSessionMethodAccess(scope.gateway.snapshot, {
+    method: "sessions.setInvolvement",
+    requiredScope: "operator.read",
+  });
+  if (!access.allowed) {
+    host.sessionData.publishSessionMutationError(scope, access.reason);
+    return;
+  }
+  try {
+    await requestSessionInvolvement(scope.client, {
+      key: session.key,
+      agentId,
+      expectedSessionId: session.sessionId,
+      hidden,
+    });
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    scope.sessions.patchRowLocal(
+      session.key,
+      { hiddenFromInvolvingMe: hidden },
+      {
+        agentId,
+        sessionId: session.sessionId,
+      },
+    );
+    await host.sessionData.refreshSidebarSessions(agentId);
+  } catch (error) {
+    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      host.sessionData.publishSessionMutationError(scope, error);
+    }
+  }
 }

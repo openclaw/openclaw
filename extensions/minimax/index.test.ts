@@ -11,7 +11,7 @@ import {
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
+import { buildMinimaxModelDiscovery, buildMinimaxProvider } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
@@ -46,7 +46,7 @@ describe("minimax provider hooks", () => {
   });
 
   it("uses the Anthropic model-list route and X-Api-Key auth", () => {
-    const discovery = buildMinimaxModelDiscovery();
+    const discovery = buildMinimaxModelDiscovery(buildMinimaxProvider());
     const headers = new Headers(
       discovery.buildRequestHeaders?.({ apiKey: "api-key", discoveryApiKey: "discovery-key" }),
     );
@@ -57,7 +57,7 @@ describe("minimax provider hooks", () => {
   });
 
   it("preserves Bearer auth for portal OAuth model discovery", () => {
-    const discovery = buildMinimaxModelDiscovery("oauth");
+    const discovery = buildMinimaxModelDiscovery(buildMinimaxProvider(), "oauth");
     const headers = new Headers(
       discovery.buildRequestHeaders?.({ apiKey: "marker", discoveryApiKey: "oauth-token" }),
     );
@@ -721,20 +721,6 @@ describe("minimax provider hooks", () => {
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("shares the provider hook bundle across MiniMax variants", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
-    const apiProvider = requireRegisteredProvider(providers, "minimax");
-    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
-
-    expect(apiProvider.buildReplayPolicy).toBe(portalProvider.buildReplayPolicy);
-    expect(apiProvider.wrapStreamFn).toBe(portalProvider.wrapStreamFn);
-    expect(apiProvider.resolveReasoningOutputMode).toBe(portalProvider.resolveReasoningOutputMode);
-  });
-
   it("registers the bundled MiniMax web search provider", () => {
     const webSearchProviders: unknown[] = [];
 
@@ -849,6 +835,7 @@ describe("minimax provider hooks", () => {
       throw new Error("expected minimax portal oauth auth method");
     }
 
+    const assertCurrent = vi.fn();
     const result = await oauthMethod.run({
       prompter: {
         progress() {
@@ -857,7 +844,13 @@ describe("minimax provider hooks", () => {
         note: vi.fn(async () => undefined),
       },
       openUrl: vi.fn(async () => undefined),
+      assertCurrent,
     } as never);
+
+    const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+    expect(vi.mocked(loginMiniMaxPortalOAuth)).toHaveBeenCalledWith(
+      expect.objectContaining({ assertCurrent }),
+    );
 
     expect(result?.configPatch?.models?.providers?.["minimax-portal"]).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",

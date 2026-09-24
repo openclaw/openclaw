@@ -331,12 +331,20 @@ export function applyLegacyVllmQwenThinkingFormat(params: {
   return true;
 }
 
-export function removeUntargetedLegacyVllmQwenThinkingFormat(params: {
+export function applyLegacyVllmQwenThinkingFormatToTargets(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
+  targets: Array<{ model: Record<string, unknown>; index: number }>;
   legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
   changes: string[];
 }): void {
+  if (params.targets.length > 0) {
+    // Reuse the captured format after the first target removes the legacy keys.
+    for (const target of params.targets) {
+      applyLegacyVllmQwenThinkingFormat({ ...params, target });
+    }
+    return;
+  }
   removeLegacyVllmQwenThinkingParams(params.legacyParams);
   params.changes.push(
     `Removed ${params.sourcePath}.${params.legacyFormat.key}; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.`,

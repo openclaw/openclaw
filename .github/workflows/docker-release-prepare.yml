@@ -81,6 +81,12 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Resolve exact preparation identity
         id: identity
         env:
@@ -163,25 +169,31 @@ jobs:
             sleep "$((attempt * 10))"
           done
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
           # Hosted VMs own local builder teardown; deleting its large volume here
           # delays the dependent seal job after artifact uploads have finished.
           cleanup: false
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
       # Both variants reuse this builder's local cache. Fresh provenance timestamps
       # invalidate application layers across runs; remote transfers cost more than
       # reusing the remaining runtime setup saves.
       # Fast gzip keeps new layers compatible with the Skopeo smoke transport.
       - name: Build default OCI image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/default,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -193,15 +205,31 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Relay default image limit warnings
+        if: ${{ always() && steps.build.outputs.metadata != '' }}
+        continue-on-error: true
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
       - name: Build browser OCI image
         if: ${{ needs.resolve.outputs.include_browser == 'true' }}
         id: build-browser
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/browser,tar=false,compression=gzip,compression-level=1
           build-args: |
+            GITHUB_ACTIONS=true
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
             OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
@@ -214,6 +242,22 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Relay browser image limit warnings
+        if: ${{ always() && steps.build-browser.outputs.metadata != '' }}
+        continue-on-error: true
+        env:
+          BUILD_METADATA: ${{ steps.build-browser.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          build_ref="$(node -e 'const ref = JSON.parse(process.env.BUILD_METADATA)["buildx.build.ref"]; if (typeof ref !== "string" || !ref) throw new Error("Build metadata is missing its build reference"); process.stdout.write(ref)')"
+          history_status=0
+          history_log="$(docker buildx history logs --progress plain "$build_ref" 2>&1)" || history_status=$?
+          if [ "$history_status" -ne 0 ]; then
+            echo "::notice title=Build limit warning relay skipped::docker buildx history logs exited ${history_status}: $(printf '%s' "$history_log" | head -c 400 | tr '\n' ' ')"
+            exit 0
+          fi
+          printf '%s\n' "$history_log" | node workflow-source/scripts/relay-build-limit-warnings.mts
+
       - name: Verify OCI bytes, attestations, and image smoke
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
@@ -264,6 +308,12 @@ jobs:
           pattern: ${{ needs.resolve.outputs.artifact_name }}-metadata-*
           merge-multiple: true
           path: ${{ runner.temp }}/docker-release/metadata
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Seal exact prepared image identities
         id: manifest
         env:

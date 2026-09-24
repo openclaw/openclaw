@@ -17,7 +17,6 @@ import type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceResponseOutcome,
-  RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
@@ -82,7 +81,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
   runAgentConsult?: RealtimeVoiceAgentConsultRunner;
-  onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  onTranscript?: RealtimeVoiceBridgeCallbacks["onTranscript"];
   handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
@@ -114,6 +113,7 @@ export function createRealtimeVoiceBridgeSession(
   let phase: RealtimeVoiceSessionPhase = "admitting";
   let terminalBeforeBridgeAdoption = false;
   let closeReported = false;
+  let detached = false;
   let closeCompletion: Promise<void> | undefined;
   const isAdmitting = () => phase === "admitting";
   const requireBridge = () => {
@@ -149,6 +149,7 @@ export function createRealtimeVoiceBridgeSession(
         return closeCompletion;
       }
       const bridge = requireBridge();
+      detached = isAdmitting() && options?.disposition === "detach";
       phase = "closing";
       try {
         const completion = bridge.close(options);
@@ -259,7 +260,8 @@ export function createRealtimeVoiceBridgeSession(
             request.signal?.throwIfAborted();
             const result = await runAgentConsult(request);
             request.signal?.throwIfAborted();
-            if (!isAdmitting()) {
+            // Replacement retires the transport, not work admitted before the handoff.
+            if (!isAdmitting() && !detached) {
               throw new Error("Realtime voice session is closed");
             }
             return result;
@@ -313,9 +315,10 @@ export function createRealtimeVoiceBridgeSession(
         }
       }
     },
-    onTranscript: (role, text, isFinal) => {
+    onTranscript: (...args) => {
+      const isFinal = args[2];
       if (isAdmitting() || (phase === "closing" && isFinal)) {
-        params.onTranscript?.(role, text, isFinal);
+        params.onTranscript?.(...args);
       }
     },
     ...(handleDelegationInput

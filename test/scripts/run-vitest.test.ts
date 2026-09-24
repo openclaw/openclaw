@@ -5,6 +5,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
@@ -21,6 +22,7 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
 } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   writeVitestUnhandledErrorSummary,
@@ -40,6 +42,8 @@ import {
 } from "../../scripts/run-vitest.mts";
 import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
@@ -68,8 +72,11 @@ describe("scripts/run-vitest", () => {
     },
   );
 
-  it("adds --no-maglev to vitest child processes by default", () => {
-    expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
+  it("keeps Sparkplug compilation synchronous in test processes", () => {
+    expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual([
+      "--no-maglev",
+      "--no-concurrent-sparkplug",
+    ]);
   });
 
   it("detects pnpm exec node wrappers that can be spawned directly", () => {
@@ -82,6 +89,54 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+  });
+
+  it.each([undefined, "node", "bun"])(
+    "selects the %s test runtime without changing the compiled bootstrap or test operands",
+    (runtime) => {
+      const operands = [
+        "scripts/lib/vitest-worker-bootstrap.mts",
+        "/compiled/generation",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--testNamePattern",
+        "--no-maglev",
+      ];
+      const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
+      expect(
+        resolveVitestTestCommand([...flags, ...operands], {
+          OPENCLAW_VITEST_RUNTIME: runtime,
+        }),
+      ).toEqual({
+        command: runtime === "bun" ? "bun" : process.execPath,
+        args:
+          runtime === "bun"
+            ? [
+                "--tsconfig-override",
+                fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+                ...operands,
+              ]
+            : [...flags, ...operands],
+      });
+    },
+  );
+
+  it("rejects an unsupported test runtime before launching a child", () => {
+    expect(() =>
+      spawnWatchedVitestProcess({
+        pnpmArgs: ["exec", "node", "node_modules/vitest/vitest.mjs", "run"],
+        spawnParams: {},
+        env: { OPENCLAW_VITEST_RUNTIME: "deno" },
+      }),
+    ).toThrow("Invalid OPENCLAW_VITEST_RUNTIME: deno; expected node or bun");
+  });
+
+  it("keeps native preparation tools on Node when tests select Bun", () => {
+    const args = ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"];
+    expect(resolveVitestTestCommand(args, { OPENCLAW_VITEST_RUNTIME: "bun" })).toEqual({
+      command: process.execPath,
+      args,
+    });
   });
 
   it("reports an actionable error when Vitest cannot be resolved", () => {
@@ -291,6 +346,19 @@ registerHooks({resolve(specifier, context, nextResolve) {
         "-x",
       ],
     ]);
+  });
+
+  it("keeps every Gateway server file in one bounded native invocation", () => {
+    const argv = ["run", "--config", "test/vitest/vitest.gateway-server.config.ts"];
+    const invocations = resolveBoundedVitestInvocations(argv, { env: {} });
+    const targets = invocations.map((args) => args.slice(argv.length));
+
+    expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+    expect(targets.flat()).toEqual(
+      listGitTrackedFiles({ pathspecs: "src/gateway" })
+        ?.filter(isGatewayServerTestFile)
+        .toSorted((a, b) => a.localeCompare(b)),
+    );
   });
 
   it("bounds implicit CI runs for absolute Gateway server config paths", () => {
@@ -753,6 +821,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
       ["test/scripts/run-vitest.test.ts", "--", "-t", "src"],
     ],
+    [
+      ["run", "test/scripts/run-vitest.test.ts", "--repeats", "19"],
+      ["test/scripts/run-vitest.test.ts", "--", "--repeats", "19"],
+    ],
   ])("keeps option value %j out of project target classification", (argv, expected) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
@@ -865,6 +937,14 @@ registerHooks({resolve(specifier, context, nextResolve) {
       null,
     ],
     [["ui/src/**/*.browser.test.ts"], null],
+    [["ui/src/components/markdown.progress.node.test.ts"], null],
+    [
+      [
+        "ui/src/components/markdown.progress.node.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      null,
+    ],
     [["ui/src/components", "ui/src/pages/chat/chat-message-markdown.browser.test.ts"], null],
   ])("preserves browser ownership for implicit targets %j", (targets, config) => {
     expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
@@ -872,13 +952,13 @@ registerHooks({resolve(specifier, context, nextResolve) {
     );
   });
 
-  it("allows opting back into Maglev explicitly", () => {
+  it("allows opting back into Maglev while keeping Sparkplug compilation synchronous", () => {
     expect(
       resolveVitestNodeArgs({
         OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
         PATH: "/usr/bin",
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual(["--no-concurrent-sparkplug"]);
   });
 
   it("parses the optional no-output timeout env", () => {
@@ -964,40 +1044,27 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
   });
 
-  it("disables an inherited Node compile cache for every Vitest child", () => {
-    expect(
-      resolveRunVitestSpawnEnv(
-        {
-          NODE_COMPILE_CACHE: "/tmp/node-compile",
-          NODE_COMPILE_CACHE_PORTABLE: "1",
-          PATH: "/usr/bin",
-        },
-        ["run"],
-      ),
-    ).toEqual({
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-      PATH: "/usr/bin",
-    });
-    expect(
-      resolveRunVitestSpawnEnv({ NODE_COMPILE_CACHE: "/tmp/node-compile", PATH: "/usr/bin" }, [
-        "run",
-        "--coverage=false",
-      ]),
-    ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
-    expect(
-      resolveVitestSpawnParams(
-        {
-          CI: "true",
-          NODE_COMPILE_CACHE: "/tmp/node-compile",
-          NODE_COMPILE_CACHE_PORTABLE: "1",
-          PATH: "/usr/bin",
-        },
-        "linux",
-      ).env,
-    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
-  });
+  it.each([undefined, "1"])(
+    "forwards Node compile cache settings with explicit disable=%s",
+    (disabled) => {
+      const env = {
+        CI: "true",
+        NODE_COMPILE_CACHE: "/tmp/node-compile",
+        NODE_COMPILE_CACHE_PORTABLE: "1",
+        ...(disabled ? { NODE_DISABLE_COMPILE_CACHE: disabled } : {}),
+        PATH: "/usr/bin",
+      };
+      for (const argv of [["run"], ["run", "--coverage=false"]]) {
+        expect(resolveRunVitestSpawnEnv(env, argv)).toEqual({
+          ...env,
+          OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+        });
+      }
+      expect(resolveRunVitestSpawnEnv(env, ["--watch"])).toEqual(env);
+      expect(resolveVitestSpawnParams(env, "linux").env).toEqual(env);
+    },
+  );
 
   describe("native config option ownership", () => {
     const config = "test/vitest/vitest.e2e.config.ts";
@@ -1473,7 +1540,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       const forceKillSpy = vi.fn();
       const logSpy = vi.fn();
 
-      const teardown = installVitestNoOutputWatchdog({
+      const watchdog = installVitestNoOutputWatchdog({
         streams: [stdout],
         timeoutMs: 1000,
         forceKillAfterMs: 5000,
@@ -1503,41 +1570,49 @@ registerHooks({resolve(specifier, context, nextResolve) {
         "[vitest] process group still alive after 5000ms; sending SIGKILL.",
       );
 
-      teardown();
+      watchdog.teardown();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
-    vi.useFakeTimers();
-    try {
-      const stdout = new EventEmitter();
-      const timeoutSpy = vi.fn();
-      const forceKillSpy = vi.fn();
+  it.each(["output", "preparation"] as const)(
+    "keeps force-kill scheduled when %s arrives after the idle timeout",
+    (activity) => {
+      vi.useFakeTimers();
+      try {
+        const stdout = new EventEmitter();
+        const timeoutSpy = vi.fn();
+        const forceKillSpy = vi.fn();
 
-      installVitestNoOutputWatchdog({
-        streams: [stdout],
-        timeoutMs: 1000,
-        forceKillAfterMs: 5000,
-        onTimeout: timeoutSpy,
-        onForceKill: forceKillSpy,
-        setTimeoutFn: setTimeout,
-        clearTimeoutFn: clearTimeout,
-      });
+        const watchdog = installVitestNoOutputWatchdog({
+          streams: [stdout],
+          timeoutMs: 1000,
+          forceKillAfterMs: 5000,
+          onTimeout: timeoutSpy,
+          onForceKill: forceKillSpy,
+          setTimeoutFn: setTimeout,
+          clearTimeoutFn: clearTimeout,
+        });
 
-      vi.advanceTimersByTime(1000);
-      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(1000);
+        expect(timeoutSpy).toHaveBeenCalledTimes(1);
 
-      stdout.emit("data", "too late");
-      vi.advanceTimersByTime(5000);
+        if (activity === "output") {
+          stdout.emit("data", "too late");
+        } else {
+          watchdog.recordActivity();
+        }
+        vi.advanceTimersByTime(5000);
 
-      expect(timeoutSpy).toHaveBeenCalledTimes(1);
-      expect(forceKillSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(timeoutSpy).toHaveBeenCalledTimes(1);
+        expect(forceKillSpy).toHaveBeenCalledTimes(1);
+        watchdog.teardown();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("prints bounded heartbeats before killing silent vitest runs", () => {
     vi.useFakeTimers();

@@ -4,7 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -59,53 +59,41 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes archive hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
       const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
-      const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
-      const tooltip = menu?.closest("openclaw-tooltip") as
+      const archive = row?.querySelector<HTMLElement>("[data-sidebar-session-archive]");
+      const tooltip = archive?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
       expect(pin?.getAttribute("aria-label")).toBe("Pin session");
       expect(pin?.getAttribute("title")).toBe("Pin session");
-      expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
-      expect(menu?.hasAttribute("title")).toBe(false);
-      expect(tooltip?.content).toBe("Open session menu");
+      expect(archive?.getAttribute("aria-label")).toBe(`Archive session: ${label}`);
+      expect(archive?.hasAttribute("title")).toBe(false);
+      expect(tooltip?.content).toBe("Archive session");
       expect(tooltip?.describe).toBe(false);
     }
   });
 
-  it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
+  it("restores the thread link when Tab exits its keyboard context menu", async () => {
     const { sidebar } = await mountMultiSelect();
     const trigger = sidebar.querySelector<HTMLElement>(
-      '[data-session-key="agent:main:a"] [data-session-menu]',
+      '[data-session-key="agent:main:a"] .sidebar-recent-session__link',
     );
-    const tooltip = trigger?.closest("openclaw-tooltip") as
-      | (HTMLElement & {
-          disabled: boolean;
-          renderRoot: ShadowRoot;
-          updateComplete: Promise<unknown>;
-        })
-      | null;
-    if (!trigger || !tooltip) {
-      throw new Error("expected session menu tooltip");
+    if (!trigger) {
+      throw new Error("expected session row link");
     }
-    const popup = tooltip.renderRoot.querySelector("wa-tooltip") as
-      | (HTMLElement & { open: boolean })
-      | null;
     trigger.focus();
-    expect(popup?.open).toBe(true);
 
-    trigger.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true }),
+    );
     await sidebar.updateComplete;
-    await tooltip.updateComplete;
-    expect(tooltip.disabled).toBe(true);
-    expect(popup?.open).toBe(false);
 
     const menu = await sessionMenu(sidebar);
     const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");
@@ -202,8 +190,8 @@ describe("AppSidebar multi-select", () => {
       { archived: true },
     );
     expect(harness.patch).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledTimes(1));
+    expect(harness.reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("marks every selected session unread through patchMany", async () => {
@@ -225,56 +213,14 @@ describe("AppSidebar multi-select", () => {
       { unread: true },
     );
     expect(harness.patch).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledOnce());
   });
 
-  it("archives serially when an older Gateway does not advertise patchMany", async () => {
-    const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
-
-    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
-    await sidebar.updateComplete;
-    openContextMenu(sidebar, "agent:main:a");
-    await sidebar.updateComplete;
-
-    const menu = await sessionMenu(sidebar);
-    const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
-    expect(archive?.disabled).toBe(false);
-    archive?.click();
-
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:a",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:b",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
-  });
-
-  it("disables batch archive when method metadata is missing", async () => {
-    const rejection = new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "unknown method: sessions.patchMany",
-    });
-    const { sidebar, harness, request } = await mountMultiSelect(null, rejection);
+  it.each([
+    { name: "patchMany is not advertised", methods: ["sessions.patch"] },
+    { name: "method metadata is missing", methods: null },
+  ])("disables batch archive when $name", async ({ methods }) => {
+    const { sidebar, harness, request } = await mountMultiSelect(methods);
 
     click(rowLink(sidebar, "agent:main:a"), { altKey: true });
     click(rowLink(sidebar, "agent:main:b"), { altKey: true });
@@ -291,10 +237,10 @@ describe("AppSidebar multi-select", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
-  it("hides an archived current thread immediately without navigating away", async () => {
+  it("hides an archiving current thread immediately without navigating away", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKeySpy = vi.spyOn(gatewayHarness.gateway, "setSessionKey");
     const harness = createSessionsHarness("main", [
@@ -727,7 +673,7 @@ describe("AppSidebar catalog session rows", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
       // Live-row parity: the adopted row exposes the regular session actions.
-      expect(rows[0]?.querySelector("[data-session-menu]")).not.toBeNull();
+      expect(rows[0]?.querySelector("[data-sidebar-session-archive]")).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }

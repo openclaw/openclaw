@@ -6,27 +6,13 @@ import { getCompactionProvider, type CompactionProvider } from "./compaction-pro
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "./runtime/types.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
-
-function createTestRegistry() {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 function createRecord(id: string) {
   return createPluginRecord({

@@ -59,6 +59,11 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+With a positive cache lifetime, validated empty results use the same
+successful-observation lifetime as nonempty results. After expiry, ordinary
+catalog reads return retained rows while the existing inventory owner refreshes
+the provider in the background. `ttlMs: 0` still disables response caching and
+does not record an expiry for this renewal path.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
@@ -72,7 +77,8 @@ pass `{ discoveryMode: "strict" }` explicitly; Hugging Face discovery accepts
 this options object after its existing timeout argument. The Chutes public
 default retains its anonymous retry after HTTP 401; strict calls never retry
 without the selected credential.
-The strict and advisory paths share the same guarded transport and cache.
+The strict and advisory paths share the same guarded transport and cache, with
+separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to convert acquisition errors into outcomes. Keep metadata-feed fallback
 separate from account discovery; do not retry a rejected account request
@@ -219,6 +225,12 @@ and pass a provider-specific `readRows` / `readModelId` only when the
 upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
 shape.
 
+During model-runtime preparation, `staticCatalog.run` and `prepareSyntheticAuth`
+receive an optional `signal`. Shutdown and plugin/config replacement abort it.
+Stop awaited acquisition when it aborts and finish resource cleanup before the
+hook settles. OpenClaw discards cancelled results and joins cleanup before a
+replacement can acquire the same agent resources.
+
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
 each entry pairs a runtime model with its lifecycle status.
@@ -232,6 +244,24 @@ in the owning plugin. Derive static fallback eligibility after refreshing
 metadata so the first failed or fully filtered discovery uses current status.
 Public metadata never establishes account entitlement or expands the
 credential scope of discovery.
+
+The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle in one prepared
+owner. Supply the trusted seed, provider routes, metadata and model-list
+endpoints, static-entry eligibility, and any model decoration. An optional
+`upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
+The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
+`buildLiveProvider`; credentials belong to each build call. Live builds refresh
+metadata before deriving static eligibility and intersecting advertised IDs.
+Metadata acquisition failure retains the previous snapshot; model-list failures
+and empty results remain strict. `refreshMetadata` returns `undefined` when the
+feed lacks the provider, so explicit model preparation cannot mistake retained
+metadata for a successful refresh. Plugin policy still owns which models may
+resolve directly from the seed or current snapshot.
+
+Upstream reasoning metadata preserves omitted controls as unspecified and an
+empty options or effort list as no effort control. A native `null` effort maps
+to `none`; provider-native effort names retain their casing. These facts remain
+separate from whether a model performs reasoning internally.
 
 Official plugins use the private, pure
 `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes

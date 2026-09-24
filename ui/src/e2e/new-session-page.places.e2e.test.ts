@@ -6,6 +6,7 @@ import {
   captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -469,12 +470,14 @@ suite.define(() => {
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("false");
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "New worktree from main",
+        "New worktree",
       );
-      await checkoutSelect.getByLabel("From").waitFor();
+      await checkoutBaseRefInput(checkoutSelect).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
       await checkoutSelect
-        .getByText("Creates branch openclaw/<name> in a separate checkout.", { exact: true })
+        .getByText("Creates a branch from the session title in a separate checkout.", {
+          exact: true,
+        })
         .waitFor();
       await page.keyboard.press("Escape");
       await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -504,9 +507,9 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
-        worktreeBaseRef: "main",
         cwd: PICKED,
       });
+      expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
 
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -597,7 +600,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await captureProjectUiProof(suite, page, "project-selected.png", {
         surface: checkout.locator('wa-popup [part="popup"]'),
-        content: [checkout.getByLabel("From")],
+        content: [checkoutBaseRefInput(checkout)],
       });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");
@@ -609,8 +612,8 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
     } finally {

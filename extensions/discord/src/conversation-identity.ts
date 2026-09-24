@@ -1,4 +1,3 @@
-// Discord plugin module implements conversation identity behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

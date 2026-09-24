@@ -15,6 +15,10 @@ import {
 } from "../agents/sessions/model-registry-runtime.js";
 import { openClawAgentCoreRuntime } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInstanceUnavailableError,
+} from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 
 const model: Model = {
@@ -119,6 +123,84 @@ async function consume(kind: "agent" | "summary" | "branch" | "model-summary", s
 }
 
 describe("plugin stream consumer admission", () => {
+  it.each([false, true])(
+    "rechecks retained authority for results after forced retirement (released: %s)",
+    async (released) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("retained-result");
+      const consumer = instance.retainConsumer();
+      const finish = createDeferredCore<string>();
+      const operation = instance.wrap(() => finish.promise);
+      const pending = consumer.run(operation);
+      void pending.catch(() => {});
+      const retirement = instance.dispose();
+      let settlement: Promise<void> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        const timeout = (await retirement).errors[0];
+        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected retained consumer retirement deadline");
+        }
+        settlement = timeout.settled;
+        expect(() => instance.run(() => "fresh")).toThrow("reloaded or disabled");
+        if (released) {
+          consumer.release();
+        }
+        finish.resolve("completed");
+        if (released) {
+          await expect(pending).rejects.toBeInstanceOf(PluginInstanceUnavailableError);
+        } else {
+          await expect(pending).resolves.toBe("completed");
+          consumer.release();
+        }
+        expect(() => consumer.run(operation)).toThrow("consumer is closed");
+        await settlement;
+      } finally {
+        finish.resolve("completed");
+        consumer.release();
+        await Promise.allSettled([pending, retirement, settlement]);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("fences new retained admission while replacing an idle donor and releases only its own reservation", async () => {
+    const instance = new PluginInstance("idle-donor");
+    const custody = instance.retainConsumer(undefined, undefined, "custody");
+    const release = instance.reserveReplacement();
+    try {
+      expect(() => instance.retainConsumer()).toThrow("retiring");
+      expect(() => custody.run(() => instance.retainConsumer())).toThrow("retiring");
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      expect(() => instance.reserveReplacement()).toThrow("replacement is in progress");
+      release();
+      const releaseNext = instance.reserveReplacement();
+      release();
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      releaseNext();
+      const work = instance.retainConsumer();
+      expect(work.run(() => "still callable")).toBe("still callable");
+      work.release();
+    } finally {
+      release();
+      custody.release();
+      await instance.dispose();
+    }
+  });
+
+  it("keeps finite host work visible to replacement without making disposal wait on itself", async () => {
+    const instance = new PluginInstance("host-work");
+    const release = instance.retainWork();
+    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    await expect(instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    release();
+    release();
+    instance.reserveReplacement()();
+    expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
+  });
+
   it.each(["direct", "thinking"] as const)(
     "admits an async stream factory through %s before retirement can finish its handoff",
     async (wrapper) => {
@@ -282,7 +364,7 @@ describe("plugin stream consumer admission", () => {
           closed = true;
         });
         expect(instance.dispose()).toBe(closing);
-        await vi.advanceTimersByTimeAsync(10_001);
+        await vi.advanceTimersByTimeAsync(4_999);
         expect(closed).toBe(false);
         expect(cleanup).not.toHaveBeenCalled();
         const stale = first.run(async () => {
@@ -339,7 +421,7 @@ describe("plugin stream consumer admission", () => {
     await entered.promise;
     const closing = instance.dispose();
     try {
-      await vi.advanceTimersByTimeAsync(5_001);
+      await vi.advanceTimersByTimeAsync(4_999);
       resume.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(observed).toEqual(["original-owner"]);

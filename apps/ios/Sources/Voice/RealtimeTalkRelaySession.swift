@@ -26,6 +26,7 @@ private func makeRealtimeAudioTapBlock(
 final class IOSRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private static let bufferSize: AVAudioFrameCount = 2048
     private let audioEngine = AVAudioEngine()
+    private var tappedInputNode: AVAudioInputNode?
 
     var suppressesInputDuringOutput: Bool {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -55,12 +56,16 @@ final class IOSRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
                 inputSampleRate: format.sampleRate,
                 targetSampleRate: targetSampleRate,
                 onAudio: onAudio))
+        self.tappedInputNode = input
         self.audioEngine.prepare()
         try self.audioEngine.start()
     }
 
     func stop() {
-        self.audioEngine.inputNode.removeTap(onBus: 0)
+        // Reading inputNode creates RemoteIO even when capture never started.
+        // Cold relay cancellation must only tear down an already installed tap.
+        self.tappedInputNode?.removeTap(onBus: 0)
+        self.tappedInputNode = nil
         self.audioEngine.stop()
     }
 }

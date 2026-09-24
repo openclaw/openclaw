@@ -151,54 +151,78 @@ describe("session ingestion", () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
       tempDirs.push(dir);
       const archiveFile = path.join(dir, "archive.jsonl");
-      const record = (id: string, content: string) =>
+      const record = (id: string, content: string, timestamp: string) =>
         `${JSON.stringify({
           type: "message",
           id,
-          timestamp: "2026-04-05T18:00:00.000Z",
+          timestamp,
           message: {
             role: "user",
             content,
-            timestamp: "2026-04-05T18:00:00.000Z",
+            timestamp,
           },
         })}\n`;
       await fs.writeFile(
         archiveFile,
-        record("message-1", "Alpha durable note.") + record("message-2", "Bravo durable note."),
+        record("message-1", "Alpha durable note.", "2026-04-06T06:59:59.000Z") +
+          record("message-2", "Bravo durable note.", "2026-04-06T07:00:00.000Z"),
       );
       const source = foreignSessionIngestionSource("main", archiveFile);
+      const classifiedDays: string[] = [];
+      const classifyDay = (day: string) => {
+        classifiedDays.push(day);
+        return "include" as const;
+      };
       const first = await scanSessionIngestionSource({
         source,
         seenMessages: {},
         verifyContent: true,
         maxCandidates,
-        classifyDay: () => "include",
+        timezone: "America/Los_Angeles",
+        classifyDay,
       });
       if (!first.fileState) {
         throw new Error("expected initial backfill checkpoint");
       }
+      expect(first.candidates.map((candidate) => candidate.day)).toEqual(
+        ["2026-04-05", "2026-04-06"].slice(0, maxCandidates),
+      );
+      expect(classifiedDays).toEqual(["2026-04-05", "2026-04-06"].slice(0, maxCandidates));
 
+      classifiedDays.length = 0;
       const unchanged = await scanSessionIngestionSource({
         source,
         previous: first.fileState,
         seenMessages: {},
         verifyContent: true,
-        classifyDay: () => "include",
+        timezone: "America/Los_Angeles",
+        classifyDay,
       });
       expect(unchanged.candidates.map((candidate) => candidate.snippet)).toEqual(
         maxCandidates === 1 ? ["User: Bravo durable note."] : [],
       );
+      expect(classifiedDays).toEqual(maxCandidates === 1 ? ["2026-04-06"] : []);
 
-      await fs.appendFile(archiveFile, record("message-3", "Charlie durable note."));
+      await fs.appendFile(
+        archiveFile,
+        record("message-3", "Charlie durable note.", "2026-04-06T07:30:00.000Z"),
+      );
+      classifiedDays.length = 0;
       const second = await scanSessionIngestionSource({
         source,
         previous: first.fileState,
         seenMessages: {},
         verifyContent: true,
-        classifyDay: () => "include",
+        timezone: "America/Los_Angeles",
+        classifyDay,
       });
 
-      expect(second.candidates.map((candidate) => candidate.snippet)).toEqual(expected);
+      expect(second.candidates.map(({ snippet, day }) => ({ snippet, day }))).toEqual(
+        expected.map((snippet) => ({ snippet, day: "2026-04-06" })),
+      );
+      expect(classifiedDays).toEqual(
+        maxCandidates === 1 ? ["2026-04-06", "2026-04-06"] : ["2026-04-06"],
+      );
     },
   );
 

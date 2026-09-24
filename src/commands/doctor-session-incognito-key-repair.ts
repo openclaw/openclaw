@@ -10,6 +10,11 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import {
+  listExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+  type ExistingAgentDatabaseTarget,
+} from "../infra/session-sqlite-migration-readers.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -33,10 +38,6 @@ import {
   type ReservedKeyRename,
   writeRepairJournal,
 } from "./doctor-session-incognito-key-repair-state.js";
-import {
-  listExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-readers.js";
 
 export type ReservedIncognitoKeyRepairReport = {
   found: number;
@@ -47,11 +48,14 @@ export async function repairReservedIncognitoSessionKeys(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }): Promise<ReservedIncognitoKeyRepairReport> {
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env).map((target) => ({
-    target,
-    databaseOptions: resolveTargetSqliteOptions(target, params.env),
-  }));
+  const targets = (params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)).map(
+    (target) => ({
+      target,
+      databaseOptions: resolveTargetSqliteOptions(target, params.env),
+    }),
+  );
   const reservedKeys = new Set<string>();
   const sharedDatabase = params.apply ? openOpenClawStateDatabase({ env: params.env }) : undefined;
   const journalRenames = sharedDatabase
@@ -188,10 +192,25 @@ function applyReservedIncognitoKeyRenameColumns(
   // Board widget foreign keys are immediate; defer them so every key-bearing row renames atomically.
   database.db.exec("PRAGMA defer_foreign_keys = ON;"); // sqlite-allow-raw -- transaction-local FK deferral.
   for (const rename of renames) {
+    const affected = executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+        .selectFrom("session_nodes")
+        .select("session_key")
+        .where((eb) =>
+          eb.or([
+            eb("session_key", "=", rename.from),
+            eb("parent_session_key", "=", rename.from),
+            eb("spawned_by", "=", rename.from),
+            eb("fork_source_session_key", "=", rename.from),
+          ]),
+        ),
+    ).rows;
     updateSessionKeyColumns(database.db, rename);
+    for (const sessionKey of new Set([rename.to, ...affected.map((row) => row.session_key)])) {
+      publishSessionEntryCacheInvalidation(database, { sessionKey });
+    }
   }
-  // Key and lineage columns reshape the cached map even when no entry JSON needs rewriting.
-  publishSessionEntryCacheInvalidation(database);
 }
 
 function legacyIncognitoSessionKey(sessionKey: string): string {

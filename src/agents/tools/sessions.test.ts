@@ -1,8 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-// Sessions tool tests cover list/send helpers, announce-target resolution,
-// and assistant-visible text sanitization.
+// Sessions tool tests cover list/send helpers and announce-target resolution.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
@@ -19,11 +18,8 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
-import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
-const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -51,11 +47,14 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
   };
 });
 vi.mock("./in-process-gateway.js", () => ({
-  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
+  callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
+  getInProcessGatewayToolContext: () => undefined,
+  hasGatewayToolRoutingContext: () => false,
   runWithGatewayToolCleanupContext: <T>(run: () => T): T => run(),
+  runWithGatewayToolContinuationContext: async <T>(run: () => Promise<T>): Promise<T> => run(),
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -121,6 +120,31 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
+const PEER_ONLY_ROUTING_CONFIG: Pick<OpenClawConfig, "agents" | "bindings"> = {
+  agents: { ownership: "explicit", entries: { main: {}, other: {} } },
+  bindings: [
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "feishu", peer: { kind: "group", id: "peer-1" } },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "slack", peer: { kind: "channel", id: "peer-1" } },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "feishu", peer: { kind: "direct", id: "peer-2" } },
+    },
+    {
+      type: "route",
+      agentId: "other",
+      match: { channel: "discord", peer: { kind: "group", id: "ops" } },
+    },
+  ],
+};
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
 > = ({ rawId }) => ({
@@ -284,6 +308,7 @@ async function executeFireAndForgetA2AFrom(
     bindingAgentId?: string;
     bindingPeerId?: string;
     bindingTeamId?: string;
+    routingConfig?: Pick<SessionsToolTestConfig, "agents" | "bindings">;
   },
 ) {
   setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -332,6 +357,7 @@ async function executeFireAndForgetA2AFrom(
           ],
         }
       : {}),
+    ...options?.routingConfig,
     session: {
       scope: "per-sender",
       mainKey: options?.mainKey ?? "main",
@@ -381,37 +407,9 @@ async function executeFireAndForgetA2AFrom(
   return flowParams;
 }
 
-describe("extractStoredAssistantText sanitization", () => {
-  it("strips minimax tool call XML and downgraded markers", () => {
-    // Session recall should not replay provider/tool markup as assistant text.
-    const input =
-      'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
-      "[Tool Call: foo (ID: 1)] world";
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Hello  world");
-    expect(result).not.toContain("invoke");
-    expect(result).not.toContain("Tool Call");
-  });
-
-  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
-    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Prefix\n\nSuffix");
-    expect(result).not.toContain("tool_result");
-  });
-
-  it("strips thinking tags", () => {
-    const input = "Before <think>secret</think> after";
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Before  after");
-  });
-});
-
 beforeEach(() => {
   recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
-  inProcessGatewayRequestMock.mockReset();
-  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -614,67 +612,6 @@ it("authorizes an arbitrary bare key against its persisted fixed-store owner", a
   expect(callGatewayMock.mock.calls).not.toContainEqual([
     expect.objectContaining({ method: "agent" }),
   ]);
-});
-
-describe("extractStoredAssistantText", () => {
-  it("sanitizes blocks without injecting newlines", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Hi " },
-        { type: "text", text: "<think>secret</think>there" },
-      ],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Hi there");
-  });
-
-  it("rewrites error-ish assistant text only when the transcript marks it as an error", () => {
-    const message = {
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: "500 Internal Server Error",
-      content: [{ type: "text", text: "500 Internal Server Error" }],
-    };
-    expect(extractStoredAssistantText(message)).toBe("HTTP 500: Internal Server Error");
-  });
-
-  it("keeps normal status text that mentions billing", () => {
-    const message = textAssistant(
-      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
-    );
-    expect(extractStoredAssistantText(message)).toBe(
-      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
-    );
-  });
-
-  it("preserves successful turns with stale background errorMessage", () => {
-    const message = {
-      role: "assistant",
-      stopReason: "end_turn",
-      errorMessage: "insufficient credits for embedding model",
-      content: [{ type: "text", text: "Handle payment required errors in your API." }],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Handle payment required errors in your API.");
-  });
-
-  it("prefers final_answer text when phased assistant history is present", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "internal reasoning",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Done.");
-  });
 });
 
 describe("resolveAnnounceTarget", () => {
@@ -1147,9 +1084,28 @@ describe("sessions_send gating", () => {
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 0 },
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 1 },
     { targetKey: "agent:main:subagent:child", timeoutSeconds: 1 },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 0,
+      requesterSessionKey: "agent:main:feishu:group:peer-1",
+    },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 1,
+      requesterSessionKey: "agent:main:slack:channel:peer-1",
+    },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 1,
+      requesterSessionKey: "agent:main:feishu:direct:peer-2:thread:reply-root",
+    },
   ])(
-    "keeps an exact-incarnation send scoped ($targetKey, wait $timeoutSeconds)",
-    async ({ targetKey: targetSessionKey, timeoutSeconds }) => {
+    "keeps an exact-incarnation send scoped ($targetKey, wait $timeoutSeconds, $requesterSessionKey)",
+    async ({
+      targetKey: targetSessionKey,
+      timeoutSeconds,
+      requesterSessionKey = MAIN_AGENT_SESSION_KEY,
+    }) => {
       await withTestDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
         const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
         vi.mocked(runSessionsSendA2AFlow).mockClear();
@@ -1160,8 +1116,8 @@ describe("sessions_send gating", () => {
           {
             sessionId: targetSessionId,
             updatedAt: 1,
-            parentSessionKey: MAIN_AGENT_SESSION_KEY,
-            spawnedBy: MAIN_AGENT_SESSION_KEY,
+            parentSessionKey: requesterSessionKey,
+            spawnedBy: requesterSessionKey,
           },
         );
         callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1181,11 +1137,12 @@ describe("sessions_send gating", () => {
           return {};
         });
         const tool = createSessionsSendTool({
-          agentSessionKey: MAIN_AGENT_SESSION_KEY,
+          agentSessionKey: requesterSessionKey,
           expectedTargetSessionId: targetSessionId,
           idempotencyKey: "worker-session-send:stable-operation",
           callGateway: callGatewayMock,
           config: {
+            ...PEER_ONLY_ROUTING_CONFIG,
             session: { scope: "per-sender", mainKey: "main", store: storePath },
             tools: {
               agentToAgent: { enabled: true },
@@ -1217,6 +1174,8 @@ describe("sessions_send gating", () => {
             method: "agent",
             params: expect.objectContaining({
               idempotencyKey: "worker-session-send:stable-operation",
+              sessionKey: targetSessionKey,
+              inputProvenance: expect.objectContaining({ sourceSessionKey: requesterSessionKey }),
             }),
           }),
         );
@@ -1861,7 +1820,6 @@ describe("sessions_send gating", () => {
     { label: "cron with direct token", key: "agent:main:cron:direct:peer-1" },
     { label: "hook with direct token", key: "agent:main:hook:direct:peer-1" },
     { label: "hook with dm token", key: "agent:main:hook:dm:peer-1" },
-    { label: "subagent with direct token", key: "agent:main:subagent:direct:peer-1" },
     { label: "nested agent owner", key: "agent:main:agent:worker:feishu:direct:peer-1" },
     {
       label: "thread-scoped direct conversation",
@@ -1875,6 +1833,27 @@ describe("sessions_send gating", () => {
     const flowParams = await executeFireAndForgetA2AFrom(key);
 
     expect(flowParams.requesterSessionKey).toBe(key);
+  });
+
+  it.each([
+    { label: "group", key: "agent:main:feishu:group:peer-1" },
+    { label: "channel", key: "agent:main:slack:channel:peer-1" },
+    { label: "threaded DM", key: "agent:main:feishu:direct:peer-2:thread:reply-root" },
+  ])("preserves a peer-only $label requester without an account owner", async ({ key }) => {
+    const flowParams = await executeFireAndForgetA2AFrom(key, {
+      routingConfig: PEER_ONLY_ROUTING_CONFIG,
+    });
+
+    expect(flowParams.requesterSessionKey).toBe(key);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:other:discord:group:ops",
+          inputProvenance: expect.objectContaining({ sourceSessionKey: key }),
+        }),
+      }),
+    );
   });
 
   it.each([

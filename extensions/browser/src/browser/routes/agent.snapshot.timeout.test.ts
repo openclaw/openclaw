@@ -4,7 +4,10 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 const cdpMocks = vi.hoisted(() => ({
   captureScreenshot: vi.fn(),
-  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
+  getDocumentIdentitiesViaCdp: vi.fn(async () => ({
+    mainFrame: "cdp:test-document",
+    frameTree: "cdp:test-tree",
+  })),
   snapshotAria: vi.fn(async () => ({ nodes: [] })),
   snapshotRoleViaCdp: vi.fn(async () => ({
     snapshot: "button Continue",
@@ -54,7 +57,7 @@ vi.mock("../pw-ai-module.js", () => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: cdpMocks.captureScreenshot,
-  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
+  getDocumentIdentitiesViaCdp: cdpMocks.getDocumentIdentitiesViaCdp,
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
 }));

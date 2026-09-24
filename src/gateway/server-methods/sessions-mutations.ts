@@ -6,14 +6,21 @@ import {
   missingScopeErrorShape,
   type SessionsPatchManyResult,
   validateSessionsAssignOwnerParams,
+  validateSessionsSetInvolvementParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
+import {
+  assignSessionOwner,
+  updateSessionProfileInvolvement,
+} from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   projectAssignableSessionOwner,
@@ -30,6 +37,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
@@ -47,8 +55,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     context,
     client,
     sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+    hasCurrentClientAuthority,
+    signal,
   }) => {
     const diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
     try {
       if (
         !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
@@ -57,7 +69,9 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       if (
-        params.patch.permissionMode === "full" &&
+        (params.patch.permissionMode === "full" ||
+          params.patch.sandboxMode !== undefined ||
+          params.patch.nativeRuntimeConsent !== undefined) &&
         client !== null &&
         !scopes.includes(ADMIN_SCOPE)
       ) {
@@ -69,10 +83,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         return;
       }
       const targets = params.targets;
+      if (params.patch.model !== undefined) {
+        capturedOperator = captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: { assertCurrent: () => sessionMutationCommitGuard?.(), signal },
+        });
+      }
       const executed = await executeSessionPatchMutations({
         client,
         context,
         diagnostics,
+        operatorAuthority: capturedOperator?.authority,
         patch: params.patch,
         targets: targets.map((target) => ({
           ...target,
@@ -102,17 +125,34 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       respond(true, { outcomes }, undefined);
     } finally {
+      capturedOperator?.release();
       diagnostics?.finish();
     }
   },
-  "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.patch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     const diagnostics = startSessionPatchDiagnostics("sessions.patch");
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
     try {
       if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
         return;
       }
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+      if (
+        (params.permissionMode === "full" ||
+          params.sandboxMode !== undefined ||
+          params.nativeRuntimeConsent !== undefined) &&
+        client !== null &&
+        !scopes.includes(ADMIN_SCOPE)
+      ) {
         respond(
           false,
           undefined,
@@ -126,10 +166,25 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       const patch = { ...params, key };
       const target = sessionPatchTargetIdentity(patch);
+      if (params.model !== undefined) {
+        capturedOperator = captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: {
+            assertCurrent: () => {
+              sessionMutationCommitGuard?.();
+              sessionMutationAuthorization?.assertCurrent();
+            },
+            signal,
+          },
+        });
+      }
       const executed = await executeSessionPatchMutations({
         client,
         context,
         diagnostics,
+        operatorAuthority: capturedOperator?.authority,
         patch,
         targets: [
           {
@@ -149,21 +204,136 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       const prepared = executed.preparedByIndex[0]!;
       diagnostics?.scope("response");
+      const catalog = await executed.catalogs.available(prepared.targetAgentId);
       respond(
         true,
         projectSessionPatchResult({
           ...prepared,
           cfg: executed.cfg,
           entry: outcome.entry,
-          modelCatalog: await executed.catalogs.available(prepared.targetAgentId),
+          modelCatalog: catalog?.entries,
+          modelCatalogRouteVariants: catalog?.routeVariants,
         }),
         undefined,
       );
     } finally {
+      capturedOperator?.release();
       diagnostics?.finish();
     }
   },
-  "sessions.assignOwner": async ({ params, respond, context, client }) => {
+  "sessions.setInvolvement": async ({ params, respond, context, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsSetInvolvementParams,
+        "sessions.setInvolvement",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId;
+    const profile = profileId && resolveCurrentUserProfileDisplay(profileId);
+    if (
+      !client ||
+      client.invalidated ||
+      client.connectionSignal?.aborted ||
+      isSyntheticGatewayCaller(client) ||
+      !profile ||
+      profile.kind !== "resolved"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Personal session visibility requires a signed-in profile.",
+        ),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.key, params.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const target = resolveSessionSharingTarget({
+      cfg,
+      sessionKey: params.key,
+      agentId: requestedAgent.agentId,
+    });
+    if (
+      !target ||
+      target.entry.sessionId !== params.expectedSessionId ||
+      target.entry.incognito ||
+      authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
+      createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Session is unavailable or changed. Refresh the session list.",
+        ),
+      );
+      return;
+    }
+    const updated = updateSessionProfileInvolvement(
+      { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+      {
+        expectedSessionId: params.expectedSessionId,
+        profileIds: [profile.profileId],
+        change: { kind: "visibility", hidden: params.hidden },
+        assertCurrent: () => {
+          const currentCfg = context.getRuntimeConfig();
+          const current = resolveSessionSharingTarget({
+            cfg: currentCfg,
+            sessionKey: target.canonicalKey,
+            agentId: target.agentId,
+          });
+          const currentProfile = client.authenticatedUserProfile?.profileId;
+          if (
+            client.invalidated ||
+            client.connectionSignal?.aborted ||
+            currentProfile !== profileId ||
+            !current ||
+            current.entry.sessionId !== params.expectedSessionId ||
+            current.entry.incognito ||
+            createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+              current.storeKey,
+              current.entry,
+            ) === false
+          ) {
+            throw new SessionMutationAuthorizationChangedError(
+              errorShape(ErrorCodes.FORBIDDEN, "Session access changed. Refresh the session list."),
+            );
+          }
+        },
+      },
+    );
+    if (!updated) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+      );
+      return;
+    }
+    respond(
+      true,
+      { ok: true, key: target.canonicalKey, hiddenFromInvolvingMe: params.hidden },
+      undefined,
+    );
+  },
+  "sessions.assignOwner": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
     ) {
@@ -230,39 +400,45 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const owner = { type: projectedOwner.type, id: projectedOwner.id };
-    const assignment = assignSessionOwner(
-      {
-        agentId: target.agentId,
-        sessionKey: target.storeKey,
-        storePath: target.storePath,
-      },
-      {
-        owner,
-        assignedBy,
-        assertCurrent: () => {
-          const current = resolveSessionSharingTarget({
-            cfg: context.getRuntimeConfig(),
-            sessionKey: target.canonicalKey,
+    const assignment = await runExclusiveSessionLifecycleMutation({
+      scope: target.storePath,
+      identities: [target.storeKey, target.entry.sessionId],
+      run: async () =>
+        assignSessionOwner(
+          {
             agentId: target.agentId,
-          });
-          const currentError = current ? authorizeView(current) : null;
-          if (
-            !current ||
-            current.entry.sessionId !== target.entry.sessionId ||
-            current.storeKey !== target.storeKey ||
-            currentError
-          ) {
-            throw new SessionMutationAuthorizationChangedError(
-              currentError ??
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "session changed before sessions.assignOwner; retry the request",
-                ),
-            );
-          }
-        },
-      },
-    );
+            sessionKey: target.storeKey,
+            storePath: target.storePath,
+          },
+          {
+            owner,
+            assignedBy,
+            assertCurrent: () => {
+              sessionMutationAuthorization?.assertCurrent();
+              const current = resolveSessionSharingTarget({
+                cfg: context.getRuntimeConfig(),
+                sessionKey: target.canonicalKey,
+                agentId: target.agentId,
+              });
+              const currentError = current ? authorizeView(current) : null;
+              if (
+                !current ||
+                current.entry.sessionId !== target.entry.sessionId ||
+                current.storeKey !== target.storeKey ||
+                currentError
+              ) {
+                throw new SessionMutationAuthorizationChangedError(
+                  currentError ??
+                    errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      "session changed before sessions.assignOwner; retry the request",
+                    ),
+                );
+              }
+            },
+          },
+        ),
+    });
     const projectedActor = assignment
       ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
       : null;

@@ -528,16 +528,36 @@ fullAccessSuite.define(() => {
               expect(loggingLevel(savedConfig)).toBe("info");
               const configSnapshot = await gateway.call("config.get", {});
               expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
-              await page
+              const finalMessage =
+                isRecord(history) && Array.isArray(history.messages)
+                  ? history.messages.findLast(
+                      (message) => isRecord(message) && message.role === "assistant",
+                    )
+                  : undefined;
+              const finalMeta = isRecord(finalMessage) ? finalMessage["__openclaw"] : undefined;
+              const finalEntryId = isRecord(finalMeta) ? finalMeta.id : undefined;
+              if (typeof finalEntryId !== "string") {
+                throw new Error("chat.history returned no persisted assistant entry id");
+              }
+              // History replaces the live final and its work-group key. Expand the persisted row.
+              await page.locator(`.chat-bubble[data-entry-id="${finalEntryId}"]`).waitFor();
+              const workSummary = page
                 .locator(".chat-work-group > .chat-activity-group__summary")
-                .first()
-                .click();
+                .first();
+              await workSummary.waitFor();
+              if ((await workSummary.getAttribute("aria-expanded")) !== "true") {
+                await workSummary.click();
+              }
               const toolSummaries = page.locator(".chat-tool-msg-summary");
               await toolSummaries.first().waitFor();
               for (const summary of await toolSummaries.all()) {
-                await summary.click();
+                if ((await summary.getAttribute("aria-expanded")) !== "true") {
+                  await summary.click();
+                }
               }
-              const appliedResult = page.getByText(/Updated logging\.level/u).first();
+              const appliedResult = page.locator(".chat-tool-msg-body", {
+                hasText: /Updated logging\.level/u,
+              });
               await appliedResult.waitFor();
               await appliedResult.scrollIntoViewIfNeeded();
               expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(

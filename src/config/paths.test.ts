@@ -143,6 +143,18 @@ describe("default install identity", () => {
     ).toBe(false);
   });
 
+  it("keeps the default install identity for unset home literals", () => {
+    const home = "/home/test";
+
+    for (const literal of ["undefined", "null", "  undefined  "]) {
+      const env = { HOME: home, OPENCLAW_HOME: literal };
+      // Home resolution already reads these literals as unset, so the install
+      // stays on the account home and the default state dir.
+      expect(isDefaultInstallIdentity(env, () => home)).toBe(true);
+      expect(allowsProcessHomeSessionScan(env, () => home)).toBe(true);
+    }
+  });
+
   it("accepts the canonical paths a named profile projects", async () => {
     await withTestDir({ prefix: "openclaw-profile-install-" }, async (home) => {
       const defaultStateDir = path.join(home, ".openclaw");

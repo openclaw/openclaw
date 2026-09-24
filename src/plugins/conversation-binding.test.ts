@@ -7,15 +7,24 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import {
+  createDiscordCodexBindRequest,
+  createTelegramCodexBindRequest,
+  seedPluginConversationBindingApprovalForTest,
+} from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -163,7 +172,8 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
   };
 }
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir == null) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -194,47 +204,6 @@ afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
   vi.useRealTimers();
 });
-
-function createDiscordCodexBindRequest(
-  conversationId: string,
-  summary: string,
-  accountId = "isolated",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot: "/plugins/codex-a",
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "discord",
-      accountId,
-      conversationId,
-    },
-    binding: { summary },
-  };
-}
-
-function createTelegramCodexBindRequest(
-  conversationId: string,
-  threadId: string,
-  summary: string,
-  pluginRoot = "/plugins/codex-a",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot,
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "telegram",
-      accountId: "default",
-      conversationId,
-      parentConversationId: "-10099",
-      threadId,
-    },
-    binding: { summary },
-  };
-}
 
 function createCodexBindRequest(params: {
   channel: "discord" | "telegram";
@@ -444,18 +413,6 @@ function readPluginBindingApprovalRows(): Array<{
   ).rows;
 }
 
-function insertPluginBindingApprovalRow(params: {
-  pluginRoot: string;
-  channel: string;
-  accountId: string;
-  pluginId: string;
-}): void {
-  seedPluginConversationBindingApprovalForTest({
-    ...params,
-    approvedAt: 1,
-  });
-}
-
 describe("plugin conversation binding approvals", () => {
   beforeEach(async () => {
     await drainGlobalSingletonLifecycleState();
@@ -601,47 +558,63 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const request = await requestPendingBinding(
-      createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
-    );
+    await closeOpenClawStateDatabaseAsync();
+    await withStateDatabaseCoordinatorRuntimeDirectory(
+      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
+      async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const request = await requestPendingBinding(
+          createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
+        );
 
-    // The deadline check is authoritative even when the event loop has not dispatched the timer.
-    vi.setSystemTime(1_000 + 30 * 60_000);
-    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
-      status: "expired",
-    });
-    expect(sessionBindingState.bind).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+        // The deadline check is authoritative even when the event loop has not dispatched the timer.
+        vi.setSystemTime(1_000 + 30 * 60_000);
+        await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+          status: "expired",
+        });
+        expect(sessionBindingState.bind).not.toHaveBeenCalled();
+        // Retire storage's independent idle timer before counting approval timers.
+        await closeOpenClawStateDatabaseAsync();
+        expect(vi.getTimerCount()).toBe(0);
+      },
+    );
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {
-    vi.useFakeTimers();
-    const requests = [];
-    for (let index = 0; index < 513; index += 1) {
-      requests.push(
-        await requestPendingBinding(
-          createDiscordCodexBindRequest(
-            `channel:bounded-${index}`,
-            `Bind this conversation to Codex thread ${index}.`,
-          ),
-        ),
-      );
-    }
+    await closeOpenClawStateDatabaseAsync();
+    await withStateDatabaseCoordinatorRuntimeDirectory(
+      { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
+      async () => {
+        vi.useFakeTimers();
+        const requests = [];
+        for (let index = 0; index < 513; index += 1) {
+          requests.push(
+            await requestPendingBinding(
+              createDiscordCodexBindRequest(
+                `channel:bounded-${index}`,
+                `Bind this conversation to Codex thread ${index}.`,
+              ),
+            ),
+          );
+        }
 
-    expect(vi.getTimerCount()).toBe(512);
-    const oldest = requests[0];
-    const newest = requests[512];
-    if (!oldest || !newest) {
-      throw new Error("expected bounded pending requests");
-    }
-    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
-      status: "expired",
-    });
-    await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
-      status: "denied",
-    });
+        // Pending approvals outlive database actors; count only their owned timers.
+        await closeOpenClawStateDatabaseAsync();
+        expect(vi.getTimerCount()).toBe(512);
+        const oldest = requests[0];
+        const newest = requests[512];
+        if (!oldest || !newest) {
+          throw new Error("expected bounded pending requests");
+        }
+        await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
+          status: "expired",
+        });
+        await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
+          status: "denied",
+        });
+      },
+    );
   });
 
   it("keeps allow-once approval scoped to its requester and conversation", async () => {
@@ -697,14 +670,12 @@ describe("plugin conversation binding approvals", () => {
     );
 
     const writeSpy = vi
-      .spyOn(openClawStateDb, "runOpenClawStateWriteTransaction")
-      .mockImplementationOnce(() => {
-        throw new Error("SQLITE_BUSY: database is locked");
-      });
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockRejectedValueOnce(new Error("approval operation unavailable"));
 
     // A failed persist must propagate; the grant was never durably recorded.
     await expect(approveBindingRequest(pendingRequest.approvalId, "allow-always")).rejects.toThrow(
-      "SQLITE_BUSY",
+      "approval operation unavailable",
     );
 
     writeSpy.mockRestore();
@@ -782,7 +753,8 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not remove approval rows written outside the process cache", async () => {
-    insertPluginBindingApprovalRow({
+    await seedPluginConversationBindingApprovalForTest({
+      approvedAt: 1,
       pluginRoot: "/plugins/other",
       channel: "discord",
       accountId: "default",

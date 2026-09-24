@@ -5,6 +5,7 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 }));
 const {
   resolveThinkingProfile,
+  resolveThinkingDefaultForModel,
   listThinkingLevelOptions,
   listThinkingLevels,
   formatThinkingLevels,
@@ -36,9 +37,15 @@ describe("known-empty provider thinking profiles", () => {
     ];
     const params = { provider: "demo", model: "demo-model", catalog, agentRuntime: "openclaw" };
 
-    expect(resolveThinkingProfile(params)).toEqual({ levels: [], defaultLevel: undefined });
-    expect(listThinkingLevelOptions("demo", "demo-model", catalog, "openclaw")).toEqual([]);
-    expect(formatThinkingLevels("demo", "demo-model", ", ", catalog, "openclaw")).toBe("");
+    expect(resolveThinkingProfile(params)).toEqual({
+      levels: [{ id: "ultra", label: "ultra", rank: 80 }],
+      defaultLevel: undefined,
+    });
+    expect(resolveThinkingDefaultForModel(params)).toBe("off");
+    expect(listThinkingLevelOptions("demo", "demo-model", catalog, "openclaw")).toEqual([
+      { id: "ultra", label: "ultra" },
+    ]);
+    expect(formatThinkingLevels("demo", "demo-model", ", ", catalog, "openclaw")).toBe("ultra");
     expect(isThinkingLevelSupported({ ...params, level: "off" })).toBe(false);
     expect(isThinkingLevelSupported({ ...params, level: "high" })).toBe(false);
   });

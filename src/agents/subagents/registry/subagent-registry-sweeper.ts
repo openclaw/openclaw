@@ -3,7 +3,10 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
@@ -17,13 +20,11 @@ import type {
 } from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
   resolveSuspendedDeliveryExpiryMs,
-  SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
-  SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
+  warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
 import {
   reconcileDurableSubagentKillIntent,
@@ -48,7 +49,6 @@ const restartRecoveryLoader = createLazyImportLoader(
   () => import("./subagent-registry-restart-recovery.js"),
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
-type RunManager = ReturnType<typeof createSubagentRunManager>;
 type CompletionRuntime = ReturnType<typeof createSubagentRegistryCompletionRuntime>;
 
 export function createSubagentRegistrySweeper(params: {
@@ -60,16 +60,6 @@ export function createSubagentRegistrySweeper(params: {
   sweepPendingLifecycle: (now: number) => void;
   completeSubagentRunWithRecovery: CompletionRuntime["completeSubagentRunWithRecovery"];
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
-  abandonSubagentRestartRecoveryLaunch: RunManager["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedSubagentRestartRecovery: RunManager["clearAcceptedSubagentRestartRecovery"];
-  clearPendingSubagentRecoveryNotice: RunManager["clearPendingSubagentRecoveryNotice"];
-  resumeSettledSubagentRestartRecovery: RunManager["resumeSettledSubagentRestartRecovery"];
-  replaceSubagentRunAfterSteer: RunManager["replaceSubagentRunAfterSteer"];
-  markSubagentRestartRecoveryLaunchAttempted: RunManager["markSubagentRestartRecoveryLaunchAttempted"];
-  markSubagentRestartRecoveryLaunchAccepted: RunManager["markSubagentRestartRecoveryLaunchAccepted"];
-  markSubagentRestartRecoveryLaunchConsumed: RunManager["markSubagentRestartRecoveryLaunchConsumed"];
-  reserveSubagentRestartRecoveryLaunch: RunManager["reserveSubagentRestartRecoveryLaunch"];
-  resetSubagentRestartRecoveryLaunchAttempt: RunManager["resetSubagentRestartRecoveryLaunchAttempt"];
   finalizeInterruptedSubagentRun: CompletionRuntime["finalizeInterruptedSubagentRun"];
   resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
   startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
@@ -92,10 +82,10 @@ export function createSubagentRegistrySweeper(params: {
 }) {
   const { runs, resumedRuns } = params;
   let intervalStarted = false;
-  let scheduledTimer: NodeJS.Timeout | null = null;
-  let scheduledAt = Number.POSITIVE_INFINITY;
+  let scheduled: { timer: NodeJS.Timeout; at: number } | undefined;
   let sweepInProgress = false;
   let rerunRequested = false;
+  let lastWarnedSuspendedCount: number | undefined;
 
   function start() {
     if (intervalStarted) {
@@ -107,22 +97,24 @@ export function createSubagentRegistrySweeper(params: {
 
   function stop() {
     intervalStarted = false;
+    clearTimeout(scheduled?.timer);
+    scheduled = undefined;
+    rerunRequested = false;
   }
 
   function schedule(options?: { delayMs?: number }) {
     const delayMs = Math.max(0, options?.delayMs ?? 5_000);
     const nextAt = Date.now() + delayMs;
-    if (scheduledTimer && scheduledAt <= nextAt) {
+    if (scheduled && scheduled.at <= nextAt) {
       return;
     }
-    clearTimeout(scheduledTimer ?? undefined);
-    scheduledAt = nextAt;
-    scheduledTimer = setTimeout(() => {
-      scheduledTimer = null;
-      scheduledAt = Number.POSITIVE_INFINITY;
+    clearTimeout(scheduled?.timer);
+    const timer = setTimeout(() => {
+      scheduled = undefined;
       void runTick();
     }, delayMs);
-    scheduledTimer.unref?.();
+    timer.unref?.();
+    scheduled = { timer, at: nextAt };
   }
 
   async function runTick() {
@@ -133,16 +125,18 @@ export function createSubagentRegistrySweeper(params: {
     try {
       await runWithGatewayIndependentRootWorkAdmission(sweepOnce, "subagents:sweeper");
     } catch (error) {
+      if (isGatewayRestartDrainError(error)) {
+        return params.warn("subagent run sweep skipped: gateway is draining for restart");
+      }
       params.warn(
         `subagent run sweep failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-    } finally {
-      if (rerunRequested) {
-        rerunRequested = false;
-        schedule({ delayMs: 0 });
-      } else if (intervalStarted) {
-        schedule({ delayMs: 60_000 });
-      }
+    }
+    if (rerunRequested) {
+      rerunRequested = false;
+      schedule({ delayMs: 0 });
+    } else if (intervalStarted) {
+      schedule({ delayMs: 60_000 });
     }
   }
 
@@ -150,16 +144,6 @@ export function createSubagentRegistrySweeper(params: {
     runs,
     getRunsForChildSession: params.getRunsForChildSession,
     getGatewayRuntime: params.getGatewayRecoveryRuntime,
-    abandonLaunch: params.abandonSubagentRestartRecoveryLaunch,
-    clearAcceptedRecovery: params.clearAcceptedSubagentRestartRecovery,
-    clearPendingNotice: params.clearPendingSubagentRecoveryNotice,
-    resumeAcceptedRecovery: params.resumeSettledSubagentRestartRecovery,
-    replaceRun: params.replaceSubagentRunAfterSteer,
-    markLaunchAttempted: params.markSubagentRestartRecoveryLaunchAttempted,
-    markLaunchAccepted: params.markSubagentRestartRecoveryLaunchAccepted,
-    markLaunchConsumed: params.markSubagentRestartRecoveryLaunchConsumed,
-    reserveLaunch: params.reserveSubagentRestartRecoveryLaunch,
-    resetLaunchAttempt: params.resetSubagentRestartRecoveryLaunchAttempt,
     finalizeRun: params.finalizeInterruptedSubagentRun,
     recoverRow: async (recoveryParams) =>
       (await restartRecoveryLoader.load()).recoverInterruptedSubagentRow(recoveryParams),
@@ -284,18 +268,6 @@ export function createSubagentRegistrySweeper(params: {
             : freezeSessionIdentity(entry.childSessionKey),
         );
       }
-      recovery.prune();
-      const suspendedEntries = runEntries.filter(([, entry]) =>
-        isSuspendedPendingFinalDelivery(entry),
-      );
-      if (suspendedEntries.length >= SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT) {
-        params.warn("subagent suspended delivery backlog exceeded pressure cap", {
-          suspendedCount: suspendedEntries.length,
-          softCap: SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
-          hardCap: SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
-          admissionBlocked: suspendedEntries.length >= SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
-        });
-      }
       for (const [runId, entry] of runEntries) {
         if (runs.get(runId) !== entry) {
           continue;
@@ -378,11 +350,10 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
-          (entry.resumptionNotice !== undefined ||
-            entry.execution.restartRecovery?.phase === "accepted" ||
+          (entry.execution.restartRecovery !== undefined ||
             entry.terminalOwner === "interrupted-recovery" ||
             (!getAgentRunContext(runId) && typeof entry.execution.endedAt !== "number")) &&
-          (await recovery.recover(runId, entry, now))
+          (await recovery.recover(runId, entry))
         ) {
           continue;
         }
@@ -705,6 +676,12 @@ export function createSubagentRegistrySweeper(params: {
       }
     } finally {
       sweepInProgress = false;
+      // Count retained delivery after expiry, even when unrelated sweep work fails.
+      lastWarnedSuspendedCount = warnSuspendedDeliveryPressure(
+        runs.values(),
+        lastWarnedSuspendedCount,
+        params.warn,
+      );
     }
   }
 
@@ -716,13 +693,8 @@ export function createSubagentRegistrySweeper(params: {
     runTick,
     reset() {
       stop();
-      clearTimeout(scheduledTimer ?? undefined);
-      scheduledTimer = null;
-      scheduledAt = Number.POSITIVE_INFINITY;
-      recovery.reset();
-      rerunRequested = false;
-      intervalStarted = false;
       sweepInProgress = false;
+      lastWarnedSuspendedCount = undefined;
     },
   };
 }

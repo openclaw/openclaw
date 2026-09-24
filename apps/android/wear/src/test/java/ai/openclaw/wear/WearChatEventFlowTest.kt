@@ -10,8 +10,12 @@ import ai.openclaw.wear.shared.WearRpcMethod
 import android.app.Activity
 import android.app.RemoteInput
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Bundle
 import android.os.Looper
+import android.provider.Settings
+import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
 import android.view.View
 import android.view.ViewGroup
@@ -49,11 +53,82 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowTextToSpeech
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearChatEventFlowTest {
+  @Test
+  @Config(qualifiers = "en-rUS-w227dp-h227dp-round-xhdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun refreshRetainsIncompatibleDiagnosisAndRecoversFromUpgrade() =
+    withFlow { flow ->
+      flow.observeMainActivity(WearLaunchTarget.Chat)
+      flow.gatewayConnected = false
+      flow.connectionFailure = "incompatible"
+      flow.connection(false)
+      flow.settleApp()
+      assertEquals(WearConversationFailure.INCOMPATIBLE, flow.state.failure)
+      flow.scrollAppTo(5)
+      flow.captureApp("diagnosis-before-refresh")
+      flow.vm.refresh()
+      flow.settleApp()
+      flow.scrollAppTo(4)
+      flow.captureApp("diagnosis-after-refresh")
+      assertEquals(WearConversationFailure.INCOMPATIBLE, flow.state.failure)
+      assertTrue(flow.hasAppText("Update OpenClaw on both phone and watch."))
+      flow.gatewayConnected = true
+      flow.connectionFailure = null
+      flow.connection(true)
+      flow.settleApp()
+      assertTrue(flow.state.connected)
+      assertNull(flow.state.failure)
+    }
+
+  @Test
+  fun refreshUsesCurrentDiagnosisInsteadOfRetainingThePreviousFailure() {
+    for ((failure, status, expected) in listOf(
+      Triple(null, "Update OpenClaw", WearConversationFailure.INCOMPATIBLE),
+      Triple("incompatible", "Versions differ", WearConversationFailure.INCOMPATIBLE),
+      Triple("gateway_offline", "Offline", WearConversationFailure.GATEWAY_OFFLINE),
+    )) {
+      withFlow { flow ->
+        flow.gatewayConnected = false
+        flow.connectionFailure = "incompatible"
+        flow.connection(false)
+        flow.connectionFailure = failure
+        flow.connectionStatus = status
+        flow.vm.refresh()
+        flow.idle()
+        assertEquals(expected, flow.state.failure)
+      }
+    }
+  }
+
+  @Test
+  fun disconnectCancelsStaleIncompatibleStatusBeforeCompatibleReconnect() =
+    withFlow { flow ->
+      flow.gatewayConnected = false
+      flow.connectionFailure = "incompatible"
+      flow.connection(false)
+      val gate = CompletableDeferred<Unit>()
+      flow.statusGate = gate
+      flow.vm.refresh()
+      flow.idle()
+      flow.connectionFailure = "gateway_offline"
+      flow.connection(false)
+      gate.complete(Unit)
+      flow.idle()
+      assertEquals(WearConversationFailure.GATEWAY_OFFLINE, flow.state.failure)
+      flow.statusGate = null
+      flow.gatewayConnected = true
+      flow.connectionFailure = null
+      flow.connection(true)
+      assertTrue(flow.state.connected)
+      assertNull(flow.state.failure)
+    }
+
   private val terminalHistoryOutcomes =
     listOf(
       "settled-finalization-fallback" to WearReplyOutcome.Final,
@@ -2556,8 +2631,131 @@ class WearChatEventFlowTest {
     }
   }
 
+  @Test
+  @Config(qualifiers = "w227dp-h227dp-round-hdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun searchedSessionOutsideRecentListKeepsItsDisplayedTitleAndReplyTarget() {
+    val app = RuntimeEnvironment.getApplication() as WearApplication
+    val originalScale = Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    try {
+      withFlow { flow ->
+        flow.sessionSearchList = """[{"key":"agent:main:archive","displayName":"Archive notes","hasActiveRun":false}]"""
+        flow.vm.refresh()
+        flow.idle()
+        flow.observeApp()
+        flow.scrollAppTo(4)
+        flow.clickAppAction("Session: Test chat")
+        flow.vm.searchSessions("Archive")
+        flow.idle()
+        flow.scrollAppTo(5)
+        flow.clickAppAction("Archive notes")
+        flow.idle()
+        assertEquals("agent:main:archive", flow.state.selectedSession?.key)
+        assertEquals(listOf("agent:main:proof"), flow.state.sessions.map { it.key })
+        assertTrue(flow.state.sessionSearchResults.isEmpty())
+        flow.scrollAppTo(4)
+        flow.appAction("Session: Archive notes")
+        flow.submitFromApp("Continue these notes")
+        assertEquals(listOf("agent:main:archive"), flow.sentSessionKeys)
+        assertEquals(listOf("Continue these notes"), flow.sentMessages)
+      }
+    } finally {
+      Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalScale)
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w227dp-h227dp-round-hdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun voiceTypeShowsOrdinaryReplyOnChat() = voiceInputShowsOutcome(dictate = false, failure = false)
+
+  @Test
+  @Config(qualifiers = "w227dp-h227dp-round-hdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun voiceDictateShowsOrdinaryErrorOnChat() = voiceInputShowsOutcome(dictate = true, failure = true)
+
+  private fun voiceInputShowsOutcome(
+    dictate: Boolean,
+    failure: Boolean,
+  ) = withFlow { flow ->
+    flow.observeMainActivity(WearLaunchTarget.Voice)
+    flow.launchVoiceInput(dictate)
+    flow.completeInput(dictate, "Hello from Voice")
+    assertEquals(listOf("Hello from Voice"), flow.sentMessages)
+    if (failure) {
+      flow.emit("error")
+    } else {
+      flow.historyMessages = """[{"id":"reply","role":"assistant","content":"Hello from Chat","idempotencyKey":"${flow.runId}"}]"""
+      flow.emit("final")
+    }
+    flow.settleApp()
+    flow.captureApp(if (dictate) "dictate-error" else "type-reply")
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
+    if (failure) {
+      flow.scrollAppTo(0)
+      assertTrue(flow.hasAppText("Error"))
+    } else {
+      assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
+    }
+    assertTrue(
+      flow.state.realtimeTalk.conversation
+        .isEmpty(),
+    )
+  }
+
+  @Test
+  @Config(qualifiers = "w227dp-h227dp-round-hdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun canceledEmptyAndRejectedVoiceInputsStayOnVoice() {
+    for (dictate in listOf(false, true)) {
+      for (result in listOf("canceled", "empty", "rejected")) {
+        withFlow { flow ->
+          flow.observeMainActivity(WearLaunchTarget.Voice)
+          flow.launchVoiceInput(dictate)
+          if (result == "rejected") flow.emit("delta", text = "Existing run")
+          flow.completeInput(dictate, if (result == "empty") "  " else "Hello", if (result == "canceled") Activity.RESULT_CANCELED else Activity.RESULT_OK)
+          flow.settleApp()
+          assertEquals(0, flow.sendRequests)
+          assertTrue("Non-submission must retain the current Voice mode", flow.hasAppText(if (dictate) "Dictate" else "Start Live to see the conversation here."))
+        }
+      }
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w227dp-h227dp-round-hdpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun chatSubmissionAndRepeatedWarmLaunchesKeepReplyOwnership() =
+    withFlow { flow ->
+      flow.observeMainActivity(WearLaunchTarget.Chat)
+      val engine = checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance())
+      val speech = shadowOf(engine)
+      speech.onInitListener.onInit(TextToSpeech.SUCCESS)
+      flow.scrollAppTo(3)
+      flow.submitFromApp("First request")
+      val pending = flow.state.pendingReply
+      flow.warmLaunch(WearLaunchTarget.Voice)
+      assertTrue(flow.hasAppText("Dictate"))
+      flow.warmLaunch(WearLaunchTarget.Chat)
+      assertEquals(pending, flow.state.pendingReply)
+      flow.historyMessages = """[{"id":"first","role":"assistant","content":"First reply","idempotencyKey":"${flow.runId}"}]"""
+      flow.emit("final")
+      flow.settleApp()
+      assertTrue(flow.hasAppText("First reply"))
+      flow.warmLaunch(WearLaunchTarget.Voice)
+      flow.launchVoiceInput(dictate = true)
+      flow.completeInput(dictate = true, text = "Second request")
+      assertEquals(listOf("First request", "Second request"), flow.sentMessages)
+      flow.emit("error")
+      flow.settleApp()
+      flow.scrollAppTo(0)
+      assertTrue(flow.hasAppText("Error"))
+    }
+
   private class Flow {
     private val app = RuntimeEnvironment.getApplication() as WearApplication
+    private var originalScale: Float? = null
     private val owner =
       object : ViewModelStoreOwner {
         override val viewModelStore = ViewModelStore()
@@ -2574,12 +2772,17 @@ class WearChatEventFlowTest {
     var sendErrorCode = "internal_error"
     var sendAck: JsonObject? = null
     var gatewayConnected = true
+    var connectionFailure: String? = null
+    var connectionStatus = "Offline"
+    var statusGate: CompletableDeferred<Unit>? = null
     var statusFails = false
     var historyErrorCode = "internal_error"
     var abortFails = false
     var abortAccepted = true
     var abortGate: CompletableDeferred<Unit>? = null
     var sessionList = """[{"key":"agent:main:proof","displayName":"Test chat","hasActiveRun":false}]"""
+    var sessionSearchList: String? = null
+    val sentSessionKeys = mutableListOf<String>()
     val sentRunIds = mutableListOf<String>()
     val sentMessages = mutableListOf<String>()
     var historyMessages = "[]"
@@ -2589,13 +2792,14 @@ class WearChatEventFlowTest {
     var sendGate: CompletableDeferred<Unit>? = null
     val completedReplies = mutableListOf<WearChatMessage?>()
     val abortRuns = mutableListOf<String?>()
-    private var replyObserver: ActivityController<ComponentActivity>? = null
+    private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
       WearProxyClient.createForTests(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )
-    val vm: WearViewModel
+    var vm: WearViewModel
+      private set
     val state: WearUiState get() = vm.state.value
 
     init {
@@ -2648,6 +2852,87 @@ class WearChatEventFlowTest {
       idle()
     }
 
+    fun observeMainActivity(target: WearLaunchTarget) {
+      originalScale = Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+      Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+      owner.viewModelStore.clear()
+      idle()
+      val controller = Robolectric.buildActivity(MainActivity::class.java, Intent().putExtra(extraWearLaunchTarget, target.rawValue))
+      // Bind this test application before Activity's cached default factory can
+      // reuse an Application from an earlier Robolectric test.
+      vm = ViewModelProvider(controller.get(), ViewModelProvider.AndroidViewModelFactory(app))[WearViewModel::class.java]
+      replyObserver = controller
+      controller.setup().visible()
+      val root = controller.get().window.decorView
+      val metrics = app.resources.displayMetrics
+      root.measure(View.MeasureSpec.makeMeasureSpec(metrics.widthPixels, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(metrics.heightPixels, View.MeasureSpec.EXACTLY))
+      root.layout(0, 0, metrics.widthPixels, metrics.heightPixels)
+      settleApp()
+      assertTrue("MainActivity connection: $state", state.connected)
+    }
+
+    fun warmLaunch(target: WearLaunchTarget) {
+      checkNotNull(replyObserver).newIntent(Intent().putExtra(extraWearLaunchTarget, target.rawValue))
+      settleApp()
+    }
+
+    fun settleApp() = shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(600))
+
+    fun launchVoiceInput(dictate: Boolean) {
+      if (!dictate) {
+        clickAppAction("Open thread")
+        settleApp()
+      }
+      clickAppAction(if (dictate) "Dictate" else "Type")
+      settleApp()
+      if (dictate) {
+        // The production preview uses the coroutine default executor's real delay.
+        Thread.sleep(350L)
+        settleApp()
+      }
+    }
+
+    fun completeInput(
+      dictate: Boolean,
+      text: String,
+      resultCode: Int = Activity.RESULT_OK,
+    ) {
+      val activity = checkNotNull(replyObserver).get()
+      val launch = checkNotNull(shadowOf(activity).nextStartedActivityForResult)
+      val result = Intent()
+      if (dictate) {
+        assertEquals(RecognizerIntent.ACTION_RECOGNIZE_SPEECH, launch.intent.action)
+        result.putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS, arrayListOf(text))
+      } else {
+        RemoteInput.addResultsToIntent(
+          arrayOf(RemoteInput.Builder(REPLY_RESULT_KEY).setLabel("Message").build()),
+          result,
+          Bundle().apply { putCharSequence(REPLY_RESULT_KEY, text) },
+        )
+      }
+      shadowOf(activity).receiveResult(launch.intent, resultCode, result)
+      settleApp()
+    }
+
+    fun hasAppText(text: String): Boolean =
+      appNodes().any { node ->
+        node.boundsInRoot.width > 0 && node.boundsInRoot.height > 0 &&
+          node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == text } == true
+      }
+
+    fun captureApp(name: String) {
+      val directory = System.getenv("WEAR_NAVIGATION_PROOF_DIR") ?: return
+      val root = checkNotNull(replyObserver).get().window.decorView
+      check(root.width > 0 && root.height > 0)
+      val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
+      root.draw(Canvas(bitmap))
+      java.io.File(directory).mkdirs()
+      java.io
+        .File(directory, "$name.png")
+        .outputStream()
+        .use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+    }
+
     fun submitFromApp(text: String) {
       assertEquals(true, appAction("Type").config[SemanticsActions.OnClick].action?.invoke())
       val activity = checkNotNull(replyObserver).get()
@@ -2666,7 +2951,7 @@ class WearChatEventFlowTest {
       assertEquals(true, appAction(label).config[SemanticsActions.OnClick].action?.invoke())
     }
 
-    fun appAction(label: String): SemanticsNode {
+    private fun appNodes(): List<SemanticsNode> {
       idle()
 
       fun roots(view: View): List<ViewRootForTest> =
@@ -2682,12 +2967,26 @@ class WearChatEventFlowTest {
           root.measureAndLayoutForTest()
           nodes(root.semanticsOwner.rootSemanticsNode)
         }
+      return nodes
+    }
+
+    fun appAction(label: String): SemanticsNode {
+      val nodes = appNodes()
       return checkNotNull(
         nodes.firstOrNull { node ->
           SemanticsActions.OnClick in node.config &&
-            node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true
+            (
+              node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true ||
+                node.config[SemanticsActions.OnClick].label == label
+            )
         },
       ) { "Missing action $label; rendered semantics: ${nodes.map { it.config }}" }
+    }
+
+    fun scrollAppTo(index: Int) {
+      val list = appNodes().last { SemanticsActions.ScrollToIndex in it.config && SemanticsProperties.VerticalScrollAxisRange in it.config }
+      assertEquals(true, list.config[SemanticsActions.ScrollToIndex].action?.invoke(index))
+      shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1))
     }
 
     fun transcript(
@@ -2713,11 +3012,22 @@ class WearChatEventFlowTest {
       val result =
         when (request.method) {
           WearRpcMethod.ProxyStatus -> {
-            Json.parseToJsonElement("""{"connected":$gatewayConnected,"activeAgentId":"main","activeSessionKey":"agent:main:proof"}""")
+            val snapshot =
+              buildJsonObject {
+                put("connected", gatewayConnected)
+                put("status", connectionStatus)
+                connectionFailure?.let { put("failure", it) }
+                put("activeAgentId", "main")
+                put("activeSessionKey", "agent:main:proof")
+                if (sessionSearchList != null) put("capabilities", Json.parseToJsonElement("""["session-search-pagination"]"""))
+              }
+            statusGate?.await()
+            snapshot
           }
 
           WearRpcMethod.SessionsList -> {
-            Json.parseToJsonElement("""{"sessions":$sessionList}""")
+            val sessions = if ("search" in request.params) checkNotNull(sessionSearchList) else sessionList
+            Json.parseToJsonElement("""{"sessions":$sessions}""")
           }
 
           WearRpcMethod.ChatHistory -> {
@@ -2752,6 +3062,10 @@ class WearChatEventFlowTest {
                 .getValue("idempotencyKey")
                 .jsonPrimitive.content
             runId = requestedRunId
+            sentSessionKeys +=
+              request.params
+                .getValue("sessionKey")
+                .jsonPrimitive.content
             sentRunIds += requestedRunId
             sentMessages +=
               request.params
@@ -2796,7 +3110,11 @@ class WearChatEventFlowTest {
             WearMessage.Event(
               sequence = sequence,
               event = WearEventType.Connection,
-              payload = buildJsonObject { put("connected", connected) },
+              payload =
+                buildJsonObject {
+                  put("connected", connected)
+                  connectionFailure?.let { put("failure", it) }
+                },
               streamId = "epoch-a",
             ),
           ),
@@ -2846,6 +3164,7 @@ class WearChatEventFlowTest {
       idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
+      originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }
     }
   }
 }

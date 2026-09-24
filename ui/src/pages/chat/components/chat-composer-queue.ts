@@ -137,7 +137,12 @@ function mountQueueEditInput(element: Element | undefined, value: string): void 
 }
 
 function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
-  if (offline && item.sendState !== "failed" && item.sendState !== "unconfirmed") {
+  if (
+    offline &&
+    item.sendState !== "failed" &&
+    item.sendState !== "unconfirmed" &&
+    item.sendState !== "held"
+  ) {
     return t("chat.queue.states.waitingForReconnect");
   }
   switch (item.sendState) {
@@ -149,6 +154,7 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
     case "waiting-reconnect":
       return t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
+    case "held":
       return t("chat.queue.states.needsReview");
     case "failed":
       return t("common.failed");
@@ -159,7 +165,10 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
 
 export function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = (props.displayQueue ?? props.queue).filter(
-    (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
+    (item) =>
+      item.sendState !== "submitting" &&
+      item.sendState !== "sending" &&
+      !isQueuedSendInlineState(item),
   );
   // A peer can retire the source while this pane is away. Render its retained
   // correction for recovery/cancel; this never recreates a row in the outbox.
@@ -191,7 +200,8 @@ export function renderChatQueue(props: ChatQueueProps) {
   // Keep their unresolved delivery visible beside the messages they block.
   const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+    (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
+    isQueuedSendInlineState(head)
       ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
       : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
@@ -270,7 +280,8 @@ function renderChatQueueItem(
 ) {
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
-  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const failed =
+    item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
   const stateLabel = sendStateLabel(item, props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;

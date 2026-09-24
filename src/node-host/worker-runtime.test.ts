@@ -80,6 +80,7 @@ function startWorkerFixture(
   workerHostingDisabledReason?: string,
   options: {
     prepared?: PreparedRuntime;
+    desktopSharingEnabled?: boolean;
     initialWorkerCapacity?: { total: number; available: number } | null;
     gatewayResponse?: (
       message: Record<string, unknown>,
@@ -133,7 +134,7 @@ function startWorkerFixture(
   const previousExitCode = process.exitCode;
   const interruptListeners = process.listeners("SIGINT");
   const terminateListeners = process.listeners("SIGTERM");
-  const running = runNodeHostWorker();
+  const running = runNodeHostWorker({ desktopSharingEnabled: options.desktopSharingEnabled });
   return {
     input,
     messages,
@@ -236,6 +237,43 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     await stop();
   }
 });
+
+it.each([
+  { desktopSharingEnabled: undefined, configured: false, enabled: false },
+  { desktopSharingEnabled: false, configured: true, enabled: false },
+  { desktopSharingEnabled: true, configured: false, enabled: true },
+])(
+  "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
+  async ({ desktopSharingEnabled, configured, enabled }) => {
+    fixture.prepare.mockImplementationOnce(async (params) => ({
+      ...(await prepareNodeHostRuntime({
+        ...params,
+        config: { desktop: { host: { enabled: configured } } },
+        env: {},
+        platform: "darwin",
+      })),
+      start: fixture.start,
+    }));
+    const { messages, stop } = startWorkerFixture(false, undefined, { desktopSharingEnabled });
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "ready",
+          manifest: expect.objectContaining({
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
+          }),
+        }),
+      );
+    } finally {
+      await stop();
+    }
+  },
+);
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { input, messages, stderr, stop } = startWorkerFixture();

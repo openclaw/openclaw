@@ -9,9 +9,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { vitestWorkerBuildEntries } from "../scripts/lib/vitest-worker-build-entries.mts";
+import { createRuntimeProcessBuildEntries } from "../scripts/lib/runtime-process-core-build-entries.mts";
+import {
+  preservedModuleBuildSources,
+  vitestWorkerBuildEntries,
+} from "../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../scripts/lib/vitest-worker-declarations.mts";
+import { schtasksNativeEntrypoints } from "../src/daemon/schtasks-native-entrypoints.test-support.ts";
 import productionConfig from "./knip.config.ts";
+
+// Audit native entrypoints on every host without opting into their compilation.
+const nativeSchtasksAuditEntries = createRuntimeProcessBuildEntries(
+  Object.values(schtasksNativeEntrypoints),
+);
 
 const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
 
@@ -41,12 +51,18 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  // The PR artifact Vitest suite launches this standalone Node regression by path.
+  "test/scripts/pr-review-artifacts.node.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The plugin artifact suite launches these Node tests with the native tooling preload.
+  "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
+  // Generated handoff preload and resolver shims import this helper by URL.
+  "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // The public QA Gateway child launches this transport proxy by path.
@@ -86,6 +102,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
+  // The ACP reset proof spawns this adapter by path from the proof driver.
+  "test/fixtures/acp-reset-timeout-adapter.ts!",
 ] as const;
 
 const workspaces = Object.fromEntries(
@@ -106,12 +124,16 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // Both compiler registries emit entry modules, including declarations
+        // Compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
-        ...Object.values({
-          ...vitestWorkerBuildEntries,
-          ...vitestWorkerDeclarationEntries,
-        }).flatMap((source) => {
+        ...[
+          ...Object.values({
+            ...nativeSchtasksAuditEntries,
+            ...vitestWorkerBuildEntries,
+            ...vitestWorkerDeclarationEntries,
+          }),
+          ...preservedModuleBuildSources,
+        ].flatMap((source) => {
           const relative = path.relative(workspace, source).replaceAll("\\", "/");
           return relative.startsWith("../") ? [] : [`${relative}!`];
         }),
@@ -121,6 +143,8 @@ const workspaces = Object.fromEntries(
               TEST_ENTRY_GLOB,
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
+              // Core owner tests load this Telegram fixture through the bundled facade loader.
+              ...(workspace === "extensions/telegram" ? ["native-command.test-support.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next

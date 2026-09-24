@@ -228,7 +228,11 @@ suite.define(() => {
             await status.getByText("openclaw triage", { exact: false }).waitFor();
             expect(await status.textContent()).toContain("ENOSPC");
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
-            expect(await page.locator("openclaw-assistant-panel .assistant-panel").count()).toBe(0);
+            expect(
+              await page.locator("openclaw-assistant-panel .assistant-panel").isVisible(),
+            ).toBe(false);
+            expect(await page.locator("openclaw-assistant-panel-content").count()).toBe(0);
+            await expectRequestCountStable(gateway, "openclaw.chat", 0);
             expect(questions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
             await page.screenshot({

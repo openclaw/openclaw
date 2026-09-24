@@ -111,7 +111,10 @@ public enum OpenClawChatGatewayPayloadCodec {
         return try OpenClawChatModelCatalogSnapshot(
             choices: decoded.models.map(self.modelChoice),
             availabilityIsSessionScoped: true,
-            refreshFailed: decoded.refreshfailed == true)
+            refreshFailed: decoded.refreshfailed == true,
+            modelSelectionPolicy: decoded.modelselectionpolicy.map {
+                try GatewayPayloadDecoding.decode(AnyCodable($0))
+            })
     }
 
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
@@ -131,6 +134,7 @@ public enum OpenClawChatGatewayPayloadCodec {
             name: name.isEmpty ? model.id : model.name,
             provider: model.provider,
             available: model.available,
+            manualSelectionAllowed: model.manualselectionallowed,
             unavailableReason: model.unavailablereason?.value as? String,
             unavailableUntil: model.unavailableuntil,
             contextWindow: model.contextwindow,
@@ -174,12 +178,21 @@ public enum OpenClawChatGatewayPayloadCodec {
             acceptsArgs: entry.acceptsargs)
     }
 
+    private struct MetadataChangedPayload: Decodable {
+        let modelSelectionChanged: Bool?
+    }
+
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
         switch frame.event {
         case "tick":
             return .tick
-        case "chat.metadata.changed", "config.changed":
-            return .chatMetadataChanged
+        case "chat.metadata.changed":
+            let payload = frame.payload.flatMap {
+                try? GatewayPayloadDecoding.decode($0, as: MetadataChangedPayload.self)
+            }
+            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged
+        case "config.changed":
+            return .modelSelectionChanged
         case "sessions.changed":
             guard let payload = frame.payload,
                   let change = try? GatewayPayloadDecoding.decode(

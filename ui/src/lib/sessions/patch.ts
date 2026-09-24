@@ -1,4 +1,7 @@
-import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPermissionMode,
+  SessionsPatchParams,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
 
 export type SessionToolOverrides = {
@@ -8,7 +11,15 @@ export type SessionToolOverrides = {
   webSearch?: boolean;
 };
 
-export type SessionPatch = {
+export type SessionPatch = Pick<
+  SessionsPatchParams,
+  | "sandboxMode"
+  | "nativeRuntimeConsent"
+  | "expectedNativeRuntimeConsent"
+  | "expectedSandboxMode"
+  | "expectedPermissionMode"
+  | "expectedLifecycleRevision"
+> & {
   label?: string | null;
   icon?: string | null;
   color?: string | null;
@@ -16,6 +27,7 @@ export type SessionPatch = {
   boardFace?: "chat" | "dashboard";
   boardPresentation?: "split" | "expanded" | null;
   model?: string | null;
+  agentRuntime?: string | null;
   contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
@@ -38,6 +50,8 @@ export type SessionPatchOptions = {
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */
   waitFor?: Promise<unknown>;
+  /** Revalidate explicit user intent after the settings tail, before dispatch. */
+  canDispatch?: () => boolean;
   /**
    * Skips the canonical list refresh this patch forces. Batch callers own one
    * refresh after their last row; otherwise an N-row batch pays N full

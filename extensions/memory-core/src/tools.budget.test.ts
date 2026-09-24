@@ -72,7 +72,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([10_000, 30_000])(
+it.each([20_000, 40_000])(
   "keeps the wiki deadline independent of managed memory readiness (wiki=%i ms)",
   async (wikiDelayMs) => {
     vi.useFakeTimers();
@@ -119,22 +119,22 @@ it.each([10_000, 30_000])(
     const result = await pending;
     expect(result.details).toMatchObject({
       results: expect.arrayContaining(
-        (wikiDelayMs < 15_000 ? [wikiHit, memoryHit] : [memoryHit]).map((hit) =>
+        (wikiDelayMs < 30_000 ? [wikiHit, memoryHit] : [memoryHit]).map((hit) =>
           expect.objectContaining({ path: hit.path, snippet: hit.snippet }),
         ),
       ),
       corpora: [
         { corpus: "memory", outcome: "ok" },
-        wikiDelayMs < 15_000
+        wikiDelayMs < 30_000
           ? { corpus: "wiki", outcome: "ok" }
           : {
               corpus: "wiki",
               outcome: "unavailable",
-              error: "memory_search timed out after 15s",
+              error: "memory_search timed out after 30s",
             },
       ],
     });
-    expect(result.details).toHaveProperty("results.length", wikiDelayMs < 15_000 ? 2 : 1);
+    expect(result.details).toHaveProperty("results.length", wikiDelayMs < 30_000 ? 2 : 1);
   },
 );
 

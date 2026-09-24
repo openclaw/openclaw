@@ -140,13 +140,17 @@ pub fn observe_history(webview: &Webview) {
 }
 
 pub(super) fn authorized_source(app: &AppHandle, label: &str, source: &Url) -> bool {
+    if app
+        .try_state::<crate::gateway_windows::GatewayWindows>()
+        .is_some_and(|windows| windows.authorized_source(label, source))
+    {
+        return true;
+    }
     if label == "main" {
         app.state::<crate::DesktopState>()
             .main_window_has_local_url(source)
-            || crate::native_browser_bridge::dashboard_window_source_is_current(app, source)
     } else {
-        crate::external_browser_url_allowed(source)
-            && label == crate::discovery::gateway_window_label(source)
+        false
     }
 }
 

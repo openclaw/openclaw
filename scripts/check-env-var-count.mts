@@ -2,8 +2,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
-  enforceRatchetScalar,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
@@ -36,7 +36,18 @@ export function isCountedSourcePath(filePath: string) {
   );
 }
 
-export function collectEnvVarNames(root = process.cwd(), options: { staged?: boolean } = {}) {
+export type EnvVarNamesByPath = ReadonlyMap<string, ReadonlySet<string>>;
+
+export function addEnvVarNames(source: string, names: Set<string>) {
+  for (const match of source.matchAll(ENV_VAR_PATTERN)) {
+    names.add(match[0]);
+  }
+}
+
+export function collectEnvVarNames(
+  root = process.cwd(),
+  options: { staged?: boolean; preparedNames?: EnvVarNamesByPath } = {},
+) {
   const staged = options.staged === true;
   const files = execFileSync(
     "git",
@@ -57,10 +68,15 @@ export function collectEnvVarNames(root = process.cwd(), options: { staged?: boo
   const sources = staged ? loadRatchetSources(root, files).values() : files;
   const names = new Set<string>();
   for (const entry of sources) {
-    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
-    for (const match of source.matchAll(ENV_VAR_PATTERN)) {
-      names.add(match[0]);
+    const prepared = staged ? undefined : options.preparedNames?.get(entry);
+    if (prepared !== undefined) {
+      for (const name of prepared) {
+        names.add(name);
+      }
+      continue;
     }
+    const source = staged ? entry : fs.readFileSync(path.join(root, entry), "utf8");
+    addEnvVarNames(source, names);
   }
   return [...names].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
@@ -97,7 +113,11 @@ function readBaseBudget(root: string, ref: string) {
   return loadRatchetReference(root, baselineRef, BUDGET_PATH, parseBudget);
 }
 
-export function main(argv: string[] = process.argv.slice(2), root = process.cwd()) {
+export function main(
+  argv: string[] = process.argv.slice(2),
+  root = process.cwd(),
+  preparedNames?: EnvVarNamesByPath,
+) {
   const baseIndex = argv.indexOf("--base");
   const baseRef = baseIndex < 0 ? "origin/main" : argv[baseIndex + 1];
   const staged = argv.includes("--staged");
@@ -109,17 +129,40 @@ export function main(argv: string[] = process.argv.slice(2), root = process.cwd(
   }
   const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
   const baseBudget = readBaseBudget(root, baseRef);
-  if (baseBudget !== null) {
-    enforceRatchetScalar(budget, baseBudget, {
-      increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
-    });
+  const growth =
+    baseBudget !== null && budget > baseBudget
+      ? [
+          {
+            file: BUDGET_PATH,
+            title: "Environment variable count budget",
+            message: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
+          },
+        ]
+      : [];
+  if (reportLimitViolations(growth)) {
+    throw new Error(growth[0]!.message);
   }
-  const names = collectEnvVarNames(root, { staged });
-  enforceRatchetScalar(names.length, budget, {
-    decreased: `OPENCLAW_* count ${names.length} is below budget ${budget}; update ${BUDGET_PATH}`,
-    increased: `OPENCLAW_* count ${names.length} exceeds budget ${budget}; update ${BUDGET_PATH}`,
-  });
-  reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
+  const names = collectEnvVarNames(root, { staged, preparedNames });
+  const messages =
+    names.length === budget
+      ? []
+      : [
+          `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
+        ];
+  if (
+    reportLimitViolations(
+      messages.map((message) => ({
+        file: BUDGET_PATH,
+        title: "Environment variable count budget",
+        message,
+      })),
+    )
+  ) {
+    throw new Error(messages.join("\n"));
+  }
+  if (messages.length === 0 && growth.length === 0) {
+    reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
+  }
   return names.length;
 }
 

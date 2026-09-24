@@ -52,7 +52,10 @@ function expectBoundedMissingProfileRecovery(
   const serialized = JSON.stringify(value);
   if (options?.allowSessionTruncation) {
     expect(typeof value).toBe("string");
-    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT.slice(0, 160));
+    expect(value).toContain("The selected auth profile is unavailable");
+    expect(value).toContain("`openclaw configure`");
+    expect(value).toMatch(/then retry\.$/u);
+    expect(value).toHaveLength(160);
   } else {
     expect(serialized).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
@@ -224,7 +227,6 @@ describe("Codex auth product proof", () => {
                     command: process.execPath,
                     args: [appServerFixture],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },
@@ -391,7 +393,6 @@ describe("Codex auth product proof", () => {
                     command: process.execPath,
                     args: [appServerFixture],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },
@@ -518,31 +519,20 @@ describe("Codex auth product proof", () => {
             expect(
               events.find(
                 (event) =>
-                  event.event === "sessions.changed" &&
+                  event.event === "session.message" &&
                   event.payload !== null &&
                   typeof event.payload === "object" &&
                   (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-                  (event.payload as { lastRunId?: unknown }).lastRunId === runId &&
-                  (event.payload as { reason?: unknown }).reason === "chat.dispatch-error",
+                  (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
+                    runId &&
+                  (event.payload as { session?: { status?: unknown } }).session?.status ===
+                    "failed",
               ),
             ).toBeDefined();
           },
           { interval: 20, timeout: 5_000 },
         );
 
-        await vi.waitFor(
-          async () => {
-            const listed = await client.request<{
-              sessions?: Array<{ key?: unknown; lastRunError?: unknown }>;
-            }>("sessions.list", { limit: 20 });
-            const session = listed.sessions?.find((entry) => entry.key === sessionKey);
-            expect(session).toBeDefined();
-            expectBoundedMissingProfileRecovery(session?.lastRunError, {
-              allowSessionTruncation: true,
-            });
-          },
-          { interval: 50, timeout: REQUEST_TIMEOUT_MS },
-        );
         failedHistory = await client.request<GatewayHistory>(
           "chat.history",
           { agentId: "main", sessionKey, limit: 50 },
@@ -563,18 +553,18 @@ describe("Codex auth product proof", () => {
       );
       const lifecycleEvent = events.find(
         (event) =>
-          event.event === "sessions.changed" &&
+          event.event === "session.message" &&
           event.payload !== null &&
           typeof event.payload === "object" &&
           (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-          (event.payload as { lastRunId?: unknown }).lastRunId === runId &&
-          (event.payload as { reason?: unknown }).reason === "chat.dispatch-error",
+          (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId === runId &&
+          (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
       );
       expectBoundedMissingProfileRecovery(finalEvent?.payload);
-      // Rejected admission persists a session lifecycle error before broadcasting chat.error;
-      // it must not invent a native agent lifecycle for a run that never started.
+      // Native lifecycle publishes the failed session snapshot before broadcasting chat.error.
       expectBoundedMissingProfileRecovery(
-        (lifecycleEvent?.payload as { lastRunError?: unknown } | undefined)?.lastRunError,
+        (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
+          ?.lastRunError,
         { allowSessionTruncation: true },
       );
       expectBoundedMissingProfileRecovery(terminal);
@@ -590,7 +580,11 @@ describe("Codex auth product proof", () => {
       const operationalMethods = failureMethods.filter(
         (method) => method !== "initialize" && method !== "initialized",
       );
-      expect(operationalMethods).toEqual([]);
+      // App-server may perform read-only capability discovery before OpenClaw rejects the
+      // removed profile, but it must not start or resume a conversation turn.
+      expect(
+        operationalMethods.filter((method) => method !== "model/list" && method !== "account/read"),
+      ).toEqual([]);
 
       console.log(
         `[qa-codex-missing-auth-profile] ${JSON.stringify({

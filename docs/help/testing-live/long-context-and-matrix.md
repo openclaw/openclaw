@@ -71,6 +71,33 @@ benchmarks. They fail unless the following runtime contracts hold:
 Compaction duration, restart latency, turn latency, and total suite duration
 are emitted as informational metrics only.
 
+### Bounded compaction replay
+
+The bounded replay cases put a verification marker only in synthetic tool
+output, reopen the SQLite session, and require the model to recall that marker.
+Configure the corresponding provider API key before running either case;
+explicit provider failures are test failures.
+
+Anthropic exercises streamed native compaction and the next request's replay.
+Its native threshold has a 50,000-token minimum:
+
+```bash
+OPENCLAW_LIVE_TEST=1 ANTHROPIC_LIVE_TEST=1 \
+  node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts \
+  src/agents/anthropic-transport-stream.live.test.ts \
+  -t 'replays streamed native compaction from SQLite'
+```
+
+OpenAI exercises automatic client summarization through the managed runner with
+a smaller configured context budget, then replays its persisted summary:
+
+```bash
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 \
+  node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts \
+  src/agents/sessions/agent-session.openai-compaction.live.test.ts \
+  -t 'automatically compacts tool history and resumes from its SQLite checkpoint'
+```
+
 <Warning>
 The full modes deliberately cross OpenAI's long-context pricing boundary and
 make several large API calls. Above `272000` input tokens, the whole request is
@@ -164,6 +191,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                      | Notes      |
 | --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5-5`                         |            |
 | `anthropic/claude-opus-5`                           |            |
 | `anthropic/claude-opus-4-8`                         |            |
 | `anthropic/claude-sonnet-5`                         |            |
@@ -182,6 +210,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `openrouter/minimax/minimax-m2.7`                   |            |
 | `opencode-go/glm-5`                                 |            |
 | `openrouter/ai21/jamba-large-1.7`                   |            |
+| `xai/grok-4.7`                                      |            |
 | `xai/grok-4.6`                                      |            |
 | `xai/grok-4.5`                                      |            |
 | `xai/grok-4.20-0309-reasoning`                      |            |

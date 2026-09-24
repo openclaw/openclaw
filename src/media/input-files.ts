@@ -244,18 +244,25 @@ async function fetchWithGuard(
   return result;
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number) {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   const limit = Math.max(0, Math.floor(maxChars));
   const decode = (label: string) => {
     const decoder = new TextDecoder(label);
     let text = "";
-    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+    // Look past an exact limit: unread bytes may only contain decoder state, not omitted text.
+    for (let offset = 0; offset < buffer.length && text.length <= limit; offset += 16_384) {
       const end = Math.min(offset + 16_384, buffer.length);
       // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
       text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
     }
-    return truncateUtf16Safe(text, limit);
+    const prefix = truncateUtf16Safe(text, limit);
+    return {
+      text: prefix,
+      ...(prefix.length < text.length
+        ? { metadata: { textTruncated: true, imagesTruncated: false } }
+        : {}),
+    };
   };
   try {
     return decode(encoding);
@@ -469,7 +476,7 @@ export async function extractFileContentFromBuffer(params: {
     const metadata: DocumentExtractionMetadata = {
       ...extracted.metadata,
       textTruncated:
-        extracted.metadata?.textTruncated === true || extracted.text.length > limits.maxChars,
+        extracted.metadata?.textTruncated === true || text.length < extracted.text.length,
       imagesTruncated: extracted.metadata?.imagesTruncated === true,
     };
     return {
@@ -480,14 +487,5 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  // Look past the output cap by one full UTF-16 code point to detect truncation.
-  const decodedText = decodeTextContent(buffer, charset, limits.maxChars + 2);
-  const text = truncateUtf16Safe(decodedText, limits.maxChars);
-  return {
-    filename,
-    text,
-    ...(decodedText.length > limits.maxChars
-      ? { metadata: { textTruncated: true, imagesTruncated: false } }
-      : {}),
-  };
+  return { filename, ...decodeTextContent(buffer, charset, limits.maxChars) };
 }

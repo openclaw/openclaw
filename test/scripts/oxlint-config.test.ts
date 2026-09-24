@@ -362,6 +362,173 @@ describe("oxlint config", () => {
     );
   });
 
+  it("keeps source and UI lint projects bounded with imported and ambient types", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-core-projects-"));
+    for (const file of [
+      ".oxlintrc.json",
+      "tsconfig.json",
+      "src/tsconfig.json",
+      "ui/tsconfig.json",
+    ]) {
+      if (fs.existsSync(file)) {
+        const target = path.join(tempRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file, target);
+      }
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    const source = [
+      'import { work } from "../packages/imported.js";',
+      "work(); fromCore(); fromUi(); fromPackage(); fromPlugin(); fromMts(); fromCts();",
+    ].join("\n");
+    for (const [file, content] of Object.entries({
+      "src/owner.ts": source,
+      "ui/owner.ts": source,
+      "packages/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
+      "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
+      "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
+      "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
+      "extensions/contracts.d.ts": "declare function fromPlugin(): Promise<void>;",
+      "packages/contracts.d.mts":
+        "export {}; declare global { function fromMts(): Promise<void>; }",
+      "packages/contracts.d.cts":
+        "export {}; declare global { function fromCts(): Promise<void>; }",
+    })) {
+      const target = path.join(tempRoot, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    }
+    const selected = ["src/owner.ts", "ui/owner.ts"];
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("node_modules/oxlint/bin/oxlint"),
+        "--type-aware",
+        "--format",
+        "json",
+        "--threads=1",
+        ...selected,
+      ],
+      {
+        cwd: tempRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OXC_LOG: "debug",
+          GOMAXPROCS: "2",
+          OXLINT_TSGOLINT_PATH: path.resolve(
+            "node_modules/.bin",
+            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+          ),
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      diagnostics: Array<{ filename: string; code: string }>;
+    };
+    for (const file of selected) {
+      expect(
+        report.diagnostics
+          .filter((diagnostic) => diagnostic.filename.replaceAll("\\", "/") === file)
+          .map((diagnostic) => diagnostic.code),
+      ).toEqual(Array.from({ length: 7 }, () => "typescript(no-floating-promises)"));
+      const owner = path.dirname(file);
+      expect(result.stderr.replaceAll("\\", "/")).toContain(
+        `Got tsconfig for file ${path.join(tempRoot, file).replaceAll("\\", "/")}: ${path.join(tempRoot, owner, "tsconfig.json").replaceAll("\\", "/")}`,
+      );
+      const project = spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/typescript-native/bin/tsc"),
+          "--showConfig",
+          "-p",
+          `${owner}/tsconfig.json`,
+        ],
+        { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
+      );
+      expect(project.status, project.stdout + project.stderr).toBe(0);
+      const parsed = JSON.parse(project.stdout) as { files: string[] };
+      expect(parsed.files).not.toContain(`../${owner === "src" ? "ui" : "src"}/owner.ts`);
+    }
+  });
+
+  it("checks unbound methods in TypeScript and CommonJS source test support", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-source-support-"));
+    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+      if (fs.existsSync(file)) {
+        const target = path.join(tempRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file, target);
+      }
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    const supportFiles = [
+      "src/cli/diagnostics.test-support.ts",
+      "src/cli/diagnostics.test-support.cjs",
+    ];
+    const files = [...supportFiles, "src/cli/unrelated.cjs", "ui/unrelated.test-support.cjs"];
+    const source = 'const emit = process.emit;\nemit("lint-fixture");\n';
+    for (const file of files) {
+      const target = path.join(tempRoot, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    }
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--format",
+          "json",
+          "--threads=1",
+          ...files,
+        ],
+        {
+          cwd: tempRoot,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OXLINT_TSGOLINT_PATH: path.resolve(
+              "node_modules/.bin",
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const broken = lint();
+    expect(broken.error).toBeUndefined();
+    expect(broken.status, broken.stdout + broken.stderr).toBe(1);
+    const report = JSON.parse(broken.stdout) as {
+      diagnostics: Array<{ filename: string; code: string }>;
+    };
+    expect(
+      report.diagnostics.map(({ filename, code }) => ({
+        filename: filename.replaceAll("\\", "/"),
+        code,
+      })),
+    ).toEqual(
+      expect.arrayContaining(
+        supportFiles.map((filename) => ({ filename, code: "typescript(unbound-method)" })),
+      ),
+    );
+    expect(report.diagnostics).toHaveLength(supportFiles.length);
+    for (const file of supportFiles) {
+      fs.writeFileSync(
+        path.join(tempRoot, file),
+        source.replace("process.emit;", "process.emit.bind(process);"),
+      );
+    }
+    const fixed = lint();
+    expect(fixed.error).toBeUndefined();
+    expect(fixed.status, fixed.stdout + fixed.stderr).toBe(0);
+    expect(JSON.parse(fixed.stdout).diagnostics).toEqual([]);
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 
@@ -479,7 +646,7 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("enforces scoped max-lines budgets while excluding generated output", () => {
+  it("errors on scoped max-lines budgets while excluding generated output", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const maxLinesOverrides = (config.overrides ?? []).filter(
       (override) => override.rules?.["max-lines"],
@@ -525,6 +692,132 @@ describe("oxlint config", () => {
         },
       },
     ]);
+  });
+
+  it("keeps native cap scopes and correctness while making only CI limits advisory", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    fs.writeFileSync(
+      path.join(root, ".oxlintrc.json"),
+      JSON.stringify({
+        ...config,
+        env: { browser: true },
+        globals: { configuredGlobal: "readonly" },
+        rules: { ...config.rules, "no-undef": "error" },
+        ignorePatterns: [...(config.ignorePatterns ?? []), "src/ignored-by-config.ts"],
+        overrides: [
+          ...(config.overrides ?? []),
+          {
+            files: ["src/disabled/**"],
+            rules: { "max-lines": "off" },
+          },
+        ],
+      }),
+    );
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const sources = {
+      "src/oversized.ts": 702,
+      "src/within-cap.test.ts": 902,
+      "extensions/copilot/src/event-bridge.ts": 902,
+      "src/generated/ignored.ts": 1402,
+      "src/ignored-by-config.ts": 1402,
+      "src/disabled/ignored.ts": 1402,
+    };
+    for (const [file, lines] of Object.entries(sources)) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, file),
+        `export const values = [\n${"  0,\n".repeat(lines - 2)}];\n`,
+      );
+    }
+    fs.writeFileSync(path.join(root, "src/correctness.ts"), "export var legacy = 1;\n");
+    fs.writeFileSync(path.join(root, "src/globals.js"), "window.console.log(configuredGlobal);\n");
+    for (const { github, correctness } of [
+      { github: false, correctness: false },
+      { github: true, correctness: false },
+      { github: true, correctness: true },
+    ]) {
+      const summary = path.join(root, `summary-${github}-${correctness}.md`);
+      const result = spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/run-oxlint.mts"),
+          "--openclaw-focused-config",
+          "--threads=1",
+          "--format",
+          "json",
+          ...Object.keys(sources),
+          "src/globals.js",
+          ...(correctness ? ["src/correctness.ts"] : []),
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "true",
+            GITHUB_ACTIONS: github ? "true" : "false",
+            GITHUB_STEP_SUMMARY: summary,
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(github && !correctness ? 0 : 1);
+      const report = JSON.parse(result.stdout) as {
+        diagnostics: Array<{ code: string; severity: string; filename: string; help?: string }>;
+      };
+      expect(report.diagnostics).toHaveLength(correctness ? 2 : 1);
+      expect(
+        report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
+      ).toMatchObject({
+        severity: github ? "warning" : "error",
+        help: "Maximum allowed is 700.",
+      });
+      if (github) {
+        expect(result.stderr).toContain("::warning file=src/oversized.ts,");
+        expect(fs.readFileSync(summary, "utf8")).toContain("Maximum allowed is 700.");
+      }
+      if (correctness) {
+        expect(
+          report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(no-var)")?.severity,
+        ).toBe("error");
+      }
+    }
+  });
+
+  it("preserves native config validation locally and in Actions", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-invalid-limit-"));
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    fs.writeFileSync(path.join(root, "fixture.ts"), "console.log(1);\n");
+    const invalidConfigs = [
+      ...["not-a-severity", 3, null].map((severity) =>
+        JSON.stringify({
+          categories: { correctness: "off" },
+          rules: { "max-lines": [severity, { max: 1 }] },
+        }),
+      ),
+      '{categories: {correctness: "off"}, rules: {"max-lines": ["error", {max: 1}]}}',
+    ];
+    for (const config of invalidConfigs) {
+      fs.writeFileSync(path.join(root, ".oxlintrc.json"), config);
+      for (const github of [false, true]) {
+        const result = spawnSync(
+          process.execPath,
+          [path.resolve("scripts/run-oxlint.mts"), "--openclaw-focused-config", "fixture.ts"],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: { ...process.env, GITHUB_ACTIONS: github ? "true" : "false" },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(
+          result.status,
+          `${config} / Actions=${github}: ${result.stdout}${result.stderr}`,
+        ).toBe(1);
+        expect(result.stdout + result.stderr).toContain("Failed to parse");
+      }
+    }
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

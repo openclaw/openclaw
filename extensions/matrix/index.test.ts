@@ -25,7 +25,10 @@ vi.mock("./src/cli.js", () => {
 });
 
 vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
-vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
+vi.mock("./runtime-setter-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-setter-api.js")>()),
+  setMatrixRuntime: runtimeMocks.setMatrixRuntime,
+}));
 vi.mock("./src/matrix/subagent-hooks.js", () => runtimeMocks);
 
 function requireFirstCliRegistration(mock: ReturnType<typeof vi.fn>) {

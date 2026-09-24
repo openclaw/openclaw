@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   inspectAcpSessionClaimsForDoctor,
   updateAcpSessionIdentityForDoctor,
@@ -7,8 +10,10 @@ import {
   listChannelIngressQueueAccountIdsReadOnly,
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionIdentityEvidenceBatch } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
@@ -30,12 +35,108 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  readDeferredPluginSessionImport,
+  resolveVerifiedSessionSource,
+} from "./deferred-plugin-session-sources.js";
+import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
 type DoctorSessionStoreTarget = { agentId: string; storePath: string };
+
+type SessionSourceEvidence = { imported: boolean; sessionIds: ReadonlySet<string> };
+
+function hasUnimportedSessionIdentity(params: {
+  agentId: string;
+  sessionId: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  cache: Map<string, SessionSourceEvidence>;
+}): boolean {
+  const agentId = normalizeAgentId(params.agentId);
+  const configuredStore = resolveSessionStorePathCore(params.config.session?.store, {
+    agentId,
+    env: params.env,
+  });
+  const defaultStore = resolveSessionStorePathCore(undefined, { agentId, env: params.env });
+  const legacyRootStore = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
+  const sources = new Map([
+    [configuredStore, configuredStore],
+    [defaultStore, defaultStore],
+    [legacyRootStore, configuredStore],
+  ]);
+  let importedIdentity = false;
+  let unimportedIdentity = false;
+  for (const [storePath, destination] of sources) {
+    if (storePath.endsWith(".sqlite")) {
+      continue;
+    }
+    const key = `${agentId}\0${storePath}\0${destination}`;
+    let sourceEvidence = params.cache.get(key);
+    if (sourceEvidence === undefined) {
+      const before = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
+      sourceEvidence = { imported: false, sessionIds: new Set() };
+      if (before) {
+        const sqlitePath = resolveSqliteTargetFromSessionStorePath(destination, {
+          agentId,
+          env: params.env,
+        }).path;
+        const receipt = readDeferredPluginSessionImport({
+          cfg: params.config,
+          target: {
+            agentId,
+            storePath,
+            ...(storePath === legacyRootStore ? { sqlitePath } : {}),
+          },
+          sqlitePath,
+          env: params.env,
+          purpose: "canonical",
+        });
+        if (receipt) {
+          const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
+          if (
+            !index ||
+            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
+          ) {
+            throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
+          }
+        }
+        const parsed = readSessionStoreJson5(storePath);
+        const after = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
+        if (
+          !parsed.ok ||
+          !after ||
+          (["dev", "ino", "mtimeNs", "ctimeNs", "size"] as const).some(
+            (field) => before[field] !== after[field],
+          )
+        ) {
+          throw new Error(
+            `Legacy session source could not be verified while reading identity evidence: ${storePath}`,
+          );
+        }
+        sourceEvidence = {
+          imported: receipt !== undefined,
+          sessionIds: new Set(
+            Object.values(parsed.store).flatMap((entry) =>
+              isRecord(entry) && typeof entry.sessionId === "string"
+                ? [entry.sessionId.trim()]
+                : [],
+            ),
+          ),
+        };
+      }
+      params.cache.set(key, sourceEvidence);
+    }
+    if (sourceEvidence.sessionIds.has(params.sessionId)) {
+      importedIdentity ||= sourceEvidence.imported;
+      unimportedIdentity ||= !sourceEvidence.imported;
+    }
+  }
+  return !importedIdentity && unimportedIdentity;
+}
 
 function resolveDoctorSessionIdentityEvidence(params: {
   cache: SessionStoreTargetsReadCache;
@@ -92,6 +193,7 @@ function resolveDoctorSessionIdentityEvidence(params: {
     }
   }
   const evidence = readSessionIdentityEvidenceBatch(probes);
+  const sourceImports = new Map<string, SessionSourceEvidence>();
   const observedByRequest: (typeof evidence)[] = params.requests.map(() => []);
   for (const [position, observed] of evidence.entries()) {
     observedByRequest[probes[position]!.index]!.push(observed);
@@ -106,9 +208,18 @@ function resolveDoctorSessionIdentityEvidence(params: {
     ) {
       return { ...request, state: "unknown" };
     }
+    const unimported =
+      current.length === 0 &&
+      hasUnimportedSessionIdentity({
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        config: params.config,
+        env: params.env,
+        cache: sourceImports,
+      });
     return current[0]
       ? { ...request, state: "current", sessionKey: current[0].sessionKey }
-      : { ...request, state: "absent" };
+      : { ...request, state: unimported ? "unknown" : "absent" };
   });
 }
 

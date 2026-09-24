@@ -11,7 +11,6 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { extractText, extractTextCached } from "../../lib/chat/message-extract.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
-import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
@@ -229,15 +228,19 @@ export function resolveCumulativeAssistantTail(
   cumulativeText: string,
   runId: string,
   endIndex = messages.length,
+  replayedCommentaryItemIds?: ReadonlySet<string>,
 ): string | null {
   let ownedPrefixIndex = -1;
   for (let index = 0; index < endIndex; index += 1) {
     const message = messages[index];
     const identity = readSessionMessageIdentity(message);
+    const commentaryIdentity = readAssistantStreamSegmentIdentity(message);
+    const replayOwnsCommentary =
+      commentaryIdentity !== undefined &&
+      (replayedCommentaryItemIds === undefined ||
+        replayedCommentaryItemIds.has(commentaryIdentity.itemId));
     const persistedText =
-      identity?.runId === runId && !isKeyedAssistantStreamFallbackMessage(message)
-        ? extractTextCached(message)
-        : null;
+      identity?.runId === runId && !replayOwnsCommentary ? extractTextCached(message) : null;
     if (
       identity?.role === "assistant" &&
       persistedText &&
@@ -251,22 +254,40 @@ export function resolveCumulativeAssistantTail(
     ownedPrefixIndex >= 0 ? ownedPrefixIndex : lastUserMessageIndex(messages, endIndex) + 1;
   const persistedTexts = messages.slice(turnStart, endIndex).map((message) => {
     const identity = readSessionMessageIdentity(message);
-    // Keyed commentary mirrors travel through item events, outside the cumulative buffer.
-    return identity?.role === "assistant" &&
+    const commentaryIdentity = readAssistantStreamSegmentIdentity(message);
+    // A surviving item event owns its keyed commentary mirror. If replay eviction
+    // removed that event, the persisted mirror is the only prefix evidence left.
+    const replayOwnsCommentary =
+      commentaryIdentity !== undefined &&
+      (replayedCommentaryItemIds === undefined ||
+        replayedCommentaryItemIds.has(commentaryIdentity.itemId));
+    const text =
+      identity?.role === "assistant" &&
       (!identity.runId || identity.runId === runId) &&
-      !isKeyedAssistantStreamFallbackMessage(message)
-      ? extractTextCached(message)
-      : null;
+      !replayOwnsCommentary
+        ? extractTextCached(message)
+        : null;
+    return { text, skipOnMismatch: commentaryIdentity !== undefined };
   });
-  return resolveAssistantTextTail(persistedTexts, cumulativeText);
+  return resolveAssistantTextCandidateTail(persistedTexts, cumulativeText);
 }
 
 export function resolveAssistantTextTail(
   persistedTexts: readonly (string | null)[],
   cumulativeText: string,
 ): string | null {
+  return resolveAssistantTextCandidateTail(
+    persistedTexts.map((text) => ({ text, skipOnMismatch: false })),
+    cumulativeText,
+  );
+}
+
+function resolveAssistantTextCandidateTail(
+  persistedTexts: readonly { text: string | null; skipOnMismatch: boolean }[],
+  cumulativeText: string,
+): string | null {
   let persistedPrefixLength = 0;
-  for (const persistedText of persistedTexts) {
+  for (const { text: persistedText, skipOnMismatch } of persistedTexts) {
     if (!persistedText) {
       continue;
     }
@@ -285,6 +306,9 @@ export function resolveAssistantTextTail(
     }
     if (whitespace && persistedText.startsWith(remaining.slice(whitespace.length))) {
       return null;
+    }
+    if (skipOnMismatch) {
+      continue;
     }
     if (persistedPrefixLength > 0) {
       break;

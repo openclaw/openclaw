@@ -8,9 +8,8 @@ import { describe, expect, it } from "vitest";
 import { collectBundledExtensionManifestErrors } from "../scripts/lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
-import { collectPackUnpackedSizeErrors } from "../scripts/lib/npm-pack-budget.mts";
+import { collectPackUnpackedSizeFindings } from "../scripts/lib/npm-pack-budget.mts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../scripts/lib/package-dist-inventory-contract.mts";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import { createWorkspaceBootstrapSmokeEnv } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import {
   collectInstalledBundledRuntimeSidecarPaths,
@@ -18,7 +17,7 @@ import {
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   collectAppcastSparkleVersionErrors,
-  collectCriticalPluginSdkEntrypointSizeErrors,
+  collectCriticalPluginSdkEntrypointSizeFindings,
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
@@ -36,6 +35,7 @@ import {
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
@@ -52,6 +52,9 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 }
 
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+
+// Prepare the public SDK graph through the test runner before the consumer test deadline.
+await import("openclaw/plugin-sdk/channel-outbound");
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -161,6 +164,32 @@ describe("packed CLI smoke", () => {
       OPENCLAW_SUPPRESS_NOTES: "1",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
     });
+  });
+
+  it("does not inherit provider credentials from the base environment", () => {
+    const env = createPackedCliSmokeEnv({
+      HOME: "/tmp/original-home",
+      OPENAI_API_KEY: "base-openai-secret",
+    });
+
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("does not admit provider credentials through smoke overrides", () => {
+    const env = createPackedCliSmokeEnv(
+      { HOME: "/tmp/original-home" },
+      {
+        HOME: "/tmp/smoke-home",
+        OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+        OPENAI_API_KEY: "override-openai-secret",
+      },
+    );
+
+    expect(env).toMatchObject({
+      HOME: "/tmp/smoke-home",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("skips plugin command discovery during packed completion cache smoke", () => {
@@ -620,6 +649,49 @@ describe("packed install verification", () => {
 });
 
 describe("createPackedPluginSdkTypescriptSmokeProject", () => {
+  it("preserves the unchanged released progress consumer behavior", async () => {
+    await import("../scripts/fixtures/packed-plugin-sdk-progress-consumer.js");
+  });
+
+  it("creates a focused strict-declaration progress consumer without source aliases", () => {
+    const consumerDir = mkdtempSync(join(tmpdir(), "release-check-progress-consumer-"));
+    try {
+      createPackedPluginSdkTypescriptSmokeProject({
+        consumerDir,
+        packageSpec: "2026.9.4",
+        progressConsumerOnly: true,
+      });
+      expect(JSON.parse(readFileSync(join(consumerDir, "tsconfig.json"), "utf8"))).toEqual({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          noEmit: true,
+          strict: true,
+          skipLibCheck: false,
+          types: ["node"],
+          target: "ES2022",
+        },
+        include: ["src/packed-plugin-sdk-progress-consumer.ts"],
+      });
+      expect(
+        readFileSync(join(consumerDir, "src/packed-plugin-sdk-progress-consumer.ts"), "utf8"),
+      ).toBe(readFileSync("scripts/fixtures/packed-plugin-sdk-progress-consumer.ts", "utf8"));
+    } finally {
+      rmSync(consumerDir, { recursive: true, force: true });
+    }
+  });
+
+  it("limits setupSurface omission to the recorded frozen targets", async () => {
+    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
+  });
+
   it("writes a consumer project that imports representative public SDK subpaths", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-types-"));
     try {
@@ -665,50 +737,68 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
   });
 });
 
-describe("collectPackUnpackedSizeErrors", () => {
+describe("collectPackUnpackedSizeFindings", () => {
   it.each([
     { label: "ordinary package", unpackedSize: 120_354_302 },
     { label: "required native payload", unpackedSize: 243_066_603 },
-    { label: "exact budget", unpackedSize: 235 * 1024 * 1024 },
+    { label: "exact budget", unpackedSize: 320 * 1024 * 1024 },
   ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", unpackedSize)]),
-    ).toStrictEqual([]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", unpackedSize)]),
+    ).toStrictEqual({ errors: [], violations: [] });
   });
 
   it("accepts npm 12 name-keyed pack results", () => {
     expect(
-      collectPackUnpackedSizeErrors({
+      collectPackUnpackedSizeFindings({
         openclaw: makePackResult("openclaw-2026.3.14.tgz", 120_354_302),
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual({ errors: [], violations: [] });
   });
 
   it("rejects pack results one byte above the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 235 * 1024 * 1024 + 1)]),
-    ).toEqual([
-      "candidate.tgz unpackedSize 246415361 bytes (235.0 MiB) exceeds budget 246415360 bytes (235.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
-    ]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 320 * 1024 * 1024 + 1)]),
+    ).toEqual({
+      errors: [],
+      violations: [
+        {
+          file: "package.json",
+          title: "npm package unpacked size budget",
+          message:
+            "candidate.tgz unpackedSize 335544321 bytes (320.0 MiB) exceeds budget 335544320 bytes (320.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+        },
+      ],
+    });
   });
 
   it("honors an explicit lower unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 101)], { budgetBytes: 100 }),
-    ).toEqual([
-      expect.stringContaining("unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes"),
-    ]);
+      collectPackUnpackedSizeFindings([makePackResult("candidate.tgz", 101)], { budgetBytes: 100 }),
+    ).toEqual({
+      errors: [],
+      violations: [
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes",
+          ),
+        }),
+      ],
+    });
   });
 
   it("fails closed when npm pack output omits unpackedSize for every result", () => {
     expect(
-      collectPackUnpackedSizeErrors([
+      collectPackUnpackedSizeFindings([
         { filename: "openclaw-2026.3.14.tgz" },
         { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
       ]),
-    ).toEqual([
-      "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
-    ]);
+    ).toEqual({
+      errors: [
+        "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
+      ],
+      violations: [],
+    });
   });
 });
 
@@ -757,24 +847,30 @@ describe("resolvePackedTarballPath", () => {
   });
 });
 
-describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
+describe("collectCriticalPluginSdkEntrypointSizeFindings", () => {
   it("flags oversized public plugin SDK entrypoints before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-critical-sdk-"));
     try {
       const pluginSdkDir = join(root, "dist", "plugin-sdk");
       mkdirSync(pluginSdkDir, { recursive: true });
       writeFileSync(join(pluginSdkDir, "core.js"), "export {};\n");
-      writeFileSync(join(pluginSdkDir, "runtime.js"), "export {};\n");
       writeFileSync(
         join(pluginSdkDir, "provider-entry.js"),
         "x".repeat(MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1),
       );
 
-      expect(collectCriticalPluginSdkEntrypointSizeErrors(root)).toEqual([
-        `dist/plugin-sdk/provider-entry.js is ${
-          MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
-        } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
-      ]);
+      expect(collectCriticalPluginSdkEntrypointSizeFindings(root)).toEqual({
+        errors: ["dist/plugin-sdk/runtime.js is missing."],
+        violations: [
+          {
+            file: "src/plugin-sdk/provider-entry.ts",
+            title: "Plugin SDK entrypoint size budget",
+            message: `dist/plugin-sdk/provider-entry.js is ${
+              MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
+            } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
+          },
+        ],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

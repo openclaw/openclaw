@@ -2,7 +2,7 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-export function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
+function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
   return runs.toSorted((a, b) => {
     const aTime = a.execution.startedAt ?? a.createdAt ?? 0;
     const bTime = b.execution.startedAt ?? b.createdAt ?? 0;
@@ -32,6 +32,11 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isRetainedUnendedSubagentRun(entry, now) ||
+      (entry.pauseReason === "sessions_yield" &&
+        !entry.killReconciliation &&
+        !entry.killIntent &&
+        entry.endedReason !== "subagent-killed" &&
+        entry.suppressAnnounceReason !== "killed") ||
       params.countPendingDescendantRuns(entry.childSessionKey) > 0
     ) {
       active.push(entry);

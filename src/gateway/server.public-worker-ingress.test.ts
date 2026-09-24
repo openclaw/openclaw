@@ -16,6 +16,7 @@ import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import {
@@ -23,7 +24,6 @@ import {
   createGatewayWsTestRequestContext,
 } from "./server/ws-connection.test-helpers.js";
 import type { WorkerConnectionService } from "./server/ws-connection/worker-connection.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 import {
   admitWorkerConnection,
@@ -154,7 +154,7 @@ class PublicWorkerHarness {
   readonly credentialRecord: WorkerCredentialRecord;
   readonly store: WorkerEnvironmentStore;
   readonly workerService: WorkerConnectionService;
-  readonly clients = new Set<GatewayWsClient>();
+  readonly clients = new GatewayClientRegistry();
   readonly connectionWork = new GatewayConnectionWork();
   readonly wss = new WebSocketServer({
     noServer: true,

@@ -156,6 +156,24 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
   });
 
+  it("cleans partial external command output when the producer fails", async () => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-failure-");
+    const failure = new Error("external producer failed");
+
+    await expect(
+      writeExternalFileWithinRoot({
+        rootDir: dir,
+        path: "artifact.txt",
+        write: async (tempPath) => {
+          await fs.writeFile(tempPath, "partial artifact");
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    await expect(fs.readdir(dir)).resolves.toEqual([]);
+  });
+
   it.each([
     ["fallbackFileName", { fallbackFileName: "safe-output.bin" }],
     ["tempPrefix", { tempPrefix: "safe-output.bin" }],

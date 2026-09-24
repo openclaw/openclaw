@@ -42,7 +42,7 @@ export function wrapLlamaServerStream(ctx: ProviderWrapStreamFnContext): StreamF
       onPayload: async (payload, requestModel) => {
         const customized = (await onPayload?.(payload, requestModel)) ?? payload;
         if (isRecord(customized)) {
-          if (ctx.thinkingLevel === "off") {
+          if ((options?.reasoning ?? ctx.thinkingLevel) === "off") {
             setQwenChatTemplateThinking(customized, false);
           }
           normalizeLlamaServerResponseFormat(customized, options?.responseFormat);

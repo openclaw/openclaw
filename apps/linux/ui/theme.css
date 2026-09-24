@@ -1,0 +1,74 @@
+/* Tauri embeds these faces from the Control UI's canonical font assets (SIL OFL). */
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("instrument-sans-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("instrument-sans-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Shared local desktop palette, matching the web login gate without a Gateway dependency. */
+:root {
+  color-scheme: light dark;
+  --bg: #0e1015;
+  --card: #161920;
+  --bg-elevated: #191c24;
+  --bg-hover: #1f2330;
+  --text: #bcbcc0;
+  --text-strong: #f4f4f5;
+  --muted: #8b8b94;
+  --border: #1e2028;
+  --border-strong: #2e3040;
+  --accent: #ff5c5c;
+  --primary: #d13c3c;
+  --primary-hover: #c22e2e;
+  --primary-foreground: #fff;
+  --danger: #ff6b6b;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 25%);
+  --shadow-dialog: 0 8px 32px rgb(0 0 0 / 30%);
+  --input-shadow: inset 0 1px rgb(255 255 255 / 4%);
+  --dialog-backdrop: rgb(0 0 0 / 60%);
+  --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  font: 400 14px/1.55 var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #faf9f7;
+    --card: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-hover: #efebe4;
+    --text: #403c35;
+    --text-strong: #211e1a;
+    --muted: #6e6960;
+    --border: #e8e4dc;
+    --border-strong: #d6d0c5;
+    --accent: #bd4531;
+    --primary: #bd4531;
+    --primary-hover: #a83c29;
+    --danger: #b91c1c;
+    --shadow-sm: 0 1px 2px rgb(60 42 24 / 5%);
+    --shadow-dialog: 0 8px 32px rgb(60 42 24 / 16%);
+    --input-shadow: none;
+    --dialog-backdrop: rgb(33 30 26 / 30%);
+  }
+}

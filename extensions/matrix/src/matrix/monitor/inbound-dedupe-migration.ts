@@ -249,9 +249,7 @@ function parseLegacySqliteRow(row: {
 export async function readLegacyInboundDedupeSqliteSource(
   storageRootDir: string,
 ): Promise<{ markers: LegacyInboundDedupeMarker[]; legacyRowCount: number }> {
-  // sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
-  // enumeration does not cold-load it with this closure.
-  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
   const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
@@ -286,7 +284,7 @@ export async function readLegacyInboundDedupeSqliteSource(
 /** Deletes only the two retired Matrix namespaces after a successful import. */
 export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string): Promise<void> {
   const { openNodeSqliteDatabase, runSqliteImmediateTransactionSync } =
-    await import("openclaw/plugin-sdk/sqlite-runtime");
+    await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
   const db = openNodeSqliteDatabase(databasePath);
   try {

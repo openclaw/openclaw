@@ -53,7 +53,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.3.27"
+        "typebox": "1.3.30"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"
@@ -555,6 +555,15 @@ const setupWizard: ChannelSetupWizard = {
 ```
 
 `ChannelSetupWizard` also supports `textInputs`, `dmPolicy`, `allowFrom`, `groupAccess`, `prepare`, `finalize`, and more. See the Discord plugin's `src/setup-core.ts` for a full bundled example.
+
+Before a durable setup effect, await `options.beforePersistentEffect?.()` to run
+host preparation. Hosted channel wizards also supply
+`options.assertPersistentEffectCurrent`, a synchronous check of the live wizard
+owner. Carry that check through asynchronous credential preparation and invoke it
+at the storage owner's final write admission. Detached QR login callbacks must
+stop after their wizard is disposed, replaced, or completed; a successful earlier
+preparation check does not keep that wizard alive. This optional lifetime check
+does not replace the existing asynchronous preparation callback.
 
 <AccordionGroup>
   <Accordion title="Shared allowFrom prompts">

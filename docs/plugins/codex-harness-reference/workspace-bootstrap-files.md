@@ -15,8 +15,13 @@ How `AGENTS.md`, persona, skills, and memory files reach a native Codex turn. Pa
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child
 inheritance. Ordinary persistent cold or changed-configuration resumes require an
-uninterrupted managed local stdio process owner and observed native unload before OpenClaw injects the full
-current policy. Merely sending `developerInstructions` on `thread/resume` does not
+uninterrupted app-server client and observed native unload before OpenClaw injects
+the full current policy. OpenClaw must be the sole lifecycle owner of the native
+conversation, including when its app-server runs remotely. Independent clients
+that can reload the same conversation during the handoff are outside this contract;
+observed unload does not reserve the conversation against a competing resume.
+Local and remote transports use the same conversation ID through unsubscribe and
+resume. Merely sending `developerInstructions` on `thread/resume` does not
 refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
 a withdrawal, not a fallback to older instructions.
 
@@ -70,7 +75,11 @@ the Gateway's HTTP(S) proxy and TLS configuration. Native login, token refresh,
 backend routing, and approval-reviewer checks stay native-owned. It rejects oversized
 prepared context instead of truncating it (256 KiB maximum); model request bodies
 and WebSocket frames are bounded at 32 MiB. Reduce bootstrap/skills budgets or
-attached context when those limits are exceeded.
+attached context when those limits are exceeded. The relay validates each native request
+and its current parent registration before forwarding. Requests that need no
+parent-local instructions keep their native JSON bytes, including existing zstd
+compression on HTTP. Requests with parent-local instructions still receive the
+same bounded instruction injection.
 
 Custom commands, Desktop attachments, external Unix/WebSocket connections,
 non-OpenAI native providers, custom upstream endpoints, unsupported native account

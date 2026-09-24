@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
+  findServiceOwnershipRefusal,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -12,9 +13,10 @@ export type SystemdUserTransport =
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
+  scope?: "user" | "system";
   transport?: SystemdUserTransport;
   unit?: string;
-  /** Native D-Bus credential of the observed user-manager connection, not the CLI UID. */
+  /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
   managerUid?: number;
   killMode?: string;
   tasksCurrent?: number;
@@ -65,6 +67,10 @@ export function createServiceRuntimeInspectionFailure(
   error: unknown,
   timeoutMs?: number,
 ): GatewayServiceRuntime {
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
+import { getAgentDir } from "../../agents/config.js";
+import { CONFIG_DIR_NAME } from "../../agents/package-metadata.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { isPathInside } from "../../infra/path-guards.js";

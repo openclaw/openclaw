@@ -1,11 +1,13 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
   WorktreesBranchesResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
@@ -28,14 +30,12 @@ import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import "../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import "../styles/app-sidebar.css";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
   renderAppSidebarOnline,
   renderAppSidebarPagesHead,
-  renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
@@ -74,6 +74,7 @@ import {
 import { icons } from "./icons.ts";
 import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
+import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 
@@ -136,6 +137,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
+  private readonly sidebarContext = new SidebarContextController(this);
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private projectedSessionCatalogs: SidebarSessionCatalog[] = [];
   private projectedSessionSections: SidebarVisibleSections = {
@@ -151,6 +153,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     .watch(
       () => this.context?.agentIdentity,
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
     )
     .watch(
       () => this.context?.config,
@@ -392,7 +398,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+    void this.sessionOrganizer.patchSession(
+      session,
+      { pinned: !session.pinned },
+      {
+        sessionScope: true,
+      },
+    );
   }
 
   toggleSessionMenu(
@@ -592,6 +604,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       empty: visibleSessions.length === 0,
       sections,
       nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
+      nativeSessionsLoading: this.sessionData.sessionsLoading,
       catalogRenderer: this.catalogRenderer,
       catalogs: {
         catalogs,
@@ -611,11 +624,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
-    const occupiedPluginPlacements = new Set(
-      sidebarZone.entries.flatMap((entry) =>
-        entry.type === "route" ? [`route:${entry.route}`] : [],
-      ),
-    );
     return html`
       <aside
         class="sidebar"
@@ -640,11 +648,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           )}
           <div class="sidebar-shell__content">
             <div
-              class="sidebar-shell__body sidebar-shell__body--scroll-${
-                this.sessionData.sessionsScrollState
-              }"
-              @scroll=${(event: Event) =>
-                this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+              class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}"
+              @scroll=${(event: Event) => this.sidebarContext.handleScroll(event)}
             >
               <nav
                 class="sidebar-nav"
@@ -660,35 +665,28 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
                   ${renderAppSidebarHomeRow(this)}
-                  ${sidebarZone.entries
-                    .filter(
+                  ${repeat(
+                    sidebarZone.entries.filter(
                       (entry) => this.sidebarAgentsMode !== "roster" || entry.type !== "session",
-                    )
-                    .map((entry) =>
-                      renderAppSidebarZoneEntry(this, entry, sidebarZone.sessionRows),
-                    )}
-                  ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
-                    .filter(
-                      (tab) =>
-                        (!tab.placement || !occupiedPluginPlacements.has(tab.placement)) &&
-                        !this.pluginNavigation().some(
-                          (entry) =>
-                            entry.pluginId === tab.pluginId && entry.value.page.id === tab.id,
-                        ),
-                    )
-                    .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
-                  <openclaw-plugin-contributions
-                    .kind=${"navigation"}
-                    .excludedNavigationKeys=${sidebarZone.entries
-                      .filter((entry) => entry.type === "plugin")
-                      .map((entry) => entry.key)}
-                  ></openclaw-plugin-contributions>
+                    ),
+                    serializeSidebarEntry,
+                    (entry) =>
+                      renderAppSidebarZoneEntry(
+                        this,
+                        entry,
+                        sidebarZone.sessionRows,
+                        sidebarZone.pluginTabs,
+                      ),
+                  )}
                 </div>
               </nav>
-              ${renderAppSidebarOnline(this)} ${this.renderSessions()}
+              <div class="sidebar-session-content" ?hidden=${Boolean(this.contextualSidebar)}>
+                ${renderAppSidebarOnline(this)} ${this.renderSessions()}
+              </div>
+              ${this.contextualSidebar?.render(this.contextualSidebar.data, this.contextualSidebar.loaderPending, true) ?? nothing}
             </div>
             ${
-              this.sessionsStatusFilter === "archived"
+              this.contextualSidebar || this.sessionsStatusFilter === "archived"
                 ? nothing
                 : renderPanelRefreshStatus({
                     status: this.sessionData.sessionCatalogRefreshStatus,

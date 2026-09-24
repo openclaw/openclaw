@@ -33,52 +33,22 @@ describe("qa model selection runtime", () => {
     );
   });
 
-  it("keeps the OpenAI live default when an API key is configured", () => {
-    resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
-
+  it("selects live defaults without reading credentials", () => {
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
     expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-terra",
     });
+    expect(resolveEnvApiKey).not.toHaveBeenCalled();
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it.each(["oauth", "token"] as const)(
-    "prefers the Codex live default for a stored %s profile",
-    (type) => {
-      loadAuthProfileStoreForRuntime.mockReturnValue({
-        profiles: {
-          "openai:user@example.com": {
-            provider: "openai",
-            type,
-          },
-        },
-      });
-
-      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-terra",
-      });
-      expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
-        readOnly: true,
-        allowKeychainPrompt: false,
-        externalCliProviderIds: ["openai"],
-      });
-    },
-  );
-
-  it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
-    loadAuthProfileStoreForRuntime.mockReturnValue({
-      profiles: {
-        "openai:api-key": {
-          provider: "openai",
-          type: "api_key",
-        },
-      },
-    });
-
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6-luna");
+  it("preserves an explicit preferred live model", () => {
+    expect(
+      defaultQaRuntimeModelForMode("live-frontier", {
+        preferredLiveModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra"])(

@@ -9,10 +9,9 @@ import { CronCliError } from "./cron-cli-error.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
-  parseCronFallbacks,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
-  parseCronToolsAllow,
+  parseCronStringList,
 } from "./shared.js";
 import { parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
@@ -37,7 +36,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
   const scriptPath = readNonBlankString(opts.script);
-  const commandShell = normalizeOptionalString(opts.command);
+  const commandShell = readNonBlankString(opts.command);
   const commandArgv = parseCronCommandArgv(opts.commandArgv);
   if (commandShell && commandArgv) {
     throw new CronCliError(
@@ -55,11 +54,11 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (hasThinking && opts.clearThinking) {
     throw new CronCliError("Use --thinking or --clear-thinking, not both");
   }
-  const fallbacks = parseCronFallbacks(opts.fallbacks);
+  const fallbacks = parseCronStringList(opts.fallbacks);
   if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
     throw new CronCliError("Use --fallbacks or --clear-fallbacks, not both");
   }
-  const toolsAllow = parseCronToolsAllow(opts.tools);
+  const toolsAllow = parseCronStringList(opts.tools);
   const timeoutSeconds = parseCronIntegerOption(
     opts.timeoutSeconds,
     "--timeout-seconds",

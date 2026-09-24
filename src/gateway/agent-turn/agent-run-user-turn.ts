@@ -15,7 +15,12 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  isSubagentCoordinationInputProvenance,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -40,6 +45,7 @@ import {
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
+import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type PreparedAgentRunUserTurn = {
@@ -50,6 +56,7 @@ export type PreparedAgentRunUserTurn = {
   execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   message: string;
+  inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
@@ -126,8 +133,10 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
+  settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
+  deferTimeoutCompletion?: (settle: () => void) => boolean;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -205,6 +214,18 @@ export async function prepareAgentRunUserTurn(params: {
     const senderIsOwner = params.restoredCronContinuation
       ? true
       : clientHasAdminScope(params.client);
+    const settleWakeReplay = params.settleWakeReplay;
+    if (
+      settleWakeReplay &&
+      (!params.runId.startsWith("announce:") ||
+        params.inputProvenance?.kind !== "inter_session" ||
+        params.inputProvenance.sourceTool !== "subagent_settle" ||
+        !params.inputProvenance.sourceSessionKey ||
+        !settleWakeReplay.sourceSessionKeys.includes(params.inputProvenance.sourceSessionKey))
+    ) {
+      throw new Error("Settle replay requires an exact internal frozen-cohort source");
+    }
+    let inputProvenance = params.inputProvenance;
     if (
       params.privateCompletion &&
       (params.request.deliver !== false ||
@@ -242,7 +263,11 @@ export async function prepareAgentRunUserTurn(params: {
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
       const input: UserTurnInput = {
-        ...(params.privateCompletion ? { display: false as const } : {}),
+        ...(params.privateCompletion ||
+        isCompletionReportInputProvenance(params.inputProvenance) ||
+        isSubagentCoordinationInputProvenance(params.inputProvenance)
+          ? { display: false as const }
+          : {}),
         text:
           persistedMedia.omission === "inline-image-save-failed"
             ? [effectiveTranscriptInputText, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
@@ -259,6 +284,7 @@ export async function prepareAgentRunUserTurn(params: {
       };
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: params.privateCompletion,
+        pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: () => {
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
@@ -296,30 +322,48 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
-          assertCurrent: params.assertCurrent,
+          assertCurrent: () => {
+            params.assertCurrent();
+            settleWakeReplay?.assertCurrent();
+          },
+          assertAdmittedCurrent: params.assertCurrent,
           assertCompletionCurrent: params.assertCompletionCurrent,
         })) &&
         !recorder.getProcessingCompletion?.()
       ) {
         throw new Error("agent turn was not durably admitted");
       }
+      // Storage may prove the scheduling source used by a shipped batch. Carry
+      // that exact provenance into execution, not only its transcript receipt.
+      if (settleWakeReplay) {
+        inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
+      }
     }
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
-        try {
-          recorder.completeProcessing?.(
-            buildAgentRunTerminalOutcome({
-              status: "error",
-              stopReason: params.getAbortStopReason?.() ?? "rpc",
-            }),
-          );
-        } catch (error) {
-          params.context.logGateway.warn(
-            `private input cancellation persistence failed: ${formatForLog(error)}`,
-          );
+        const stopReason = params.getAbortStopReason?.() ?? "rpc";
+        const settle = () => {
+          try {
+            recorder.completeProcessing?.(
+              buildAgentRunTerminalOutcome({
+                status: stopReason === "timeout" ? "timeout" : "error",
+                stopReason,
+              }),
+            );
+          } catch (error) {
+            params.context.logGateway.warn(
+              `private input cancellation persistence failed: ${formatForLog(error)}`,
+            );
+          }
+        };
+        // Give the timed-out producer its existing terminal grace to supply
+        // final facts. Stop still records its non-retry receipt synchronously.
+        if (stopReason === "timeout" && params.deferTimeoutCompletion?.(settle)) {
+          return;
         }
+        settle();
       };
       // Abort reserves terminal ownership before notifying listeners. Record
       // the stop while that exact controller still exists, even after input consumption.
@@ -343,6 +387,7 @@ export async function prepareAgentRunUserTurn(params: {
         ? { execApprovalContinuationTranscriptPromptRange }
         : {}),
       message,
+      inputProvenance,
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
       suppressPromptPersistence,
@@ -384,5 +429,22 @@ export function releasePreparedAgentRunUserTurn(
       handoffId: prepared.claimedExecApprovalFollowupHandoffId,
       claimId: prepared.execApprovalFollowupHandoffClaimId,
     });
+  }
+}
+
+/** Settles failed input while preserving both admission and settlement failures. */
+export function releasePreparedAgentRunUserTurnAfterFailure(
+  prepared: PreparedAgentRunUserTurn,
+  error: unknown,
+  disposition: "cancelled" | "interrupted" = "cancelled",
+): unknown {
+  try {
+    releasePreparedAgentRunUserTurn(prepared, disposition);
+    return error;
+  } catch (cleanupError) {
+    return new AggregateError(
+      [error, cleanupError],
+      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
+    );
   }
 }

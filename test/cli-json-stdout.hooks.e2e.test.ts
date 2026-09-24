@@ -146,21 +146,25 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_GATEWAY_PORT: "29791",
-          OPENCLAW_STATE_DIR: stateDir,
-          ...("explicitGateway" in testCase
-            ? {
-                OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
-                OPENCLAW_GATEWAY_TOKEN: "fixture-token",
-              }
-            : {}),
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_GATEWAY_PORT: "29791",
+            OPENCLAW_STATE_DIR: stateDir,
+            ...("explicitGateway" in testCase
+              ? {
+                  OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:9",
+                  OPENCLAW_GATEWAY_TOKEN: "fixture-token",
+                }
+              : {}),
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+        );
         const message =
           "remoteMissing" in testCase
             ? [
@@ -172,7 +176,8 @@ describe("cli json stdout contract", () => {
               'Unknown agent id "retired". Run openclaw agents list to see configured agents.');
 
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
         if ("human" in testCase) {
           if ("missingHook" in testCase) {
             expect(result.stdout.trim()).toBe(message);

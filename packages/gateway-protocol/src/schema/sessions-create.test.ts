@@ -6,6 +6,17 @@ import {
 } from "../index.js";
 
 describe("sessions.create schema", () => {
+  it("accepts an explicit runtime but reserves null for patch reset", () => {
+    expect(
+      validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" }),
+    ).toBe(true);
+    expect(validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: null })).toBe(
+      false,
+    );
+    expect(validateSessionsCreateParams({ model: "openai/gpt-5.6-sol", agentRuntime: "" })).toBe(
+      false,
+    );
+  });
   it.each([undefined, 0, 1800000])("accepts initial run timeout %s", (timeoutMs) => {
     expect(
       validateSessionsCreateParams({

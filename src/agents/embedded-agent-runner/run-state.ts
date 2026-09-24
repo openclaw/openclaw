@@ -25,6 +25,7 @@ import {
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -79,8 +80,24 @@ export type EmbeddedAgentQueueHandle = {
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  terminalReplyExpectation?: ReplyExpectation;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
+
+export type EmbeddedAgentQueueFailureReason =
+  | "input_visibility_mismatch"
+  | "no_active_run"
+  | "not_streaming"
+  | "stale_run"
+  | "compacting"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "task_suggestion_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
+  | "transcript_commit_wait_unsupported"
+  | "guarded_injection_unsupported"
+  | "runtime_rejected";
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 

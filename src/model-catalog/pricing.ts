@@ -7,15 +7,28 @@ import {
   createStaticProviderModelIdNormalizer,
   normalizeProviderId,
 } from "../agents/model-ref-shared.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  getPluginCache,
+  getPluginCacheRetirementSignal,
+  isPluginCacheFactInvalidatedError,
+  retainPluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
+import {
   resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
-import { getRemoteModelCatalogPricing } from "./remote-overlay.js";
+import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
+import {
+  getRemoteModelCatalogPricing,
+  prepareRemoteModelCatalogStartupSnapshot,
+} from "./remote-overlay.js";
 
 type PricingValue = RemoteModelCatalogPricing | ModelCatalogCost;
 type ExternalPricingPolicy = {
@@ -61,17 +74,10 @@ function normalizedHostedKey(
   return normalizeKey(key.slice(0, slash), key.slice(slash + 1));
 }
 
-function buildPricingContext(config: OpenClawConfig): PricingContext {
-  let snapshot: PluginMetadataSnapshot | undefined;
-  try {
-    snapshot = resolvePluginMetadataSnapshot({
-      config,
-      env: process.env,
-      allowWorkspaceScopedCurrent: true,
-    });
-  } catch {
-    snapshot = undefined;
-  }
+function buildPricingContext(
+  config: OpenClawConfig,
+  snapshot: PluginMetadataSnapshot | undefined,
+): PricingContext {
   const registry = snapshot
     ? activeManifestRegistry(snapshot, config)
     : ({ plugins: [], diagnostics: [] } satisfies PluginManifestRegistry);
@@ -128,9 +134,69 @@ export function resolveModelPricingContext(config: OpenClawConfig = EMPTY_CONFIG
   if (existing) {
     return existing;
   }
-  const context = buildPricingContext(config);
+  let snapshot: PluginMetadataSnapshot | undefined;
+  try {
+    snapshot = resolvePluginMetadataSnapshot({
+      config,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+  } catch {
+    snapshot = undefined;
+  }
+  const context = buildPricingContext(config, snapshot);
   pricingContextByConfig.set(config, context);
   return context;
+}
+
+/** Prepare the existing config-owned context before synchronous per-record pricing. */
+export async function prepareModelPricingContext(
+  config: OpenClawConfig = EMPTY_CONFIG,
+): Promise<void> {
+  if (pricingContextByConfig.has(config)) {
+    return;
+  }
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  const cache = getPluginCache();
+  const release = retainPluginCache(cache);
+  const metadata = cache.metadata;
+  const signal = getPluginCacheRetirementSignal(cache);
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    if (cache.metadata !== metadata) {
+      throw new Error("Pricing metadata changed during preparation; retry the operation.");
+    }
+  };
+  try {
+    await withPluginCache(cache, async () => {
+      let snapshot: PluginMetadataSnapshot | undefined;
+      try {
+        snapshot = await resolvePluginMetadataSnapshotAsync({
+          config,
+          env,
+          allowWorkspaceScopedCurrent: true,
+        });
+      } catch (error) {
+        if (isPluginCacheFactInvalidatedError(error)) {
+          throw error;
+        }
+        snapshot = undefined;
+      }
+      assertCurrent();
+      if (snapshot && isRemoteModelCatalogRefreshEnabled(config)) {
+        await prepareRemoteModelCatalogStartupSnapshot({ env });
+      }
+      assertCurrent();
+      // A synchronous reader may have captured this config while preparation awaited I/O.
+      if (!pricingContextByConfig.has(config)) {
+        const context = buildPricingContext(config, snapshot);
+        assertCurrent();
+        pricingContextByConfig.set(config, context);
+      }
+    });
+  } finally {
+    release();
+  }
 }
 
 function hasKnownPricing(pricing: PricingValue): boolean {

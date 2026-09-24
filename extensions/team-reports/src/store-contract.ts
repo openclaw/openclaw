@@ -1,4 +1,9 @@
-import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, PersonReport, ReportDocument, SummaryDocument } from "./types.js";
+
+export type ReportPerson = Pick<
+  PersonReport,
+  "login" | "aliases" | "display" | "affiliation" | "roleGroup" | "roleLabel" | "access" | "areas"
+>;
 
 export type StoredPeriod = {
   report: ReportDocument;
@@ -53,11 +58,16 @@ export type TeamReportsOperations = {
     output: void;
   };
   getPeriod: { input: { period: Period; key: string }; output: StoredPeriod | undefined };
+  getPeriodDocument: {
+    input: { period: Period; key: string };
+    output: Pick<StoredPeriod, "report" | "summary"> | undefined;
+  };
   listPeriods: {
     input: { period?: Period; status?: "partial" | "closed"; limit?: number };
     output: PeriodListEntry[];
   };
   latestSourceWarnings: { input: undefined; output: string[] };
+  latestPeople: { input: undefined; output: { key: string; members: ReportPerson[] } | undefined };
   getDayReports: { input: { sinceMs: number; untilMs: number }; output: ReportDocument[] };
   listPersonDays: {
     input: { login: string; options: { since?: string; until?: string; limit?: number } };

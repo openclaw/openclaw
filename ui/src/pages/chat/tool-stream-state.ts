@@ -41,7 +41,10 @@ export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
   }
   const activityPrefix = `tool:[${JSON.stringify(runId)},`;
   for (const sequenceIdentity of host.activityEventSeqById?.keys() ?? []) {
-    if (sequenceIdentity.startsWith(activityPrefix)) {
+    if (
+      sequenceIdentity.startsWith(activityPrefix) ||
+      sequenceIdentity.startsWith(`item:${runId}:`)
+    ) {
       host.activityEventSeqById?.delete(sequenceIdentity);
     }
   }

@@ -66,6 +66,16 @@ export function resolveSessionModelOverrideSource(
   return hasUserPinnedModelSelection(entry) ? "user" : "auto";
 }
 
+/** Retains automatic execution selections only when their stored origin is complete. */
+export function hasSessionAutoModelSelection(
+  entry: ModelOverrideProvenanceEntry | undefined,
+): boolean {
+  return (
+    resolveSessionModelOverrideSource(entry) === "auto" &&
+    hasSessionAutoModelFallbackProvenance(entry)
+  );
+}
+
 /** Resolves persisted route provenance, including fallback pins from before the marker existed. */
 export function resolveSessionModelOverrideRouteResolution(
   entry:

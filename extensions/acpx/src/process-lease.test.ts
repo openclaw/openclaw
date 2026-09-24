@@ -6,6 +6,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAcpxProcessLeaseStore,
@@ -43,6 +44,7 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     await rm(stateDir, { recursive: true, force: true });
   });
 

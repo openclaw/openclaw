@@ -18,7 +18,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogModel } from "../packages/model-catalog-core/src/model-catalog-types.js";
 import type {
   RemoteModelCatalogBundle,
+  RemoteModelCatalogBundleV2,
   RemoteModelCatalogPricing,
+  RemoteModelCatalogPricingV2,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -55,6 +57,7 @@ type ModelsDevModel = Record<string, unknown> & {
 type ModelCatalogHydrationCounts = { added: number; filled: number; skipped: number };
 type ModelCatalogHydrationResult = Record<string, ModelCatalogHydrationCounts>;
 type ModelCatalogSourceLoader = (url: string, label: string) => Promise<unknown>;
+type PricingSelection = Pick<RemoteModelCatalogPricingV2, "status" | "source">;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
 
@@ -87,6 +90,7 @@ export function parsePublishModelCatalogArgs(args: string[]) {
   let dryRun = false;
   let pricing = false;
   let out: string | undefined;
+  let outV2: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--dry-run") {
@@ -102,12 +106,17 @@ export function parsePublishModelCatalogArgs(args: string[]) {
       index += 1;
       continue;
     }
+    if (arg === "--out-v2") {
+      outV2 = requireOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${arg}`);
   }
   if (!dryRun && !out) {
     throw new Error("provide --out <file> or --dry-run");
   }
-  return { dryRun, pricing, ...(out ? { out } : {}) };
+  return { dryRun, pricing, ...(out ? { out } : {}), ...(outV2 ? { outV2 } : {}) };
 }
 
 export function readModelCatalogManifests(
@@ -131,16 +140,20 @@ export function readModelCatalogManifests(
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 }
 
-async function loadClientBundleValidator() {
+async function loadClientBundleValidator(version: 1 | 2 = 1) {
   const modulePath = path.join(
     defaultRootDir,
     "packages/model-catalog-core/src/remote-catalog-bundle.ts",
   );
   const module = await importToolingTypeScript(pathToFileURL(modulePath).href, import.meta.url);
-  if (typeof module.validateAndSanitizeRemoteModelCatalogBundle !== "function") {
+  const name =
+    version === 1
+      ? "validateAndSanitizeRemoteModelCatalogBundle"
+      : "validateAndSanitizeRemoteModelCatalogBundleV2";
+  if (typeof module[name] !== "function") {
     throw new Error("remote catalog bundle validator export is unavailable");
   }
-  return module.validateAndSanitizeRemoteModelCatalogBundle;
+  return module[name];
 }
 
 export async function assembleModelCatalogBundle(options: {
@@ -501,7 +514,12 @@ export async function hydrateModelCatalogFromModelsDev(options: {
       upstreamProvider.id !== upstreamProviderId ||
       !isRecord(upstreamProvider.models)
     ) {
-      throw new Error(`models.dev catalog missing or malformed for provider ${upstreamProviderId}`);
+      // One renamed or broken upstream provider must not freeze every other
+      // provider's catalog updates. Its manifest rows still publish as authored.
+      process.stderr.write(
+        `[${SCRIPT_LABEL}] warning: models.dev catalog missing or malformed for provider ${upstreamProviderId}; publishing ${providerId} without models.dev hydration\n`,
+      );
+      continue;
     }
     if (provider.models.some((model) => model.api !== undefined)) {
       process.stderr.write(
@@ -727,6 +745,7 @@ export async function enrichModelCatalogPricing(options: {
   manifests: ModelCatalogManifestInput[];
   fetchImpl?: typeof fetch;
   loadSource?: ModelCatalogSourceLoader;
+  pricingSelections?: WeakMap<ModelCatalogModel, PricingSelection>;
 }): Promise<{ modelsEnriched: number; pricingEntries: number }> {
   const policies = readPricingPolicies(options.manifests);
   const sources = await fetchPricingSources(
@@ -758,10 +777,12 @@ export async function enrichModelCatalogPricing(options: {
       );
       if (chosen?.pricing) {
         model.cost = chosen.pricing;
+        options.pricingSelections?.set(model, { status: "known", source: chosen.source.id });
         enriched += 1;
       } else if (chosen) {
         // Keep the metadata row: removing it would revive the bundled seed's stale price.
         delete model.cost;
+        options.pricingSelections?.set(model, { status: "unavailable", source: chosen.source.id });
         process.stderr.write(
           `[${SCRIPT_LABEL}] warning: ${chosen.source.label} pricing unavailable for ${providerId}/${model.id}; preserving metadata without cost\n`,
         );
@@ -840,6 +861,79 @@ export function serializeModelCatalogBundle(bundle: PublishedModelCatalogBundle)
   return `${JSON.stringify(sortCatalogValue({ ...bundle, providers }), null, 2)}\n`;
 }
 
+export async function assembleModelCatalogBundleV2(
+  bundle: PublishedModelCatalogBundle,
+  pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
+): Promise<RemoteModelCatalogBundleV2> {
+  const providers: RemoteModelCatalogBundleV2["providers"] = {};
+  const models: RemoteModelCatalogBundleV2["models"] = [];
+  for (const [providerId, provider] of Object.entries(bundle.providers)) {
+    providers[providerId] = {
+      api: provider.api,
+      defaultModel: provider.defaultModel,
+      defaultUtilityModel: provider.defaultUtilityModel,
+    };
+    for (const model of provider.models) {
+      const { cost, ...metadata } = model;
+      delete metadata.baseUrl;
+      delete metadata.headers;
+      delete metadata.upstreamModel;
+      const selection = pricingSelections.get(model);
+      const pricing: RemoteModelCatalogPricingV2 =
+        cost && (selection?.status === "known" || hasKnownPricing(cost))
+          ? {
+              status: "known",
+              currency: "USD",
+              unit: "million_tokens",
+              ...cost,
+              ...(selection?.source ? { source: selection.source } : {}),
+            }
+          : {
+              status: selection?.status === "unavailable" ? "unavailable" : "unknown",
+              ...(selection?.source ? { source: selection.source } : {}),
+            };
+      models.push({ ...metadata, provider: providerId, pricing });
+    }
+  }
+  const validateBundle = await loadClientBundleValidator(2);
+  // The first supporting release is not assigned yet. schemaVersion gates v2;
+  // never copy v1's older client floor onto a new wire contract.
+  return validateBundle({
+    schemaVersion: 2,
+    generatedAt: bundle.generatedAt,
+    sourceCommit: bundle.sourceCommit,
+    providers,
+    models,
+  });
+}
+
+export function serializeModelCatalogBundleV2(bundle: RemoteModelCatalogBundleV2): string {
+  const models = bundle.models
+    .toSorted(
+      (left, right) =>
+        left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
+    )
+    .map(({ id, provider, ...metadata }) =>
+      Object.assign(
+        { id, provider },
+        Object.fromEntries(
+          Object.entries(metadata)
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => [key, sortCatalogValue(value)]),
+        ),
+      ),
+    );
+  return `${JSON.stringify(
+    Object.fromEntries(
+      Object.entries(bundle)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => [key, key === "models" ? models : sortCatalogValue(value)]),
+    ),
+    null,
+    2,
+  )}\n`;
+}
+
 function resolveSourceCommit(rootDir: string): string {
   return execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: rootDir,
@@ -848,7 +942,7 @@ function resolveSourceCommit(rootDir: string): string {
   }).trim();
 }
 
-async function runPublishModelCatalog(
+export async function runPublishModelCatalog(
   options: {
     args?: string[];
     fetchImpl?: typeof fetch;
@@ -859,22 +953,44 @@ async function runPublishModelCatalog(
 ) {
   const rootDir = options.rootDir ?? defaultRootDir;
   const args = parsePublishModelCatalogArgs(options.args ?? process.argv.slice(2));
+  if (
+    args.out &&
+    args.outV2 &&
+    path.resolve(rootDir, args.out) === path.resolve(rootDir, args.outV2)
+  ) {
+    throw new Error("--out and --out-v2 must name different files");
+  }
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
   let bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
+  const pricingSelections = new WeakMap<ModelCatalogModel, PricingSelection>();
+  // Capture seed ownership before hydration/enrichment can replace its cost.
+  for (const provider of Object.values(bundle.providers)) {
+    for (const model of provider.models) {
+      if (model.cost && hasKnownPricing(model.cost)) {
+        pricingSelections.set(model, { status: "known", source: "manifest" });
+      }
+    }
+  }
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const pricingResult = args.pricing
-    ? await enrichModelCatalogPricing({ bundle, manifests, loadSource })
+    ? await enrichModelCatalogPricing({ bundle, manifests, loadSource, pricingSelections })
     : { modelsEnriched: 0, pricingEntries: 0 };
   // Validate after all enrichment so metadata-only and dry-run output obey the
   // same client contract as priced catalogs.
   const validateBundle = await loadClientBundleValidator();
+  // Project while selection facts still refer to the assembled model objects.
+  const bundleV2 = args.outV2
+    ? await assembleModelCatalogBundleV2(bundle, pricingSelections)
+    : undefined;
   bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
+  const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;
+  const bundleV2Bytes = serializedV2 ? Buffer.byteLength(serializedV2) : 0;
   if (bundleBytes > BUNDLE_SIZE_WARNING_BYTES) {
     process.stderr.write(
       `[${SCRIPT_LABEL}] warning: bundle size ${bundleBytes} bytes exceeds ${BUNDLE_SIZE_WARNING_BYTES} bytes\n`,
@@ -883,6 +999,11 @@ async function runPublishModelCatalog(
   if (bundleBytes > CLIENT_BUNDLE_LIMIT_BYTES) {
     throw new Error(
       `catalog bundle ${bundleBytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
+    );
+  }
+  if (bundleV2Bytes > CLIENT_BUNDLE_LIMIT_BYTES) {
+    throw new Error(
+      `catalog v2 bundle ${bundleV2Bytes} bytes exceeds client limit ${CLIENT_BUNDLE_LIMIT_BYTES} bytes`,
     );
   }
   const hydrationSummary = Object.entries(hydrationResult)
@@ -903,6 +1024,14 @@ async function runPublishModelCatalog(
   const outputFile = path.resolve(rootDir, args.out);
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   fs.writeFileSync(outputFile, serialized);
+  if (args.outV2 && serializedV2) {
+    const outputV2File = path.resolve(rootDir, args.outV2);
+    fs.mkdirSync(path.dirname(outputV2File), { recursive: true });
+    fs.writeFileSync(outputV2File, serializedV2);
+    process.stdout.write(
+      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+    );
+  }
   process.stdout.write(`[${SCRIPT_LABEL}] published ${stats} out=${args.out}\n${hydrationSummary}`);
   return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: true };
 }

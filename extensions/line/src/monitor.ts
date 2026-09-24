@@ -1,4 +1,3 @@
-// Line plugin module implements monitor behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -6,7 +5,6 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -25,19 +23,10 @@ import {
 import { resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
-import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
-import { buildLineMediaMessage } from "./outbound-media.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import {
-  createFlexMessage,
-  createLocationMessage,
-  pushMessagesLine,
-  replyMessageLine,
-  showLoadingAnimation,
-} from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { showLoadingAnimation } from "./send.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import {
   createLineNodeWebhookHandler,
@@ -282,20 +271,10 @@ export async function monitorLineProvider(
                     accountId: ctx.accountId,
                     cfg: turnConfig,
                     textLimit,
-                    deps: {
-                      buildTemplateMessageFromPayload,
-                      processLineMessage,
-                      chunkMarkdownText,
-                      replyMessageLine,
-                      pushMessagesLine,
-                      createFlexMessage,
-                      buildMediaMessage: buildLineMediaMessage,
-                      createLocationMessage,
-                      onReplyError: (replyErr) => {
-                        logVerbose(
-                          `line: reply token failed, falling back to push: ${String(replyErr)}`,
-                        );
-                      },
+                    onReplyError: (replyErr) => {
+                      logVerbose(
+                        `line: reply token failed, falling back to push: ${String(replyErr)}`,
+                      );
                     },
                   });
                   replyTokenUsed = deliveryResult.replyTokenUsed;

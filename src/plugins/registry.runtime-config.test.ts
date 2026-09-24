@@ -2,7 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,6 +20,9 @@ import { disposePluginRegistryInstances, withPluginRegistrationContext } from ".
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import * as sdkAlias from "./sdk-alias.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("plugin registration runtime admission", () => {
   function fixture() {
@@ -452,12 +455,14 @@ describe("plugin registry runtime config scope", () => {
           };
         }),
       };
-      const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-        throw new Error("broad runtime should stay lazy during scoped node access");
-      });
+      const resolveRuntimeModule = vi
+        .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+        .mockImplementation(() => {
+          throw new Error("broad runtime should stay lazy during scoped node access");
+        });
       const runtime =
         mode === "lazy"
-          ? createLazyPluginRuntime({ loadPluginModule, runtimeOptions: { nodes } })
+          ? createLazyPluginRuntime({ runtimeOptions: { nodes } })
           : createPluginRuntime({ nodes });
       const pluginRegistry = createRuntimeTestRegistry(runtime);
       const record = createPluginRecord({
@@ -491,7 +496,7 @@ describe("plugin registry runtime config scope", () => {
         pluginSource: "/plugins/google-meet/index.js",
       });
       expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
-      expect(loadPluginModule).not.toHaveBeenCalled();
+      expect(resolveRuntimeModule).not.toHaveBeenCalled();
     },
   );
 

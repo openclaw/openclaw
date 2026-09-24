@@ -9,6 +9,7 @@ import {
   createDeferredConfiguredPluginRepairDoctorResult,
   createUpdatePostInstallDoctorResultPath,
   getUpdateDoctorConfigWriteAuthority,
+  normalizeUpdatePostInstallDoctorWarnings,
   recordUpdateDoctorConfigMigration,
   recordUpdateDoctorConfigWrite,
   recordUpdateDoctorConfigWriteRefusal,
@@ -25,6 +26,11 @@ describe("post-install doctor result IPC", () => {
   it.each([
     { status: "ok" as const, configHash: "unchanged" },
     { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
+    {
+      status: "ok" as const,
+      warnings: ["Doctor maintenance is deferred; run openclaw doctor --fix."],
+      maintenanceRefusal: { kind: "deferred" as const, reason: "coordinator-contention" as const },
+    },
     { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       status: "error" as const,
@@ -87,6 +93,17 @@ describe("post-install doctor result IPC", () => {
       status: "ok",
       warnings: expected,
     });
+  });
+
+  it("truncates long warnings without splitting a UTF-16 surrogate pair", () => {
+    // The 500-code-unit cut lands between the halves of the emoji pair.
+    const input = `${"w".repeat(499)}🤔`;
+    const [normalized] = normalizeUpdatePostInstallDoctorWarnings([input]);
+    expect(normalized).toBe("w".repeat(499));
+    // Keep ordinary ASCII truncation and empty-warning filtering unchanged.
+    expect(normalizeUpdatePostInstallDoctorWarnings(["y".repeat(600), "   "])).toEqual([
+      "y".repeat(500),
+    ]);
   });
 
   it("retains complete config evidence beyond health-warning limits", async () => {

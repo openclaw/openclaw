@@ -76,6 +76,7 @@ export async function buildSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      gatewayFilePath: entry.skill.fileHost === "gateway" ? entry.skill.filePath : undefined,
       skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),

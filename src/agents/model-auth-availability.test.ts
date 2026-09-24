@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
@@ -52,17 +52,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("canonicalizes prepared runtime auth through provider aliases", () => {
-    const metadataSnapshot = {
-      index: {
-        plugins: [
-          {
-            pluginId: "external-cloud",
-            origin: "global",
-            enabled: true,
-            enabledByDefault: true,
-          },
-        ],
-      },
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
           id: "external-cloud",
@@ -70,7 +60,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           providerAuthAliases: { "cloud-alias": "external-cloud" },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolver = createModelAuthAvailabilityResolver({
       cfg: {},
       authStore: authStore(),
@@ -103,8 +93,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("keeps prepared native-runtime authentication scoped to its exact owner", () => {
-    const metadataSnapshot = {
-      index: { plugins: [] },
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
           id: "anthropic",
@@ -112,7 +101,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           providerAuthAliases: { "claude-cli": "anthropic" },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolver = createModelAuthAvailabilityResolver({
       cfg: {},
       authStore: authStore(),

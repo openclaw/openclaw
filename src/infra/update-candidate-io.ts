@@ -11,9 +11,10 @@ import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 
 export async function measureUpdateStateFiles(
   files: Iterable<string>,
-): Promise<{ bytes: number; largest: number }> {
+): Promise<{ bytes: number; largest: number; families: Array<{ path: string; bytes: number }> }> {
   let bytes = 0;
   let largest = 0;
+  const families: Array<{ path: string; bytes: number }> = [];
   for (const file of files) {
     let family = 0;
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
@@ -27,8 +28,9 @@ export async function measureUpdateStateFiles(
     }
     bytes += family;
     largest = Math.max(largest, family);
+    families.push({ path: file, bytes: family });
   }
-  return { bytes, largest };
+  return { bytes, largest, families };
 }
 
 // Core-only code survives package replacement; native filesystem requests stay in this child.

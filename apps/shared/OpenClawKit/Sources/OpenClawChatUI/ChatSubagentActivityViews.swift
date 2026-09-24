@@ -41,6 +41,9 @@ private struct ChatSubagentActivityRow: View {
     }
 
     private var title: LocalizedStringResource {
+        #if os(macOS)
+        "Subagent"
+        #else
         switch self.activity.status {
         case .queued:
             "Subagent queued"
@@ -53,9 +56,15 @@ private struct ChatSubagentActivityRow: View {
         case .cancelled:
             "Subagent cancelled"
         }
+        #endif
     }
 
     private var titleColor: Color {
+        #if os(macOS)
+        self.isDesktopLayout
+            ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
+            : OpenClawChatTheme.assistantText
+        #else
         switch self.activity.status {
         case .failed, .timedOut:
             OpenClawChatTheme.danger
@@ -64,8 +73,10 @@ private struct ChatSubagentActivityRow: View {
                 ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
                 : OpenClawChatTheme.assistantText
         }
+        #endif
     }
 
+    #if !os(macOS)
     private var statusLabel: LocalizedStringResource {
         switch self.activity.status {
         case .queued: "Queued"
@@ -74,6 +85,22 @@ private struct ChatSubagentActivityRow: View {
         case .failed, .timedOut: "Failed"
         case .cancelled: "Cancelled"
         }
+    }
+    #endif
+
+    private var statusHelp: String {
+        switch self.activity.status {
+        case .queued: String(localized: "Queued — waiting to start.")
+        case .running: String(localized: "Running — working on this task.")
+        case .completed: String(localized: "Completed — finished successfully.")
+        case .failed: String(localized: "Failed — the task ended with an error.")
+        case .cancelled: String(localized: "Cancelled — stopped before completion.")
+        case .timedOut: String(localized: "Timed out — reached its time limit.")
+        }
+    }
+
+    private var rowHelp: String {
+        self.activity.title.map { "\($0)\n\(self.statusHelp)" } ?? self.statusHelp
     }
 
     var body: some View {
@@ -88,7 +115,10 @@ private struct ChatSubagentActivityRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityValue(self.expanded ? "Expanded" : "Collapsed")
+                .accessibilityValue([
+                    self.statusHelp,
+                    self.expanded ? String(localized: "Expanded") : String(localized: "Collapsed"),
+                ].joined(separator: " "))
                 .accessibilityIdentifier("chat-subagent-activity-\(self.activity.id)")
             } else {
                 self.summary
@@ -103,10 +133,14 @@ private struct ChatSubagentActivityRow: View {
             }
         }
         .modifier(ChatWorkCardStyle())
+        .help(Text(self.rowHelp))
     }
 
     private var summary: some View {
         HStack(alignment: .center, spacing: 7) {
+            #if os(macOS)
+            ChatSubagentStatusClaw(activity: self.activity)
+            #else
             if self.activity.status == .running {
                 ChatWorkingClawView(seed: self.activity.id)
             } else {
@@ -121,19 +155,22 @@ private struct ChatSubagentActivityRow: View {
                     .frame(width: 28, height: 24)
                     .accessibilityHidden(true)
             }
+            #endif
 
             (self.activity.title.map { Text(verbatim: $0) } ?? Text(self.title))
                 .font(OpenClawChatTypography.footnoteSemiBold)
                 .foregroundStyle(self.titleColor)
                 .lineLimit(1)
-                .help(self.activity.title ?? String(localized: self.title))
+                .help(Text(self.rowHelp))
 
+            #if !os(macOS)
             if self.activity.title != nil {
                 Text(self.statusLabel)
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize()
             }
+            #endif
 
             if let detail = self.detail {
                 Text(verbatim: detail)
@@ -161,8 +198,10 @@ private struct ChatSubagentActivityRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(self.statusHelp)
     }
 
+    #if !os(macOS)
     private var statusSymbol: String {
         switch self.activity.status {
         case .queued: "hourglass"
@@ -172,4 +211,59 @@ private struct ChatSubagentActivityRow: View {
         case .failed, .timedOut: "exclamationmark.triangle"
         }
     }
+    #endif
 }
+
+#if os(macOS)
+private struct ChatSubagentStatusClaw: View {
+    @State private var completionHighlighted = false
+    let activity: ChatSubagentActivity
+
+    var body: some View {
+        ChatWorkingClawView(
+            seed: self.activity.id,
+            parked: self.activity.status != .running,
+            tint: self.tint)
+            .overlay(alignment: .topTrailing) {
+                if self.activity.status == .failed || self.activity.status == .timedOut {
+                    Image(systemName: self.activity.status == .failed ? "exclamationmark.triangle.fill" : "clock.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(self.activity.status == .failed
+                            ? OpenClawChatTheme.danger : OpenClawChatTheme.warning)
+                        .padding(2)
+                        .background(Circle().fill(OpenClawChatTheme.composerField))
+                        .offset(x: 2, y: -1)
+                }
+            }
+            .accessibilityHidden(true)
+            .task(id: self.completionDeadline) {
+                self.completionHighlighted = false
+                guard let deadline = self.completionDeadline else { return }
+                let remaining = deadline.timeIntervalSinceNow
+                guard remaining > 0, remaining <= 3 else { return }
+                self.completionHighlighted = true
+                try? await Task.sleep(for: .seconds(remaining))
+                guard !Task.isCancelled else { return }
+                self.completionHighlighted = false
+            }
+    }
+
+    private var completionDeadline: Date? {
+        guard self.activity.status == .completed,
+              let observedAt = self.activity.terminalObservedAt,
+              observedAt.isFinite
+        else { return nil }
+        return Date(timeIntervalSince1970: observedAt / 1000).addingTimeInterval(3)
+    }
+
+    private var tint: Color? {
+        switch self.activity.status {
+        case .running: nil
+        case .queued: Color.secondary.opacity(0.55)
+        case .cancelled: Color.secondary.opacity(0.35)
+        case .completed where self.completionHighlighted: OpenClawChatTheme.success
+        case .completed, .failed, .timedOut: Color.secondary.opacity(0.8)
+        }
+    }
+}
+#endif

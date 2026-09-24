@@ -2658,7 +2658,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "never repairs external, developer-owned, or aliased host packages after an npm update",
+    "repairs managed ClawHub hosts without traversing external or developer aliases after an npm update",
     async () => {
       const plugins = [
         { pluginId: "sibling", packageName: "@acme/sibling" },
@@ -2755,12 +2755,12 @@ describe("updateNpmInstalledPlugins", () => {
       expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
       expect(fs.lstatSync(peerLinkPath("sibling")).isSymbolicLink()).toBe(true);
       expect(fs.lstatSync(peerLinkPath("updated")).isSymbolicLink()).toBe(true);
-      for (const copiedHostDir of copiedHosts) {
-        expect(fs.lstatSync(copiedHostDir).isDirectory()).toBe(true);
-        expect(
-          JSON.parse(fs.readFileSync(path.join(copiedHostDir, "package.json"), "utf8")),
-        ).toEqual({ name: "openclaw", version: "2026.4.1" });
-      }
+      expect(
+        copiedHosts.map((copiedHostDir) => fs.lstatSync(copiedHostDir).isSymbolicLink()),
+      ).toEqual([false, false, false, true]);
+      expect(fs.realpathSync(expectDefined(copiedHosts[3], "clawhub copied host fixture"))).toBe(
+        fs.realpathSync(process.cwd()),
+      );
     },
   );
 
@@ -6234,7 +6234,7 @@ describe("syncPluginsForUpdateChannel", () => {
   });
 
   it("uses the provided env when matching bundled load and install paths", async () => {
-    const bundledHome = "/tmp/openclaw-home";
+    const bundledHome = makeTrackedTempDir("openclaw-plugin-update-home", tempDirs);
     mockBundledSources(
       createBundledSource({
         localPath: `${bundledHome}/plugins/feishu`,

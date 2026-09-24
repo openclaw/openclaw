@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import type { BuzzInboundMessage } from "./message-event.js";
@@ -325,9 +325,10 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -405,33 +406,8 @@ describe("Buzz gateway cold-start recovery", () => {
   });
 
   it("reads persisted room activations once when reconnecting at capacity", async () => {
-    let reads = 0;
-    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
-    const prepare = DatabaseSync.prototype.prepare;
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
-      function (this: DatabaseSync, sql) {
-        const statement = prepare.call(this, sql);
-        if (/^select\b.*\bfrom "plugin_state_entries"/iu.test(sql)) {
-          const get = statement.get.bind(statement);
-          vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-            reads += 1;
-            return get(...bindings);
-          });
-          const all = statement.all.bind(statement);
-          vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-            reads += 1;
-            return all(...bindings);
-          });
-          const iterate = statement.iterate.bind(statement);
-          vi.spyOn(statement, "iterate").mockImplementation((...bindings) => {
-            reads += 1;
-            return iterate(...bindings);
-          });
-        }
-        return statement;
-      },
-    );
     const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+    const entries = vi.spyOn(store, "entries");
     const channelIds = Array.from({ length: BUZZ_MAX_CONFIGURED_ROOMS }, (_, i) => `room-${i}`);
     await resolveBuzzRecoverySince({
       store,
@@ -439,7 +415,7 @@ describe("Buzz gateway cold-start recovery", () => {
       nowSeconds: START_SECONDS,
       lookbackSeconds: LOOKBACK_SECONDS,
     });
-    reads = 0;
+    entries.mockClear();
     const recovered = await resolveBuzzRecoverySince({
       store,
       channelIds,
@@ -447,7 +423,7 @@ describe("Buzz gateway cold-start recovery", () => {
       lookbackSeconds: LOOKBACK_SECONDS,
     });
     expect(recovered).toEqual(new Map(channelIds.map((id) => [id, START_SECONDS])));
-    expect(reads).toBe(1);
+    expect(entries).toHaveBeenCalledOnce();
   });
 
   it("rejects recovery when an existing room cursor cannot be read", async () => {

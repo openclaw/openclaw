@@ -18,6 +18,10 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import {
+  assertCodexNativeHookRelayAllowed,
+  CodexManagedHooksOnlyError,
+} from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -26,8 +30,13 @@ import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
 } from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
+import {
+  createIsolatedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
+import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
-import { resolveCodexWebSearchPlan } from "./web-search.js";
+import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 function resolveCodexAttemptBundleManifestRegistry(
   preparedModelRuntime: EmbeddedRunAttemptParams["preparedModelRuntime"],
@@ -194,7 +203,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
     !(
-      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.managementEntitlement &&
       cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
     ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&
@@ -223,44 +232,117 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+  let nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
     { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  if (
+    nativeToolSurfaceEnabled &&
+    sandbox?.enabled &&
+    sandbox.backend &&
+    params.hostCapabilities.retainSourceAuthority
+  ) {
+    const client = await attemptClientFactory({
+      assertCurrent: connection.assertCurrent,
+      startOptions: appServer.start,
+      pluginConfig,
+      ...(startupPreparedAuth
+        ? { preparedAuth: startupPreparedAuth }
+        : { authProfileId: startupClientAuthProfileId }),
+      authRequirement: connection.startupAuthRequirement,
+      authProfileStore: attemptAuthProfileStore,
+      authBindingFingerprint: preparedAuthBinding?.fingerprint,
+      ...(connection.runtimeArtifactRequest
+        ? {
+            runtimeArtifactMode: "capture" as const,
+            ...(connection.runtimeArtifactRequest.expected
+              ? { expectedRuntimeArtifact: connection.runtimeArtifactRequest.expected }
+              : {}),
+          }
+        : {}),
+      agentId: sessionAgentId,
+      agentDir,
+      config: params.config,
+      abandonSignal: runAbortController.signal,
+      timeoutMs: appServer.requestTimeoutMs,
+    });
+    try {
+      connection.assertCurrent();
+      await assertCodexNativeHookRelayAllowed(
+        client,
+        runAbortController.signal,
+        appServer.requestTimeoutMs,
+      );
+      connection.assertCurrent();
+    } catch (error) {
+      if (!(error instanceof CodexManagedHooksOnlyError)) {
+        throw error;
+      }
+      connection.assertCurrent();
+      // Choose the existing sandbox-backed tools before their catalog and prompt are built.
+      nativeToolSurfaceEnabled = false;
+      embeddedAgentLog.info("Codex managed-only hooks require sandbox-backed OpenClaw tools");
+    } finally {
+      if (attemptClientFactory === createIsolatedCodexAppServerClient) {
+        await client.closeAndWait();
+      } else {
+        releaseLeasedSharedCodexAppServerClient(client);
+      }
+    }
+  }
   const configuredMcpSurface = scheduledConfiguredMcpSurface
     ? "scheduled"
     : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
       ? "transient"
       : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
-  const nativeProviderWebSearchSupport =
-    resolveCodexWebSearchPlan({
+  const webSearchPlan = resolveCodexWebSearchPlan({
+    config: params.config,
+    disableTools: params.disableTools,
+    nativeToolSurfaceEnabled,
+  });
+  const supervisedSearchFingerprint =
+    usesSupervisionConnection && !mutable.startupBinding?.pendingSupervisionBranch
+      ? mutable.startupBinding?.webSearchThreadConfigFingerprint
+      : undefined;
+  let nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
+  // The bound thread owns its established search policy, not the daemon's current
+  // provider defaults. Explicit OpenClaw policy changes still pass the lifecycle checks.
+  if (
+    webSearchPlan.kind !== "native-hosted" ||
+    supervisedSearchFingerprint ===
+      fingerprintJsonObject(resolveCodexWebSearchPlan({ disableTools: true }).threadConfig)
+  ) {
+    nativeProviderWebSearchSupport = "unsupported";
+  } else if (supervisedSearchFingerprint === fingerprintJsonObject(webSearchPlan.threadConfig)) {
+    nativeProviderWebSearchSupport = "supported";
+  } else {
+    nativeProviderWebSearchSupport = await resolveCodexProviderWebSearchSupport({
+      clientFactory: attemptClientFactory,
+      appServer,
+      authProfileId: startupClientAuthProfileId,
+      preparedAuth: startupPreparedAuth,
+      agentDir,
       config: params.config,
-      disableTools: params.disableTools,
-      nativeToolSurfaceEnabled,
-    }).kind === "native-hosted"
-      ? await resolveCodexProviderWebSearchSupport({
-          clientFactory: attemptClientFactory,
-          appServer,
-          authProfileId: startupClientAuthProfileId,
-          preparedAuth: startupPreparedAuth,
-          agentDir,
-          config: params.config,
-          modelProviderOverride: usesSupervisionConnection
-            ? mutable.startupBinding?.modelProvider
-            : resolveCodexAppServerThreadModelSelection({
-                provider: params.provider,
-                model: params.modelId,
-                binding: mutable.startupBinding,
-                authProfileId: startupAuthProfileId,
-                authProfileStore: attemptAuthProfileStore,
-                agentDir,
-                config: params.config,
-              }).modelProvider,
-          signal: runAbortController.signal,
-        })
-      : "unsupported";
+      expectedNativeModelProvider: usesSupervisionConnection
+        ? mutable.startupBinding?.modelProvider
+        : undefined,
+      modelProviderOverride: usesSupervisionConnection
+        ? undefined
+        : resolveCodexAppServerThreadModelSelection({
+            homeScope: appServer.start.homeScope,
+            provider: params.provider,
+            model: params.modelId,
+            binding: mutable.startupBinding,
+            authProfileId: startupAuthProfileId,
+            authProfileStore: attemptAuthProfileStore,
+            agentDir,
+            config: params.config,
+          }).modelProvider,
+      signal: runAbortController.signal,
+    });
+  }
   preDynamicStartupStages.mark("provider-capabilities");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);

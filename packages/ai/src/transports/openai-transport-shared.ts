@@ -430,11 +430,12 @@ export function createModelStreamCooperativeScheduler(
         return;
       }
       eventsSinceYield = 0;
-      lastYieldedAt = now;
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });
       throwIfModelStreamAborted(signal);
+      // Time waiting for the yield does not consume the next work budget.
+      lastYieldedAt = Date.now();
     },
   };
 }

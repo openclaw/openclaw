@@ -28,7 +28,7 @@ const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
 const buildExportSessionReplyMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "session exported" })),
 );
-const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
+const prepareSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(async () => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
 );
@@ -56,7 +56,7 @@ vi.mock("../../skills/discovery/chat-commands.js", async () => {
   );
   return {
     ...actual,
-    listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+    prepareSkillCommandsForAgents: prepareSkillCommandsForAgentsMock,
   };
 });
 
@@ -289,7 +289,7 @@ describe("info command handlers", () => {
 
     expect(result).toBeNull();
     expect(params.loadSkillCommands).toHaveBeenCalledOnce();
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("loads skills when named /skill receives an empty precomputed command list", async () => {
@@ -309,7 +309,7 @@ describe("info command handlers", () => {
 
     expect(result).toBeNull();
     expect(params.loadSkillCommands).toHaveBeenCalledOnce();
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("keeps an empty precomputed /skill command list authoritative without a loader", async () => {
@@ -322,7 +322,7 @@ describe("info command handlers", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Unknown skill: demo_skill");
-    expect(listSkillCommandsForAgentsMock).not.toHaveBeenCalled();
+    expect(prepareSkillCommandsForAgentsMock).not.toHaveBeenCalled();
   });
 
   it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
@@ -496,8 +496,8 @@ describe("info command handlers", () => {
 
     expect(result?.shouldContinue).toBe(false);
     const listParams = firstMockArg(
-      listSkillCommandsForAgentsMock,
-      "listSkillCommandsForAgents",
+      prepareSkillCommandsForAgentsMock,
+      "prepareSkillCommandsForAgents",
     ) as { agentIds?: string[] };
     expect(listParams.agentIds).toEqual(["target"]);
   });
@@ -511,7 +511,7 @@ describe("info command handlers", () => {
     params.sessionKey = "global";
 
     expect((await handleCommandsListCommand(params, true))?.shouldContinue).toBe(false);
-    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
+    expect(prepareSkillCommandsForAgentsMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentIds: ["target"] }),
     );
   });

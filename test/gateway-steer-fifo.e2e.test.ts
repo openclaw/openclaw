@@ -877,10 +877,10 @@ describe("Gateway steer FIFO", () => {
       expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
       expect(contentText(inputItems[gateOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(await readTrace(steeringTools.tracePath)).toEqual([
         "preflight-start",
@@ -964,10 +964,10 @@ describe("Gateway steer FIFO", () => {
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
       expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
       expect(contentText(inputItems[gateOutputIndex]?.output)).not.toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(
         fixture.modelServer.requests
@@ -1080,7 +1080,7 @@ describe("Gateway steer FIFO", () => {
         );
         expect(statusResult).toBeDefined();
         expect(contentText(statusResult?.output)).not.toContain(
-          "Skipped due to queued user message.",
+          "Skipped to process an incoming message.",
         );
         expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
           hasActiveRun: true,

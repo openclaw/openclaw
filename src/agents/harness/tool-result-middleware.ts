@@ -13,14 +13,8 @@ import type {
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
-import {
-  hasPluginMessagingDeliveryId,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
-import {
-  isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
-} from "../embedded-agent-messaging.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -313,24 +307,20 @@ function coerceMiddlewareToolResult(
   return isValidMiddlewareToolResult(result) ? result : undefined;
 }
 
-/**
- * Coerce an arbitrary value into a JSON-safe shape that satisfies
- * `isValidMiddlewareDetails`. Round-trips through `JSON.stringify` with a
- * WeakSet replacer that drops functions, symbols, and `undefined`; coerces
- * bigints to their decimal string form; breaks cycles at the offending
- * reference; and collapses payloads larger than the validator byte cap to a
- * `{ truncated, originalSizeBytes }` marker. Returns `null` for inputs that
- * cannot be represented at all (top-level function/symbol/undefined).
- */
+// Normalize incoming details to satisfy the validator's byte and shape limits.
 function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
   const serialized = serializeMiddlewareValue(value);
   if (serialized === undefined) {
     return null;
   }
   const bytes = Buffer.byteLength(serialized, "utf8");
-  return bytes > MAX_MIDDLEWARE_DETAILS_BYTES
-    ? { truncated: true, originalSizeBytes: bytes }
-    : JSON.parse(serialized);
+  if (bytes <= MAX_MIDDLEWARE_DETAILS_BYTES) {
+    const parsed = JSON.parse(serialized);
+    if (hasValidMiddlewareDetailsShape(parsed)) {
+      return parsed;
+    }
+  }
+  return { truncated: true, originalSizeBytes: bytes };
 }
 
 /**
@@ -378,13 +368,12 @@ function buildDeliveredMessagingFailureFallback(
   );
   const delivered = deliveryFact
     ? deliveryFact.status === "settled"
-    : isPluginNativeMessagingTool(event.toolName) &&
-      isDeliveredMessagingToolResult({
+    : isDeliveredMessagingToolResult({
         toolName: event.toolName,
         args: event.args,
         result,
-      }) &&
-      hasPluginMessagingDeliveryId(result);
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||

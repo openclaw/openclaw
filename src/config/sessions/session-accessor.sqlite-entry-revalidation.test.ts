@@ -21,8 +21,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
-import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-projection.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
+import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 
 const tempDirs = createTempDirTracker();
@@ -88,6 +88,13 @@ describe("SQLite session entry patch commit revalidation", () => {
         );
   }
 
+  function setUnrelatedParent(db: DatabaseSync, parentSessionKey: string | null): void {
+    db.prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?").run(
+      parentSessionKey,
+      "agent:main:main",
+    );
+  }
+
   it.each([false, true])(
     "commits an unchanged persisted row after preparation (reopen: %s)",
     async (reopen) => {
@@ -140,7 +147,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     "canonical validation for $route patches (replacement: $replaceEntry)",
     ({ route, replaceEntry }) => {
       it.each([false, true])(
-        "rejects invalidated main keys even when the target row is unchanged (no-op: %s)",
+        "revalidates unrelated lineage after a main-key change even when the target row is unchanged (no-op: %s)",
         async (noop) => {
           await upsertSessionEntryCore(
             { ...scope, sessionKey: "agent:main:main" },
@@ -155,6 +162,7 @@ describe("SQLite session entry patch commit revalidation", () => {
               route,
               (entry) => {
                 setCanonicalSqliteSessionMainKey(database, "work");
+                setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
                 expect(
                   database.db
                     .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
@@ -166,7 +174,7 @@ describe("SQLite session entry patch commit revalidation", () => {
             ),
           ).rejects.toThrow("openclaw doctor --fix");
 
-          setCanonicalSqliteSessionMainKey(database, "main");
+          setUnrelatedParent(database.db, null);
           expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
         },
       );
@@ -174,7 +182,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   it.each([false, true])(
-    "keeps the exact-replacement reader exception after main-key invalidation (no-op: %s)",
+    "keeps the exact-replacement reader exception after unrelated lineage invalidation (no-op: %s)",
     async (noop) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
@@ -184,12 +192,13 @@ describe("SQLite session entry patch commit revalidation", () => {
         "ordinary",
         (entry) => {
           setCanonicalSqliteSessionMainKey(database, "work");
+          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
           return noop ? null : { ...entry, label: "exact replacement" };
         },
         true,
       );
       expect(result?.label).toBe(noop ? "original" : "exact replacement");
-      setCanonicalSqliteSessionMainKey(database, "main");
+      setUnrelatedParent(database.db, null);
       expect(loadExactSessionEntry(scope)?.entry.label).toBe(
         noop ? "original" : "exact replacement",
       );
@@ -197,7 +206,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   it.each(["ordinary", "lifecycle"] as const)(
-    "rejects a no-op %s patch after reopening with an invalid main key",
+    "rejects a no-op %s patch after reopening with invalidated unrelated lineage",
     async (route) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
@@ -206,6 +215,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       await expect(
         patchEntry(route, () => {
           setCanonicalSqliteSessionMainKey(database, "work");
+          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
           expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
           return null;
         }),
@@ -214,7 +224,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       closeOpenClawAgentDatabaseByPath(database.path);
       const cleanup = new DatabaseSync(database.path);
       try {
-        setCanonicalSqliteSessionMainKey({ db: cleanup }, "main");
+        setUnrelatedParent(cleanup, null);
       } finally {
         cleanup.close();
       }

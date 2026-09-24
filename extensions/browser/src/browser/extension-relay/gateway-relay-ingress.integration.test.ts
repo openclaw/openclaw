@@ -3,8 +3,8 @@ import http from "node:http";
 import net from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,

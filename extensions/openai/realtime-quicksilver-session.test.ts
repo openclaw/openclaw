@@ -397,6 +397,7 @@ describe("GPT-Live offer broker", () => {
       socketFactory: (attempt) => (attempt < 1 ? new ErrorOnCloseSocket() : new FakeSocket("open")),
     });
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
@@ -409,15 +410,32 @@ describe("GPT-Live offer broker", () => {
         throw new Error("Expected WebRTC reservation");
       }
       const response = createResponseHarness();
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      const handling = realtime.handler(
+        createRequest({ token: reservation.clientSecret }),
+        response.res,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets).toHaveLength(1);
+      expect(sockets[0]?.readyState).toBe(0);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(sockets[0]?.closed).toBe(false);
+      expect(response.end).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sockets[0]?.closed).toBe(true);
+      expect(sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(200);
+      await handling;
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(response.res.statusCode).toBe(200);
+      expect(response.readBody()).toBe("v=answer\r\n");
       expect(sockets[0]?.listenerCount("error")).toBeGreaterThan(0);
     } finally {
-      await realtime.cleanup();
+      try {
+        await realtime.cleanup();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 

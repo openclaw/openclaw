@@ -1772,7 +1772,7 @@ mutateModule.syncBuiltinESMExports();
     expect(existsSync(sentinel)).toBe(false);
   });
 
-  it("matches the exact current publisher inventory: 95 npm and 91 ClawHub packages", () => {
+  it("matches the exact current npm and ClawHub publisher inventories", () => {
     const root = tempDirs.make("openclaw-release-plan-current-");
     const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: resolve("."),
@@ -1825,36 +1825,22 @@ mutateModule.syncBuiltinESMExports();
     const clawHubPackages = plan.inventory.packages.filter((entry) =>
       entry.targets.includes("clawhub"),
     );
-    expect(npmPackages).toHaveLength(95);
-    expect(clawHubPackages).toHaveLength(91);
-    const coreNpmPackages = new Set([
+    const coreNpmPackages = [
       "@openclaw/ai",
       "@openclaw/gateway-client",
       "@openclaw/gateway-protocol",
       "openclaw",
-    ]);
-    expect(
-      npmPackages
-        .map((entry) => entry.name)
-        .filter((name) => !coreNpmPackages.has(name))
-        .toSorted(),
-    ).toEqual(
-      collectPublishablePluginPackages(root)
-        .map((plugin) => plugin.packageName)
-        .toSorted(),
+    ];
+    expect(npmPackages.map((entry) => entry.name).toSorted()).toEqual(
+      [
+        ...coreNpmPackages,
+        ...collectPublishablePluginPackages(root).map((plugin) => plugin.packageName),
+      ].toSorted(),
     );
     expect(clawHubPackages.map((entry) => entry.name).toSorted()).toEqual(
       collectClawHubPublishablePluginPackages(root)
         .map((plugin) => plugin.packageName)
         .toSorted(),
-    );
-    expect(npmPackages.map((entry) => entry.name)).toEqual(
-      expect.arrayContaining([
-        "@openclaw/ai",
-        "@openclaw/gateway-client",
-        "@openclaw/gateway-protocol",
-        "openclaw",
-      ]),
     );
   });
 

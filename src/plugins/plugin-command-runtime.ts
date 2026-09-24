@@ -33,6 +33,7 @@ export type PluginCommandDispatchContext = Readonly<{
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
@@ -55,6 +56,7 @@ export type PluginCommandDispatchContext = Readonly<{
   runtimeContext?: {
     compactCurrent?: (
       signal?: AbortSignal,
+      assertOwnerCurrent?: () => void,
     ) => ReturnType<
       NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
     >;
@@ -149,8 +151,9 @@ function createSelectedPluginCommandDispatch(
 async function executeSelectedPluginCommand(
   runtime: PluginCommandRuntime | undefined,
   dispatch: PluginCommandDispatch,
-  context: PluginCommandDispatchContext,
+  input: PluginCommandDispatchContext,
 ): Promise<PluginCommandResult> {
+  const context = { ...input };
   const selected = dispatchSelections.get(dispatch as object);
   if (!selected || (runtime && selected.runtime !== runtime)) {
     return { ...INVALID_SELECTION_REPLY };

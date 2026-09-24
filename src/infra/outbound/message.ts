@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
+  durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   type DurableMessageBatchSendResult,
@@ -13,6 +14,7 @@ import {
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ChannelPlugin, ChannelPollResult } from "../../channels/plugins/types.public.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -23,8 +25,11 @@ import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.
 import { formatErrorMessage } from "../errors.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
+  assertOutboundHandoffCurrent,
+  findOutboundHandoffRejectedError,
+} from "./deliver-handoff.js";
+import {
   resolveOutboundDurableFinalDeliverySupport,
-  type DurableFinalDeliveryRequirements,
   type OutboundDeliveryResult,
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
@@ -182,8 +187,12 @@ type MessagePollParams = {
   inboundEventKind?: InboundEventKind;
   /** @internal Runs immediately before recipient-visible poll platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Revalidate live caller authority at the direct poll adapter. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Channel plugin already selected and bootstrapped by the caller. */
   preparedPlugin?: ChannelPlugin;
+  /** @internal The active Gateway is executing this provider-owned poll locally. */
+  gatewayOwnedDelivery?: boolean;
 };
 
 export type MessagePollResult = {
@@ -257,28 +266,6 @@ function assertPollOptionSupport(params: {
   }
 }
 
-async function resolveRequiredChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-}): Promise<{ channel: string; plugin: ChannelPlugin }> {
-  return await resolveMessageChannelSelection({
-    cfg: params.cfg,
-    channel: params.channel,
-  });
-}
-
-function deriveRequiredMessageSendCapabilities(params: {
-  payloads: ReplyPayload[];
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  silent?: boolean;
-}): DurableFinalDeliveryRequirements {
-  return deriveDurableFinalDeliveryRequirementsForBatch({
-    ...params,
-    reconcileUnknownSend: true,
-  });
-}
-
 async function assertRequiredMessageSendDurability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -292,7 +279,10 @@ async function assertRequiredMessageSendDurability(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
-    requirements: deriveRequiredMessageSendCapabilities(params),
+    requirements: deriveDurableFinalDeliveryRequirementsForBatch({
+      ...params,
+      reconcileUnknownSend: true,
+    }),
   });
   if (support.ok) {
     return;
@@ -307,10 +297,6 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
-  return resolveOutboundMessageGatewayOptions(opts);
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
@@ -318,14 +304,14 @@ async function callMessageGateway<T>(params: {
   onPlatformSendDispatch?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
 }): Promise<T> {
-  const gateway = resolveGatewayOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // Mint before the local dispatch fence so revocation during RPC is enforced
   // by the Gateway's live operational-run validator, not token freshness.
   const agentRuntimeIdentityToken = params.gateway?.request
     ? undefined
     : await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
-  params.assertDirectAdapterHandoff?.();
+  assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
   if (params.gateway?.request) {
     return await params.gateway.request<T>({
       method: params.method,
@@ -363,7 +349,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
   const prepared = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
+    : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
@@ -493,18 +479,42 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       },
       params.conversationDeliveryTarget,
     );
+    const sendMayHaveReachedRecipient = durableMessageBatchMayHaveReachedRecipient(send);
+    const handoffRejection =
+      send.status === "failed" && !sendMayHaveReachedRecipient
+        ? (send.payloadOutcomes
+            ?.map((outcome) =>
+              outcome.status === "failed"
+                ? findOutboundHandoffRejectedError(outcome.error)
+                : undefined,
+            )
+            .find((error) => error !== undefined) ?? findOutboundHandoffRejectedError(send.error))
+        : undefined;
+    if (handoffRejection) {
+      // Keep the final host handoff fact intact for both ordinary and
+      // best-effort callers instead of normalizing it into a provider result.
+      throw handoffRejection;
+    }
     const shouldThrowFailure =
       !params.bestEffort && params.gateway?.clientName !== GATEWAY_CLIENT_NAMES.CLI;
     if (shouldThrowFailure && (send.status === "failed" || send.status === "partial_failed")) {
+      if (send.status === "partial_failed") {
+        throw createChannelPartialDeliveryError(send.error, {
+          messageIds: send.results.map((result) => result.messageId),
+          receipt: send.receipt,
+          visibleReplySent: true,
+        });
+      }
       throw send.error;
     }
     const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
     const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes);
+    const sentBeforeError = send.status !== "sent" && sendMayHaveReachedRecipient;
 
     return {
       channel,
       to: params.to,
-      via: "direct",
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
@@ -513,7 +523,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(send.status === "failed" || send.status === "partial_failed"
         ? { error: formatErrorMessage(send.error) }
         : {}),
-      ...(send.status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+      ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
       ...(payloadOutcomes ? { payloadOutcomes } : {}),
     };
   }
@@ -560,7 +570,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const cfg = await resolveMessageConfig(params.cfg);
   const prepared = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
+    : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
 
   const pollInput: PollInput = {
@@ -596,7 +606,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     isAnonymous: params.isAnonymous,
   });
 
-  if (deliveryMode !== "gateway") {
+  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const resolvedTarget = resolveOutboundTarget({
       channel,
       plugin,
@@ -609,6 +619,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       throw resolvedTarget.error;
     }
 
+    params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({
       cfg,
       to: resolvedTarget.to,
@@ -621,13 +632,14 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       sessionKey: params.sessionKey,
       inboundEventKind: params.inboundEventKind,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });
 
     return buildMessagePollResult({
       channel,
       to: params.to,
       normalized,
-      via: "direct",
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       result: normalizeMessagePollDeliveryResult(result),
     });
   }
@@ -635,6 +647,8 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const result = await callMessageGateway<ChannelPollResult>({
     gateway: params.gateway,
     method: "poll",
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     params: {
       to: params.to,
       question: normalized.question,

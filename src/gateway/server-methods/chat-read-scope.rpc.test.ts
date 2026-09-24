@@ -10,10 +10,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 async function request(
@@ -63,6 +63,11 @@ describe("registered chat read scope", () => {
     async (testCase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = rolePolicyConfig();
+        if (testCase.actor === "admin") {
+          expectDefined(cfg.gateway?.roles?.definitions.write, "admin role definition").scopes = [
+            "operator.admin",
+          ];
+        }
         await state.writeConfig(cfg);
         const owner = roleClient("write", "synthetic-owner");
         const client =
@@ -110,7 +115,7 @@ describe("registered chat read scope", () => {
         );
         try {
           receipt.finish("cancelled");
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+          const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
           const history = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
           });
@@ -173,7 +178,7 @@ describe("registered chat read scope", () => {
         const interrupted = expectDefined(receipts[2], "interrupted receipt");
         cancelled.finish("cancelled");
         interrupted.finish("interrupted");
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const history = async (pendingBefore?: number) => {
           const [ok, payload, error] = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
@@ -269,7 +274,7 @@ describe("registered chat read scope", () => {
             return result;
           });
         const lookup = request(
-          createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
           client,
           "chat.message.get",
           { sessionKey: scope.sessionKey, messageId: "async-message" },

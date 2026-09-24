@@ -538,6 +538,7 @@ async function startNpmFixtureRegistry(
         env: {
           ...env,
           NPM_CONFIG_REGISTRY: `http://127.0.0.1:${port}`,
+          npm_config_registry: `http://127.0.0.1:${port}`,
         },
         stop() {
           child.kill();

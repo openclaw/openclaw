@@ -1,4 +1,3 @@
-// Telegram plugin module implements outbound adapter behavior.
 import {
   resolveOutboundSendDep,
   sanitizeForPlainText,
@@ -11,14 +10,12 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
-import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
@@ -59,16 +56,6 @@ async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<Tele
   );
 }
 
-function chunkTelegramOutboundText(
-  text: string,
-  limit: number,
-  ctx?: { formatting?: OutboundDeliveryFormattingOptions },
-): string[] {
-  return ctx?.formatting?.parseMode === "HTML"
-    ? splitTelegramHtmlChunks(text, limit)
-    : chunkMarkdownTextWithMode(text, limit, ctx?.formatting?.chunkMode ?? "length");
-}
-
 async function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
   deps?: OutboundSendDeps;
@@ -94,6 +81,8 @@ async function resolveTelegramSendContext(params: {
     verbose: false;
     textMode?: "html";
     tableMode?: OutboundDeliveryFormattingOptions["tableMode"];
+    textLimit?: number;
+    chunkMode?: TelegramSendOpts["chunkMode"];
     messageThreadId?: number;
     replyToMessageId?: number;
     replyToIdSource?: TelegramSendOpts["replyToIdSource"];
@@ -132,6 +121,8 @@ async function resolveTelegramSendContext(params: {
       assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
+      textLimit: params.formatting?.textLimit,
+      chunkMode: params.formatting?.chunkMode,
     },
   };
 }
@@ -429,8 +420,8 @@ export function createTelegramOutboundAdapter(
   return {
     deliveryMode: "direct",
     sendPayloadGroupsMedia: true,
-    chunker: chunkTelegramOutboundText,
-    chunkerMode: "markdown",
+    // Telegram splits parsed content; raw Markdown cuts lose code ownership.
+    chunker: null,
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     preserveMarkdownDetails: ({ cfg, accountId }) =>
@@ -544,7 +535,14 @@ export function createTelegramOutboundAdapter(
         },
       });
     },
-    pinDeliveredMessage: async ({ cfg, target, messageId, pin, gatewayClientScopes }) => {
+    pinDeliveredMessage: async ({
+      cfg,
+      target,
+      messageId,
+      pin,
+      gatewayClientScopes,
+      assertDirectAdapterHandoff,
+    }) => {
       const { pinMessageTelegram } = await loadSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);
       const pinTarget = parseTelegramTarget(outboundTo);
@@ -554,6 +552,7 @@ export function createTelegramOutboundAdapter(
         notify: pin.notify,
         verbose: false,
         gatewayClientScopes,
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
     },
     resolveEffectiveTextChunkLimit: ({ cfg, accountId, formatting }) =>

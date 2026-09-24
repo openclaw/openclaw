@@ -8,7 +8,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
@@ -68,171 +68,226 @@ describe("plugin update publication authority", () => {
           const control = state.path("control");
           await fs.mkdir(control);
           vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-          await withPluginInstallRoots(roots, () =>
-            withPluginLifecycleLease({ env: state.env }, async (rawLease) => {
-              const seed = async () => {
-                const result = await installPluginFromNpmSpec({
-                  npmDir,
-                  spec: `${packageName}@1.0.0`,
-                  mode: "update",
-                  logger: { info: () => {}, warn: () => {} },
-                  timeoutMs: 120_000,
-                });
-                if (!result.ok) {
-                  throw new Error(result.error);
-                }
-                return result;
-              };
-              const legacy = await seed();
-              const generation = await seed();
-              expect(generation.targetDir).not.toBe(legacy.targetDir);
-              const projectRoot = path.dirname(path.dirname(generation.targetDir));
-              expect(isPluginNpmProjectDir({ packageName, projectDir: projectRoot, npmDir })).toBe(
-                true,
-              );
-              const backupRoot = path.join(path.dirname(projectRoot), ".openclaw-install-backups");
-              const readBackups = async () => {
-                try {
-                  return (await fs.readdir(backupRoot)).toSorted();
-                } catch (error) {
-                  if (isNotFoundPathError(error)) {
-                    return [];
+          await withPluginInstallRoots(roots, async () => {
+            const retainedFixture = await withPluginLifecycleLease(
+              { env: state.env },
+              async (rawLease) => {
+                const seed = async () => {
+                  const result = await installPluginFromNpmSpec({
+                    npmDir,
+                    spec: `${packageName}@1.0.0`,
+                    mode: "update",
+                    logger: { info: () => {}, warn: () => {} },
+                    timeoutMs: 120_000,
+                  });
+                  if (!result.ok) {
+                    throw new Error(result.error);
                   }
-                  throw error;
-                }
-              };
-              const readProject = async (root: string) => {
-                const packageRoot = path.join(root, "node_modules", packageName);
-                const identities = await Promise.all(
-                  [root, packageRoot].map(async (dir) => {
-                    const stat = await fs.lstat(dir, { bigint: true });
-                    expect(stat.isDirectory()).toBe(true);
-                    return [stat.dev, stat.ino];
-                  }),
+                  return result;
+                };
+                const legacy = await seed();
+                const generation = await seed();
+                expect(generation.targetDir).not.toBe(legacy.targetDir);
+                const projectRoot = path.dirname(path.dirname(generation.targetDir));
+                expect(
+                  isPluginNpmProjectDir({ packageName, projectDir: projectRoot, npmDir }),
+                ).toBe(true);
+                const backupRoot = path.join(
+                  path.dirname(projectRoot),
+                  ".openclaw-install-backups",
                 );
-                const files = await Promise.all(
-                  [
-                    path.join(root, "package.json"),
-                    path.join(root, "package-lock.json"),
-                    path.join(packageRoot, "package.json"),
-                    path.join(packageRoot, "openclaw.plugin.json"),
-                    path.join(packageRoot, "dist", "index.js"),
-                  ].map((file) => fs.readFile(file)),
-                );
-                return { identities, files };
-              };
-              const seeded = await readProject(projectRoot);
-              const initialBackups = await readBackups();
-              expect(initialBackups).toEqual([]);
-              // Omit resolved metadata on both attempts so the real installer
-              // replaces this same generation instead of taking the unchanged shortcut.
-              const config: OpenClawConfig = {
-                plugins: {
-                  installs: {
-                    [packageName]: {
-                      source: "npm",
-                      spec: packageName,
-                      installPath: generation.targetDir,
-                      version: "1.0.0",
+                const readBackups = async () => {
+                  try {
+                    return (await fs.readdir(backupRoot)).toSorted();
+                  } catch (error) {
+                    if (isNotFoundPathError(error)) {
+                      return [];
+                    }
+                    throw error;
+                  }
+                };
+                const readProject = async (root: string) => {
+                  const packageRoot = path.join(root, "node_modules", packageName);
+                  const identities = await Promise.all(
+                    [root, packageRoot].map(async (dir) => {
+                      const stat = await fs.lstat(dir, { bigint: true });
+                      expect(stat.isDirectory()).toBe(true);
+                      return [stat.dev, stat.ino];
+                    }),
+                  );
+                  const files = await Promise.all(
+                    [
+                      path.join(root, "package.json"),
+                      path.join(root, "package-lock.json"),
+                      path.join(packageRoot, "package.json"),
+                      path.join(packageRoot, "openclaw.plugin.json"),
+                      path.join(packageRoot, "dist", "index.js"),
+                    ].map((file) => fs.readFile(file)),
+                  );
+                  return { identities, files };
+                };
+                const seeded = await readProject(projectRoot);
+                const initialBackups = await readBackups();
+                expect(initialBackups).toEqual([]);
+                // Omit resolved metadata on both attempts so the real installer
+                // replaces this same generation instead of taking the unchanged shortcut.
+                const config: OpenClawConfig = {
+                  plugins: {
+                    installs: {
+                      [packageName]: {
+                        source: "npm",
+                        spec: packageName,
+                        installPath: generation.targetDir,
+                        version: "1.0.0",
+                      },
                     },
                   },
-                },
-              };
-              const installDeferred = async (sink: PluginInstallTransaction[]) => {
-                const onCapabilityConsent: PluginCapabilityConsentHandler = async (review) => ({
-                  reviewToken: review.reviewToken,
-                });
-                // The updater lease is the only authority source; no request assertion.
-                const result = await updateNpmInstalledPlugins(
-                  requestDeferredPluginInstall(
-                    { config, timeoutMs: 120_000, onCapabilityConsent },
-                    sink,
-                  ),
-                );
-                expect(result.outcomes).toEqual([
-                  expect.objectContaining({
-                    pluginId: packageName,
-                    status: "unchanged",
-                    currentVersion: "1.0.0",
-                    nextVersion: "1.0.0",
-                  }),
-                ]);
-                expect(result.config.plugins?.installs?.[packageName]?.installPath).toBe(
-                  generation.targetDir,
-                );
-                expect(sink).toHaveLength(1);
-                return expectDefined(sink[0], "retained plugin install transaction");
-              };
-              const oldRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
-              await withUpdateCommandExecutor(oldRun.runId, async (oldExecutor) => {
-                const oldFence = await oldExecutor.enter(state.root, { preflight: true });
-                const oldTransaction = await withPluginLifecycleLease(
-                  { assertCurrent: oldFence.assertCurrent },
-                  () => installDeferred([]),
-                );
-                const retainedBackups = await readBackups();
-                expect(retainedBackups).toHaveLength(1);
-                const oldBackup = path.join(
-                  backupRoot,
-                  expectDefined(retainedBackups[0], "retained plugin install backup"),
-                );
-                expect(await readProject(oldBackup)).toEqual(seeded);
-                const snapshot = async () => ({
-                  live: await readProject(projectRoot),
-                  backup: await readProject(oldBackup),
-                  backups: await readBackups(),
-                });
-                const retained = await snapshot();
-                expect(retained.live.identities).not.toEqual(retained.backup.identities);
-                releaseUpdateCommandPreflightForHandoff(oldFence);
-                expect(oldFence.assertCurrent).toThrow(UpdateCommandRecoveryPendingError);
-                rawLease.assertOwned();
-                expect(rawLease.signal.aborted).toBe(false);
-
-                const freshRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
-                await withUpdateCommandExecutor(freshRun.runId, async (freshExecutor) => {
-                  const freshFence = await freshExecutor.enter(state.root);
-                  await withPluginLifecycleLease(
-                    { assertCurrent: freshFence.assertCurrent },
-                    async () => {
-                      // First touch of the retained handle is under a new genuine
-                      // updater: ambient ownership must not revive the captured one.
-                      const secondAction = firstAction === "commit" ? "rollback" : "commit";
-                      for (const action of [firstAction, secondAction] as const) {
-                        await expect(oldTransaction[action]()).rejects.toThrow(
-                          UpdateCommandRecoveryPendingError,
-                        );
-                        expect(await snapshot()).toEqual(retained);
-                        rawLease.assertOwned();
-                        expect(rawLease.signal.aborted).toBe(false);
-                      }
-                      const freshTransaction = await installDeferred([]);
-                      const freshBackups = (await readBackups()).filter(
-                        (name) => !retainedBackups.includes(name),
-                      );
-                      expect(freshBackups).toHaveLength(1);
-                      const freshBackup = path.join(
-                        backupRoot,
-                        expectDefined(freshBackups[0], "fresh plugin install backup"),
-                      );
-                      expect(await readProject(freshBackup)).toEqual(retained.live);
-                      const freshLive = await readProject(projectRoot);
-                      expect(freshLive.identities).not.toEqual(retained.live.identities);
-                      await freshTransaction[firstAction]();
-                      expect(await readProject(projectRoot)).toEqual(
-                        firstAction === "commit" ? freshLive : retained.live,
-                      );
-                      expect(await readBackups()).toEqual(retainedBackups);
-                      expect(await readProject(oldBackup)).toEqual(retained.backup);
-                      freshFence.assertCurrent();
-                      rawLease.assertOwned();
-                      expect(rawLease.signal.aborted).toBe(false);
-                    },
+                };
+                const installDeferred = async (sink: PluginInstallTransaction[]) => {
+                  const onCapabilityConsent: PluginCapabilityConsentHandler = async (review) => ({
+                    reviewToken: review.reviewToken,
+                  });
+                  // The updater lease is the only authority source; no request assertion.
+                  const result = await updateNpmInstalledPlugins(
+                    requestDeferredPluginInstall(
+                      { config, timeoutMs: 120_000, onCapabilityConsent },
+                      sink,
+                    ),
                   );
+                  expect(result.outcomes).toEqual([
+                    expect.objectContaining({
+                      pluginId: packageName,
+                      status: "unchanged",
+                      currentVersion: "1.0.0",
+                      nextVersion: "1.0.0",
+                    }),
+                  ]);
+                  expect(result.config.plugins?.installs?.[packageName]?.installPath).toBe(
+                    generation.targetDir,
+                  );
+                  expect(sink).toHaveLength(1);
+                  return expectDefined(sink[0], "retained plugin install transaction");
+                };
+                const oldRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
+                return await withUpdateCommandExecutor(oldRun.runId, async (oldExecutor) => {
+                  const oldFence = await oldExecutor.enter(state.root, { preflight: true });
+                  const oldTransaction = await withPluginLifecycleLease(
+                    { assertCurrent: oldFence.assertCurrent },
+                    () => installDeferred([]),
+                  );
+                  const retainedBackups = await readBackups();
+                  expect(retainedBackups).toHaveLength(1);
+                  const oldBackup = path.join(
+                    backupRoot,
+                    expectDefined(retainedBackups[0], "retained plugin install backup"),
+                  );
+                  expect(await readProject(oldBackup)).toEqual(seeded);
+                  const snapshot = async () => ({
+                    live: await readProject(projectRoot),
+                    backup: await readProject(oldBackup),
+                    backups: await readBackups(),
+                  });
+                  const retained = await snapshot();
+                  expect(retained.live.identities).not.toEqual(retained.backup.identities);
+                  releaseUpdateCommandPreflightForHandoff(oldFence);
+                  expect(oldFence.assertCurrent).toThrow(UpdateCommandRecoveryPendingError);
+                  rawLease.assertOwned();
+                  expect(rawLease.signal.aborted).toBe(false);
+
+                  const freshRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
+                  await withUpdateCommandExecutor(freshRun.runId, async (freshExecutor) => {
+                    const freshFence = await freshExecutor.enter(state.root);
+                    await withPluginLifecycleLease(
+                      { assertCurrent: freshFence.assertCurrent },
+                      async () => {
+                        // A new updater cannot revive the captured transaction. Its
+                        // first refusal also closes this shared plugin lease generation.
+                        const secondAction = firstAction === "commit" ? "rollback" : "commit";
+                        for (const action of [firstAction, secondAction] as const) {
+                          await expect(oldTransaction[action]()).rejects.toThrow(
+                            UpdateCommandRecoveryPendingError,
+                          );
+                          expect(await snapshot()).toEqual(retained);
+                          expect(() => rawLease.assertOwned()).toThrow(
+                            UpdateCommandRecoveryPendingError,
+                          );
+                          expect(rawLease.signal.aborted).toBe(false);
+                        }
+                        freshFence.assertCurrent();
+                      },
+                    );
+                  });
+                  return {
+                    installDeferred,
+                    readBackups,
+                    readProject,
+                    projectRoot,
+                    backupRoot,
+                    retainedBackups,
+                    oldBackup,
+                    retained,
+                    oldTransaction,
+                    snapshot,
+                  };
                 });
+              },
+            );
+            // Genuine recovery starts after the refused lifecycle generation closes.
+            // Retained handles stay revoked; only the new transaction can settle.
+            const {
+              installDeferred,
+              readBackups,
+              readProject,
+              projectRoot,
+              backupRoot,
+              retainedBackups,
+              oldBackup,
+              retained,
+              oldTransaction,
+              snapshot,
+            } = retainedFixture;
+            await withPluginLifecycleLease({ env: state.env }, async (freshLease) => {
+              const freshRun = createUpdateRun({ trigger: "cli" }, { env: state.env });
+              await withUpdateCommandExecutor(freshRun.runId, async (freshExecutor) => {
+                const freshFence = await freshExecutor.enter(state.root);
+                await withPluginLifecycleLease(
+                  { assertCurrent: freshFence.assertCurrent },
+                  async () => {
+                    const secondAction = firstAction === "commit" ? "rollback" : "commit";
+                    for (const action of [firstAction, secondAction] as const) {
+                      await expect(oldTransaction[action]()).rejects.toThrow(
+                        UpdateCommandRecoveryPendingError,
+                      );
+                      expect(await snapshot()).toEqual(retained);
+                      freshFence.assertCurrent();
+                      freshLease.assertOwned();
+                    }
+                    const freshTransaction = await installDeferred([]);
+                    const freshBackups = (await readBackups()).filter(
+                      (name) => !retainedBackups.includes(name),
+                    );
+                    expect(freshBackups).toHaveLength(1);
+                    const freshBackup = path.join(
+                      backupRoot,
+                      expectDefined(freshBackups[0], "fresh plugin install backup"),
+                    );
+                    expect(await readProject(freshBackup)).toEqual(retained.live);
+                    const freshLive = await readProject(projectRoot);
+                    expect(freshLive.identities).not.toEqual(retained.live.identities);
+                    await freshTransaction[firstAction]();
+                    expect(await readProject(projectRoot)).toEqual(
+                      firstAction === "commit" ? freshLive : retained.live,
+                    );
+                    expect(await readBackups()).toEqual(retainedBackups);
+                    expect(await readProject(oldBackup)).toEqual(retained.backup);
+                    freshFence.assertCurrent();
+                    freshLease.assertOwned();
+                    expect(freshLease.signal.aborted).toBe(false);
+                  },
+                );
               });
-            }),
-          );
+            });
+          });
         },
       );
     },

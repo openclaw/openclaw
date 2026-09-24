@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  type CrabboxState,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   isCrabboxWarmImageCaptureUncertain,
@@ -10,7 +11,7 @@ import {
 
 type CliProgram = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0]["program"];
 
-export function registerCrabboxWarmImageCommands(program: CliProgram): void {
+export function registerCrabboxWarmImageCommands(program: CliProgram, state: CrabboxState): void {
   program
     .command("crabbox")
     .description("Manage Crabbox warm images")
@@ -26,20 +27,25 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
       "Confirm owning processes and recovered workers are stopped and provider artifacts are reconciled",
     )
     .action(
-      (options: { json?: boolean; recover?: string; acknowledgeProviderCleanup?: boolean }) => {
+      async (options: {
+        json?: boolean;
+        recover?: string;
+        acknowledgeProviderCleanup?: boolean;
+      }) => {
         if (options.acknowledgeProviderCleanup && !options.recover) {
           throw new Error(
             "--acknowledge-provider-cleanup requires --recover <selector> from warm-images inspection.",
           );
         }
         if (options.recover) {
-          recoverCrabboxWarmImageCapture(
+          await recoverCrabboxWarmImageCapture(
+            state,
             options.recover,
             options.acknowledgeProviderCleanup === true,
           );
         }
-        const images = listCrabboxWarmImages();
-        const legacyLeases = listCrabboxLegacyWarmLeases();
+        const images = await listCrabboxWarmImages(state);
+        const legacyLeases = await listCrabboxLegacyWarmLeases(state);
         const nextSteps =
           "Restart the Gateway after manual reconciliation; the next eligible worker can capture again.";
         if (options.json) {

@@ -4,18 +4,15 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import {
-  listSessionGroups,
-  normalizeGroupNames,
-  resolveSessionGroupMutationTargetsByName,
-} from "./session-groups.js";
+import { listSessionGroups, normalizeGroupNames } from "./session-groups.js";
 import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
-import { resolveUnifiedTalkSessionTarget } from "./talk-session-registry.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
@@ -31,7 +28,7 @@ export function resolveDirectSessionTargets(
   }
   const record = params as Record<string, unknown>;
   const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
+  if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
     candidates.push(...record.keys);
   }
   if (Array.isArray(record.sessionKeys)) {
@@ -63,18 +60,24 @@ function readSessionSharingStringParam(params: unknown, key: string): string | u
   return normalizeOptionalString((params as Record<string, unknown>)[key]);
 }
 
+function preparedGroupTargets(context: GatewayRequestContext) {
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Session group membership is unavailable during Gateway startup");
+  }
+  return projection.sessionGroupTargets();
+}
+
 function resolveSessionGroupMutationTargets(params: {
-  getCfg: () => OpenClawConfig;
+  context: GatewayRequestContext;
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
   const groupName = readSessionSharingStringParam(params.requestParams, "name");
-  return groupName
-    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
-    : undefined;
+  return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
 }
 
 function resolveSessionGroupsPutMutationTargets(
-  getCfg: () => OpenClawConfig,
+  context: GatewayRequestContext,
   requestParams: unknown,
 ): SessionMutationTarget[] | undefined {
   const names =
@@ -91,7 +94,7 @@ function resolveSessionGroupsPutMutationTargets(
   if (dropped.length === 0) {
     return [];
   }
-  const byName = resolveSessionGroupMutationTargetsByName(getCfg());
+  const byName = preparedGroupTargets(context);
   return dropped.flatMap((name) => byName.get(name) ?? []);
 }
 
@@ -111,10 +114,10 @@ function resolveApprovalSessionTarget(
       : method === "approval.resolve" && kind === "system-agent"
         ? context.systemAgentApprovalManager
         : context.execApprovalManager;
-  const resolvedId = manager?.lookupApprovalId(id, { includeResolved: true });
+  const resolvedId = manager?.lookupLocalApprovalId(id, { includeResolved: true });
   const recordId =
     resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
-  const request = manager?.getSnapshot(recordId)?.request;
+  const request = manager?.getLocalSnapshot(recordId)?.request;
   const sessionKey = readSessionSharingStringParam(request, "sessionKey");
   const agentId = readSessionSharingStringParam(request, "agentId");
   return sessionKey
@@ -193,12 +196,12 @@ export function resolveSessionMutationTargets(params: {
     params.method === "sessions.groups.update"
   ) {
     return resolveSessionGroupMutationTargets({
-      getCfg: params.getCfg,
+      context: params.context,
       requestParams: params.requestParams,
     });
   }
   if (params.method === "sessions.groups.put") {
-    return resolveSessionGroupsPutMutationTargets(params.getCfg, params.requestParams);
+    return resolveSessionGroupsPutMutationTargets(params.context, params.requestParams);
   }
   if (isApprovalSessionTargetMethod(params.method)) {
     const target = resolveApprovalSessionTarget(

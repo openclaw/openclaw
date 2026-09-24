@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  bindOperatorModelExecution,
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
+import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -13,7 +19,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import {
-  buildSessionCompanionRunConfig,
+  resolveSessionCompanionModel,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
 import {
@@ -47,6 +53,8 @@ type SessionCompanionRunParams = {
   workspaceDir: string;
   systemPrompt: string;
   messages: SessionCompanionPromptMessage[];
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  assertSourceCurrent?: () => void;
   signal: AbortSignal;
 };
 
@@ -147,15 +155,13 @@ function toRunnerHistoryMessage(
 }
 
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
-  const selection = resolveSimpleCompletionSelectionForAgent({
+  params.assertSourceCurrent?.();
+  const selectedModel = resolveSessionCompanionModel({
     cfg: params.cfg,
     agentId: params.agentId,
     modelRef: params.modelRef,
-    useUtilityModel: true,
+    operatorAuthority: params.operatorAuthority,
   });
-  if (!selection) {
-    throw new Error("No utility model is configured for this session.");
-  }
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
@@ -172,21 +178,59 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     runId,
     storePath,
   });
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.cfg,
-    runId,
-    params.agentId,
-    "session-companion.ask",
-  );
+  const expectedSeedOwner = {
+    lifecycleRevision: target.sessionEntry.lifecycleRevision,
+    activeWriterRunId: target.sessionEntry.activeWriterRunId,
+  };
+  let executionStarted = false;
+  let preparedRunAdmission: PreparedAgentRunAdmission | undefined;
+  let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   try {
+    modelExecution = bindOperatorModelExecution(params.operatorAuthority, {
+      provider: selectedModel.provider,
+      model: selectedModel.modelId,
+    });
+    const abortSignal = modelExecution
+      ? AbortSignal.any([params.signal, modelExecution.signal])
+      : params.signal;
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      params.cfg,
+      runId,
+      params.agentId,
+      "session-companion.ask",
+      params.assertSourceCurrent,
+      params.operatorAuthority,
+    );
     const [{ SessionManager }, { runEmbeddedAgent }] = await Promise.all([
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
-    const sessionManager = SessionManager.open(target);
-    for (const message of params.messages.slice(0, -1)) {
-      sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
-    }
+    const sessionManager = await SessionManager.openAsync(
+      target,
+      undefined,
+      undefined,
+      params.signal,
+    );
+    params.signal.throwIfAborted();
+    params.assertSourceCurrent?.();
+    await withSessionManagerWrite(sessionManager, () => {
+      abortSignal.throwIfAborted();
+      params.assertSourceCurrent?.();
+      const currentEntry = loadExactSessionEntry(target)?.entry;
+      if (
+        !currentEntry ||
+        currentEntry.sessionId !== target.sessionId ||
+        currentEntry.lifecycleRevision !== expectedSeedOwner.lifecycleRevision ||
+        currentEntry.activeWriterRunId !== expectedSeedOwner.activeWriterRunId
+      ) {
+        throw new Error("Session companion identity changed before history persistence");
+      }
+      for (const message of params.messages.slice(0, -1)) {
+        sessionManager.appendMessage(toRunnerHistoryMessage(message, selectedModel));
+      }
+    });
+    abortSignal.throwIfAborted();
+    executionStarted = true;
     const result = await runEmbeddedAgent({
       preparedRunAdmission,
       sessionId: target.sessionId,
@@ -197,20 +241,25 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       trigger: "manual",
       workspaceDir: params.workspaceDir,
       cwd: params.workspaceDir,
-      config: buildSessionCompanionRunConfig(params.cfg),
+      config: params.cfg,
+      // Invocation restrictions survive configured-runtime admission and reload.
+      // The internal execution session must not become the session-read target.
+      disableToolSearch: true,
+      requireWorkspaceOnly: true,
+      sessionReadScopeKey: params.sessionKey,
       codeModeOverride: false,
       prompt: current.content,
-      provider: selection.runtimeProvider ?? selection.provider,
-      model: selection.modelId,
+      provider: selectedModel.runtimeProvider ?? selectedModel.provider,
+      model: selectedModel.modelId,
       modelFallbacksOverride: [],
       requestedRouteResolution: "resolved",
       agentHarnessRuntimeOverride: "openclaw",
-      authProfileId: selection.profileId,
-      authProfileIdSource: selection.profileId ? "user" : undefined,
+      authProfileId: selectedModel.profileId,
+      authProfileIdSource: selectedModel.profileId ? "user" : undefined,
       timeoutMs: ASK_TIMEOUT_MS,
       runTimeoutOverrideMs: ASK_TIMEOUT_MS,
       runId,
-      abortSignal: params.signal,
+      abortSignal,
       extraSystemPrompt: params.systemPrompt,
       promptMode: "minimal",
       bootstrapContextMode: "lightweight",
@@ -222,6 +271,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       oneShotCliRun: true,
       inputProvenance: { kind: "internal_system", sourceTool: "session-companion" },
     });
+    modelExecution?.assertCurrent();
     return (
       result.meta.finalAssistantVisibleText ??
       result.payloads
@@ -231,8 +281,15 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ""
     );
   } finally {
-    preparedRunAdmission.close();
-    await removeInternalSessionEffectsSession(target);
+    try {
+      preparedRunAdmission?.close();
+      await removeInternalSessionEffectsSession(
+        target,
+        executionStarted ? undefined : expectedSeedOwner,
+      );
+    } finally {
+      modelExecution?.release();
+    }
   }
 }
 
@@ -379,6 +436,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string,
     agentId: string,
     signal: AbortSignal,
+    assertSourceCurrent?: () => void,
   ): Promise<SessionCompanionThread> => {
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
@@ -386,6 +444,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertSourceCurrent?.();
     if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
       return existing;
     }
@@ -396,6 +455,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted || params.isDisposed()) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertSourceCurrent?.();
     if (result.kind === "missing") {
       throw contextError("session-missing", "The selected session is no longer available.");
     }
@@ -428,6 +488,8 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string;
     question: string;
     connId: string;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+    assertSourceCurrent?: () => void;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
@@ -436,6 +498,18 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
+    const assertSourceCurrent = request.operatorAuthority
+      ? () => {
+          request.assertSourceCurrent?.();
+          request.operatorAuthority?.assertCurrent();
+        }
+      : request.assertSourceCurrent;
+    assertSourceCurrent?.();
+    const requestSignal = request.operatorAuthority?.signal
+      ? request.signal
+        ? AbortSignal.any([request.signal, request.operatorAuthority.signal])
+        : request.operatorAuthority.signal
+      : request.signal;
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
     if (existing?.busy || activeAsks.has(threadKey)) {
@@ -488,10 +562,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       controller.abort();
     };
     const abortRequest = () => abort("request-aborted");
-    if (request.signal?.aborted) {
+    if (requestSignal?.aborted) {
       abortRequest();
     } else {
-      request.signal?.addEventListener("abort", abortRequest, { once: true });
+      requestSignal?.addEventListener("abort", abortRequest, { once: true });
     }
     const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
     const aborted = createDeferredCore<never>();
@@ -507,7 +581,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     // Preparation shares the model's cancellation race. Late completions must
     // still pass the ownership checks before dispatching or committing an answer.
     const execute = async () => {
-      const thread = await prepareThread(sessionKey, agentId, controller.signal);
+      const thread = await prepareThread(
+        sessionKey,
+        agentId,
+        controller.signal,
+        assertSourceCurrent,
+      );
       ownedThread = thread;
       if (controller.signal.aborted) {
         throw new Error("session companion preparation was cancelled");
@@ -546,6 +625,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         referenceContext,
         now: admittedAt,
       });
+      assertSourceCurrent?.();
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -554,11 +634,14 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         workspaceDir,
         systemPrompt: buildSystemPrompt(sessionKey),
         messages,
+        ...(request.operatorAuthority ? { operatorAuthority: request.operatorAuthority } : {}),
+        assertSourceCurrent,
         signal: controller.signal,
       });
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
       }
+      assertSourceCurrent?.();
       if (
         params.threads.get(threadKey) !== thread ||
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId
@@ -606,7 +689,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } finally {
       clearTimeoutFn(timeout);
       controller.signal.removeEventListener("abort", onAbort);
-      request.signal?.removeEventListener("abort", abortRequest);
+      requestSignal?.removeEventListener("abort", abortRequest);
       if (activeAsks.get(threadKey) === activeAsk) {
         activeAsks.delete(threadKey);
       }

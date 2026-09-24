@@ -1,5 +1,5 @@
-// Vercel Ai Gateway tests cover provider catalog plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -34,14 +34,6 @@ const STATIC_MODEL_IDS = [
   "moonshotai/kimi-k2.6",
 ];
 
-function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-}
-
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   fetchWithSsrFGuardMock.mockReset();
@@ -53,7 +45,7 @@ describe("vercel ai gateway provider catalog", () => {
     async (status) => {
       const release = vi.fn(async () => undefined);
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: jsonResponse({ data: [] }, { status }),
+        response: jsonResponse({ data: [] }, status),
         release,
       });
       await expect(buildVercelAiGatewayProvider()).resolves.toEqual(

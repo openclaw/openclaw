@@ -1,20 +1,107 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  inspectOpenClawAgentDatabaseOwner,
   isOpenClawAgentDatabaseOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSession, resolveSessionKeyForRequestCore } from "./session.js";
 
+it.each(
+  ["global", "unknown"].flatMap((sessionKey) =>
+    ["legacy", "explicit"].flatMap((ownership) =>
+      ["main-first", "ops-first"].map((order) => ({ sessionKey, ownership, order })),
+    ),
+  ),
+)(
+  "resolves a partitioned $sessionKey session id with $ownership ownership ($order)",
+  async ({ sessionKey, ownership, order }) => {
+    await withOpenClawTestState({ label: "command-partitioned-session-id" }, async (state) => {
+      const storePath = state.statePath("sessions.json");
+      const agentIds = order === "main-first" ? ["main", "ops"] : ["ops", "main"];
+      const cfg: OpenClawConfig = {
+        agents: {
+          ...(ownership === "explicit" ? { ownership: "explicit" } : {}),
+          entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+        },
+        session: { store: storePath },
+      };
+      if (ownership === "legacy") {
+        retainLegacyDefaultAgentId(cfg, "main");
+      }
+      for (const agentId of ["main", "ops"]) {
+        await sessionAccessor.replaceSessionEntry(
+          { agentId, sessionKey, storePath },
+          { sessionId: `${agentId}-session`, updatedAt: Date.now(), label: agentId },
+        );
+      }
+
+      expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "ops-session" })).toMatchObject({
+        agentId: "ops",
+        sessionKey,
+        storePath,
+        sessionEntry: { sessionId: "ops-session", label: "ops" },
+      });
+    });
+  },
+);
+
+it("keeps exact shared SQLite ownership separate from the scan agent and physical owner", async () => {
+  await withOpenClawTestState({ label: "command-shared-session-id" }, async (state) => {
+    const storePath = state.statePath("shared.sqlite");
+    await sessionAccessor.replaceSessionEntry(
+      { agentId: "main", sessionKey: "global", storePath },
+      { sessionId: "unscoped-session", updatedAt: Date.now() },
+    );
+    await sessionAccessor.replaceSessionEntry(
+      { agentId: "ops", sessionKey: "agent:ops:work", storePath },
+      { sessionId: "scoped-session", updatedAt: Date.now() },
+    );
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
+      session: { store: storePath },
+    };
+
+    expect(() =>
+      resolveSessionKeyForRequestCore({ cfg, sessionId: "unscoped-session" }),
+    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    expect(resolveSessionKeyForRequestCore({ cfg, sessionId: "scoped-session" })).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:work",
+      storePath,
+    });
+    for (const owner of ["ops", "retired"]) {
+      const ownedCfg: OpenClawConfig = {
+        ...cfg,
+        agents: { ...cfg.agents, defaults: { sessionStore: { agentId: owner } } },
+      };
+      if (owner === "retired") {
+        expect(() =>
+          resolveSessionKeyForRequestCore({ cfg: ownedCfg, sessionId: "unscoped-session" }),
+        ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+      } else {
+        expect(
+          resolveSessionKeyForRequestCore({ cfg: ownedCfg, sessionId: "unscoped-session" }),
+        ).toMatchObject({ agentId: "ops", sessionKey: "global", storePath });
+      }
+    }
+    expect(inspectOpenClawAgentDatabaseOwner(storePath)).toEqual({
+      status: "owned",
+      agentId: "main",
+    });
+  });
+});
+
 it.each(["work", "dashboard:incognito-work"])(
   "resolves the exact %s session without enumerating unrelated rows",
   async (key) => {
     await withOpenClawTestState({ label: "command-exact-session" }, async (state) => {
-      const storePath = state.path("sessions.sqlite");
+      const storePath = state.statePath("sessions.sqlite");
       const sessionKey = `agent:main:${key}`;
       const incognito = key.startsWith("dashboard:incognito-");
       const cfg = {
@@ -89,7 +176,7 @@ it.each([
   "agent:main:matrix:channel:!Room:Example.org:thread:$Event",
 ])("reuses the persisted session for explicit key %s", async (sessionKey) => {
   await withOpenClawTestState({ label: "command-uppercase-tail-session" }, async (state) => {
-    const storePath = state.path("sessions.sqlite");
+    const storePath = state.statePath("sessions.sqlite");
     const cfg = {
       agents: { defaults: {} },
       session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
@@ -113,7 +200,7 @@ it.each([
 
 it("does not provision a missing incognito lookup or select a hidden run-owned entry", async () => {
   await withOpenClawTestState({ label: "command-private-session" }, async (state) => {
-    const storePath = state.path("sessions.sqlite");
+    const storePath = state.statePath("sessions.sqlite");
     const cfg = { agents: { defaults: {} }, session: { store: storePath } };
     const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
     expect(

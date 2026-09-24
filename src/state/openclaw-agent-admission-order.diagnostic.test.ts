@@ -6,6 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
+import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
@@ -26,6 +27,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -66,13 +68,15 @@ function seed() {
   database.db.exec(`
     INSERT INTO memory_index_chunks
       (id,path,start_line,end_line,hash,model,text,embedding,updated_at)
-      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text','[]',1);
+      VALUES ('synthetic-parent','synthetic',1,1,'hash','synthetic','text',X'',1);
     INSERT INTO memory_index_chunk_recall_metadata (chunk_id, importance)
       VALUES ('synthetic-parent',1);
   `);
   expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
+  // Independent fixture writers model unclean state that requires a full admission check.
+  clearOpenClawAgentIntegrityVerification(pathname, options.env);
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -177,6 +181,7 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
@@ -280,7 +285,7 @@ describe("asynchronous canonical admission", () => {
           {
             pathname,
             databaseLabel: pathname,
-            identity: integrityWorker.readSqliteIntegrityFileIdentity(pathname),
+            identity: readSqliteIntegrityFileIdentity(pathname),
             busyTimeoutMs: 5000,
           } satisfies integrityWorker.SqliteIntegrityWorkerInput,
           (error) => {
@@ -632,6 +637,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,

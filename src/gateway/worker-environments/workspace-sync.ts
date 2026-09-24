@@ -27,16 +27,18 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
+import { parseWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
-  parseWorkerWorkspaceManifest,
 } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import {
@@ -386,6 +388,7 @@ export function createWorkerWorkspaceActions(
               const fileListPath = await filterExistingGitTransferList({
                 gitRoot,
                 preparedListPath: preparedGitTransferListPath,
+                signal: options.ownerSignal,
                 outputPath: path.join(
                   path.dirname(preparedGitTransferListPath),
                   `attempt-${transferAttempt++}`,
@@ -489,7 +492,11 @@ export function createWorkerWorkspaceActions(
         throw workspaceSyncError(baseManifestTransfer);
       }
       const baseRaw = await readTransferredManifest(baseManifestPath);
-      const base = parseWorkerWorkspaceManifest(baseRaw, request.baseManifestRef);
+      const base = await parseWorkspaceManifest(
+        baseRaw,
+        request.baseManifestRef,
+        options.ownerSignal,
+      );
       await fs.rm(baseManifestPath);
       // Recover interrupted publication before measuring; a partial swap is not a planning base.
       await recoverAcceptedWorkspacePublication({
@@ -549,14 +556,14 @@ export function createWorkerWorkspaceActions(
           throw workspaceSyncError(currentManifestTransfer);
         }
         currentRaw = await readTransferredManifest(currentManifestPath);
-        current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
+        current = await parseWorkspaceManifest(currentRaw, currentRef, options.ownerSignal);
       }
       const { expectedRemoteRef, publishAcceptedManifest } = acceptedWorkspacePublisher(
         current,
         currentRef,
       );
       if (changed) {
-        const transferPaths = workerWorkspaceTransferPaths(current, base);
+        const transferPaths = workerWorkspaceTransferPaths(current, base, options.ownerSignal);
         const transferPathSet = new Set(transferPaths);
         if (transferPaths.length > 0) {
           await fs.writeFile(transferListPath, Buffer.from(`${transferPaths.join("\0")}\0`), {
@@ -579,7 +586,7 @@ export function createWorkerWorkspaceActions(
               `${stagingRoot}/`,
             ],
             destinationRoot: stagingRoot,
-            entryLimit: MAX_RECONCILIATION_ENTRIES * 2,
+            entryLimit: MAX_WORKSPACE_INVENTORY_ENTRIES,
             totalByteLimit: MAX_RECONCILIATION_TOTAL_BYTES,
           });
           if (!success(resultTransfer)) {

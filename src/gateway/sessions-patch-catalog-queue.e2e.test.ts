@@ -73,10 +73,10 @@ test("an authenticated metadata patch completes while another session awaits cat
       // The overlap measures a loaded method graph, not its first lazy import.
       await client.request("sessions.patch", { key: metadataKey, pinned: false });
       const entered = createDeferredCore();
-      const originalLoader = modelCatalog.loadGatewayModelCatalog;
+      const originalLoader = modelCatalog.loadGatewayModelCatalogSnapshot;
       let catalogTrace: DiagnosticTraceContext | undefined;
       const loader = vi
-        .spyOn(modelCatalog, "loadGatewayModelCatalog")
+        .spyOn(modelCatalog, "loadGatewayModelCatalogSnapshot")
         .mockImplementation((params) => {
           catalogTrace = getActiveDiagnosticTraceContext();
           entered.resolve();

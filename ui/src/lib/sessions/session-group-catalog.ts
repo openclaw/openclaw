@@ -223,7 +223,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
   };
 
   /** Group consumers may probe once per connection; explicitly absent features never probe. */
-  const load = async () => {
+  const load = async (): Promise<readonly SessionGroupSettings[] | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -243,11 +243,17 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    const promise = loadAttempt(scope, generation, advertised).finally(() => {
-      if (pendingLoad === promise) {
-        pendingLoad = null;
-      }
-    });
+    const promise = loadAttempt(scope, generation, advertised)
+      .then((result) => {
+        // Another invalidation can join the same admitted bootstrap task.
+        // Its completion must include the current catalog generation.
+        return host.connection.isCurrent(scope) && generation !== loadGeneration ? load() : result;
+      })
+      .finally(() => {
+        if (pendingLoad === promise) {
+          pendingLoad = null;
+        }
+      });
     pendingLoad = promise;
     return promise;
   };
@@ -355,12 +361,8 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
         return "stale";
       }
       const state = host.readState();
-      const pathFreeGroups = state.groupSettings.map(({ name: groupName, position }) => ({
-        name: groupName,
-        position,
-      }));
       publishCatalog(
-        mergeSessionGroupDefaults(pathFreeGroups, result),
+        mergeSessionGroupDefaults(state.groupSettings, result),
         state.sectionOrder,
         "ready",
       );

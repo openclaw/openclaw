@@ -2,6 +2,7 @@
 // lifecycle hooks.
 import { describe, expect, it, vi } from "vitest";
 import {
+  getSandboxBackendCapabilities,
   getSandboxBackendFactory,
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
@@ -76,6 +77,25 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendFactory("podman")).not.toBeNull();
     expect(getSandboxBackendManager("podman")).not.toBeNull();
     expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
+  });
+
+  it("advertises read-only resource projection only for supporting backends", () => {
+    expect(getSandboxBackendCapabilities("docker")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("podman")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("ssh")?.readOnlyResourceMounts).not.toBe(true);
+
+    const restore = registerSandboxBackend("test-capabilities", {
+      factory: async () => {
+        throw new Error("not used");
+      },
+      capabilities: { readOnlyResourceMounts: true },
+    });
+    try {
+      expect(getSandboxBackendCapabilities("test-capabilities")?.readOnlyResourceMounts).toBe(true);
+    } finally {
+      restore();
+    }
+    expect(getSandboxBackendCapabilities("test-capabilities")).toBeUndefined();
   });
 
   it.each(["docker", "podman", "ssh"] as const)(

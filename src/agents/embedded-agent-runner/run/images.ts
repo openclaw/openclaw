@@ -23,6 +23,7 @@ import {
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
+import { getMediaDir } from "../../../media/store.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -34,6 +35,7 @@ import {
 } from "../../sandbox-media-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
+import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
   collectMediaImageRefs,
@@ -293,6 +295,8 @@ export async function detectAndLoadPromptImages(params: {
   userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
   media?: readonly MediaFact[];
   workspaceDir: string;
+  /** Registered agent workspace, when sandbox execution uses a different directory. */
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
   existingImageFactIndexes?: readonly ImageFactIndex[];
@@ -430,12 +434,24 @@ export async function detectAndLoadPromptImages(params: {
   let loadedCount = 0;
   let failedMediaCount = 0;
   let skippedCount = 0;
-  const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }) => {
+  const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
+    // Remote workspaces keep admitted attachment originals on Gateway for hydration.
+    // Prompt-discovered workspace references still use the sandbox boundary.
+    const gatewayAttachment =
+      attachment &&
+      Boolean(
+        getAgentWorkspaceAccess(
+          params.agentWorkspaceDir ?? params.workspaceDir,
+          "prepareTurnAttachments",
+        )?.prepareTurnAttachments,
+      );
     const image = await loadImageFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
-      localRoots: params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined),
-      sandbox: params.sandbox,
+      localRoots: gatewayAttachment
+        ? [getMediaDir()]
+        : (params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined)),
+      sandbox: gatewayAttachment ? undefined : params.sandbox,
     });
     if (image) {
       loadedCount++;
@@ -455,7 +471,7 @@ export async function detectAndLoadPromptImages(params: {
     // Gateway-owned transcripts retain managed facts, not necessarily inline bytes.
     // A missing inline block must hydrate its exact fact on replay, just like an offloaded slot.
     const ref = slot.factIndex === undefined ? undefined : refsByFact.get(slot.factIndex);
-    const image = ref?.hydrate ? await loadRef(ref) : null;
+    const image = ref?.hydrate ? await loadRef(ref, true) : null;
     if ((ref?.hydrate || slot.kind === "inline") && !image) {
       failedMediaCount++;
     }
@@ -487,6 +503,7 @@ export async function detectAndLoadPromptImages(params: {
 
 type PromptMediaOptions = {
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   maxBytes?: number;
   maxDimensionPx?: number;
@@ -518,15 +535,22 @@ async function materializeVideoFact(
     return { type: "text", text: VIDEO_OMISSION.limit };
   }
   const ref = resolveMediaFactLocalRef(fact);
+  const gatewayAttachment = Boolean(
+    getAgentWorkspaceAccess(
+      options.agentWorkspaceDir ?? options.workspaceDir,
+      "prepareTurnAttachments",
+    )?.prepareTurnAttachments,
+  );
   const loaded = ref
     ? await loadMediaFromRef(ref, fact.workspaceDir ?? options.workspaceDir, {
         label: "Native video",
         maxBytes: budget.remaining,
         signal: options.signal,
         workspaceOnly: options.workspaceOnly,
-        localRoots:
-          options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined),
-        sandbox: options.sandbox,
+        localRoots: gatewayAttachment
+          ? [getMediaDir()]
+          : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined)),
+        sandbox: gatewayAttachment ? undefined : options.sandbox,
       })
     : null;
   if (!loaded) {
@@ -612,6 +636,7 @@ async function materializePromptMediaMessages(
       prompt: "",
       media: resolvedMedia,
       workspaceDir: options.workspaceDir,
+      agentWorkspaceDir: options.agentWorkspaceDir,
       model: options.model,
       existingImages,
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
@@ -690,6 +715,7 @@ export async function materializeProviderContext(params: {
   context: Context;
   signal?: AbortSignal;
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   workspaceOnly?: boolean;
   localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
@@ -697,6 +723,7 @@ export async function materializeProviderContext(params: {
 }): Promise<ProviderContext> {
   const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
     workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
     model: { input: ["text", "image"] },
     workspaceOnly: params.workspaceOnly,
     localRoots: params.localRoots,

@@ -1,5 +1,6 @@
 // Browser tests cover pw tools core.interactions.set input files plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 
 const readFile = vi.fn();
 const stat = vi.fn();
@@ -195,6 +196,7 @@ describe("setInputFilesViaPlaywright", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
     expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
       signal: expect.any(AbortSignal),
     });
     expect(setInputFiles).toHaveBeenCalledTimes(1);
@@ -227,7 +229,7 @@ describe("setInputFilesViaPlaywright", () => {
           lastModifiedMs: 1700000000000,
         },
       ],
-      { signal: expect.any(AbortSignal) },
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(elementHandle).not.toHaveBeenCalled();
@@ -254,7 +256,7 @@ describe("setInputFilesViaPlaywright", () => {
           lastModifiedMs: 1700000000000,
         },
       ],
-      { signal: expect.any(AbortSignal) },
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
   });
 
@@ -298,7 +300,7 @@ describe("setInputFilesViaPlaywright", () => {
           lastModifiedMs: 1700000000000,
         },
       ],
-      { signal: expect.any(AbortSignal) },
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
   });
 
@@ -342,6 +344,7 @@ describe("setInputFilesViaPlaywright", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
     expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
       signal: expect.any(AbortSignal),
     });
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
@@ -376,7 +379,7 @@ describe("setInputFilesViaPlaywright", () => {
           lastModifiedMs: 1700000000000,
         },
       ],
-      { signal: expect.any(AbortSignal) },
+      { timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS, signal: expect.any(AbortSignal) },
     );
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);

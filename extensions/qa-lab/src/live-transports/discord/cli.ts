@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
   createStandardLiveTransportQaCliRegistration,
@@ -9,12 +8,28 @@ const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<
   typeof import("./adapter.runtime.js")
 >(() => import("./adapter.runtime.js"));
 
-export const discordQaCliRegistration: LiveTransportQaCliRegistration =
-  createStandardLiveTransportQaCliRegistration({
-    channelId: "discord",
-    channelLabel: "Discord",
-    async createAdapter(context) {
-      return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
-    },
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
-  });
+const standardDiscordQaCliRegistration = createStandardLiveTransportQaCliRegistration({
+  channelId: "discord",
+  channelLabel: "Discord",
+  agentE2e: true,
+  async createAdapter(context) {
+    return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
+  },
+  description: "Run Discord QA through the live service or Crabline local provider server",
+  listScenariosHelp: "Print the selected Discord scenario ids and exit",
+});
+
+export const discordQaCliRegistration: LiveTransportQaCliRegistration = {
+  ...standardDiscordQaCliRegistration,
+  register(qa) {
+    standardDiscordQaCliRegistration.register(qa);
+    const command = qa.commands.find((candidate) => candidate.name() === "discord");
+    if (!command) {
+      throw new Error("missing Discord QA command after registration");
+    }
+    command.option(
+      "--channel-driver <live|crabline>",
+      "Channel driver: live (default) or Crabline local provider server",
+    );
+  },
+};

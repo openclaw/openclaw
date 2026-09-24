@@ -128,8 +128,9 @@ export type WorkerProviderLifecycleOptions = Omit<
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: WorkerEnvironmentTransitionPatch,
-  ) => WorkerEnvironmentRecord;
-  saveError: (record: WorkerEnvironmentRecord, error: unknown) => WorkerEnvironmentRecord;
+    assertCurrent?: () => void,
+  ) => Promise<WorkerEnvironmentRecord>;
+  saveError: (record: WorkerEnvironmentRecord, error: unknown) => Promise<WorkerEnvironmentRecord>;
   serviceError: (
     code:
       | "bootstrap_failure"

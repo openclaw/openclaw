@@ -60,6 +60,7 @@ export function withActivatedPluginIds(params: {
   const entries = {
     ...params.config?.plugins?.entries,
   };
+  let entryChanged = false;
   for (const pluginId of params.pluginIds) {
     const normalized = pluginId.trim();
     if (!normalized) {
@@ -70,13 +71,23 @@ export function withActivatedPluginIds(params: {
     }
     allow.add(normalized);
     const existingEntry = entries[normalized];
+    const enabled = existingEntry?.enabled !== false || params.overrideExplicitDisable === true;
+    entryChanged ||= existingEntry?.enabled !== enabled;
     entries[normalized] = {
       ...existingEntry,
-      enabled: existingEntry?.enabled !== false || params.overrideExplicitDisable === true,
+      enabled,
     };
   }
   const forcePluginsEnabled =
     params.overrideGlobalDisable === true && params.config?.plugins?.enabled === false;
+  if (
+    !forcePluginsEnabled &&
+    !entryChanged &&
+    allow.size === originalAllow.length &&
+    params.config?.plugins?.entries
+  ) {
+    return params.config;
+  }
   return {
     ...params.config,
     plugins: {

@@ -67,14 +67,17 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it("rejects oversized multibyte middleware details", async () => {
+  it.each([
+    { name: "multibyte", details: { payload: "é".repeat(60_000) } },
+    { name: "shape", details: Array.from({ length: 1_001 }, () => null) },
+  ])("rejects oversized $name middleware details", async ({ details }) => {
     // Details are serialized into harness/tool payloads; cap them before a
     // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { payload: "é".repeat(60_000) },
+          details,
         },
       }),
     ]);
@@ -572,6 +575,44 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
+  it.each([10, 147])("preserves the wiki_lint summary with %i issues", async (count) => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => ({ result: event.result }),
+    ]);
+    const issues = Array.from({ length: count }, (_, i) => ({
+      severity: "warning",
+      category: "quality",
+      code: "stale-page",
+      path: `sources/example-${i}.md`,
+      message: "Synthetic freshness warning.",
+    }));
+    const details = {
+      issueCount: count,
+      issues,
+      issuesByCategory: { quality: [...issues] },
+      reportPath: "reports/lint.md",
+    };
+    // The wiki shares issue objects; incoming normalization removes repeated references.
+    const normalizedDetails = {
+      ...details,
+      issuesByCategory: { quality: issues.map(() => null) },
+    };
+    const originalSizeBytes = Buffer.byteLength(JSON.stringify(normalizedDetails));
+    expect(originalSizeBytes).toBeLessThanOrEqual(100_000);
+    const summary = `Issues: ${count} total (0 errors, ${count} warnings)`;
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "wiki_lint",
+      args: {},
+      result: { content: [{ type: "text", text: summary }], details },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: summary }]);
+    expect(result.details).toEqual(
+      count === 10 ? normalizedDetails : { truncated: true, originalSizeBytes },
+    );
+  });
+
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => {
@@ -603,38 +644,88 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
-  it("preserves confirmed delivery when middleware returns an explicit failure", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      () => ({
+  it.each([
+    ["plugin ID", "message", { ok: true, result: { messageId: "sent-1" } }, false, true],
+    ["plugin without ID", "message", { status: "sent" }, false, false],
+    ["core sent without ID", "conversations_send", { status: "sent" }, false, true],
+    [
+      "core queued with ID",
+      "conversations_send",
+      { status: "queued", messageId: "prepared-1" },
+      false,
+      false,
+    ],
+    [
+      "core suppressed with ID",
+      "conversations_send",
+      { status: "suppressed", messageId: "prepared-1" },
+      false,
+      false,
+    ],
+    [
+      "core unknown with ID",
+      "conversations_send",
+      { status: "unknown", messageId: "prepared-1" },
+      false,
+      false,
+    ],
+    [
+      "core sent with error",
+      "conversations_turn",
+      { status: "sent", error: "reply waiter unavailable" },
+      false,
+      false,
+    ],
+    [
+      "core reply timeout",
+      "conversations_turn",
+      { status: "timeout", messageId: "sent-1" },
+      false,
+      false,
+    ],
+    ["errored core event", "conversations_send", { status: "sent" }, true, false],
+  ] satisfies Array<[string, string, Record<string, unknown>, boolean, boolean]>)(
+    "preserves only confirmed successful delivery for %s after middleware failure",
+    async (_name, toolName, details, isError, delivered) => {
+      const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+        () => ({
+          result: {
+            content: [{ type: "text", text: "post-processing failed" }],
+            details: { status: "error", middlewareError: true },
+          },
+        }),
+      ]);
+
+      const result = await runner.applyToolResultMiddleware({
+        toolCallId: "call-1",
+        toolName,
+        isError,
+        args: { action: "send", target: "C123" },
         result: {
-          content: [{ type: "text", text: "post-processing failed" }],
-          details: { status: "error", middlewareError: true },
+          content: [{ type: "text", text: "raw result must stay private" }],
+          details,
         },
-      }),
-    ]);
+      });
 
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "message",
-      args: { action: "send", target: "C123" },
-      result: {
-        content: [{ type: "text", text: "raw result must stay private" }],
-        details: {
-          ok: true,
-          result: { messageId: "1700000000.000100", channelId: "C123" },
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
-      details: {
-        ok: true,
-        deliveryStatus: "sent",
-        middlewareWarning: "post-processing failed",
-      },
-    });
-  });
+      expect(result).toEqual(
+        delivered
+          ? {
+              content: [
+                { type: "text", text: "Message delivered, but result post-processing failed." },
+              ],
+              details: {
+                ok: true,
+                deliveryStatus: "sent",
+                middlewareWarning: "post-processing failed",
+              },
+            }
+          : {
+              content: [{ type: "text", text: "post-processing failed" }],
+              details: { status: "error", middlewareError: true },
+            },
+      );
+    },
+  );
 
   it("accepts well-formed middleware results", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [

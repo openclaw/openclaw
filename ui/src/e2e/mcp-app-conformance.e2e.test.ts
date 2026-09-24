@@ -320,6 +320,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext");
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
         await waitForTextContaining(
@@ -435,6 +438,9 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#capabilities"), "serverResources");
         await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", false);
         await waitForText(app.locator("#ping"), "{}");
+        await app.locator("#list-tools").click();
+        await waitForTextContaining(app.locator("#tools"), "app_companion");
+        await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await app.locator("#call-app").click();
         await waitForTextContaining(app.locator("#app-tool"), "companion-called");

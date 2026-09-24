@@ -19,6 +19,7 @@ import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
+import { formatCliOperatorError } from "./failure-output.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -383,10 +384,8 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     if (!opts.json) {
       throw err;
     }
-    result = {
-      valid: false,
-      errors: [err instanceof Error ? err.message : String(err)],
-    };
+    const failure = err instanceof Error ? err : String(err);
+    result = { valid: false, errors: [formatCliOperatorError(failure)] };
   }
 
   if (!result.valid) {
@@ -489,7 +488,7 @@ function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
       outDir: "dist",
       skipLibCheck: true,
     },
-    include: type === "provider" ? ["src/index.ts"] : ["src/**/*.ts"],
+    include: type === "feature" ? ["src/**/*.ts"] : ["src/index.ts"],
   };
 }
 

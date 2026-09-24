@@ -1,5 +1,7 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -22,24 +24,61 @@ const CANONICAL_SCHEMA = `
     ON records(active, tenant_id);
 `;
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function createDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(CANONICAL_SCHEMA);
   return db;
 }
 
-function tracePreparedSql(database: DatabaseSync): {
+function tracePreparedSql(
+  database: DatabaseSync,
+  onIndexSql?: (sql: string) => void,
+): {
   database: DatabaseSync;
   statements: string[];
+  readonly materializedIndexSqlBytes: number;
 } {
   const statements: string[] = [];
+  let materializedIndexSqlBytes = 0;
+  function observe(row: unknown) {
+    if (
+      row &&
+      typeof row === "object" &&
+      "sql" in row &&
+      typeof row.sql === "string" &&
+      /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
+    ) {
+      materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
+      onIndexSql?.(row.sql);
+    }
+  }
   return {
     database: new Proxy(database, {
       get(target, property) {
         if (property === "prepare") {
           return (sql: string) => {
             statements.push(sql);
-            return target.prepare(sql);
+            return new Proxy(target.prepare(sql), {
+              get(statement, method) {
+                if (method === "get" || method === "all") {
+                  return (...args: unknown[]) => {
+                    const result = Reflect.apply(statement[method], statement, args);
+                    if (method === "all") {
+                      for (const row of result) {
+                        observe(row);
+                      }
+                    } else {
+                      observe(result);
+                    }
+                    return result;
+                  };
+                }
+                const value = Reflect.get(statement, method, statement) as unknown;
+                return typeof value === "function" ? value.bind(statement) : value;
+              },
+            });
           };
         }
         const value = Reflect.get(target, property, target) as unknown;
@@ -47,10 +86,44 @@ function tracePreparedSql(database: DatabaseSync): {
       },
     }) as DatabaseSync,
     statements,
+    get materializedIndexSqlBytes() {
+      return materializedIndexSqlBytes;
+    },
   };
 }
 
 describe("repairCanonicalSqliteIndexes", () => {
+  it("inspects one committed index snapshot and releases it before later repair writes", () => {
+    const filename = path.join(tempDirs.make("openclaw-index-snapshot-"), "state.sqlite");
+    const writer = new DatabaseSync(filename);
+    writer.exec(`PRAGMA journal_mode=WAL; ${CANONICAL_SCHEMA}`);
+    const reader = new DatabaseSync(filename);
+    let droppedIndex: string | undefined;
+    const traced = tracePreparedSql(reader, (sql) => {
+      if (droppedIndex) {
+        return;
+      }
+      droppedIndex = sql.includes("idx_records_identity")
+        ? "idx_records_active_lookup"
+        : "idx_records_identity";
+      writer.exec(`DROP INDEX ${droppedIndex}`);
+    });
+    try {
+      expect(
+        repairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA),
+      ).toEqual([]);
+      expect(droppedIndex).toBeDefined();
+      expect(repairCanonicalSqliteIndexes(reader, "test database", CANONICAL_SCHEMA)).toEqual([
+        droppedIndex,
+      ]);
+      expect(reader.isTransaction).toBe(false);
+      expect(reader.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    } finally {
+      reader.close();
+      writer.close();
+    }
+  });
+
   it("runs one whole-file integrity check for healthy indexes", () => {
     const db = createDatabase();
     try {
@@ -70,10 +143,21 @@ describe("repairCanonicalSqliteIndexes", () => {
     const db = createDatabase();
     try {
       const before = db.prepare("PRAGMA schema_version").get();
+      const indexSqlBytes = db
+        .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND sql IS NOT NULL")
+        .all()
+        .reduce((sum, row) => {
+          if (typeof row.sql !== "string") {
+            throw new Error("Expected fixture index DDL");
+          }
+          return sum + Buffer.byteLength(row.sql, "utf8");
+        }, 0);
+      const traced = tracePreparedSql(db);
 
-      verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+      verifyAndRepairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA);
 
       expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
+      expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
     } finally {
       db.close();
     }

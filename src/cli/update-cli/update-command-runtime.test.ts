@@ -34,8 +34,9 @@ describe("unsupported CLI Node update admission", () => {
 
   it.each(["22.23.2", "26.0.0"])("refuses Node %s before stateful preparation", async (node) => {
     vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
-    vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockReturnValue({
-      ...nodeSqlite.detectCurrentSqliteCapabilities(),
+    const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
+    vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
+      ...capabilities,
       text: false,
     });
     await expect(updateCommand({ json: true })).rejects.toEqual(new ExitError(1));

@@ -1,21 +1,34 @@
 // Document Extract tests cover document extractor plugin behavior.
+import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPdfFixture } from "./document-extractor.test-support.js";
 
-const { createEngineMock, openPdfMock, pdfDocument } = vi.hoisted(() => ({
-  createEngineMock: vi.fn(),
-  openPdfMock: vi.fn(),
-  pdfDocument: {
-    pageCount: 2,
-    extract: vi.fn(),
-    destroy: vi.fn(),
-  },
-}));
+const { createEngineMock, openPdfMock, encodePngMock, renderMock, pageTextMock, pdfDocument } =
+  vi.hoisted(() => ({
+    createEngineMock: vi.fn(),
+    openPdfMock: vi.fn(),
+    encodePngMock: vi.fn(),
+    renderMock: vi.fn(),
+    pageTextMock: vi.fn(),
+    pdfDocument: {
+      pageCount: 2,
+      page: vi.fn(),
+      destroy: vi.fn(),
+    },
+  }));
 
-vi.mock("clawpdf", () => ({
+vi.mock("clawpdf", async (importOriginal) => ({
+  PdfError: (await importOriginal<typeof import("clawpdf")>()).PdfError,
   createEngine: createEngineMock,
+  encodePng: encodePngMock,
 }));
 
 import { extractPdfContent } from "./document-extractor.runtime.js";
+
+const control: WorkerTaskControl = {
+  runNativeSection: async (operation) => operation(),
+  throwIfCancelled: vi.fn(),
+};
 
 function request(overrides = {}) {
   return {
@@ -25,15 +38,6 @@ function request(overrides = {}) {
     maxPixels: 100,
     minTextChars: 10,
     ...overrides,
-  };
-}
-
-function extractionResult(text: string, pagesProcessed = [1, 2]) {
-  return {
-    text,
-    images: [],
-    pagesProcessed,
-    truncated: { text: false, images: false },
   };
 }
 
@@ -48,68 +52,39 @@ describe("PDF document extractor", () => {
     openPdfMock.mockReset();
     openPdfMock.mockResolvedValue(pdfDocument);
     pdfDocument.pageCount = 2;
-    pdfDocument.extract.mockReset();
+    pageTextMock.mockReset();
+    pageTextMock.mockReturnValue("");
     pdfDocument.destroy.mockReset();
+    pdfDocument.page.mockReset();
+    pdfDocument.page.mockReturnValue({
+      width: 5,
+      height: 10,
+      render: renderMock,
+      text: pageTextMock,
+    });
+    renderMock.mockReset();
+    renderMock.mockReturnValue({ width: 5, height: 10, rgba: new Uint8Array(200) });
+    encodePngMock.mockReset();
+    encodePngMock.mockResolvedValue(Uint8Array.from(Buffer.from("png")));
   });
 
   it("extracts text first and renders each fallback page with its own pixel budget", async () => {
-    pdfDocument.extract
-      .mockResolvedValueOnce(extractionResult(""))
-      .mockResolvedValueOnce({
-        text: "",
-        pagesProcessed: [1],
-        truncated: { text: false, images: false },
-        images: [
-          {
-            type: "image",
-            bytes: Uint8Array.from(Buffer.from("!png1?")).subarray(1, 5),
-            mimeType: "image/png",
-            page: 1,
-            width: 5,
-            height: 10,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        text: "",
-        pagesProcessed: [2],
-        truncated: { text: false, images: false },
-        images: [
-          {
-            type: "image",
-            bytes: Uint8Array.from(Buffer.from("png2")),
-            mimeType: "image/png",
-            page: 2,
-            width: 5,
-            height: 10,
-          },
-        ],
-      });
+    pageTextMock.mockReturnValueOnce("");
+    encodePngMock
+      .mockResolvedValueOnce(Uint8Array.from(Buffer.from("!png1?")).subarray(1, 5))
+      .mockResolvedValueOnce(Uint8Array.from(Buffer.from("png2")));
     const input = request({ buffer: Buffer.from("!%PDF-1.4?").subarray(1, -1) });
-    const result = await extractPdfContent(input);
+    const result = await extractPdfContent(input, control);
 
     if (!result) {
       throw new Error("Expected PDF extraction result");
     }
     expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array));
     expect(Buffer.from(openPdfMock.mock.calls[0]?.[0] ?? [])).toEqual(input.buffer);
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(1, {
-      mode: "text",
-      maxPages: 2,
-      maxTextChars: 200_000,
-    });
-    // Each page renders in its own extract() call, with the aggregate pixel cap
-    // allocated across selected pages so later pages are not starved.
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(2, {
-      mode: "images",
-      pages: [1],
-      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
-    });
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(3, {
-      mode: "images",
-      pages: [2],
-      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
-    });
+    expect(renderMock.mock.calls).toEqual([
+      [{ height: 10, forms: true }],
+      [{ height: 10, forms: true }],
+    ]);
     expect(result).toEqual({
       text: "",
       images: [
@@ -117,50 +92,133 @@ describe("PDF document extractor", () => {
         { type: "image", data: "cG5nMg==", mimeType: "image/png" },
       ],
       metadata: {
-        pages: {
-          processed: [1, 2],
-          total: 2,
-          selection: "automatic",
-          truncated: false,
-        },
+        pages: { processed: [1, 2], total: 2, selection: "automatic", truncated: false },
         textTruncated: false,
-        imagesTruncated: false,
+        imagesTruncated: true,
       },
     });
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("skips image fallback when enough text is extracted", async () => {
-    pdfDocument.pageCount = 21;
-    pdfDocument.extract.mockResolvedValueOnce({
-      text: "enough text",
-      images: [],
-      pagesProcessed: Array.from({ length: 20 }, (_, index) => index + 1),
-      truncated: { text: true, images: false },
-    });
-    const result = await extractPdfContent(request({ minTextChars: 5, maxPages: 20 }));
+    pdfDocument.pageCount = 1;
+    pageTextMock.mockReturnValueOnce("enough text");
+    const result = await extractPdfContent(request({ minTextChars: 5 }), control);
 
     expect(result).toEqual({
       text: "enough text",
       images: [],
       metadata: {
-        pages: {
-          total: 21,
-          processed: Array.from({ length: 20 }, (_, index) => index + 1),
-          selection: "automatic",
-          truncated: true,
-        },
-        textTruncated: true,
+        pages: { processed: [1], total: 1, selection: "automatic", truncated: false },
+        textTruncated: false,
         imagesTruncated: false,
       },
     });
-    expect(pdfDocument.extract).toHaveBeenCalledTimes(1);
+    expect(renderMock).not.toHaveBeenCalled();
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it("caps combined text while preserving image fallback after the text budget is exhausted", async () => {
+    pdfDocument.pageCount = 3;
+    pageTextMock
+      .mockReturnValueOnce("header")
+      .mockReturnValueOnce("x".repeat(200_000))
+      .mockReturnValueOnce("");
+    const result = await extractPdfContent(request({ maxPages: 3, minTextChars: 5 }), control);
+
+    expect(result.text).toBe("header\n\n" + "x".repeat(199_992));
+    expect(result.images).toHaveLength(1);
+    expect(result.metadata?.textTruncated).toBe(true);
+  });
+
+  it("records the actual page selection and Unicode-safe text omission", async () => {
+    pdfDocument.pageCount = 21;
+    pageTextMock.mockReturnValueOnce("x".repeat(199_999) + "🙂").mockReturnValue("enough text");
+    const result = await extractPdfContent(request({ maxPages: 20, minTextChars: 5 }), control);
+
+    expect(result.text).toBe("x".repeat(199_999));
+    expect(result.images).toEqual([]);
+    expect(result.metadata).toEqual({
+      pages: {
+        processed: Array.from({ length: 20 }, (_, index) => index + 1),
+        total: 21,
+        selection: "automatic",
+        truncated: true,
+      },
+      textTruncated: true,
+      imagesTruncated: false,
+    });
+    expect(renderMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { width: 600, height: 800, rotation: 0, maxPixels: 2_000_000, expected: [800, 1067] },
+    { width: 600, height: 800, rotation: 90, maxPixels: 2_000_000, expected: [1067, 800] },
+    { width: 1_000_000, height: 1, rotation: 0, maxPixels: 20_000, expected: [10_000, 1] },
+    { width: 1, height: 1_000_000, rotation: 0, maxPixels: 20_000, expected: [1, 10_000] },
+    { width: 100_000, height: 100_000, rotation: 0, maxPixels: 10_000, expected: [100, 100] },
+    { width: 1, height: 1, rotation: 0, maxPixels: 1, expected: [1, 1] },
+  ])(
+    "bounds real PNG output for a $width × $height page rotated $rotation degrees",
+    async ({ width, height, rotation, maxPixels, expected }) => {
+      const actual = await vi.importActual<typeof import("clawpdf")>("clawpdf");
+      const engine = await actual.createEngine();
+      try {
+        const buffer = createPdfFixture([""], { width, height, rotation });
+        openPdfMock.mockResolvedValueOnce(await engine.open(buffer));
+        encodePngMock.mockImplementationOnce(actual.encodePng);
+        const result = await extractPdfContent(request({ buffer, maxPixels }), control);
+
+        expect(result.images).toHaveLength(1);
+        const png = Buffer.from(result.images[0]!.data, "base64");
+        expect(png.subarray(1, 4).toString()).toBe("PNG");
+        expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual(expected);
+      } finally {
+        await engine.destroy();
+      }
+    },
+  );
+
+  it.each(["render", "encode"])(
+    "propagates cancellation during %s without rendering another page or reporting an image failure",
+    async (stage) => {
+      const reason = new Error("owning turn cancelled");
+      const onImageExtractionError = vi.fn();
+      let cancelled = false;
+      const cancellableControl: WorkerTaskControl = {
+        ...control,
+        throwIfCancelled: () => {
+          if (cancelled) {
+            throw reason;
+          }
+        },
+      };
+      pageTextMock.mockReturnValueOnce("short");
+      if (stage === "render") {
+        renderMock.mockImplementationOnce(() => {
+          cancelled = true;
+          return { width: 5, height: 10, rgba: new Uint8Array(200) };
+        });
+      } else {
+        encodePngMock.mockImplementationOnce(async () => {
+          cancelled = true;
+          throw new Error("encoding failed after cancellation");
+        });
+      }
+
+      await expect(
+        extractPdfContent(request({ onImageExtractionError }), cancellableControl),
+      ).rejects.toBe(reason);
+      expect(renderMock).toHaveBeenCalledTimes(1);
+      expect(encodePngMock).toHaveBeenCalledTimes(stage === "render" ? 0 : 1);
+      expect(onImageExtractionError).not.toHaveBeenCalled();
+      expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("opens encrypted PDFs with the request password", async () => {
-    pdfDocument.extract.mockResolvedValueOnce(extractionResult("enough text"));
-    await extractPdfContent(request({ password: "secret" }));
+    pageTextMock.mockReturnValueOnce("enough text");
+    await extractPdfContent(request({ password: "secret" }), control);
 
     expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "secret" });
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
@@ -170,88 +228,114 @@ describe("PDF document extractor", () => {
     openPdfMock.mockRejectedValueOnce(
       Object.assign(new Error("bad password"), { code: "password" }),
     );
-    await expect(extractPdfContent(request({ password: "wrong" }))).rejects.toThrow(
+    await expect(extractPdfContent(request({ password: "wrong" }), control)).rejects.toThrow(
       "PDF requires a password or password is incorrect.",
     );
     expect(pdfDocument.destroy).not.toHaveBeenCalled();
   });
 
-  it("filters selected pages and renders them one page per image call", async () => {
-    pdfDocument.extract
-      .mockResolvedValueOnce(extractionResult("", [2, 1]))
-      .mockResolvedValueOnce(extractionResult("", [2]))
-      .mockResolvedValueOnce(extractionResult("", [1]));
-    const result = await extractPdfContent(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
+  it("filters selected pages and renders them in selection order", async () => {
+    pdfDocument.page.mockImplementation((pageNumber: number) => ({
+      width: 5,
+      height: 10,
+      text: () => "",
+      render: () => ({ width: 5, height: 10, rgba: Uint8Array.of(pageNumber) }),
+    }));
+    encodePngMock.mockImplementation(async (rgba: Uint8Array) => rgba);
+    const result = await extractPdfContent(
+      request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }),
+      control,
+    );
 
-    expect(result).toMatchObject({
-      text: "",
-      images: [],
-      metadata: { pages: { processed: [2, 1], selection: "explicit", truncated: true } },
+    expect(result.images.map((image) => Buffer.from(image.data, "base64")[0])).toEqual([2, 1]);
+    expect(result.metadata?.pages).toEqual({
+      processed: [2, 1],
+      total: 2,
+      selection: "explicit",
+      truncated: true,
     });
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ mode: "text", pages: [2, 1] }),
-    );
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ mode: "images", pages: [2] }),
-    );
-    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({ mode: "images", pages: [1] }),
-    );
   });
 
   it("rejects selected pages outside the PDF page count before extraction", async () => {
     pdfDocument.pageCount = 1;
-    await expect(extractPdfContent(request({ pageNumbers: [2] }))).rejects.toThrow(
+    pageTextMock.mockReturnValueOnce("");
+    await expect(extractPdfContent(request({ pageNumbers: [2] }), control)).rejects.toThrow(
       "No requested PDF pages exist in this 1-page document.",
     );
-    expect(pdfDocument.extract).not.toHaveBeenCalled();
+    expect(pdfDocument.page).not.toHaveBeenCalled();
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(extractPdfContent(request({ pageNumbers: [] }), control)).resolves.toEqual({
+      text: "",
+      images: [],
+      metadata: {
+        pages: { processed: [], total: 1, selection: "explicit", truncated: false },
+        textTruncated: false,
+        imagesTruncated: false,
+      },
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(2);
   });
 
   it("reports image fallback failures and returns extracted text", async () => {
     const onImageExtractionError = vi.fn();
     const failure = new Error("render failed");
-    pdfDocument.extract
-      .mockResolvedValueOnce(extractionResult("short"))
-      .mockRejectedValueOnce(failure);
-    const result = await extractPdfContent(request({ onImageExtractionError }));
+    pageTextMock.mockReturnValueOnce("short");
+    renderMock.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const result = await extractPdfContent(request({ onImageExtractionError }), control);
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       text: "short",
       images: [],
-      metadata: { imagesTruncated: true },
+      metadata: {
+        pages: { processed: [1, 2], total: 2, selection: "automatic", truncated: false },
+        textTruncated: false,
+        imagesTruncated: true,
+      },
     });
     expect(onImageExtractionError).toHaveBeenCalledWith(failure);
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("records when the aggregate pixel budget stops image rendering early", async () => {
-    pdfDocument.extract.mockResolvedValueOnce(extractionResult("short")).mockResolvedValueOnce({
-      text: "",
-      pagesProcessed: [1],
-      truncated: { text: false, images: false },
-      images: [
-        {
-          type: "image",
-          bytes: Uint8Array.from(Buffer.from("page-one")),
-          mimeType: "image/png",
-          page: 1,
-          width: 10,
-          height: 10,
+    renderMock.mockReturnValueOnce({ width: 10, height: 10, rgba: new Uint8Array(400) });
+    encodePngMock.mockResolvedValueOnce(Uint8Array.from(Buffer.from("page-one")));
+    const result = await extractPdfContent(request(), control);
+
+    expect(renderMock).toHaveBeenCalledTimes(1);
+    expect(result.images).toEqual([{ type: "image", data: "cGFnZS1vbmU=", mimeType: "image/png" }]);
+    expect(result.metadata?.imagesTruncated).toBe(true);
+  });
+
+  it.each([
+    { maxPixels: Number.NaN, text: "" },
+    { maxPixels: Number.POSITIVE_INFINITY, text: "short" },
+  ])("preserves image budget errors for maxPixels=$maxPixels", async ({ maxPixels, text }) => {
+    const onImageExtractionError = vi.fn();
+    pageTextMock.mockReturnValueOnce(text);
+    const result = extractPdfContent(request({ maxPixels, onImageExtractionError }), control);
+    if (text) {
+      await expect(result).resolves.toEqual({
+        text,
+        images: [],
+        metadata: {
+          pages: { processed: [1, 2], total: 2, selection: "automatic", truncated: false },
+          textTruncated: false,
+          imagesTruncated: true,
         },
-      ],
-    });
-
-    const result = await extractPdfContent(request());
-
-    expect(pdfDocument.extract).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({
-      images: [{ type: "image", data: "cGFnZS1vbmU=", mimeType: "image/png" }],
-      metadata: { imagesTruncated: true },
-    });
+      });
+    } else {
+      await expect(result).rejects.toThrow("PDF image extraction failed");
+    }
+    expect(onImageExtractionError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "budget",
+        message: "maxPixels must be a finite positive number",
+      }),
+    );
+    expect(renderMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -261,12 +345,13 @@ describe("PDF document extractor", () => {
     const { PdfBudgetError } = await vi.importActual<typeof import("clawpdf")>("clawpdf");
     const onImageExtractionError = vi.fn();
     const failure = new PdfBudgetError("renderPixels", 100);
-    pdfDocument.extract
-      .mockResolvedValueOnce(extractionResult(text))
-      .mockRejectedValueOnce(failure);
+    pageTextMock.mockReturnValueOnce(text);
+    renderMock.mockImplementationOnce(() => {
+      throw failure;
+    });
     const overrides = reportError ? { onImageExtractionError } : {};
 
-    await expect(extractPdfContent(request(overrides))).rejects.toMatchObject({
+    await expect(extractPdfContent(request(overrides), control)).rejects.toMatchObject({
       message: "PDF image extraction failed with no extractable text.",
       cause: failure,
     });

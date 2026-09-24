@@ -422,6 +422,7 @@ function importSource(node: ts.ImportDeclaration) {
 function isLegacyRestartSentinelPreflightDetection(
   node: ts.StringLiteralLike,
   relativePath: string,
+  checker: ts.TypeChecker | undefined,
 ) {
   if (
     relativePath !== legacyRestartSentinelPreflightPath ||
@@ -459,12 +460,31 @@ function isLegacyRestartSentinelPreflightDetection(
   return (
     ts.isCallExpression(someCall) &&
     someCall.arguments.length === 1 &&
-    ts.isIdentifier(someCall.arguments[0]!) &&
-    someCall.arguments[0]!.text === "fileOrDirExists"
+    ts.isPropertyAccessExpression(someCall.arguments[0]!) &&
+    ts.isIdentifier(someCall.arguments[0]!.expression) &&
+    someCall.arguments[0]!.expression.text === "fs" &&
+    someCall.arguments[0]!.name.text === "existsSync" &&
+    checker
+      ?.getSymbolAtLocation(someCall.arguments[0]!.expression)
+      ?.declarations?.some(
+        (declaration) =>
+          ts.isImportClause(declaration) &&
+          !declaration.isTypeOnly &&
+          ts.isImportDeclaration(declaration.parent) &&
+          ts.isStringLiteral(declaration.parent.moduleSpecifier) &&
+          declaration.parent.moduleSpecifier.text === "node:fs",
+      ) === true
   );
 }
 
 function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relativePath: string) {
+  let preflightChecker: ts.TypeChecker | undefined;
+  if (relativePath === legacyRestartSentinelPreflightPath) {
+    const options = { noLib: true, noResolve: true, types: [] };
+    const host = ts.createCompilerHost(options);
+    host.getSourceFile = (fileName) => (fileName === sourceFile.fileName ? sourceFile : undefined);
+    preflightChecker = ts.createProgram([sourceFile.fileName], options, host).getTypeChecker();
+  }
   const checkRestartSentinel = relativePath !== legacyRestartSentinelMigrationPath;
   const checkExecApprovals =
     relativePath !== legacyExecApprovalsMigrationPath &&
@@ -488,7 +508,7 @@ function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relative
       checkRestartSentinel &&
       ts.isStringLiteralLike(node) &&
       legacyRestartSentinelFilenamePattern.test(node.text) &&
-      !isLegacyRestartSentinelPreflightDetection(node, relativePath)
+      !isLegacyRestartSentinelPreflightDetection(node, relativePath, preflightChecker)
     ) {
       addRestartViolation(node, "legacy restart sentinel reference");
     }

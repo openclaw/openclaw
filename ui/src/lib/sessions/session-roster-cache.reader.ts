@@ -81,9 +81,12 @@ export function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySe
   const result = { ...row };
   delete result.hasActiveRun;
   delete result.activeRunIds;
+  delete result.activeModel;
+  delete result.activeModelProvider;
   delete result.status;
   delete result.runtimeMs;
   delete result.runtimeSampledAt;
+  delete result.snapshotAt;
   delete result.agentStatus;
   delete result.observerDigest;
   delete result.swarmPhase;

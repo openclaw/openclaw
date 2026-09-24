@@ -156,10 +156,6 @@ describe("providerSupportsNativePdf", () => {
 });
 
 describe("pdf-tool.helpers", () => {
-  it("resolvePdfInputs requires at least one pdf reference", () => {
-    expect(() => resolvePdfInputs({ prompt: "test" })).toThrow("pdf required");
-  });
-
   it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
     // `pdf` and `pdfs` are both public inputs; normalize them to one ordered
     // list before any filesystem or provider work begins.

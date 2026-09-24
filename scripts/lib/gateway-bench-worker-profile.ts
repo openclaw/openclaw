@@ -256,6 +256,8 @@ export class GatewayBenchWorkerProfiler {
       JSON.stringify({
         kind,
         sampleIntervalMs: 100,
+        sampleClock: "performance.now",
+        cpuCounters: "cumulative-microseconds",
         workers: capture.recordings.map(({ pending: _pending, target, ...row }) => ({
           inspectorWorkerId: target.inspectorWorkerId,
           ...row,

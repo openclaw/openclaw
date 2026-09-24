@@ -504,7 +504,7 @@ ${channelPluginSource({
       expectSetupRuntimeLoaded: true,
     },
     {
-      name: "merges bundled runtime plugin into setup-runtime channel loads",
+      name: "initializes both setup and runtime graphs before merging setup-runtime channels",
       fixture: {
         id: "setup-runtime-bundled-runtime-merge-test",
         label: "Setup Runtime Bundled Runtime Merge Test",
@@ -518,12 +518,17 @@ ${channelPluginSource({
           makePluginLoaderTempDir(),
           "bundled-runtime-applied.txt",
         ),
+        bundledSetupRuntimeMarker: path.join(
+          makePluginLoaderTempDir(),
+          "setup-runtime-applied.txt",
+        ),
       },
       loadOptions: { setupIntent: true },
       expectFullLoaded: true,
       expectSetupLoaded: true,
       expectedChannels: 1,
       expectBundledFullRuntimeLoaded: true,
+      expectSetupRuntimeLoaded: true,
     },
     {
       name: "defaults ordinary unconfigured channel loads to the full runtime",

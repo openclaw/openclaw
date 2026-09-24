@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   applyOnboardingPrimaryModel,
+  applyOnboardingUtilityModel,
   prepareAgentModelDefaults,
   projectAgentModelDefaults,
   resolveOnboardingSetupTarget,
@@ -306,6 +307,10 @@ export async function runSetupModelAuthStep(params: {
     }
     if (authResult.agentModelOverride) {
       nextConfig = applyOnboardingPrimaryModel(nextConfig, target, authResult.agentModelOverride);
+    }
+    if (authResult.utilityModelOverride) {
+      nextConfig = applyOnboardingUtilityModel(nextConfig, target, authResult.utilityModelOverride);
+      break;
     }
 
     const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({

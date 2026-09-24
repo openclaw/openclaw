@@ -6,7 +6,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
-import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
+import { applyCodexAppServerAuthProfile, bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
 import * as codexRequirements from "./config-requirements.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -36,7 +36,7 @@ setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
   it.each(["websocket", "stdio-proxy", "env-stdio-proxy", "local-stdio"])(
-    "preserves the account owner for %s when deferred auth omits homeScope",
+    "keeps ordinary %s sessions isolated when deferred auth omits homeScope",
     async (connectionType) => {
       vi.stubEnv(
         "OPENCLAW_CODEX_APP_SERVER_ARGS",
@@ -81,9 +81,18 @@ describe("prepareCodexAttemptConnection", () => {
       expect(connection.appServer.start.transport).toBe(
         connectionType === "websocket" ? "websocket" : "stdio",
       );
-      expect(connection.appServer.start.homeScope).toBe(
-        connectionType === "local-stdio" ? "user" : "agent",
-      );
+      expect(connection.appServer.start.homeScope).toBe("agent");
+      if (connectionType === "local-stdio") {
+        vi.stubEnv("CODEX_HOME", path.join(tempDir, "personal-codex"));
+        const start = await bridgeCodexAppServerStartOptions({
+          startOptions: connection.appServer.start,
+          agentDir: connection.agentDir,
+          authProfileId: connection.startupClientAuthProfileId,
+          authProfileStore: params.authProfileStore,
+        });
+        expect(start.env?.CODEX_HOME).toBe(path.join(connection.agentDir, "codex-home"));
+        expect(start.env?.CODEX_HOME).not.toBe(process.env.CODEX_HOME);
+      }
     },
   );
 
@@ -149,7 +158,7 @@ describe("prepareCodexAttemptConnection", () => {
       const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
       const connect = vi
         .spyOn(bindingConnection, "resolveCodexBindingAppServerConnection")
-        .mockImplementation(() => {
+        .mockImplementation(async () => {
           throw new Error("invalid ownership reached connection preparation");
         });
 

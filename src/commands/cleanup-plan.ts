@@ -9,14 +9,8 @@ import {
 import { formatConfigIssueSummary } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
-
-function affectsWorkspaceDiscovery(path: string): boolean {
-  return (
-    path === "agents.defaults.workspace" ||
-    (path.startsWith("agents.entries.") && path.endsWith(".workspace"))
-  );
-}
 
 function buildCleanupPlanForConfig(cfg: OpenClawConfig) {
   const stateDir = resolveStateDir();
@@ -34,9 +28,13 @@ export async function resolveCleanupPlanForDryRun() {
 /** Resolve destructive cleanup inputs without mutating the state being guarded. */
 export async function resolveCleanupPlanForRemoval(runtime: RuntimeEnv) {
   const snapshot = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
-  const workspaceWarnings = snapshot.warnings.filter((issue) =>
-    affectsWorkspaceDiscovery(issue.path),
-  );
+  const workspacePaths = new Set([
+    "agents.defaults.workspace",
+    ...Object.keys(snapshot.runtimeConfig.agents?.entries ?? {}).map(
+      (agentId) => `${appendConfigPathSegment("agents.entries", agentId)}.workspace`,
+    ),
+  ]);
+  const workspaceWarnings = snapshot.warnings.filter((issue) => workspacePaths.has(issue.path));
   if (!snapshot.valid || workspaceWarnings.length > 0) {
     const issues = snapshot.valid ? workspaceWarnings : snapshot.issues;
     const issueSummary = formatConfigIssueSummary(issues) ?? "configuration read failed";

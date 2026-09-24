@@ -75,7 +75,7 @@ export async function readJob(state: CronServiceState, id: string) {
 /** Reads one job's private scratch state after proving the job exists in this store. */
 export async function readScratch(state: CronServiceState, id: string) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     // Scratch intentionally opens the process-global state DB, matching every
     // other cron store write in this service (see saveCronJobsStore); threading
@@ -97,7 +97,7 @@ export async function writeScratch(
   },
 ) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     findJobOrThrow(state, id);
     params.commitGuard?.();
     return writeCronJobScratch({
@@ -120,7 +120,7 @@ export async function recordExternalFailure(
   source?: { scheduleKey: string; identity: string },
 ) {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const job = findJobOrThrow(state, id);
     if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
       return;
@@ -187,7 +187,7 @@ export async function updateExternalState(
   statePatch: Partial<CronJob["state"]>,
 ): Promise<boolean> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     assertCronJobStateTimestamps(statePatch);
     const committedJob = commitCronRuntimeRows({
       state,
@@ -219,7 +219,7 @@ export async function retireExternalStreamSource(
   streamSourceIdentity: string,
 ): Promise<string | undefined> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const nextIdentity = createCronStreamSourceIdentity();
     const committedJob = commitCronRuntimeRows({
       state,
@@ -249,7 +249,7 @@ export async function updateExternalCounters(
   counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
 ): Promise<void> {
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     const committedJob = commitCronRuntimeRows({
       state,
       jobIds: [id],
@@ -324,7 +324,11 @@ function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter
 const SLOW_LIST_PAGE_MS = 1_000;
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
-export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
+export async function listPage(
+  state: CronServiceState,
+  opts?: CronListPageOptions,
+  matchesJob?: (job: CronJob) => boolean,
+) {
   const startedAt = performance.now();
   let enteredAt: number | undefined;
   let finishedAt: number | undefined;
@@ -374,19 +378,22 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
           if (triggerFilter === "unconditional" && job.trigger) {
             return false;
           }
-          if (!query) {
-            return true;
+          if (query) {
+            const haystack = normalizeLowercaseStringOrEmpty(
+              [
+                job.id,
+                job.name,
+                job.description ?? "",
+                job.agentId ?? "",
+                ...(job.displayName ? [job.displayName] : []),
+              ].join(" "),
+            );
+            if (!haystack.includes(query)) {
+              return false;
+            }
           }
-          const haystack = normalizeLowercaseStringOrEmpty(
-            [
-              job.id,
-              job.name,
-              job.description ?? "",
-              job.agentId ?? "",
-              ...(job.displayName ? [job.displayName] : []),
-            ].join(" "),
-          );
-          return haystack.includes(query);
+          // In-process visibility must share the sorted snapshot and its revision.
+          return !matchesJob || matchesJob(job);
         });
         // Hash the complete sorted result under the lock, but detach only the page
         // that can outlive later in-place execution state changes.

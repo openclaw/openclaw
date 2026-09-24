@@ -27,6 +27,7 @@ type LiveModelPolicyRef = ModelRef &
   Pick<Parameters<typeof resolveProviderModernModelRef>[0], "config" | "workspaceDir" | "env">;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-5-5",
   "anthropic/claude-opus-5",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-sonnet-5",
@@ -45,6 +46,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
+  "xai/grok-4.7",
   "xai/grok-4.6",
   "xai/grok-4.5",
   "xai/grok-4.20-0309-reasoning",

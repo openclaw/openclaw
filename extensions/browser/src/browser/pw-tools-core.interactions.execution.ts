@@ -29,6 +29,7 @@ import {
   evaluateViaPlaywright,
   fillFormViaPlaywright,
   hoverViaPlaywright,
+  insertTextViaPlaywright,
   pressKeyViaPlaywright,
   scrollIntoViewViaPlaywright,
   selectOptionViaPlaywright,
@@ -68,7 +69,10 @@ async function executeSingleAction(
     assertCurrent,
   };
   if (assertCurrent) {
-    await assertInteractionCurrent(interaction);
+    const assertion = assertInteractionCurrent(interaction);
+    if (assertion) {
+      await assertion;
+    }
   }
   switch (action.kind) {
     case "click":
@@ -105,6 +109,9 @@ async function executeSingleAction(
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
       });
+      break;
+    case "insertText":
+      await insertTextViaPlaywright({ ...interaction, text: action.text });
       break;
     case "press":
       await pressKeyViaPlaywright({

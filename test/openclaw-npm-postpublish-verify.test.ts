@@ -18,7 +18,6 @@ import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -41,12 +40,18 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 import { createScriptTestHarness } from "./scripts/test-helpers.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
@@ -784,11 +789,13 @@ describe("collectInstalledPackageErrors", () => {
       const probe = spawnSync(
         process.execPath,
         [
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish),
+          ).slice(0, -1),
+          "--input-type=module",
           "--eval",
           [
-            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
+            `import { collectInstalledBundledExtensionManifestErrors } from ${JSON.stringify(resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish).href)};`,
             `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
           ].join("\n"),
         ],

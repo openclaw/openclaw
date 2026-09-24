@@ -1,12 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardSubscriptionStore,
+  WorkboardWriteAuthority,
 } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
@@ -18,11 +23,12 @@ import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+  subscriptions: WorkboardSubscriptionStore;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
   ready: Promise<number>;
   dataVersion(this: void): Promise<number>;
   close(this: void): Promise<void>;
+  runWithWriteAuthority: WorkboardWriteAuthority;
 };
 
 export function createWorkboardSqliteStores(options: {
@@ -43,6 +49,7 @@ export function createWorkboardSqliteStores(options: {
   let openingFailure: { error: unknown } | undefined;
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
+  const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
   async function cleanup() {
     // Rejected admission stays broker-owned; this facade received no lease to release.
     const store = await worker.catch(() => undefined);
@@ -101,8 +108,31 @@ export function createWorkboardSqliteStores(options: {
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
     input: WorkboardSqliteOperations[K]["input"],
+    writes = false,
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
-    return unwrapWorkboardSqliteResult(await (await worker).execute({ type, input }));
+    const authority = writes ? writeAuthority.getStore() : undefined;
+    const store = await worker;
+    if (!authority) {
+      return unwrapWorkboardSqliteResult(await store.execute({ type, input }));
+    }
+    const result = unwrapWorkboardSqliteResult(
+      await runSqliteWorkerStoreOperation(
+        store,
+        (scope) => scope.execute({ type, input }),
+        undefined,
+        () => {
+          if (!authority.active) {
+            throw new Error("Workboard mutation authority has settled.");
+          }
+          authority.assertCurrent?.();
+        },
+      ),
+    );
+    // A rejected comparison has accepted no mutation; a retry still needs authority.
+    if (result !== false && result !== "conflict" && result !== "owner_busy") {
+      authority.assertCurrent = undefined;
+    }
+    return result;
   }
   async function run<Args, T>(
     args: Args,
@@ -124,28 +154,39 @@ export function createWorkboardSqliteStores(options: {
     }
   }
   return {
+    async runWithWriteAuthority(assertCurrent, operation) {
+      const authority: { active: boolean; assertCurrent?: () => void } = {
+        active: true,
+        assertCurrent,
+      };
+      try {
+        return await writeAuthority.run(authority, operation);
+      } finally {
+        authority.active = false;
+      }
+    },
     ready,
     dataVersion: () => run(undefined, (connection) => execute("dataVersion", { connection })),
     cards: {
       register: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.register", { connection, args: captured }),
+          execute("cards.register", { connection, args: captured }, true),
         ),
       registerIfAbsent: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.registerIfAbsent", { connection, args: captured }),
+          execute("cards.registerIfAbsent", { connection, args: captured }, true),
         ),
       registerIfUpdatedAt: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.registerIfUpdatedAt", { connection, args: captured }),
+          execute("cards.registerIfUpdatedAt", { connection, args: captured }, true),
         ),
       claimIfOwnerAvailable: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.claimIfOwnerAvailable", { connection, args: captured }),
+          execute("cards.claimIfOwnerAvailable", { connection, args: captured }, true),
         ),
       deleteIfUpdatedAt: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.deleteIfUpdatedAt", { connection, args: captured }),
+          execute("cards.deleteIfUpdatedAt", { connection, args: captured }, true),
         ),
       lookup: (...args) =>
         run(args, (connection, captured) =>
@@ -153,7 +194,7 @@ export function createWorkboardSqliteStores(options: {
         ),
       delete: (...args) =>
         run(args, (connection, captured) =>
-          execute("cards.delete", { connection, args: captured }),
+          execute("cards.delete", { connection, args: captured }, true),
         ),
       entries: (...args) =>
         run(args, (connection, captured) =>
@@ -179,7 +220,7 @@ export function createWorkboardSqliteStores(options: {
     boards: {
       register: (...args) =>
         run(args, (connection, captured) =>
-          execute("boards.register", { connection, args: captured }),
+          execute("boards.register", { connection, args: captured }, true),
         ),
       lookup: (...args) =>
         run(args, (connection, captured) =>
@@ -187,7 +228,7 @@ export function createWorkboardSqliteStores(options: {
         ),
       delete: (...args) =>
         run(args, (connection, captured) =>
-          execute("boards.delete", { connection, args: captured }),
+          execute("boards.delete", { connection, args: captured }, true),
         ),
       entries: (...args) =>
         run(args, (connection, captured) =>
@@ -197,7 +238,7 @@ export function createWorkboardSqliteStores(options: {
     subscriptions: {
       register: (...args) =>
         run(args, (connection, captured) =>
-          execute("subscriptions.register", { connection, args: captured }),
+          execute("subscriptions.register", { connection, args: captured }, true),
         ),
       lookup: (...args) =>
         run(args, (connection, captured) =>
@@ -205,7 +246,7 @@ export function createWorkboardSqliteStores(options: {
         ),
       delete: (...args) =>
         run(args, (connection, captured) =>
-          execute("subscriptions.delete", { connection, args: captured }),
+          execute("subscriptions.delete", { connection, args: captured }, true),
         ),
       entries: (...args) =>
         run(args, (connection, captured) =>
@@ -215,7 +256,7 @@ export function createWorkboardSqliteStores(options: {
     attachments: {
       register: (...args) =>
         run(args, (connection, captured) =>
-          execute("attachments.register", { connection, args: captured }),
+          execute("attachments.register", { connection, args: captured }, true),
         ),
       lookup: (...args) =>
         run(args, (connection, captured) =>
@@ -223,7 +264,7 @@ export function createWorkboardSqliteStores(options: {
         ),
       delete: (...args) =>
         run(args, (connection, captured) =>
-          execute("attachments.delete", { connection, args: captured }),
+          execute("attachments.delete", { connection, args: captured }, true),
         ),
       entries: (...args) =>
         run(args, (connection, captured) =>

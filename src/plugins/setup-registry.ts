@@ -1,4 +1,3 @@
-// Maintains plugin setup entries discovered from manifests and light exports.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { types } from "node:util";
@@ -14,13 +13,14 @@ import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
+import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
+import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   selectInstalledPluginManifestRecords,
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginModuleExport } from "./module-export.js";
-import { createPluginCacheKey } from "./plugin-cache-primitives.js";
 import {
   getPluginCache,
   getPluginCacheRoot,
@@ -174,20 +174,15 @@ function resolveSetupApiPathUncached(
     : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
-function collectConfiguredPluginEntryIds(config: OpenClawConfig): string[] {
-  const entries = config.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
-    return [];
-  }
-  return normalizeStringEntries(Object.keys(entries)).toSorted();
-}
-
 function resolveRelevantSetupMigrationPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const ids = new Set<string>(collectConfiguredPluginEntryIds(params.config));
+  const entries = params.config.plugins?.entries;
+  const ids = new Set<string>(
+    entries && typeof entries === "object" ? normalizeStringEntries(Object.keys(entries)) : [],
+  );
   const plugins = loadSetupManifestRecords({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -325,7 +320,7 @@ function resolveSetupRegistryCacheKey(params?: {
   if (env !== process.env) {
     return null;
   }
-  return createPluginCacheKey([
+  return JSON.stringify([
     "setup-registry",
     resolvePluginControlPlaneFingerprint({
       config: params?.config,
@@ -582,8 +577,8 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const diagnostics: PluginSetupRegistryDiagnostic[] = [];
-  let providerKeys = new Set<string>();
-  let cliBackendKeys = new Set<string>();
+  const providerKeys = new Set<string>();
+  const cliBackendKeys = new Set<string>();
 
   const plugins =
     params?.manifestRegistry == null
@@ -615,15 +610,15 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends: SetupCliBackendEntry[] = [];
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
-    const recordProviderKeys = new Set(providerKeys);
-    const recordCliBackendKeys = new Set(cliBackendKeys);
+    const recordProviderKeys = new Set<string>();
+    const recordCliBackendKeys = new Set<string>();
     const api = buildSetupPluginApi({
       record,
       setupSource: setupRegistration.setupSource,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (recordProviderKeys.has(key)) {
+          if (providerKeys.has(key) || recordProviderKeys.has(key)) {
             return;
           }
           recordProviderKeys.add(key);
@@ -634,7 +629,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (recordCliBackendKeys.has(key)) {
+          if (cliBackendKeys.has(key) || recordCliBackendKeys.has(key)) {
             return;
           }
           recordCliBackendKeys.add(key);
@@ -678,8 +673,12 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     cliBackends.push(...recordCliBackends);
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
-    providerKeys = recordProviderKeys;
-    cliBackendKeys = recordCliBackendKeys;
+    for (const key of recordProviderKeys) {
+      providerKeys.add(key);
+    }
+    for (const key of recordCliBackendKeys) {
+      cliBackendKeys.add(key);
+    }
     pushSetupDescriptorDriftDiagnostics({
       record,
       providers: recordProviders.map((entry) => entry.provider),
@@ -774,25 +773,23 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
   config: OpenClawConfig;
   changes: string[];
 } {
+  const loadPaths = params.config.plugins?.load?.paths ?? [];
+  const warning = findUninspectedPluginDiagnostic(
+    discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
+  );
+  if (warning) {
+    log.warn(warning.message);
+    return { config: params.config, changes: [] };
+  }
   let next = params.config;
   const changes: string[] = [];
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
-  if (pluginIds.length === 0) {
-    return { config: next, changes };
-  }
-
-  for (const entry of resolvePluginSetupRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    pluginIds,
-  }).configMigrations) {
+  for (const entry of resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations) {
     const migration = entry.migrate(next);
-    if (!migration || migration.changes.length === 0) {
-      continue;
+    if (migration?.changes.length) {
+      next = migration.config;
+      changes.push(...migration.changes);
     }
-    next = migration.config;
-    changes.push(...migration.changes);
   }
 
   return { config: next, changes };

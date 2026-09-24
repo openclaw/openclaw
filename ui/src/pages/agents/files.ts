@@ -1,11 +1,15 @@
 // Control UI controller manages agent files gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
+import type {
+  AgentsFilesGetResult,
+  AgentsFilesListResult,
+  AgentsFilesSetResult,
+} from "../../api/types.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
-type AgentFilesState = {
+export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
@@ -20,6 +24,54 @@ type AgentFilesState = {
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
 };
+
+export type AgentFilesViewState = Pick<
+  AgentFilesState,
+  | "agentFilesLoading"
+  | "agentFilesError"
+  | "agentFileContents"
+  | "agentFileDrafts"
+  | "agentFileSaving"
+  | "agentFileConflict"
+> & {
+  agentFilesList: AgentsFilesListResult | null;
+  agentFileActive: string | null;
+};
+
+export function hasAgentFileContent(
+  state: Pick<AgentFilesState, "agentFileContents" | "agentFileDrafts">,
+  name: string,
+): boolean {
+  return Object.hasOwn(state.agentFileContents, name) || Object.hasOwn(state.agentFileDrafts, name);
+}
+
+export type RetainedAgentFileDrafts = {
+  drafts: Record<string, string>;
+  hashes: Record<string, string>;
+  active: string | null;
+  conflict: string | null;
+};
+
+export function retainAgentFileDrafts(
+  state: AgentFilesState & { agentFileActive: string | null },
+): RetainedAgentFileDrafts | null {
+  const entries = Object.entries(state.agentFileDrafts).filter(
+    ([name, draft]) => draft !== state.agentFileContents[name] || state.agentFileConflict === name,
+  );
+  if (entries.length === 0) {
+    return null;
+  }
+  return {
+    drafts: Object.fromEntries(entries),
+    hashes: Object.fromEntries(
+      entries.flatMap(([name]) =>
+        state.agentFileHashes[name] === undefined ? [] : [[name, state.agentFileHashes[name]]],
+      ),
+    ),
+    active: state.agentFileActive,
+    conflict: state.agentFileConflict,
+  };
+}
 
 function withFileHash(
   hashes: Record<string, string>,
@@ -47,7 +99,7 @@ async function requestAgentFile(
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
   const client = state.client;
   const agents = state.agents;
-  if (!client || !state.connected || state[busy]) {
+  if (!client || !state.connected || state[busy] || (saving && !hasAgentFileContent(state, name))) {
     return false;
   }
   if (
@@ -91,7 +143,7 @@ async function requestAgentFile(
     );
     if (res?.file && isCurrent()) {
       const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
-      const previousBase = state.agentFileContents[name] ?? "";
+      const previousBase = state.agentFileContents[name];
       const currentDraft = state.agentFileDrafts[name];
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
       // Refresh may advance the workspace base while a dirty draft keeps its ancestry.
@@ -100,7 +152,8 @@ async function requestAgentFile(
       const rebasesDraft =
         resolution === "draft" ||
         !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === (saving ? content : previousBase);
+        currentDraft === content ||
+        (!saving && currentDraft === previousBase);
       if (rebasesDraft) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
@@ -160,6 +213,9 @@ export function saveAgentFile(
 }
 
 export function resetAgentFile(state: AgentFilesState, name: string): void {
+  if (!Object.hasOwn(state.agentFileContents, name)) {
+    return;
+  }
   state.agentFileDrafts = {
     ...state.agentFileDrafts,
     [name]: state.agentFileContents[name] ?? "",

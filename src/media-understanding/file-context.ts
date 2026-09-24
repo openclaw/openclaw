@@ -17,6 +17,7 @@ import {
   type FileAttachmentOutcome,
   isSkippedFileOutcome,
   renderFileAttachmentOutcome,
+  resolveFileExtractionOutcome,
   sanitizeMimeType,
 } from "./file-attachment-outcomes.js";
 import {
@@ -203,37 +204,12 @@ async function classifyFileAttachment(params: {
     return { outcome: { kind: "read-failure" }, filename, mimeType };
   }
   params.assertCurrent?.();
-  const text = extracted?.text?.trim() ?? "";
-  const extractedImages = extracted?.images ?? [];
-  const metadata = extracted?.metadata ? { metadata: extracted.metadata } : {};
-  if (text) {
-    return {
-      outcome: {
-        kind: "extracted",
-        text,
-        images: extractedImages,
-        ...metadata,
-      },
-      filename,
-      mimeType,
-    };
-  }
-  if (extractedImages.length > 0) {
-    return {
-      outcome: {
-        kind: "rendered-to-images",
-        images: extractedImages,
-        ...metadata,
-      },
-      filename,
-      mimeType,
-    };
-  }
   return {
-    outcome: {
-      kind: "no-extractable-text",
-      ...metadata,
-    },
+    outcome: resolveFileExtractionOutcome({
+      text: extracted?.text?.trim(),
+      images: extracted?.images,
+      metadata: extracted?.metadata,
+    }),
     filename,
     mimeType,
   };
@@ -358,6 +334,9 @@ export async function renderInboundDocumentContext(params: {
       ctx,
       workspaceDir: params.workspaceDir,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
   });

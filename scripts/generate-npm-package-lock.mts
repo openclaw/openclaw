@@ -354,10 +354,17 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
     Object.entries(overrides)
       .map<[string, unknown]>(([parentSelector, nestedOverrides]) => {
         if (isRecord(nestedOverrides)) {
+          const parentVersion = exactVersionFromOverrideSpec(nestedOverrides["."]);
+          const pinnedChildren = parentVersion && overrides[`${parentSelector}@${parentVersion}`];
+          // npm uses the first matching parent rule, so object-form pins must
+          // carry the same locked children as scalar pins before shadowing it.
+          const children = isRecord(pinnedChildren)
+            ? (mergeOverrides(nestedOverrides, pinnedChildren, {}) ?? nestedOverrides)
+            : nestedOverrides;
           return [
             parentSelector,
             Object.fromEntries(
-              Object.entries(nestedOverrides)
+              Object.entries(children)
                 .map<[string, unknown]>(([dependencyName, version]) => [
                   dependencyName,
                   typeof version === "string"
@@ -566,6 +573,12 @@ function packageJsonForNpmLock(
   delete normalized.bundleDependencies;
   delete normalized.bundledDependencies;
   delete normalized.devDependencies;
+  // The generated lock mirrors dependency resolution and must be reproducible on
+  // every CI host. Preserve platform constraints in the published package.json,
+  // but do not let npm reject this temporary lock-generation manifest.
+  delete normalized.os;
+  delete normalized.cpu;
+  delete normalized.libc;
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = recordAt(normalized, field);
     if (!dependencies) {

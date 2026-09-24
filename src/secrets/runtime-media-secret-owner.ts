@@ -2,6 +2,7 @@ import type {
   MediaUnderstandingCapability,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
 import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
@@ -19,22 +20,23 @@ export function runtimeMediaRequestSecretOwnerId(capability: MediaUnderstandingC
 
 function modelRequestOverridesPath(entry: MediaUnderstandingModelConfig, path: string): boolean {
   const request = entry.request;
-  const requestPath = path.split(".request.")[1];
-  if (!request || !requestPath) {
+  if (!request) {
     return false;
   }
-  if (requestPath.startsWith("auth.")) {
+  const segments = tokenizeConcreteConfigPath(path).tokens;
+  const field = segments[4];
+  if (field === "auth") {
     return request.auth !== undefined;
   }
-  if (requestPath.startsWith("tls.")) {
+  if (field === "tls") {
     return request.tls !== undefined;
   }
-  if (requestPath.startsWith("proxy.")) {
+  if (field === "proxy") {
     return request.proxy !== undefined;
   }
-  const headerName = requestPath.startsWith("headers.")
-    ? requestPath.slice("headers.".length).toLowerCase()
-    : undefined;
+  const headerKey = segments[5];
+  const headerName =
+    field === "headers" && typeof headerKey === "string" ? headerKey.toLowerCase() : undefined;
   return Boolean(
     headerName &&
     Object.keys(request.headers ?? {}).some((key) => key.toLowerCase() === headerName),

@@ -48,24 +48,29 @@ describe("decodeSessionStateNoticeContextKey", () => {
 });
 
 describe("enqueueSessionStateNotice", () => {
-  it("coalesces active wakes for 20 seconds and leaves queue-only notices asleep", () => {
-    const notice = {
-      watcherSessionKey: "agent:main:main",
-      targetSessionKey: "agent:main:slack:channel:C01234567",
-      lastSeenSequence: 42,
-    };
+  it.each([undefined, null, "/synthetic/store.sqlite"])(
+    "carries store provenance %s and preserves the 20-second coalescing policy",
+    (watcherStorePath) => {
+      const notice = {
+        watcherSessionKey: "agent:main:main",
+        watcherStorePath,
+        targetSessionKey: "agent:main:slack:channel:C01234567",
+        lastSeenSequence: 42,
+      };
 
-    enqueueSessionStateNotice(notice);
-    expect(requestHeartbeat).toHaveBeenCalledWith({
-      source: "session-state",
-      intent: "immediate",
-      reason: `session-state:${notice.targetSessionKey}`,
-      sessionKey: notice.watcherSessionKey,
-      coalesceMs: 20_000,
-    });
+      enqueueSessionStateNotice(notice);
+      expect(requestHeartbeat).toHaveBeenCalledWith({
+        source: "session-state",
+        intent: "immediate",
+        reason: `session-state:${notice.targetSessionKey}`,
+        sessionKey: notice.watcherSessionKey,
+        sessionStorePath: watcherStorePath ?? null,
+        coalesceMs: 20_000,
+      });
 
-    vi.mocked(requestHeartbeat).mockClear();
-    enqueueSessionStateNotice({ ...notice, queueOnly: true });
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-  });
+      vi.mocked(requestHeartbeat).mockClear();
+      enqueueSessionStateNotice({ ...notice, queueOnly: true });
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    },
+  );
 });

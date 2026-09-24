@@ -1,4 +1,3 @@
-// Memory Core plugin module implements dreaming narrative behavior.
 import {
   extractErrorCode,
   formatErrorMessage,

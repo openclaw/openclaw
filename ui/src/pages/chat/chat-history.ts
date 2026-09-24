@@ -11,6 +11,7 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import { historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -39,6 +40,9 @@ export async function loadChatHistory(
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startup = opts.startup === true;
+  const creationPending =
+    state.chatSubmissions?.creation?.sessionKey === sessionKey ||
+    state.hasPendingInitialTurn?.(sessionKey);
   const requests = chatHistoryRequests(state);
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
@@ -148,13 +152,6 @@ export async function loadChatHistory(
     inFlight.refresh = refresh;
     return refresh.promise;
   }
-  if (
-    opts.deferBranches !== true &&
-    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
-      state.chatBranchesConnectionEpoch !== connectionEpoch)
-  ) {
-    void loadChatBranches(state);
-  }
   const promise = hydrateChatHistory(
     state,
     client,
@@ -170,6 +167,15 @@ export async function loadChatHistory(
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
       if (result) {
+        // Appends can invalidate branch tips while this coalesced history read is pending.
+        // Check freshness on settlement so that invalidation is not lost to its early return.
+        if (
+          opts.deferBranches !== true &&
+          (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
+            state.chatBranchesConnectionEpoch !== connectionEpoch)
+        ) {
+          void loadChatBranches(state);
+        }
         setChatHistoryLoad(state, {
           phase: "committed",
           sessions,
@@ -178,6 +184,8 @@ export async function loadChatHistory(
           sessionKey,
           requestAgentId,
           sessionInfo: result.sessionInfo,
+          // A read begun during creation cannot prove that its provisional key expired.
+          sessionId: historySessionId(result) ?? (creationPending ? undefined : null),
         });
       } else if (
         state.sessionKey === sessionKey &&

@@ -16,7 +16,7 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 describe("models.list configured static entries", () => {
   afterEach(() => {
@@ -130,7 +130,20 @@ describe("models.list configured static entries", () => {
           await modelsHandlers["models.list"]!({
             req: { type: "req", id: "personal-catalog", method: "models.list", params },
             client: profileId
-              ? ({ authenticatedUserProfile: { profileId } } as GatewayClient)
+              ? {
+                  connect: {
+                    minProtocol: 4,
+                    maxProtocol: 4,
+                    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+                    caps: [],
+                  },
+                  authenticatedUserProfile: {
+                    profileId,
+                    displayName: null,
+                    hasAvatar: false,
+                    updatedAt: 1,
+                  },
+                }
               : null,
             context,
             params,

@@ -1,6 +1,9 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import {
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+} from "../../../agents/agent-scope-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
@@ -10,7 +13,6 @@ import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js"
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
@@ -29,7 +31,7 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 );
 
 function listAgentRecords(cfg: OpenClawConfig) {
-  return listAgentEntries(cfg).filter(hasRecord);
+  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
@@ -440,12 +442,12 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     }),
   );
 
-  listAgentRecords(cfg).forEach((agent, index) => {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
-    const agentPath = `agents.list[${index}].tools`;
+    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
@@ -479,16 +481,11 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
         modelId: modelRef.model,
       }),
     );
-  });
+  }
   return warnings;
 }
 
-type DoctorPreviewNotes = {
-  /** Non-warning doctor notes shown during preview. */
-  infoNotes: string[];
-  /** Warning notes shown during preview. */
-  warningNotes: string[];
-};
+type DoctorPreviewNotes = { infoNotes: string[]; warningNotes: string[] };
 
 export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
@@ -523,7 +520,6 @@ export async function collectDoctorPreviewNotes(params: {
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
-  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -534,17 +530,6 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
-  const { collectActiveToolSchemaProjectionWarnings } =
-    await import("./active-tool-schema-warnings.js");
-  warnings.push(
-    ...(await collectActiveToolSchemaProjectionWarnings({
-      cfg: params.cfg,
-      env,
-      ...(params.runWithPluginMetadataSnapshot
-        ? { runWithPluginMetadataSnapshot: params.runWithPluginMetadataSnapshot }
-        : {}),
-    })),
-  );
 
   const channelPluginRuntime = await import("./channel-plugin-blockers.js");
   const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
@@ -667,12 +652,14 @@ export async function collectDoctorPreviewNotes(params: {
       cfg: params.cfg,
       env,
     });
-    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
-      doctorFixCommand: params.doctorFixCommand,
-      extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
-      shouldSkipDefaultEmptyGroupAllowlistWarning:
-        emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
-    }).filter(
+    const emptyAllowlistWarnings = (
+      await scanEmptyAllowlistPolicyWarnings(params.cfg, {
+        doctorFixCommand: params.doctorFixCommand,
+        extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
+        shouldSkipDefaultEmptyGroupAllowlistWarning:
+          emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
+      })
+    ).filter(
       (warning) =>
         !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
     );

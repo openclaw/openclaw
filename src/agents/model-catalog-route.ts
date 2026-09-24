@@ -222,6 +222,10 @@ export function projectModelCatalogEntryForRoute(params: {
       baseUrl: route.baseUrl,
       ...(donor?.contextWindow !== undefined ? { contextWindow: donor.contextWindow } : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.contextWindows !== undefined ? { contextWindows: donor.contextWindows } : {}),
+      ...(donor?.contextWindowDefault !== undefined
+        ? { contextWindowDefault: donor.contextWindowDefault }
+        : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
       ...(donor?.thinkingPolicyProvider

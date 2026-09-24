@@ -137,7 +137,7 @@ struct GatewaySettings: View {
                     HStack(spacing: 8) {
                         Button("Open Window") {
                             guard !self.isRemoving else { return }
-                            WebChatManager.shared.openGatewayWindow(profile: profile)
+                            AppNavigationActions.openGateway(.profile(profile.id), newWindow: true)
                         }
                         .disabled(self.isRemoving)
                         Button("Reconnect") {
@@ -307,7 +307,7 @@ struct GatewayProfileEditor: View {
                 progress: self.signInProgress)
             WebChatManager.shared.gatewayProfileDidSave(profileID: profile.id)
             self.onSaved(profile)
-            DashboardManager.shared.openOrFocusDashboard(for: .profile(profile.id))
+            AppNavigationActions.openGateway(.profile(profile.id))
             self.dismiss()
         } catch is CancellationError {
             return

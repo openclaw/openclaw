@@ -47,7 +47,7 @@ describe("Codex channel tool progress", () => {
 
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🛠️ Bash",
-      channelData: { openclawToolProgressId: "private-command-1" },
+      channelData: { openclawToolProgressId: "tool:private-command-1" },
     });
     const toolStart = onAgentEvent.mock.calls
       .map(([event]) => event)
@@ -212,8 +212,24 @@ describe("Codex channel tool progress", () => {
       expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
         resultCount + 1,
       );
+      const prepared = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.stream === "item" &&
+            event.data.toolCallId === testCase.toolCallId &&
+            !event.data.suppressChannelProgress,
+        );
+      expect(
+        prepared.map((event) => event.data.phase),
+        testCase.label,
+      ).toEqual(["start", "end"]);
+      expect(
+        prepared.map((event) => event.data.itemId),
+        testCase.label,
+      ).toEqual([`tool:${testCase.toolCallId}`, `tool:${testCase.toolCallId}`]);
       expect(onToolResult.mock.calls[resultCount]?.[0], testCase.label).toMatchObject({
-        channelData: { openclawToolProgressId: testCase.toolCallId },
+        channelData: { openclawToolProgressId: prepared[0]?.data.itemId },
       });
     }
 

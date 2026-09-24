@@ -6,8 +6,10 @@ import {
   type AgentRunAttemptTerminal,
 } from "../agents/agent-run-terminal-outcome.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
+import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -26,7 +28,10 @@ function liveEventBytes(event: WorkerLiveEvent): number {
 }
 
 function truncateLiveText(value: string): string {
-  if (Buffer.byteLength(value, "utf8") <= MAX_LIVE_PREVIEW_BYTES) {
+  if (
+    value.length <= MAX_LIVE_PREVIEW_BYTES &&
+    Buffer.byteLength(value, "utf8") <= MAX_LIVE_PREVIEW_BYTES
+  ) {
     return value;
   }
   const suffix = "…";
@@ -57,7 +62,10 @@ function redactLiveText(value: string): string {
 }
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
-  if (liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
+  const textExceedsLimit =
+    (event.kind === "assistant" || event.kind === "thinking") &&
+    event.payload.text.length > MAX_LIVE_EVENT_BYTES;
+  if (!textExceedsLimit && liveEventBytes(event) <= MAX_LIVE_EVENT_BYTES) {
     return event;
   }
   let bounded: WorkerLiveEvent;
@@ -168,6 +176,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   // gateway never sees an end/error before the authoritative transcript commit.
   let terminalLiveEvent: WorkerLiveEvent | undefined;
   let terminalOutcome: AgentRunAttemptTerminal = { kind: "ok" };
+  let replayInvalid = false;
   const enqueueTerminal = (input: { aborted?: boolean; error?: string; stopReason?: string }) => {
     // Cleanup can fail after agent_end. Merge through the attempt owner so it
     // promotes success to failure without replacing an earlier cancellation.
@@ -185,6 +194,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         endedAt: Date.now(),
         ...(stopReason ? { stopReason } : {}),
         ...(terminal.aborted ? { aborted: true } : {}),
+        ...(replayInvalid ? { replayInvalid: true } : {}),
         ...(!terminal.aborted && typeof terminal.promptError === "string"
           ? { error: redactLiveText(terminal.promptError) }
           : {}),
@@ -262,41 +272,29 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       }
       return;
     }
-    if (event.type === "tool_execution_start") {
+    if (
+      event.type === "tool_execution_start" ||
+      event.type === "tool_execution_update" ||
+      event.type === "tool_execution_end"
+    ) {
+      const tool = { name: event.toolName, toolCallId: event.toolCallId };
       enqueueLive({
         kind: "tool",
         payload: {
-          phase: "start",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          args: redactAgentDiagnosticPayload(event.args),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_update") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "update",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          partialResult: redactAgentDiagnosticPayload(event.partialResult),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_end") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "result",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          isError: event.isError,
-          result: redactAgentDiagnosticPayload(event.result),
+          ...(event.type === "tool_execution_start"
+            ? { phase: "start" as const, ...tool, args: redactAgentDiagnosticPayload(event.args) }
+            : event.type === "tool_execution_update"
+              ? {
+                  phase: "update" as const,
+                  ...tool,
+                  partialResult: redactAgentDiagnosticPayload(event.partialResult),
+                }
+              : {
+                  phase: "result" as const,
+                  ...tool,
+                  isError: event.isError,
+                  result: redactAgentDiagnosticPayload(event.result),
+                }),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -314,7 +312,9 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
-    enqueueTerminal({ aborted: failure.aborted, error: failure.error.message });
+    // Later terminal merges cannot reopen replay after an owned cleanup failure.
+    replayInvalid ||= hasModelFallbackStop(failure.error);
+    enqueueTerminal({ aborted: failure.aborted, error: formatErrorMessage(failure.error) });
   };
   // Emits directly (not via the degradable preview queue): finishing is the durable
   // result fence that must reach the Gateway before post-worker reconciliation.

@@ -4,13 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
-  GIT_TIMEOUT_MS,
   enqueueGitRefMutation,
   executeGitCommand,
   executeGitCommandBytes,
+  executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
-  withForegroundGitMaintenance,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,11 +18,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import {
-  runCommandBuffered,
-  type BufferedCommandOptions,
-  type BufferedCommandResult,
-} from "../../process/exec.js";
+import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -84,10 +79,7 @@ export function gitEnvironment(
 export async function runGit(
   cwd: string,
   args: string[],
-  options: GitCommandOptions & {
-    /** Recheck caller authority at execution, after any shared-ref queue wait. */
-    beforeRun?: () => void;
-  } = {},
+  options: GitCommandOptions = {},
 ): Promise<GitResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -113,11 +105,9 @@ export async function runGit(
   // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
   const fetchesRefs = args[0] === "fetch";
   const run = (gitArgs: string[]) => {
-    if (gitArgs === args) {
-      options.beforeRun?.();
-    }
     return executeGitCommand(cwd, gitArgs, {
       ...options,
+      beforeRun: gitArgs === args ? options.beforeRun : undefined,
       baseEnv,
       env,
       input: gitArgs === args ? options.input : undefined,
@@ -139,11 +129,9 @@ export async function runGitBytes(
     cwd,
     args,
     (gitArgs) => {
-      if (gitArgs === args) {
-        options.beforeRun?.();
-      }
       return executeGitCommandBytes(cwd, gitArgs, {
         ...options,
+        beforeRun: gitArgs === args ? options.beforeRun : undefined,
         baseEnv,
         env,
         input: gitArgs === args ? options.input : undefined,
@@ -229,20 +217,13 @@ export async function runGitBuffered(
     cwd,
     args,
     (gitArgs) => {
-      if (gitArgs === args) {
-        options.beforeRun?.();
-      }
-      const argv = ["git", "-C", cwd, ...gitArgs];
-      return runCommandBuffered(
-        options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
-        {
-          ...options,
-          timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
-          input: gitArgs === args ? options.input : undefined,
-          baseEnv,
-          env,
-        },
-      );
+      return executeGitCommandBuffered(cwd, gitArgs, {
+        ...options,
+        beforeRun: gitArgs === args ? options.beforeRun : undefined,
+        input: gitArgs === args ? options.input : undefined,
+        baseEnv,
+        env,
+      });
     },
     options.signal,
   );

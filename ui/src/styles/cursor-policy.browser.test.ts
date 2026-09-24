@@ -7,7 +7,7 @@ import postcss from "postcss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { controlUiHoverGuardPlugin } from "../../config/control-ui-hover-guard.ts";
-import { dockPanelStyles } from "../components/dock-layout-controller.ts";
+import { dockPanelStyles } from "../components/dock-panel-styles.ts";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
@@ -87,8 +87,11 @@ function readUiCss(): string {
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/skill-workshop.css",
+    "ui/src/styles/rail-header.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/split-view.css",
     "ui/src/styles/chat/text.css",

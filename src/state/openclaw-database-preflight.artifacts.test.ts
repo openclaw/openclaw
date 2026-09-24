@@ -124,6 +124,9 @@ function sourceArtifacts(paths: string[], allowReadMarks: string[] = []): unknow
 describe("schema preflight source artifacts", () => {
   it("retains the source-reader lock tolerance beyond the runtime busy timeout", async () => {
     const root = tempDirs.make("openclaw-header-lock-tolerance-");
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "active-state") };
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
     const pathname = path.join(root, "agent.sqlite");
     const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
     writer.exec(`
@@ -140,7 +143,7 @@ describe("schema preflight source artifacts", () => {
     }, 8_000);
     try {
       const result = await preflightOpenClawDatabaseSchemas({
-        env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+        env,
         supportedVersions,
         configuredAgentDatabaseCandidatePaths: [pathname],
       });
@@ -164,6 +167,9 @@ describe("schema preflight source artifacts", () => {
     "reads fresh WAL metadata without copying $payloadBytes bytes of unrelated payload (admission=$admission)",
     async ({ payloadBytes, admission }) => {
       const root = tempDirs.make("openclaw-header-preflight-");
+      const env = { OPENCLAW_STATE_DIR: path.join(root, "active-state") };
+      openOpenClawStateDatabase({ env });
+      closeOpenClawStateDatabaseForTest();
       const pathname = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(pathname), { recursive: true });
       const preload = path.join(root, "no-backup.cjs");
@@ -195,7 +201,7 @@ describe("schema preflight source artifacts", () => {
           writer.exec("COMMIT;");
           const before = sourceArtifacts([pathname], [pathname]);
           const result = await preflightOpenClawDatabaseSchemas({
-            env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+            env,
             supportedVersions,
             configuredAgentDatabaseCandidatePaths: [pathname],
             ...(admission ? { agentAdmissionConfig: { agents: { entries: { main: {} } } } } : {}),
@@ -328,6 +334,8 @@ describe("schema preflight source artifacts", () => {
       expect(fs.realpathSync.native(locator)).toBe(fs.realpathSync.native(fixture.worker.path));
       expect(fs.realpathSync(locator)).toBe(fs.realpathSync.native(lexicalPath));
       const callerEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-preflight-caller-") };
+      const callerStatePath = openOpenClawStateDatabase({ env: callerEnv }).path;
+      closeOpenClawStateDatabaseForTest();
       const contexts = [
         { env: fixture.env, config: {} },
         { env: callerEnv, config: { session: { store: lexicalPath } } },
@@ -335,6 +343,7 @@ describe("schema preflight source artifacts", () => {
       ];
       const paths = [
         ...fixture.paths,
+        callerStatePath,
         lexicalPath,
         path.join(callerEnv.OPENCLAW_STATE_DIR, "absent.sqlite"),
       ];
@@ -364,7 +373,7 @@ describe("schema preflight source artifacts", () => {
     const paths = [...fixture.paths, configPath];
     const before = sourceArtifacts(paths);
     await expect(checkTargetDatabaseSchemas(supportedVersions, fixture.env)).rejects.toMatchObject({
-      reason: "database-schema-preflight",
+      reason: "invalid-config",
     });
     expect(
       await checkTargetDatabaseSchemasForContexts(undefined, [{ env: fixture.env, config: {} }]),
@@ -574,6 +583,13 @@ describe("schema preflight source artifacts", () => {
         const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
         for (const inspect of [
           () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+          () =>
+            preflightOpenClawDatabaseSchemas({
+              env: fixture.env,
+              supportedVersions,
+              verifyCurrentSchemaShape: true,
+              requireStartupMigrationReadiness: true,
+            }),
           () =>
             checkTargetDatabaseSchemasForContexts(supportedVersions, [
               { env: fixture.env, config: {} },

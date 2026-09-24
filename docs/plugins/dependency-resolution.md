@@ -278,6 +278,11 @@ The standalone build runs the selected package's asset build command and copies
 its declared `openclaw.build.staticAssets` into `dist`, including for new packages
 that are not yet tracked by Git. Missing declared source files fail the build.
 
+Root and standalone builds resolve sources under `node_modules/<package>/...`
+from the plugin's installed dependency, including hoisted installs. These are
+physical package paths; subpath export maps do not restrict the declared assets.
+A missing file in the selected dependency does not borrow another installed version.
+
 Declare private worker source files in `openclaw.build.workerEntries`, using
 package-relative paths such as `./src/store.worker.ts`. The standalone build
 emits them at matching paths under `dist`, such as `dist/src/store.worker.js`

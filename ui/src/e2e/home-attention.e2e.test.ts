@@ -155,20 +155,16 @@ suite.define(() => {
       status: "pending",
     } satisfies QuestionRecord;
     await gateway.emitGatewayEvent("question.requested", question);
-    await page.getByText("Should the run continue?", { exact: true }).waitFor();
-    observed.question = await captureState(
-      page,
-      home,
-      "02-question-attention",
-      page.locator(".chat-question-panel"),
-    );
+    const questionPanel = page.locator(".chat-question-panel");
+    await questionPanel.getByText("Should the run continue?", { exact: true }).waitFor();
+    observed.question = await captureState(page, home, "02-question-attention", questionPanel);
 
     await gateway.emitGatewayEvent("question.resolved", {
       id: question.id,
       status: "cancelled",
     });
     await expect
-      .poll(() => page.getByText("Should the run continue?", { exact: true }).count())
+      .poll(() => questionPanel.getByText("Should the run continue?", { exact: true }).count())
       .toBe(0);
     await publishSessionRow(
       gateway,

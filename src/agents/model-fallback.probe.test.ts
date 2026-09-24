@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-// Verifies fallback cooldown probe decisions and diagnostic records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import type { FailoverReason } from "./failover/signal.js";
+import { createSessionPlacementSettlementClosedAbortError } from "./run-termination.js";
 import type { SessionSuspensionParams } from "./session-suspension.js";
 import {
   makeModelFallbackCfg,
@@ -100,6 +100,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
@@ -314,7 +315,7 @@ describe("runWithModelFallback – probe logic", () => {
       authRuntime: {
         getSoonestCooldownExpiry: mockedGetSoonestCooldownExpiry,
         resolveProfilesUnavailableReason: mockedResolveProfilesUnavailableReason,
-      } as unknown as Parameters<typeof resolveCooldownDecision>[0]["authRuntime"],
+      },
       authStore,
       profileIds: ["openai-profile-1"],
     });
@@ -327,7 +328,6 @@ describe("runWithModelFallback – probe logic", () => {
     expect(decision).toEqual({
       type: "suspend_session",
       reason,
-      leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
   }
 
@@ -348,10 +348,8 @@ describe("runWithModelFallback – probe logic", () => {
     Date.now = vi.fn(() => NOW);
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
 
-    // Clear throttle state between tests
     probeThrottleInternals.lastProbeAttempt.clear();
 
-    // Default: ensureAuthProfileStore returns a fake store
     const fakeStore: AuthProfileStore = {
       version: 1,
       profiles: {},
@@ -359,7 +357,6 @@ describe("runWithModelFallback – probe logic", () => {
     mockedHasAnyAuthProfileStoreSource.mockReturnValue(true);
     mockedEnsureAuthProfileStore.mockReturnValue(fakeStore);
 
-    // Default: resolveAuthProfileOrder returns profiles only for "openai" provider
     mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
       if (provider === "openai") {
         return ["openai-profile-1"];
@@ -910,63 +907,69 @@ describe("runWithModelFallback – probe logic", () => {
     expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
   });
 
-  it.each(["caller abort", "terminal throw", "terminal classified result"])(
-    "settles deferred suspension for %s",
-    async (mode) => {
-      const { FailoverError } = await import("./failover-error.js");
-      const cfg = makeCfg();
-      mockedIsProfileInCooldown.mockReturnValue(false);
-      const controller = new AbortController();
-      const disconnect = new Error("client disconnected");
-      disconnect.name = "ClientDisconnectError";
-      const error =
-        mode === "caller abort"
-          ? disconnect
-          : new AggregateError(
-              [
-                new FailoverError("recorded terminal stop", {
-                  reason: "unknown",
-                  code: "cli_max_turns",
-                }),
-              ],
-              "wrapper",
-            );
-      const run = vi.fn(async () => {
-        if (mode === "caller abort") {
-          controller.abort(disconnect);
-        }
-        if (mode === "terminal classified result") {
-          return "partial result";
-        }
-        throw error;
-      });
-      await expect(
-        runWithModelFallback({
-          cfg,
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          run,
-          classifyResult: () => ({ error }),
-          sessionId: "test-session",
-          lane: "main",
-          abortSignal: controller.signal,
-        }),
-      ).rejects.toBe(error);
-      expect(run).toHaveBeenCalledOnce();
-      expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
+  it.each([
+    "caller abort",
+    "terminal throw",
+    "terminal classified result",
+    "closed throw",
+    "closed classified result",
+  ])("settles deferred suspension for %s", async (mode) => {
+    const { FailoverError } = await import("./failover-error.js");
+    const closed = mode.startsWith("closed");
+    const cfg = makeCfg();
+    mockedIsProfileInCooldown.mockReturnValue(false);
+    const controller = new AbortController();
+    const disconnect = new Error("client disconnected");
+    disconnect.name = "ClientDisconnectError";
+    const error =
+      mode === "caller abort"
+        ? disconnect
+        : new AggregateError(
+            [
+              closed
+                ? createSessionPlacementSettlementClosedAbortError()
+                : new FailoverError("recorded terminal stop", {
+                    reason: "unknown",
+                    code: "cli_max_turns",
+                  }),
+            ],
+            "wrapper",
+          );
+    const run = vi.fn(async () => {
       if (mode === "caller abort") {
-        expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
-      } else {
-        expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledExactlyOnceWith({
-          cfg: {},
-          sessionId: "test-session",
-          reason: "quota_exhausted",
-          failedProvider: "openai",
-          failedModel: "gpt-4.1-mini",
-        });
+        controller.abort(disconnect);
       }
-    },
-  );
+      if (mode.endsWith("classified result")) {
+        return "partial result";
+      }
+      throw error;
+    });
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+        classifyResult: () => ({ error }),
+        sessionId: "test-session",
+        lane: "main",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
+    if (mode === "caller abort" || closed) {
+      expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
+    } else {
+      expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledExactlyOnceWith({
+        cfg: {},
+        sessionId: "test-session",
+        reason: "quota_exhausted",
+        failedProvider: "openai",
+        failedModel: "gpt-4.1-mini",
+      });
+    }
+  });
 
   it("keeps generic no-lane terminal suspension unbound", async () => {
     const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);

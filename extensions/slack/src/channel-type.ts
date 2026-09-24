@@ -1,4 +1,3 @@
-// Slack plugin module implements channel type behavior.
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -78,6 +77,7 @@ export async function resolveSlackConversationInfo(params: {
   teamId?: string;
   operation?: "read" | "write";
   requireFreshName?: boolean;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<SlackConversationInfo> {
   const channelId = params.channelId.trim();
   if (!channelId) {
@@ -105,7 +105,13 @@ export async function resolveSlackConversationInfo(params: {
       // Read-only classification stays on conversations.info. conversations.open is
       // write-scoped and must only run when the caller explicitly requests a write.
       if (isNativeImChannel && operation === "write") {
-        const client = createSlackWebClient(token, { teamId: params.teamId });
+        const client = params.assertDirectAdapterHandoff
+          ? createSlackWebClient(
+              token,
+              { teamId: params.teamId },
+              params.assertDirectAdapterHandoff,
+            )
+          : createSlackWebClient(token, { teamId: params.teamId });
         const opened = await client.conversations.open({
           channel: channelId,
           prevent_creation: true,
@@ -121,7 +127,14 @@ export async function resolveSlackConversationInfo(params: {
         }
         return result;
       }
-      const client = createSlackReadClient(token, { teamId: params.teamId });
+      const client = params.assertDirectAdapterHandoff
+        ? createSlackReadClient(
+            token,
+            { teamId: params.teamId },
+            undefined,
+            params.assertDirectAdapterHandoff,
+          )
+        : createSlackReadClient(token, { teamId: params.teamId });
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
@@ -140,6 +153,8 @@ export async function resolveSlackConversationInfo(params: {
       });
       return result;
     } catch {
+      // Keep metadata fallback only while the action that requested it remains current.
+      params.assertDirectAdapterHandoff?.();
       return { type: isNativeImChannel ? "dm" : "unknown" };
     }
   }

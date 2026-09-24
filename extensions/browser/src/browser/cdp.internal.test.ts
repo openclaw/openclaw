@@ -1,7 +1,7 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 // Browser tests cover cdp.internal plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,
@@ -286,7 +286,7 @@ describe("cdp internal", () => {
               nodeId: "1",
               role: { value: "RootWebArea" },
               name: { value: "" },
-              childIds: ["2", "3"],
+              childIds: ["2", "3", "4"],
             },
             {
               nodeId: "2",
@@ -298,6 +298,12 @@ describe("cdp internal", () => {
               nodeId: "3",
               role: { value: "button" },
               name: { value: "Save" },
+              childIds: [],
+            },
+            {
+              nodeId: "4",
+              role: { value: "button" },
+              name: { value: "Cancel" },
               childIds: [],
             },
           ]);
@@ -318,6 +324,7 @@ describe("cdp internal", () => {
         e1: { role: "button", name: "Save", nth: 0 },
         e2: { role: "button", name: "Save", nth: 1 },
       });
+      expect(snap.refs.e3).toEqual({ role: "button", name: "Cancel" });
     });
 
     it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {

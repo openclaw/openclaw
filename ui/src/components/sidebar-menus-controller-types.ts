@@ -2,9 +2,9 @@ import type { ReactiveControllerHost } from "lit";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -33,7 +33,7 @@ export interface SidebarMenusControllerHost
   readonly basePath: string;
   readonly canPairDevice: boolean;
   readonly connected: boolean;
-  readonly offline: boolean;
+  readonly connectionStatus: GatewayStatus | null;
   readonly enabledRouteIds?: readonly NavigationRouteId[];
   readonly gatewayVersion: string | null;
   readonly onNavigate?: (
@@ -51,7 +51,6 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      | "approvalBadgeSnapshot"
       | "presenceInstanceId"
       | "presencePayload"
       | "sessionResultsByAgent"
@@ -60,13 +59,13 @@ export interface SidebarMenusControllerHost
       | "archiveSessionCatalog"
       | "sessionScopeGeneration"
     >;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readSessionMutationAccess(request: {
     method: string;
     params?: unknown;
@@ -99,9 +98,8 @@ export interface SidebarMenusControllerHost
   askAgentCapabilities(agentId: string): void;
   getRouteSessionKey(): string;
   getSessionNavigationState(): { selectedAgentId: string };
-  reconciledSidebarZone(): {
+  reconciledSidebarZone(): ReturnType<SessionOrganizerControllerHost["reconciledSidebarZone"]> & {
     entries: readonly SidebarZoneEntry[];
-    sidebarEntries: readonly string[];
   };
   selectedVisibleSessions(): SidebarRecentSession[];
   switchChipAgent(agentId: string): void;
