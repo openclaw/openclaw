@@ -23,7 +23,7 @@ import { withCodexAppServerJsonClient } from "./request.js";
 import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
 import {
   captureSharedCodexAppServerCatalogLifetime,
-  captureSharedCodexAppServerClientRegistration,
+  captureSharedClientRegistration,
 } from "./shared-client.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
@@ -264,7 +264,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         async (request, client) => {
           const discover = async () => {
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
-            const isClientCurrent = captureSharedCodexAppServerClientRegistration(client);
+            const isClientCurrent = captureSharedClientRegistration(client);
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,

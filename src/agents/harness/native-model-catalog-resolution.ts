@@ -89,11 +89,9 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
       } finally {
         waitingForSelection = false;
       }
-      // A successful targeted native acquisition is authoritative for its exact owned row,
-      // even while the overall inventory remains partial. Timeout fallbacks and failed refreshes
-      // cannot authorize a retained row from that partial inventory.
-      const completedTargetedAcquisition =
-        loaded === acquiredCatalog && selectedRowReady && !loaded.refreshFailed;
+      // The selected-provider attestation is independent of unrelated retained failures.
+      // Timeout fallbacks and failed selected refreshes never attest their exact row.
+      const completedTargetedAcquisition = loaded === acquiredCatalog && selectedRowReady;
       // Prefer an authoritative refresh result when it contains the requested row. Some
       // snapshots publish inventory through an accessor that still points at the previous view.
       const refreshedEntry =

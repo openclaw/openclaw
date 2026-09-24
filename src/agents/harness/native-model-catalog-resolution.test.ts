@@ -177,6 +177,26 @@ describe("first-turn native model catalog resolution", () => {
     expect(loadNative).toHaveBeenCalledOnce();
   });
 
+  it("accepts a successful selected row when another provider failure remains", async () => {
+    const loadNative = vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>>(
+      async (_selection, options) => {
+        options?.onSelectionReady?.(true);
+        return { ...catalog([luna]), authoritative: false, refreshFailed: true };
+      },
+    );
+    const { harness, snapshot } = fixture({ loadNative });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      }),
+    ).resolves.toMatchObject({ entry: luna });
+    expect(loadNative).toHaveBeenCalledOnce();
+  });
+
   it("rejects a matching partial row returned as the timeout fallback", async () => {
     vi.useFakeTimers();
     try {
