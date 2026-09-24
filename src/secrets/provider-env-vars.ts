@@ -99,6 +99,7 @@ function shouldUsePluginProviderAuthEvidence(
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
+/** `target` must be prototype-less for the same reason as `appendUniqueEnvVarCandidates`. */
 function appendUniqueAuthEvidence(
   target: Record<string, ProviderAuthEvidence[]>,
   providerId: string,
@@ -196,7 +197,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
   snapshot: PluginMetadataSnapshot,
   sortedAliases: readonly (readonly [string, string])[],
 ): Record<string, string[]> {
-  const candidates: Record<string, string[]> = {};
+  const candidates: Record<string, string[]> = Object.create(null);
   for (const { plugin, envProviders } of snapshot.owners.providerAuthContributions) {
     if (envProviders.length === 0 || !shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
@@ -220,7 +221,7 @@ function resolveManifestRuntimeAuthFacts(
   aliasEntries: readonly (readonly [string, string])[],
   sortedAliases: readonly (readonly [string, string])[],
 ) {
-  const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
+  const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = Object.create(null);
   const refs = new Set<string>();
   const isEnabled = createInstalledPluginEnabledPredicate(
     snapshot.index.plugins,

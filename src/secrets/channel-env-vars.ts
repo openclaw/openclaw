@@ -25,7 +25,7 @@ function resolveChannelEnvVars(
     workspaceDir: params?.workspaceDir,
     env: params?.env ?? process.env,
   });
-  const candidates: Record<string, string[]> = {};
+  const candidates: Record<string, string[]> = Object.create(null);
   for (const plugin of snapshot.plugins) {
     const channelId = plugin.packageChannel?.id?.trim();
     const channelEnv = plugin.packageChannel?.configuredState?.env;
