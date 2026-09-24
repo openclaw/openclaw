@@ -448,10 +448,11 @@ remove its review requirement.
 The **Dependency Guard** publishes `openclaw/dependency-review` and retains its
 dependency classification and lockfile autoscrub behavior. Dependency removals
 that already qualify as informational remain informational.
-If neither cleanup App can provide a write token, optional lockfile cleanup is
-skipped with an explanation in the workflow summary. The dependency review still
-requires maintainer approval or removal of the lockfile changes; unavailable
-cleanup credentials do not fail the Actions job.
+Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
+write token, or GitHub explicitly denies the cleanup mutation's permissions, the
+dependency notice explains how to remove the remaining changes or request
+maintainer approval. These expected access limitations do not fail the Actions
+job or satisfy dependency review. Unexpected cleanup errors remain failures.
 
 Edit `.github/security-review-policy.yml` to change path classification. Its
 `categories` group product paths with descriptions and review guidance;
