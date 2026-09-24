@@ -681,16 +681,11 @@ describe("prepared npm bundle", () => {
       candidateTypescriptRoot,
       installedTypescriptEntry.slice(installedTypescriptRoot.length + 1),
     );
-    const candidateTypescriptImplementation = join(
-      dirname(candidateTypescriptEntry),
-      "candidate-typescript-implementation.js",
-    );
-    copyFileSync(candidateTypescriptEntry, candidateTypescriptImplementation);
     writeFileSync(
       candidateTypescriptEntry,
       [
         `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        `module.exports = require("./candidate-typescript-implementation.js");`,
+        readFileSync(candidateTypescriptEntry, "utf8"),
       ].join("\n"),
     );
     writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
