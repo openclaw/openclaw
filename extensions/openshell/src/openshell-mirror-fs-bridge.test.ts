@@ -494,6 +494,35 @@ describe("openshell mirror fs bridges", () => {
     await expect(bridge.readDirectory({ filePath: "alias" })).rejects.toThrow();
   });
 
+  it("keeps literal tilde directories inside the mirror workspace", async () => {
+    await using workspace = await createOpenShellTestWorkspace("literal-tilde");
+    const filePath = path.join(workspace.dir, "~", "file.txt");
+    await fs.mkdir(path.dirname(filePath));
+    await fs.writeFile(filePath, "literal");
+    const { bridge } = await createMirrorFsBridgeFixture(workspace.dir);
+
+    await expect(bridge.readFile({ filePath: "./~/file.txt" })).resolves.toEqual(
+      Buffer.from("literal"),
+    );
+    await expect(bridge.readDirectory({ filePath: "./~" })).resolves.toEqual([
+      { name: "file.txt", isDirectory: false },
+    ]);
+    await bridge.writeFile({ filePath: "./~/file.txt", data: "updated" });
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("updated");
+    await expect(
+      bridge.createFileExclusive!({ filePath: "./~/created.txt", data: "created" }),
+    ).resolves.toBe("created");
+    await bridge.mkdirp({ filePath: "./~/nested" });
+    await bridge.rename({ from: "./~/created.txt", to: "./~/nested/moved.txt" });
+    await expect(
+      fs.readFile(path.join(workspace.dir, "~", "nested", "moved.txt"), "utf8"),
+    ).resolves.toBe("created");
+    await bridge.remove({ filePath: "./~/file.txt", force: false });
+    await expectPathMissing(filePath);
+    await bridge.remove({ filePath: ".", recursive: true });
+    await expect(fs.readdir(workspace.dir)).resolves.toEqual([]);
+  });
+
   it.each(["external", "nested"] as const)(
     "reads materialized sandbox skills from a protected %s skills workspace",
     async (location) => {

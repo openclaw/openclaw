@@ -64,7 +64,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     try {
       const root = await fsRoot(target.mountHostRoot);
       return (
-        await root.read(path.relative(target.mountHostRoot, hostPath), {
+        await root.read(relativeToRoot(target, hostPath), {
           hardlinks: "reject",
           maxBytes: params.maxBytes ?? Infinity,
         })
@@ -100,7 +100,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
-    await root.write(path.relative(target.mountHostRoot, hostPath), buffer, {
+    await root.write(relativeToRoot(target, hostPath), buffer, {
       mkdir: params.mkdir,
       mutationSymlinks: "reject",
     });
@@ -118,7 +118,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const root = await fsRoot(target.mountHostRoot);
     try {
-      await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
+      await root.create(relativeToRoot(target, hostPath), buffer, {
         mkdir: params.mkdir !== false,
         mutationSymlinks: "reject",
       });
@@ -436,7 +436,12 @@ async function removeLocalRootPath(params: {
       await fsPromises.lstat(params.hostPath);
     }
     // Clearing a mounted root removes its contents while retaining the mount directory.
-    const targets = params.recursive && !relativePath ? await root.list("") : [relativePath];
+    const targets =
+      params.recursive && !relativePath
+        ? (await root.list("")).map((name) =>
+            relativeToRoot(params.target, path.join(params.hostPath, name)),
+          )
+        : [relativePath];
     for (const target of targets) {
       await root.remove(target, {
         force: params.force !== false,
@@ -476,7 +481,8 @@ async function mkdirParentPath(root: FsSafeRoot, relativePath: string): Promise<
 
 function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {
   const relativePath = path.relative(target.mountHostRoot, hostPath);
-  return relativePath === "." ? "" : relativePath;
+  // Computed relative names must not trigger home expansion.
+  return relativePath ? `.${path.sep}${relativePath}` : "";
 }
 
 async function assertRenameSourceSupported(fromHostPath: string): Promise<void> {
