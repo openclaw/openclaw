@@ -465,12 +465,22 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
         "idempotencyKey" in current.message &&
         current.message.idempotencyKey === message.idempotencyKey
       ) {
+        // Duplicate keyed-user delivery: `current` is already the active turn
+        // in this manager's in-memory index, so nothing new is appended. The
+        // anchor is a best-effort convenience here (it is declared optional and
+        // is already omitted on the non-persistence branch). A concurrent
+        // side-append -- e.g. reply-capture writing audit artifacts with
+        // appendMode "side" -- transiently marks the transcript projection index
+        // dirty, and readActiveTranscriptEntryAnchor returns undefined for that
+        // window (~0.5-10s). Hard-throwing there turned a benign duplicate
+        // delivery into "Session transcript anchor was not returned"; degrade to
+        // returning the existing entry with the anchor omitted. The distinct
+        // adoption invariant in session-manager-persistence.ts
+        // (result.messageId !== entry.id -- a canonical row this manager did not
+        // write) still requires a real anchor and is left untouched.
         const anchor = this.persistenceTarget
           ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
           : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
-        }
         return {
           entryId: current.id,
           message: current.message,
