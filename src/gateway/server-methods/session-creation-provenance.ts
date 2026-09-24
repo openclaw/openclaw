@@ -14,7 +14,7 @@ export type TrustedSessionCreation = {
   sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
-  /** Host-verified human requester; never accepted from model-authored parameters. */
+  /** This turn's direct human requester; never accepted from model-authored parameters. */
   requesterProfileId?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;

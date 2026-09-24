@@ -148,6 +148,8 @@ Turning **Git co-author credit** off stops attribution for future runs. It does 
 
 An administrator can attest that a stable channel sender belongs to an existing Gateway profile. The link includes the channel, the configured channel account, and the sender's native ID. Display names, usernames, and `session.identityLinks` do not establish this association.
 
+Open **Settings → Profile → Channel identities**, select the person, and enter the exact channel, configured account ID, and immutable sender ID. The same section lists existing links and lets an administrator unlink them. Verify those IDs before linking; the association allows that channel sender to act with the person's current Gateway permissions.
+
 All three Gateway methods require `operator.admin`:
 
 | Method                        | Parameters              | Result                                      |
@@ -168,9 +170,11 @@ For example, the `identity` object for a Discord user is:
 
 Use the exact configured account ID and immutable sender ID. An identical sender ID on another account is a different binding. Repeating the same link is safe. A link already owned by another profile must first be explicitly unlinked from that profile. Unlinking also checks the expected profile, so a stale request cannot remove someone else's binding. The shared **Owner** profile is not a person and cannot receive these links.
 
-Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
+Links follow explicit profile merges and the surviving profile's current role. Linking does not rename people, rewrite transcript attribution, reassign existing sessions, or change visibility. New channel turns carry the verified person's current role, agent access, model policy, and scope ceiling through native tools. New visible tasks directly requested by that person receive their ownership at creation. Required sandbox and access policies still apply.
 
-Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. Explicit `commands.ownerAllowFrom` entries remain independent. See [Operator scopes](/gateway/operator-scopes).
+Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. See [Operator scopes](/gateway/operator-scopes).
+
+Explicit `commands.ownerAllowFrom` entries continue to establish command-owner status, including for unlinked standalone senders. A linked sender's agent run still follows that person's current scope, agent, model, sandbox, and access policies. A denied or unavailable person-access policy blocks channel admission; OpenClaw does not retry the request as an unlinked owner.
 
 Managed updates retain the original person-access grant through staging and a
 required authorization check before parking the Gateway. Once parking is

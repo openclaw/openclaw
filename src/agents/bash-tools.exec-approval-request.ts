@@ -9,6 +9,10 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
+import {
+  normalizeApprovalRequestDeliveryRoute,
+  type ApprovalRequestDeliveryRoute,
+} from "../infra/approval-types.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -138,6 +142,7 @@ function resolveDefaultExecApprovalExpiresAtMs(): number {
 export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
+  deliveryRoute?: ApprovalRequestDeliveryRoute;
   finalDecision?: string | null;
 };
 
@@ -169,10 +174,11 @@ async function registerExecApprovalRequest(
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
     parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
+  const deliveryRoute = normalizeApprovalRequestDeliveryRoute(registrationResult?.deliveryRoute);
   if (decision.present) {
-    return { id, expiresAtMs, finalDecision: decision.value };
+    return { id, expiresAtMs, deliveryRoute, finalDecision: decision.value };
   }
-  return { id, expiresAtMs };
+  return { id, expiresAtMs, deliveryRoute };
 }
 
 /** Uses a pre-resolved decision or waits for the registered approval id. */
@@ -362,19 +368,12 @@ async function buildHostApprovalDecisionParams(
   };
 }
 
-/** Registers a host/node approval request without waiting for a decision. */
-async function registerExecApprovalRequestForHost(
-  params: HostExecApprovalParams,
-): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
-}
-
 /** Registers a host/node approval request and wraps failures for exec callers. */
 export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   try {
-    return await registerExecApprovalRequestForHost(params);
+    return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
   } catch (err) {
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }

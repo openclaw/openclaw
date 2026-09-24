@@ -4,6 +4,18 @@ import type { PluginApprovalRequest } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 export type ChannelApprovalKind = "exec" | "plugin" | "system-agent";
+export type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
+
+export function normalizeApprovalRequestDeliveryRoute(
+  value: unknown,
+): ApprovalRequestDeliveryRoute | undefined {
+  return value === "approval-client" ||
+    value === "forwarder" ||
+    value === "turn-source" ||
+    value === "none"
+    ? value
+    : undefined;
+}
 export type ApprovalRequestChannelRouteClass = "bound-or-explicit" | "unbound";
 
 /** Backward-compatible request shape accepted from Gateway events and replay. */

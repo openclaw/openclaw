@@ -47,6 +47,30 @@ afterEach(() => {
 });
 
 describe("prepared run admission", () => {
+  it.each([
+    { profileId: undefined, admissionSource: undefined },
+    { profileId: "another-person", admissionSource: undefined },
+    { profileId: "requester", admissionSource: "operator-schedule" as const },
+    { profileId: "requester", admissionSource: "requester-schedule" as const },
+  ])("rejects a direct requester outside its foreground authority: %j", (source) => {
+    expect(() =>
+      prepareAgentRunAdmission({
+        cfg: {},
+        facts,
+        operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+        directHumanRequesterProfileId: "requester",
+        admissionSource: source.admissionSource,
+        operatorAuthority: source.profileId
+          ? createAdmittedRunOperatorAuthority({
+              profileId: source.profileId,
+              scopes: ["operator.write"],
+              assertCurrent: () => {},
+            })
+          : undefined,
+      }),
+    ).toThrow("direct human requester must match the admitted foreground operator");
+  });
+
   it.each([false, true])(
     "owns real fixture authority across module resets and runner settlement (reject=%s)",
     async (reject) => {

@@ -21,7 +21,7 @@ import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
-import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
+import { prepareCodingToolsGatewayAccess } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { projectMemoryFlushTools } from "./agent-tools.memory-flush.js";
 import {
@@ -86,7 +86,6 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
-import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
@@ -387,13 +386,18 @@ export function createOpenClawCodingToolsInternal(
   });
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
   const cronManagementGrant = bindCronManagementGrant(options?.runId);
-  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy } =
-    prepareSessionPortalToolAccess({
-      sessionKey: executionSessionKey,
+  const gatewayCaller = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: options?.scheduledToolPolicy,
+    accountId: options?.agentAccountId,
+    channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
+  });
+  const { wrapGatewayCaller, sessionPortalTarget, ownerOnlyCoreToolPolicy } =
+    prepareCodingToolsGatewayAccess({
+      options,
       agentId: executionAgentId,
-      sessionId: options?.sessionId,
-      senderIsOwner: options?.senderIsOwner,
-      sandboxed: Boolean(sandbox),
+      sessionKey: executionSessionKey,
+      accountId: gatewayCaller.accountId,
+      capabilityProfile,
       hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
     });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
@@ -402,7 +406,7 @@ export function createOpenClawCodingToolsInternal(
   );
   const pluginToolDenylist = [
     ...capabilityProfile.policy.explicitToolDenylist,
-    ...ownerOnlyCoreToolDenylist,
+    ...(ownerOnlyCoreToolPolicy?.deny ?? []),
   ];
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
@@ -413,20 +417,8 @@ export function createOpenClawCodingToolsInternal(
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const cronCreatorToolAllowlistCaptureRef = options?.cronCreatorToolAllowlistCaptureRef;
-  const gatewayCaller = resolveScheduledToolCallerContext({
-    scheduledToolPolicy: options?.scheduledToolPolicy,
-    accountId: options?.agentAccountId,
-    channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
-  });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const wrapGatewayCaller = createCodingToolsGatewayCaller({
-    options,
-    agentId: executionAgentId,
-    sessionKey: executionSessionKey,
-    accountId: gatewayCaller.accountId,
-    capabilityProfile,
-  });
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []

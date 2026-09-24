@@ -1,81 +1,46 @@
-// Covers approval turn-source route checks.
+// Manual approval routes complement connected approval clients and delivered native cards.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelApprovalCapability } from "../channels/plugins/types.adapters.js";
 
-const loadConfigMock = vi.hoisted(() => vi.fn());
-const resolveApprovalInitiatingSurfaceStateMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => loadConfigMock(),
+const capability = vi.hoisted(() => ({
+  value: undefined as ChannelApprovalCapability | undefined,
 }));
-
-vi.mock("./exec-approval-surface.js", () => ({
-  resolveApprovalInitiatingSurfaceState: (...args: unknown[]) =>
-    resolveApprovalInitiatingSurfaceStateMock(...args),
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: () => ({}),
+  resolveChannelApprovalCapability: () => capability.value,
 }));
 
 import { hasApprovalTurnSourceRoute } from "./approval-turn-source.js";
 
 describe("hasApprovalTurnSourceRoute", () => {
   beforeEach(() => {
-    loadConfigMock.mockReset();
-    resolveApprovalInitiatingSurfaceStateMock.mockReset();
-    loadConfigMock.mockReturnValue({ loaded: true });
+    capability.value = undefined;
   });
 
-  it("returns true when the initiating surface is enabled", () => {
-    resolveApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "enabled" });
-
-    expect(
-      hasApprovalTurnSourceRoute({
-        turnSourceChannel: "slack",
-        turnSourceAccountId: "work",
-      }),
-    ).toBe(true);
-    expect(resolveApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
-      channel: "slack",
-      accountId: "work",
-      cfg: { loaded: true },
-      approvalKind: "exec",
-    });
-  });
-
-  it("passes plugin approval kind to the initiating surface check", () => {
-    resolveApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "disabled" });
-
-    expect(
-      hasApprovalTurnSourceRoute({
-        turnSourceChannel: "whatsapp",
-        turnSourceAccountId: "default",
-        approvalKind: "plugin",
-      }),
-    ).toBe(false);
-    expect(resolveApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "default",
-      cfg: { loaded: true },
-      approvalKind: "plugin",
-    });
-  });
-
-  it("returns false when the initiating surface is disabled or unsupported", () => {
-    resolveApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "disabled" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(false);
-
-    resolveApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "unsupported" });
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "unknown-channel" })).toBe(false);
-  });
-
-  it("returns false when there is no turn-source channel", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
-    expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["webchat", "tui"])(
-    "requires a live approval client for the %s turn source",
+  it.each([undefined, "webchat", "tui", "unknown-channel"])(
+    "does not invent an offline approval route for %s",
     (turnSourceChannel) => {
       expect(hasApprovalTurnSourceRoute({ turnSourceChannel })).toBe(false);
-      expect(resolveApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
-      expect(loadConfigMock).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves manual replies on a deliverable channel without native policy", () => {
+    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "slack" })).toBe(true);
+  });
+
+  it("keeps exec disabled independently of a plugin approval route", () => {
+    capability.value = {
+      getExecInitiatingSurfaceState: () => ({ kind: "disabled" }),
+      getActionAvailabilityState: ({ approvalKind }) => ({
+        kind: approvalKind === "plugin" ? "enabled" : "disabled",
+      }),
+    };
+    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord", approvalKind: "exec" })).toBe(
+      false,
+    );
+    expect(
+      hasApprovalTurnSourceRoute({ turnSourceChannel: "discord", approvalKind: "plugin" }),
+    ).toBe(true);
+  });
 });

@@ -7,7 +7,9 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeApprovalRequestDeliveryRoute } from "../infra/approval-types.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
+import type { ExecApprovalPendingReplyParams } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
@@ -426,17 +428,7 @@ function queuePendingToolMedia(
   }
 }
 
-function readExecApprovalPendingDetails(result: unknown): {
-  approvalId: string;
-  approvalSlug: string;
-  expiresAtMs?: number;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  host: "gateway" | "node";
-  command: string;
-  cwd?: string;
-  nodeId?: string;
-  warningText?: string;
-} | null {
+function readExecApprovalPendingDetails(result: unknown): ExecApprovalPendingReplyParams | null {
   const outer = asOptionalObjectRecord(result);
   const details = readRecordField(outer?.details) ?? outer;
   if (details?.status !== "approval-pending") {
@@ -452,6 +444,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   return {
     approvalId,
     approvalSlug,
+    deliveryRoute: normalizeApprovalRequestDeliveryRoute(details.deliveryRoute),
     expiresAtMs: typeof details.expiresAtMs === "number" ? details.expiresAtMs : undefined,
     allowedDecisions: Array.isArray(details.allowedDecisions)
       ? details.allowedDecisions.filter(
@@ -464,42 +457,6 @@ function readExecApprovalPendingDetails(result: unknown): {
     cwd: readStringValue(details.cwd),
     nodeId: readStringValue(details.nodeId),
     warningText: readStringValue(details.warningText),
-  };
-}
-
-function readExecApprovalUnavailableDetails(result: unknown): {
-  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
-  warningText?: string;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string;
-  sentApproverDms?: boolean;
-  host?: "gateway" | "node";
-  nodeId?: string;
-} | null {
-  const outer = asOptionalObjectRecord(result);
-  const details = readRecordField(outer?.details) ?? outer;
-  if (details?.status !== "approval-unavailable") {
-    return null;
-  }
-  const reason =
-    details.reason === "initiating-platform-disabled" ||
-    details.reason === "initiating-platform-unsupported" ||
-    details.reason === "no-approval-route"
-      ? details.reason
-      : null;
-  if (!reason) {
-    return null;
-  }
-  return {
-    reason,
-    warningText: readStringValue(details.warningText),
-    channel: readStringValue(details.channel),
-    channelLabel: readStringValue(details.channelLabel),
-    accountId: readStringValue(details.accountId),
-    sentApproverDms: details.sentApproverDms === true,
-    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
-    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -544,24 +501,6 @@ export async function emitToolResultOutput(params: {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
-    }
-    return;
-  }
-
-  const approvalUnavailable = readExecApprovalUnavailableDetails(result);
-  if (!isToolError && approvalUnavailable) {
-    if (!ctx.params.onToolResult) {
-      return;
-    }
-    // Setup notices are progress, not pending prompts that replace the final answer.
-    try {
-      const { buildExecApprovalUnavailableReplyPayload } =
-        await execApprovalReplyModuleLoader.load();
-      await ctx.params.onToolResult?.(
-        buildExecApprovalUnavailableReplyPayload(approvalUnavailable),
-      );
-    } catch (error) {
-      recordApprovalPromptDeliveryFailure(error);
     }
     return;
   }

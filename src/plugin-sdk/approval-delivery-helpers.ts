@@ -52,6 +52,8 @@ type ApproverRestrictedNativeApprovalCommonParams = {
   channel: string;
   /** Human-readable channel label used in denial messages. */
   channelLabel: string;
+  /** Prepares current actor authority when approval requires asynchronous identity resolution. */
+  prepareActorAction?: ChannelApprovalCapability["prepareActorAction"];
   /** Optional setup description helper shown when exec approvals are unavailable. */
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
   /** Optional setup description helper shown when plugin approvals are unavailable. */
@@ -306,6 +308,7 @@ function buildApproverRestrictedNativeApprovalCapability(
   }) => availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId }));
 
   return createChannelApprovalCapability({
+    prepareActorAction: params.prepareActorAction,
     authorizeActorAction: ({
       cfg,
       accountId,
@@ -413,6 +416,8 @@ export function createApproverRestrictedNativeApprovalAdapter(
 
 /** Assemble a channel approval capability from its auth, delivery, render, and native surfaces. */
 export function createChannelApprovalCapability(params: {
+  /** Prepares a guarded approval decision without changing the synchronous legacy hook. */
+  prepareActorAction?: ChannelApprovalCapability["prepareActorAction"];
   /** Authorizes actors attempting approval actions. */
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
   /** Reports whether approval actions are generally available. */
@@ -441,6 +446,7 @@ export function createChannelApprovalCapability(params: {
     native: params.native,
   };
   return {
+    prepareActorAction: params.prepareActorAction,
     authorizeActorAction: params.authorizeActorAction,
     getActionAvailabilityState: params.getActionAvailabilityState,
     getExecInitiatingSurfaceState: params.getExecInitiatingSurfaceState,
@@ -457,6 +463,7 @@ export function createChannelApprovalCapability(params: {
 /** Split the canonical approval capability into the adapter shape older channel loaders consume. */
 export function splitChannelApprovalCapability(capability: ChannelApprovalCapability): {
   auth: {
+    prepareActorAction?: ChannelApprovalCapability["prepareActorAction"];
     authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
     getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
     getExecInitiatingSurfaceState?: ChannelApprovalCapability["getExecInitiatingSurfaceState"];
@@ -471,6 +478,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
 } {
   return {
     auth: {
+      prepareActorAction: capability.prepareActorAction,
       authorizeActorAction: capability.authorizeActorAction,
       getActionAvailabilityState: capability.getActionAvailabilityState,
       getExecInitiatingSurfaceState: capability.getExecInitiatingSurfaceState,
@@ -500,6 +508,7 @@ export function createApproverRestrictedNativeApprovalCapabilityFromForwardingRo
   const routing = createStandardNativeApprovalRouting(params.channel, params.routing);
   return {
     capability: createChannelApprovalCapability({
+      prepareActorAction: params.prepareActorAction,
       authorizeActorAction: params.authorizeActorAction,
       getActionAvailabilityState: routing.getActionAvailabilityState,
       getExecInitiatingSurfaceState: routing.getExecInitiatingSurfaceState,

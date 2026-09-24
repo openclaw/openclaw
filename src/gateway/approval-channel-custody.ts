@@ -15,11 +15,11 @@ type PreparedApprovalChannelCustody = {
   authorizes: (request: ApprovalRequestLike) => boolean;
 };
 
-export function prepareApprovalChannelCustody(params: {
-  cfg: OpenClawConfig;
+export async function prepareApprovalChannelCustody(params: {
+  getConfig: () => OpenClawConfig;
   approvalKind: ChannelApprovalKind;
   reviewer: ApprovalChannelReviewer;
-}): PreparedApprovalChannelCustody | null {
+}): Promise<PreparedApprovalChannelCustody | null> {
   const channel = params.reviewer.channel.trim().toLowerCase();
   const accountId = params.reviewer.accountId.trim();
   const senderId = params.reviewer.senderId.trim();
@@ -28,35 +28,68 @@ export function prepareApprovalChannelCustody(params: {
   }
   const plugin = getLoadedChannelPlugin(channel);
   const capability = resolveChannelApprovalCapability(plugin);
-  const authorizeActorAction = capability?.authorizeActorAction;
+  const authorizeActorAction = capability?.prepareActorAction ?? capability?.authorizeActorAction;
   if (!plugin || !authorizeActorAction) {
     return null;
   }
-  const isActorAuthorized = (candidateAccountId: string) =>
+  const cfg = params.getConfig();
+  const authorize = (candidateAccountId: string, currentConfig = cfg) =>
     authorizeActorAction({
-      cfg: params.cfg,
+      cfg: currentConfig,
       accountId: candidateAccountId,
       senderId,
       action: "approve",
       approvalKind: params.approvalKind,
-    }).authorized;
-  if (!isActorAuthorized(accountId)) {
-    return null;
-  }
-  const eligibleAccountIds = plugin.config.listAccountIds(params.cfg).filter(isActorAuthorized);
-  if (!eligibleAccountIds.includes(accountId)) {
+    });
+  const accounts = await Promise.all(
+    plugin.config
+      .listAccountIds(cfg)
+      .map(async (id) => ({ id, authorization: await authorize(id) })),
+  );
+  if (!accounts.some((entry) => entry.id === accountId && entry.authorization.authorized)) {
     return null;
   }
   return {
     resolverId: `${channel}:${accountId}`,
-    authorizes: (request) =>
-      doesApprovalRequestSelectChannelAccount({
-        cfg: params.cfg,
-        request,
-        channel,
-        accountId,
-        defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
-        eligibleAccountIds,
-      }),
+    authorizes: (request) => {
+      const currentConfig = params.getConfig();
+      const currentCapability = resolveChannelApprovalCapability(getLoadedChannelPlugin(channel));
+      if (
+        (currentCapability?.prepareActorAction ?? currentCapability?.authorizeActorAction) !==
+        authorizeActorAction
+      ) {
+        return false;
+      }
+      const currentAccounts = plugin.config.listAccountIds(currentConfig);
+      const eligibleAccountIds = accounts.flatMap(({ id, authorization }) => {
+        if (!authorization.authorized || !currentAccounts.includes(id)) {
+          return [];
+        }
+        try {
+          if (authorization.assertCurrent) {
+            authorization.assertCurrent();
+          } else {
+            const current = authorize(id, currentConfig);
+            if (current instanceof Promise || !current.authorized) {
+              return [];
+            }
+          }
+          return [id];
+        } catch {
+          return [];
+        }
+      });
+      return (
+        eligibleAccountIds.includes(accountId) &&
+        doesApprovalRequestSelectChannelAccount({
+          cfg: currentConfig,
+          request,
+          channel,
+          accountId,
+          defaultAccountId: plugin.config.defaultAccountId?.(currentConfig) ?? "",
+          eligibleAccountIds,
+        })
+      );
+    },
   };
 }

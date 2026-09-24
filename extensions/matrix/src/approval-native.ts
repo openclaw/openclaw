@@ -186,15 +186,6 @@ function resolveMatrixApproverDmTargets(params: {
 const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "matrix",
   channelLabel: "Matrix",
-  describeExecApprovalSetup: ({
-    accountId,
-  }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.matrix.accounts.${accountId}`
-        : "channels.matrix";
-    return `Approve it from the Web UI or terminal UI for now. Matrix supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`${prefix}.dm.allowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-  },
   listAccountIds: listMatrixAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     hasAnyMatrixApprovalApprovers({
@@ -344,7 +335,6 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
   ) =>
     matrixNativeApprovalCapability.getExecInitiatingSurfaceState?.(params) ??
     ({ kind: "disabled" } as const),
-  describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   delivery: matrixDeliveryAdapter,
   nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
   native: matrixNativeAdapter,

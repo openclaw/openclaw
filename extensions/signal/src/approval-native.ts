@@ -46,13 +46,6 @@ const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwa
     isOriginTargetAllowed: ({ cfg, accountId, target }) =>
       !isSignalGroupTarget(target.to) || getSignalApprovalApprovers({ cfg, accountId }).length > 0,
   },
-  describeExecApprovalSetup: ({ accountId }) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.signal.accounts.${accountId}`
-        : "channels.signal";
-    return `Signal supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows Signal. Link Signal and keep the gateway running; configure \`${prefix}.allowFrom\` to restrict approvers.`;
-  },
   render: {
     exec: {
       buildPendingPayload: ({ request, nowMs }) =>

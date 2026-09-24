@@ -14,6 +14,7 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import { buildExecApprovalCustomId } from "./approval-custom-id.js";
@@ -22,8 +23,14 @@ import {
   formatDiscordApprovalDisplayValue,
 } from "./approval-message-safety.js";
 import { discordApprovalMessageUpdates } from "./approval-message-updates.js";
-import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
-import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
+import {
+  shouldHandleDiscordApprovalRequest,
+  resolveDiscordApprovalRequestApprovers,
+} from "./approval-shared.js";
+import {
+  isDiscordExecApprovalClientEnabled,
+  prepareDiscordApprovalAuthority,
+} from "./exec-approvals.js";
 import {
   Button,
   createChannelMessage,
@@ -56,6 +63,7 @@ type DiscordPendingDelivery = {
 type PreparedDeliveryTarget = {
   discordChannelId: string;
   recipientUserId?: string;
+  assertCurrent: () => void;
 };
 
 type DiscordApprovalHandlerContext = {
@@ -403,11 +411,40 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
     buildExpiredResult: buildTerminalApprovalResult,
   },
   transport: {
-    prepareTarget: async ({ cfg, accountId, context, plannedTarget }) => {
+    prepareTarget: async ({ cfg, accountId, context, plannedTarget, request }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
       }
+      const policy = {
+        cfg,
+        accountId: resolved.accountId,
+        configOverride: resolved.context.config,
+      };
+      const approvers = await resolveDiscordApprovalRequestApprovers({ ...policy, request });
+      const senderId = plannedTarget.surface === "origin" ? approvers[0] : plannedTarget.target.to;
+      if (!senderId || !approvers.includes(senderId)) {
+        return null;
+      }
+      const authority = await prepareDiscordApprovalAuthority({ ...policy, senderId });
+      if (!authority) {
+        return null;
+      }
+      const currentConfig = createRuntimeConfigReader(cfg);
+      const assertCurrent = () => {
+        authority.assertCurrent();
+        const current = currentConfig();
+        if (
+          !isDiscordExecApprovalClientEnabled({
+            ...policy,
+            cfg: current,
+            configOverride: current === cfg ? policy.configOverride : undefined,
+          })
+        ) {
+          throw new Error("Discord approval delivery was disabled");
+        }
+      };
+      assertCurrent();
       if (plannedTarget.surface === "origin") {
         const destinationId =
           typeof plannedTarget.target.threadId === "string" &&
@@ -418,6 +455,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
           dedupeKey: destinationId,
           target: {
             discordChannelId: destinationId,
+            assertCurrent,
           },
         };
       }
@@ -427,10 +465,10 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         accountId: resolved.accountId,
       });
       const userId = plannedTarget.target.to;
-      const dmChannel = (await discordRequest(
-        () => createUserDmChannel(rest, userId),
-        "dm-channel",
-      )) as { id: string };
+      const dmChannel = (await discordRequest(() => {
+        assertCurrent();
+        return createUserDmChannel(rest, userId);
+      }, "dm-channel")) as { id: string };
       if (!dmChannel?.id) {
         logError(`discord approvals: failed to create DM for user ${userId}`);
         return null;
@@ -440,6 +478,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         target: {
           discordChannelId: dmChannel.id,
           recipientUserId: userId,
+          assertCurrent,
         },
       };
     },
@@ -468,14 +507,16 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         enforce_nonce: true,
       };
       const message = (await discordRequest(
-        () =>
-          createChannelMessage<{ id: string; channel_id: string }>(
+        () => {
+          preparedTarget.assertCurrent();
+          return createChannelMessage<{ id: string; channel_id: string }>(
             rest,
             preparedTarget.discordChannelId,
             {
               body,
             },
-          ),
+          );
+        },
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
         { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };

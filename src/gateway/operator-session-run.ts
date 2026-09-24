@@ -6,11 +6,11 @@ import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  authorizeSessionAgentRun,
   authorizeGatewaySessionCreation,
   resolveSandboxedSessionCreation,
 } from "./operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 
 /** Binds create-on-run provenance and row admission to the original operator. */
 export function prepareGatewayOperatorSessionRun(params: {

@@ -120,7 +120,7 @@ OpenClaw uses Discord components v2 for exec approvals and cross-context markers
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    Discord native exec approvals require `enabled: true` or `enabled: "auto"` and at least one resolved approver, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Leaving `enabled` unset or setting it to `false` disables native exec approval delivery. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`.
+    Discord native exec approvals require `enabled: true` or `enabled: "auto"`. Explicit `execApprovals.approvers` takes precedence; otherwise configured command owners and a verified requesting person with current `operator.approvals` or `operator.admin` authority can approve. Link the person's exact Discord identity in [Profile settings](/concepts/user-model#channel-identity-links). Permission is checked again when they respond. Leaving `enabled` unset or setting it to `false` disables native Discord delivery; an authorized connected Control UI can still receive the approval. Channel `allowFrom`, legacy `dm.allowFrom`, and direct-message `defaultTo` do not establish approval authority.
 
     For sensitive owner-only group commands such as `/diagnostics` and `/export-trajectory`, OpenClaw sends approval prompts and final results privately. It tries Discord DM first when the invoking owner has a Discord owner route; otherwise it falls back to the first available owner route from `commands.ownerAllowFrom`, such as Telegram.
 

@@ -66,6 +66,7 @@ function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
   return JSON.stringify([
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    run.directHumanRequesterProfileId ?? "",
     execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
@@ -182,6 +183,7 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "operatorAuthority"
+  | "directHumanRequesterProfileId"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
   | "currentInboundAudio"
@@ -246,6 +248,7 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
+  mode: "turn" | "overflow-summary" = "turn",
 ): FollowupRuntimeMetadata {
   const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
   // Delivery-key equality proves every source has the same turn authority.
@@ -264,9 +267,19 @@ export function collectRuntimeMetadata(
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
       : {}),
-    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
-    currentInboundAudio: currentTurnSource?.currentInboundAudio,
-    currentInboundContext: collectCurrentInboundContext(items),
+    ...(mode === "turn"
+      ? {
+          directHumanRequesterProfileId: authoritySource?.directHumanRequesterProfileId,
+          currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+          currentInboundAudio: currentTurnSource?.currentInboundAudio,
+          currentInboundContext: collectCurrentInboundContext(items),
+          queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
+          deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+          turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+        }
+      : items.length > 0 && items.every((item) => item.currentInboundEventKind === "room_event")
+        ? { currentInboundEventKind: "room_event" as const }
+        : {}),
     explicitSkillSelections:
       explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
     channelAdmissionEvidence: combineChannelAdmissionEvidence(
@@ -275,9 +288,6 @@ export function collectRuntimeMetadata(
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
     abortSignal,
-    queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
-    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
-    turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
@@ -288,6 +298,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
+    directHumanRequesterProfileId: source.directHumanRequesterProfileId,
     personalBootstrapEligible: source.personalBootstrapEligible,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,

@@ -151,7 +151,7 @@ export type CreateGatewaySessionParams = {
   creation?: {
     via: SessionCreatedVia;
     actor?: SessionCreatedActor;
-    /** Host-verified human requester for matching spawn-owner inheritance. */
+    /** Canonical profile of this turn's direct human requester, verified by the host. */
     requesterProfileId?: string;
     sandbox?: "required";
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];

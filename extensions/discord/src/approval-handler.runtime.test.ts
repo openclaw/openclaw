@@ -377,7 +377,7 @@ describe("discordApprovalNativeRuntime", () => {
       accountId: "main",
       context: {
         token: "discord-token",
-        config: {} as never,
+        config: { enabled: true, approvers: ["555555555"] },
       },
       plannedTarget: {
         surface: "origin",
@@ -400,7 +400,7 @@ describe("discordApprovalNativeRuntime", () => {
       pendingPayload: {} as never,
     });
 
-    expect(prepared).toEqual({
+    expect(prepared).toMatchObject({
       dedupeKey: "777888999",
       target: {
         discordChannelId: "777888999",

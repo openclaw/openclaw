@@ -138,6 +138,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
     readAdmittedRunOperatorAuthority(admittedRunContext),
+    admittedRunContext.directHumanRequesterProfileId,
   );
   capability.receiptAuthority();
   const runtimeIdentity = await capability.run((owner) => ({

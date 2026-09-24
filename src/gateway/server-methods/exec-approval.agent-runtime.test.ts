@@ -22,6 +22,9 @@ import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { dispatchGatewayRequestInProcessRaw } from "../server-in-process-dispatch.js";
+import { createRequestGatewayMethodRegistry } from "../server-methods.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "../worker-environments/placement-turn-claim-events.js";
@@ -248,6 +251,106 @@ describe("exec approval signed agent runtime", () => {
       });
     },
   );
+  it("lets a write-only live run request review without granting review access to other runs", async (testContext) => {
+    let active = true;
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => active,
+    });
+    await fixture.run(async () => {
+      const runtime = identity(false);
+      const opts = requestOptions(runtime, () => active);
+      const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
+        ...opts.client!,
+        connect: { ...opts.client!.connect, role: "operator", scopes: ["operator.write"] },
+      };
+      const context = { ...createContext(), ...opts.context, execApprovalManager: fixture.manager };
+      const methodRegistry = createRequestGatewayMethodRegistry(
+        createExecApprovalHandlers(fixture.manager),
+      );
+      const dispatch = (method: string, params: Record<string, unknown>, caller = client) =>
+        dispatchGatewayRequestInProcessRaw(method, params, {
+          client: caller,
+          context,
+          methodRegistry,
+          onExecution: (work) => {
+            void fixture.track(work);
+          },
+        });
+      const first = await dispatch("exec.approval.request", {
+        ...opts.params,
+        id: "writer-approval",
+        timeoutMs: 60_000,
+      });
+      expect(first).toMatchObject({
+        ok: true,
+        payload: { status: "accepted", id: "writer-approval" },
+      });
+      for (const method of ["exec.approval.resolve", "exec.approval.list"]) {
+        expect(
+          await dispatch(method, { id: "writer-approval", decision: "allow-once" }),
+        ).toMatchObject({ ok: false, error: { message: "missing scope: operator.approvals" } });
+      }
+      const snapshots = vi.spyOn(fixture.manager, "getSnapshot");
+      const foreignInstance = {
+        ...runtime.operationalRunInstance,
+        instanceId: "another-instance-same-session",
+      };
+      const foreign = {
+        ...client,
+        internal: {
+          ...client.internal,
+          agentRuntimeIdentity: {
+            ...runtime,
+            operationalRunInstance: foreignInstance,
+            delegatedAuthority: {
+              ...runtime.delegatedAuthority,
+              operationalRunInstance: foreignInstance,
+            },
+          },
+        },
+      };
+      expect(
+        await dispatch("exec.approval.waitDecision", { id: "writer-approval" }, foreign),
+      ).toMatchObject({ ok: false });
+      expect(snapshots).not.toHaveBeenCalled();
+      snapshots.mockRestore();
+      await fixture.manager.resolve("writer-approval", "allow-once");
+      expect(await dispatch("exec.approval.waitDecision", { id: "writer-approval" })).toMatchObject(
+        { ok: true, payload: { decision: "allow-once" } },
+      );
+
+      await dispatch("exec.approval.request", {
+        ...opts.params,
+        id: "writer-revoked",
+        timeoutMs: 60_000,
+      });
+      const entered = createDeferredCore();
+      const awaitDecision = fixture.manager.awaitDecision.bind(fixture.manager);
+      const wait = vi.spyOn(fixture.manager, "awaitDecision").mockImplementation((id) => {
+        const pending = awaitDecision(id);
+        entered.resolve();
+        return (
+          pending?.then((decision) => {
+            active = false;
+            return decision;
+          }) ?? null
+        );
+      });
+      const revoked = dispatch("exec.approval.waitDecision", { id: "writer-revoked" });
+      void revoked.catch(() => {});
+      await entered.promise;
+      await fixture.manager.resolve("writer-revoked", "allow-once");
+      await expect(revoked).rejects.toThrow("runtime authority changed");
+      wait.mockRestore();
+      expect(
+        await dispatch("exec.approval.request", { ...opts.params, id: "writer-after-revoke" }),
+      ).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("no longer active") },
+      });
+      expect(fixture.manager.getLocalSnapshot("writer-after-revoke")).toBeNull();
+    });
+  });
 
   it("prepares retained approval lineage without synchronously loading full registry payloads", async (testContext) => {
     await withOpenClawTestState(

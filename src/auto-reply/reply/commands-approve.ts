@@ -98,8 +98,8 @@ type ApproveCommandBehavior =
   | { kind: "reply"; text: string };
 
 function resolveAuthorizedApprovalKinds(params: {
-  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  execAuthorization: Awaited<ReturnType<typeof resolveApprovalCommandAuthorization>>;
+  pluginAuthorization: Awaited<ReturnType<typeof resolveApprovalCommandAuthorization>>;
 }): ChannelApprovalKind[] {
   return [
     ...(params.execAuthorization.authorized ? (["exec"] as const) : []),
@@ -108,8 +108,8 @@ function resolveAuthorizedApprovalKinds(params: {
 }
 
 function resolveApprovalAuthorizationError(params: {
-  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  execAuthorization: Awaited<ReturnType<typeof resolveApprovalCommandAuthorization>>;
+  pluginAuthorization: Awaited<ReturnType<typeof resolveApprovalCommandAuthorization>>;
 }): string {
   return (
     params.execAuthorization.reason ??
@@ -139,14 +139,14 @@ export async function handleApproveCommandFromContext(
     ctx: params.ctx,
     command: params.command,
   });
-  const execApprovalAuthorization = resolveApprovalCommandAuthorization({
+  const execApprovalAuthorization = await resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
     accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "exec",
   });
-  const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
+  const pluginApprovalAuthorization = await resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
     accountId: effectiveAccountId,
@@ -202,11 +202,15 @@ export async function handleApproveCommandFromContext(
 
   const resolvedBy = buildResolvedByLabel(params);
   const callApprovalMethod = async (resolveMethod: ChannelApprovalKind): Promise<void> => {
+    (resolveMethod === "exec"
+      ? execApprovalAuthorization
+      : pluginApprovalAuthorization
+    ).assertCurrent?.();
     await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
-      ...(approvalCapability?.authorizeActorAction
+      ...(approvalCapability?.prepareActorAction || approvalCapability?.authorizeActorAction
         ? {
             channel: params.command.channel,
             accountId: effectiveAccountId,

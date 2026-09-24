@@ -1,9 +1,11 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { applyToolAvailabilityDescriptions } from "../../agents/agent-tools.deferred-followup.js";
 // Skill tool dispatch routes runtime skill tool calls through the active session context.
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import type { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
+import { resolveOwnerOnlyToolPolicy } from "../../agents/owner-tool-policy.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
@@ -24,11 +26,11 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../../agents/tools/cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
 
@@ -68,6 +70,7 @@ export function resolveSkillDispatchTools(
     provider: string;
     model: string;
     senderIsOwner: boolean;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     senderId?: string;
     currentChannelId?: string;
     skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
@@ -130,9 +133,7 @@ export function resolveSkillDispatchTools(
     sessionKey: params.sessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const ownerOnlyCoreToolPolicy = !params.senderIsOwner
-    ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] }
-    : undefined;
+  const ownerOnlyCoreToolPolicy = resolveOwnerOnlyToolPolicy(params);
   const explicitPolicyList: Array<ToolPolicyLike | undefined> = [
     profilePolicy,
     providerProfilePolicy,
@@ -237,5 +238,13 @@ export function resolveSkillDispatchTools(
   );
   return applyToolAvailabilityDescriptions(
     filterRequesterYieldTools(policyFiltered, params.sessionKey),
+  ).map((tool) =>
+    params.operatorAuthority
+      ? wrapToolWithGatewayCallerIdentity(tool, {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          operatorAuthority: params.operatorAuthority,
+        })
+      : tool,
   );
 }

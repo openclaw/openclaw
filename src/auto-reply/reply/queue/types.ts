@@ -116,6 +116,8 @@ export type FollowupRun = {
   prompt: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Exact current human input, distinct from authority inherited by autonomous work. */
+  directHumanRequesterProfileId?: string;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */

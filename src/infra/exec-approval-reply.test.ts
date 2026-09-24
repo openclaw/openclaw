@@ -1,46 +1,12 @@
 // Tests execution approval reply text and decision formatting.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
-
-vi.mock("./exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: vi.fn(
-    (params: {
-      channel?: string | null;
-      channelLabel?: string | null;
-      accountId?: string | null;
-    }) => {
-      const channel = (params.channel ?? "").trim().toLowerCase();
-      const label = params.channelLabel ?? channel;
-      const accountId = params.accountId?.trim();
-      const accountPrefix =
-        accountId && accountId !== "default"
-          ? `channels.${channel}.accounts.${accountId}`
-          : `channels.${channel}`;
-      if (channel === "matrix") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      if (channel === "discord" || channel === "slack") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
-      }
-      if (channel === "telegram") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      return null;
-    },
-  ),
-  listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
-  supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
-    ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
-  ),
-}));
-
 import {
   buildApprovalButtonPresentation,
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
   buildExecApprovalPendingReplyPayload,
-  buildExecApprovalUnavailableReplyPayload,
   buildTypedApprovalActionDescriptors,
   buildTypedApprovalPresentation,
   buildTypedExecApprovalPendingReplyPayload,
@@ -66,164 +32,11 @@ describe("exec approval reply helpers", () => {
     },
   ] as const;
 
-  const unavailableReasonCases = [
-    {
-      reason: "initiating-platform-disabled" as const,
-      channelLabel: "Slack",
-      expected:
-        "Exec approval is required, but native chat exec approvals are not configured on Slack.",
-    },
-    {
-      reason: "initiating-platform-unsupported" as const,
-      channelLabel: undefined,
-      expected:
-        "Exec approval is required, but this platform does not support chat exec approvals.",
-    },
-    {
-      reason: "no-approval-route" as const,
-      channelLabel: undefined,
-      expected:
-        "Exec approval is required, but no interactive approval client is currently available.",
-    },
-  ] as const;
-
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
       "Approval required. I sent approval DMs to the approvers for this account.",
     );
   });
-
-  it("mentions Matrix in the fallback native approval guidance", () => {
-    const text = buildExecApprovalUnavailableReplyPayload({
-      reason: "no-approval-route",
-    }).text;
-    expect(text).toContain("native chat approval client such as");
-    expect(text).toContain("Discord");
-    expect(text).toContain("Matrix");
-    expect(text).toContain("Slack");
-    expect(text).toContain("Telegram");
-  });
-
-  it("avoids repeating allowFrom guidance in the no-route fallback", () => {
-    const text = buildExecApprovalUnavailableReplyPayload({
-      reason: "no-approval-route",
-    }).text;
-
-    expect(text).not.toContain(
-      "Then retry the command. If those accounts already know your owner ID via allowFrom or owner config",
-    );
-    expect(text).toContain(
-      "You can usually leave execApprovals.approvers unset when owner config already identifies the approvers.",
-    );
-  });
-
-  it("distinguishes node approval-inbox access from policy inspection", () => {
-    const text = buildExecApprovalUnavailableReplyPayload({
-      reason: "no-approval-route",
-      host: "node",
-      nodeId: "mac-1",
-    }).text;
-
-    expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
-    );
-    expect(text).toContain(
-      "Inspect the node's effective exec policy with `openclaw approvals get --node mac-1`.",
-    );
-    expect(text).not.toContain("`openclaw dashboard --no-open` or `openclaw approvals get");
-    expect(text).not.toContain("Open the approval inbox with");
-    expect(text).not.toContain("exec-approvals list");
-  });
-
-  it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
-    const text = buildExecApprovalUnavailableReplyPayload({
-      reason: "initiating-platform-disabled",
-      channel: "matrix",
-      channelLabel: "Matrix",
-    }).text;
-
-    expect(text).toContain("native chat exec approvals are not configured on Matrix");
-    expect(text).toContain("Matrix supports native exec approvals for this account");
-    expect(text).toContain("`channels.matrix.execApprovals.approvers`");
-    expect(text).toContain("`channels.matrix.dm.allowFrom`");
-  });
-
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.discord.dm.allowFrom`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.slack.dm.allowFrom`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      expected: "`commands.ownerAllowFrom`",
-      unexpected: "`channels.telegram.allowFrom`",
-    },
-  ])(
-    "uses channel-specific disabled setup guidance for $channelLabel",
-    ({ channel, channelLabel, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-      }).text;
-
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
-
-  it.each([
-    {
-      channel: "discord",
-      channelLabel: "Discord",
-      accountId: "work",
-      expected: "`channels.discord.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.discord.execApprovals.approvers`",
-    },
-    {
-      channel: "slack",
-      channelLabel: "Slack",
-      accountId: "work",
-      expected: "`channels.slack.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.slack.execApprovals.approvers`",
-    },
-    {
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: "work",
-      expected: "`channels.telegram.accounts.work.execApprovals.approvers`",
-      unexpected: "`channels.telegram.execApprovals.approvers`",
-    },
-    {
-      channel: "matrix",
-      channelLabel: "Matrix",
-      accountId: "work",
-      expected: "`channels.matrix.accounts.work.dm.allowFrom`",
-      unexpected: "`channels.matrix.dm.allowFrom`",
-    },
-  ])(
-    "uses account-scoped disabled setup guidance for $channelLabel named account",
-    ({ channel, channelLabel, accountId, expected, unexpected }) => {
-      const text = buildExecApprovalUnavailableReplyPayload({
-        reason: "initiating-platform-disabled",
-        channel,
-        channelLabel,
-        accountId,
-      }).text;
-
-      expect(text).toContain(expected);
-      expect(text).not.toContain(unexpected);
-    },
-  );
 
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",
@@ -277,6 +90,8 @@ describe("exec approval reply helpers", () => {
         agentId: undefined,
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: undefined,
+        deliveryRoute: undefined,
+        expiresAtMs: 2500,
       },
     });
     expect(payload.presentation).toEqual({
@@ -679,33 +494,4 @@ describe("exec approval reply helpers", () => {
     });
     expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
   });
-
-  it("builds unavailable payloads for approver DMs", () => {
-    expect(
-      buildExecApprovalUnavailableReplyPayload({
-        warningText: "  Careful.  ",
-        reason: "no-approval-route",
-        sentApproverDms: true,
-      }),
-    ).toEqual({
-      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
-      channelData: {
-        execApprovalUnavailable: {
-          reason: "no-approval-route",
-        },
-      },
-    });
-  });
-
-  it.each(unavailableReasonCases)(
-    "builds unavailable payload for reason $reason",
-    ({ reason, channelLabel, expected }) => {
-      const payload = buildExecApprovalUnavailableReplyPayload({
-        reason,
-        channelLabel,
-      });
-      expect(payload.text).toContain(expected);
-      expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
-    },
-  );
 });

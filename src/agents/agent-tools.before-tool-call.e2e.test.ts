@@ -2809,7 +2809,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
   });
 
-  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
+  it("reports turn-source plugin approval timeouts without guessing delivery configuration", async () => {
     registerTelegramPluginApprovalSetup();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -2839,10 +2839,7 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("disposition", "timed_out");
-    expect(result).toHaveProperty(
-      "reason",
-      "Approval timed out\n\nConfigure Telegram native approval setup.",
-    );
+    expect(result).toHaveProperty("reason", "Approval timed out");
   });
 
   it.each([

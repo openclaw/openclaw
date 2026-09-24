@@ -40,13 +40,6 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     isOriginTargetAllowed: ({ cfg, accountId, target }) =>
       !isWhatsAppGroupJid(target.to) || getWhatsAppApprovalApprovers({ cfg, accountId }).length > 0,
   },
-  describeExecApprovalSetup: ({ accountId }) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.whatsapp.accounts.${accountId}`
-        : "channels.whatsapp";
-    return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.allowFrom\` to restrict approvers.`;
-  },
   render: {
     exec: {
       buildPendingPayload: ({ request, nowMs }) =>

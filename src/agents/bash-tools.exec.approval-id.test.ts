@@ -100,26 +100,6 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
   },
 }));
 
-vi.mock("../infra/exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: () => null,
-  listNativeExecApprovalClientLabels: () => [],
-  resolveExecApprovalInitiatingSurfaceState: (params: {
-    channel?: string | null;
-    accountId?: string | null;
-  }) => {
-    const channel = params.channel ?? undefined;
-    return {
-      kind: "enabled",
-      channel,
-      channelLabel:
-        channel === "tui" ? "terminal UI" : channel === "webchat" ? "Web UI" : "this platform",
-      accountId: params.accountId ?? undefined,
-    };
-  },
-  supportsNativeExecApprovalClient: (channel?: string | null) =>
-    !channel || channel === "webchat" || channel === "tui",
-}));
-
 vi.mock("../infra/shell-env.js", () => ({
   getShellPathFromLoginShell: vi.fn(() => null),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),

@@ -123,6 +123,30 @@ describe("exec approval requests", () => {
     });
   });
 
+  it("preserves the Gateway delivery receipt rather than inferring a route from channel settings", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      status: "accepted",
+      id: "approval-id",
+      deliveryRoute: "approval-client",
+      expiresAtMs: 60_000,
+    });
+    await expect(
+      registerExecApprovalRequestForHostOrThrow({
+        approvalId: "approval-id",
+        command: "echo hi",
+        workdir: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        turnSourceChannel: "discord",
+      }),
+    ).resolves.toEqual({
+      id: "approval-id",
+      expiresAtMs: 60_000,
+      deliveryRoute: "approval-client",
+    });
+  });
+
   it("distinguishes run abort cancellation from unchanged timeout fallback", async () => {
     vi.mocked(callGatewayTool)
       .mockResolvedValueOnce({ decision: null, terminalReason: "timeout" })

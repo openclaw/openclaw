@@ -64,6 +64,25 @@ export function authorizeGatewayMethod(
     // the handlers bind both calls to the connection's exact device identity.
     return { error: null };
   }
+  const runtime = client.internal?.agentRuntimeIdentity;
+  if (
+    runtime &&
+    (method === "exec.approval.request" ||
+      method === "exec.approval.waitDecision" ||
+      method === "plugin.approval.request" ||
+      method === "plugin.approval.waitDecision")
+  ) {
+    // A live run can request review and await its own decision, never resolve it.
+    return {
+      error:
+        context.validateAgentRuntimeApprovalAuthority?.(runtime) === true
+          ? null
+          : errorShape(
+              ErrorCodes.FORBIDDEN,
+              "agent runtime approval authority is no longer active",
+            ),
+    };
+  }
   if (scopes.includes(ADMIN_SCOPE)) {
     return { error: null };
   }

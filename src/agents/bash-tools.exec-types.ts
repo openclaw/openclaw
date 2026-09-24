@@ -4,6 +4,7 @@
  * tool result details consumed across exec hosts and process controls.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ApprovalRequestDeliveryRoute } from "../infra/approval-types.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
   ExecApprovalDecision,
@@ -219,23 +220,8 @@ export type ExecToolDetails = {
       approvalId: string;
       approvalSlug: string;
       expiresAtMs: number;
+      deliveryRoute?: ApprovalRequestDeliveryRoute;
       allowedDecisions?: readonly ExecApprovalDecision[];
-      host: ExecHost;
-      command: string;
-      cwd?: string;
-      nodeId?: string;
-      warningText?: string;
-    }
-  | {
-      status: "approval-unavailable";
-      reason:
-        | "initiating-platform-disabled"
-        | "initiating-platform-unsupported"
-        | "no-approval-route";
-      channel?: string;
-      channelLabel?: string;
-      accountId?: string;
-      sentApproverDms?: boolean;
       host: ExecHost;
       command: string;
       cwd?: string;

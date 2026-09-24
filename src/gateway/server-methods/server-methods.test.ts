@@ -3007,7 +3007,7 @@ describe("exec approval handlers", () => {
       "conn-auto-review-requester",
       "device-auto-review-requester",
     );
-    const resolverClient = createApprovalRuntimeClient(
+    using resolverClient = createApprovalRuntimeClient(
       "conn-auto-review-resolver",
       "device-auto-review-resolver",
       { agentId: "main", sessionKey: "agent:main:main" },
@@ -3048,7 +3048,7 @@ describe("exec approval handlers", () => {
       "conn-auto-review-mismatch-requester",
       "device-auto-review-mismatch-requester",
     );
-    const resolverClient = createApprovalRuntimeClient(
+    using resolverClient = createApprovalRuntimeClient(
       "conn-auto-review-mismatch-resolver",
       undefined,
       { agentId: "other", sessionKey: "agent:other:main" },

@@ -1,9 +1,6 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  readAdmittedRunOperatorAuthority,
-  readPreparedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import { readRunOperatorAuthority } from "../admitted-run-context.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /** Capture the original CLI caller before native tool availability replaces its tool cap. */
@@ -15,9 +12,7 @@ export function prepareCliReplyToolAuthority(
     originatingChannel: normalizeMessageChannel(params.messageChannel),
     toolsAllow: params.toolsAllow,
     disableTools: params.disableTools,
-    operatorAuthority:
-      readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
-      readPreparedRunOperatorAuthority(params.preparedRunAdmission),
+    operatorAuthority: readRunOperatorAuthority(params),
     run: {
       ...params,
       agentId: workspace.agentId,

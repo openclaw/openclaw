@@ -2750,7 +2750,7 @@ src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
 src/infra/exec-approval-channel-runtime.ts	9
 src/infra/exec-approval-policy-snapshot.ts	2
-src/infra/exec-approval-reply.ts	2
+src/infra/exec-approval-reply.ts	1
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
 src/infra/exec-approvals-socket.ts	1
@@ -2982,7 +2982,6 @@ src/plugin-sdk/acp-runtime.ts	1
 src/plugin-sdk/agent-harness-exec-review-runtime.ts	1
 src/plugin-sdk/allowlist-config-edit.ts	6
 src/plugin-sdk/api-baseline.ts	1
-src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
 src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2

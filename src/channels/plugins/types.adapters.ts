@@ -637,10 +637,14 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     action: "approve";
     approvalKind: ChannelApprovalKind;
-  }) => {
-    authorized: boolean;
-    reason?: string;
-  };
+  }) => { authorized: boolean; reason?: string; assertCurrent?: () => void };
+  /** Async identity preparation; an allowed result retains a synchronous commit guard. */
+  prepareActorAction?: (
+    params: Parameters<NonNullable<ChannelApprovalCapability["authorizeActorAction"]>>[0],
+  ) => Promise<
+    | { authorized: true; reason?: string; assertCurrent: () => void }
+    | { authorized: false; reason?: string; assertCurrent?: never }
+  >;
   getActionAvailabilityState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

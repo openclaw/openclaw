@@ -64,6 +64,7 @@ export function prepareChannelRunAdmission(params: {
   evidence?: ChannelAdmissionEvidence;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  directHumanRequesterProfileId?: string;
   onAdmitted?: (context: AdmittedRunContext) => void;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = createOperationalRunInstanceRef(params.runId);
@@ -98,6 +99,7 @@ export function prepareChannelRunAdmission(params: {
           assertSourceCurrent: params.assertSourceCurrent,
           operationalRunInstance,
           operatorAuthority: params.operatorAuthority,
+          directHumanRequesterProfileId: params.directHumanRequesterProfileId,
           facts: {
             runId: params.runId,
             agentId: params.agentId,

@@ -4,12 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
+import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setUserProfileRole } from "../../state/user-profiles.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
+import { resolveDirectHumanRequesterProfileId } from "../command-owner-authority.js";
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,
@@ -174,6 +178,78 @@ describe("getReplyFromConfig configOverride", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
+
+  it("preserves linked people and their ceilings for configured command owners at the public reply entry", async () => {
+    await withAdminIngress(async ({ cfg, admins, context }) => {
+      setUserProfileRole(admins[1]!.profile.id, "member");
+      for (const [senderId, profileId, scopes] of [
+        ["100", admins[0]!.profile.id, ["operator.admin"]],
+        ["101", admins[1]!.profile.id, ["operator.read", "operator.write"]],
+        ["unlinked", undefined, undefined],
+      ] as const) {
+        cfg.commands!.ownerAllowFrom = [`discord:${senderId}`];
+        const ctx = await context(senderId);
+        expect(
+          resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
+        ).toBe(true);
+        let authority: InternalGetReplyOptions["operatorAuthority"];
+        let directHumanRequesterProfileId: string | undefined;
+        mocks.resolveReplyDirectives.mockImplementationOnce(
+          ({ opts }: { opts?: InternalGetReplyOptions }) => {
+            authority = opts?.operatorAuthority;
+            authority?.assertCurrent();
+            directHumanRequesterProfileId = resolveDirectHumanRequesterProfileId(ctx, authority);
+            return { kind: "reply", reply: { text: authority?.profileId ?? "unlinked" } };
+          },
+        );
+        await expect(getReplyFromConfig(ctx, undefined, cfg)).resolves.toEqual({
+          text: profileId ?? "unlinked",
+        });
+        expect(authority?.scopes).toEqual(scopes);
+        expect(directHumanRequesterProfileId).toBe(profileId);
+        expect(authority?.requesterChannelIdentity).toEqual(
+          profileId ? { channelId: "discord", accountId: "team", senderId } : undefined,
+        );
+        if (authority) {
+          expect(() => authority!.assertCurrent()).toThrow(
+            "operator execution authority is no longer active",
+          );
+        }
+      }
+    });
+  });
+
+  it.each(["agent", "sandbox", "access", "scope"] as const)(
+    "rejects a linked channel request outside its %s policy before reply preparation",
+    async (boundary) => {
+      await withAdminIngress(async ({ cfg, context }) => {
+        cfg.commands!.ownerAllowFrom = ["discord:100"];
+        const role = cfg.gateway!.roles!.definitions.admin!;
+        if (boundary === "agent") {
+          role.agents = ["other-agent"];
+        } else if (boundary === "sandbox") {
+          role.sandbox = "required";
+        } else if (boundary === "access") {
+          role.accessPolicyPlugin = "unavailable-person-policy";
+        } else {
+          role.scopes = ["operator.read"];
+        }
+        await expect(
+          context("100").then((ctx) => getReplyFromConfig(ctx, undefined, cfg)),
+        ).rejects.toThrow(
+          boundary === "agent"
+            ? "cannot create sessions for agent"
+            : boundary === "sandbox"
+              ? "requires a sandboxed session"
+              : boundary === "access"
+                ? "Gateway access is no longer active"
+                : "cannot start an agent run",
+        );
+        expect(mocks.initSessionState).not.toHaveBeenCalled();
+        expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("pins the issued operator source once through public reply option copies", async () => {
     const issued = createAdmittedRunOperatorAuthority({

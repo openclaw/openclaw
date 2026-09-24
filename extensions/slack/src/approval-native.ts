@@ -124,15 +124,6 @@ const shouldSuppressSlackForwardingFallback =
 const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "slack",
   channelLabel: "Slack",
-  describeExecApprovalSetup: ({
-    accountId,
-  }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.slack.accounts.${accountId}`
-        : "channels.slack";
-    return `Approve it from the Web UI or terminal UI for now. Slack supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\`. Unset or \`false\` disables native exec approval delivery.`;
-  },
   listAccountIds: listSlackAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getSlackExecApprovalApprovers({ cfg, accountId }).length > 0,

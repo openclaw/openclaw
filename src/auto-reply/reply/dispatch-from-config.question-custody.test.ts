@@ -28,7 +28,6 @@ import {
   globalBeforeAll0,
   firstToolResultPayload,
   replyRunRegistry,
-  requireToolResultHandler,
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
@@ -107,28 +106,6 @@ it.each(["native commands", "groups"] as const)(
     });
   },
 );
-it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
-  setNoAbort();
-  const payload = {
-    text: "Exec approval is unavailable.",
-    channelData: {
-      execApprovalUnavailable: { reason: "no-approval-route" },
-    },
-  } satisfies ReplyPayload;
-  const finalReply = { text: "The command could not run without an approval route." };
-  const dispatcher = createDispatcher();
-  const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
-  const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
-    await requireToolResultHandler(opts?.onToolResult)(payload);
-    return finalReply;
-  };
-
-  await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-
-  expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
-  expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
-});
-
 function createQuestionDispatch(name: string) {
   const key = `agent:main:discord:direct:question-${name}`;
   const sessionId = `question-${name}`;

@@ -1,6 +1,10 @@
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -49,6 +53,7 @@ type CachedScopedTools = {
 };
 
 type McpLoopbackScopeParams = {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   context: Omit<McpLoopbackRequestContext, "senderIsOwner"> & { senderIsOwner?: boolean };
   cfg: OpenClawConfig;
   authProfileStore?: AuthProfileStore;
@@ -205,6 +210,7 @@ function resolveMcpLoopbackTools(
       : undefined;
   const scoped = resolveGatewayScopedTools({
     ...context,
+    operatorAuthority: params.operatorAuthority,
     rootedExecution: params.rootedExecution,
     messageActionTurnCapability: params.messageActionTurnCapability,
     cfg: params.cfg,
@@ -327,9 +333,19 @@ export class McpLoopbackToolCache {
   #epoch = 0;
 
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
+    if (input.operatorAuthority) {
+      assertAdmittedRunOperatorAuthority(input.operatorAuthority);
+      input.operatorAuthority.assertCurrent();
+    }
     const epoch = this.#epoch;
     const nodeExecParams = await resolveNodeExecScope(input, "exact");
     input.signal?.throwIfAborted();
+    input.operatorAuthority?.assertCurrent();
+    // Only a minted grant can bind cached tools to one live person authority.
+    if (input.operatorAuthority && !input.grantToken) {
+      const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+      return resolved.policyResolved ?? resolveMcpLoopbackTools(resolved.params, "exact");
+    }
     // A policy-excluded computer scope has no inventory component. It can use
     // the ordinary cached catalog without touching Gateway again.
     const preDiscoveryCacheKey = buildMcpLoopbackToolCacheKey(nodeExecParams);

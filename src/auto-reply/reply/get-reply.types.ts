@@ -13,6 +13,7 @@ import type { DashboardMessageReadAdmission } from "../../gateway/message-action
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { captureChannelOperatorRunAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -101,19 +102,39 @@ export type InternalGetReplyOptions = GetReplyOptions &
   ReplyOptionsWithOperationRunState &
   ReplyOptionsWithAdmissionTicket;
 
-/** Pin the host-issued source before public options cross asynchronous preparation. */
-export function prepareInternalGetReplyOptions(
-  opts: GetReplyOptions | undefined,
-): InternalGetReplyOptions | undefined {
-  if (!opts) {
-    return undefined;
-  }
-  const { operatorAuthority, ...options }: InternalGetReplyOptions = opts;
-  if (operatorAuthority !== undefined) {
-    assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
-  }
-  return { ...options, operatorAuthority };
+/** One reply invocation captures and releases its source; queued work retains its own hold. */
+export function withReplyOperatorAuthority<Context extends MsgContext>(
+  resolveReply: (
+    ctx: Context,
+    opts: InternalGetReplyOptions | undefined,
+    configOverride: OpenClawConfig | undefined,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>,
+) {
+  return async (ctx: Context, supplied?: GetReplyOptions, configOverride?: OpenClawConfig) => {
+    const { operatorAuthority, ...options }: InternalGetReplyOptions = supplied ?? {};
+    if (operatorAuthority !== undefined) {
+      assertAdmittedRunOperatorAuthority(operatorAuthority);
+      operatorAuthority.assertCurrent();
+    }
+    const channel =
+      !operatorAuthority &&
+      !options.isHeartbeat &&
+      ctx.InternalTurnSource === undefined &&
+      (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user")
+        ? captureChannelOperatorRunAuthority(ctx)
+        : undefined;
+    try {
+      return await resolveReply(
+        ctx,
+        supplied || channel
+          ? { ...options, operatorAuthority: operatorAuthority ?? channel?.authority }
+          : undefined,
+        configOverride,
+      );
+    } finally {
+      channel?.release();
+    }
+  };
 }
 
 export function withExtractedFileImages(

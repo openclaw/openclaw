@@ -15,10 +15,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
-  authorizeGatewaySessionCreation,
+  authorizeSessionAgentRun,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import {
   authenticatedProfileUnavailableError,
@@ -408,37 +407,6 @@ export function authorizeOwnSessionMutation(params: {
         : isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId)))
     ? null
     : errorShape(ErrorCodes.FORBIDDEN, "Session-scoped writes require your own session.");
-}
-
-export function authorizeSessionAgentRun(
-  params: {
-    cfg: OpenClawConfig;
-    client: GatewayClient | null;
-    target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
-      entry?: Pick<SessionEntry, "sandbox">;
-    };
-  },
-  prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
-): ErrorShape | null {
-  const agentError = authorizeGatewaySessionCreation(
-    { cfg: params.cfg, client: params.client, agentId: params.target.agentId },
-    prepared,
-  );
-  if (agentError) {
-    return agentError;
-  }
-  if (
-    params.cfg.gateway?.roles &&
-    params.target.entry?.sandbox !== "required" &&
-    (prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg))?.sandbox ===
-      "required"
-  ) {
-    return errorShape(
-      ErrorCodes.FORBIDDEN,
-      `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
-    );
-  }
-  return null;
 }
 
 export function authorizeSessionSharingTarget(

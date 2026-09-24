@@ -41,6 +41,7 @@ type GatewayToolCallerIdentity = {
   approvalAuthority?: AgentRunDelegatedAuthority;
   /** Original operator restriction, separate from this tool/turn's execution lifetime. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  directHumanRequesterProfileId?: string;
   approvalAuthorityCheck?: () => boolean | void;
   /** Exact host-resolved owner of this individual approval request. */
   approvalOwnerPluginId?: string;
@@ -173,6 +174,9 @@ export function createAdmittedGatewayToolCallerIdentity(
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(params.admittedRunContext.directHumanRequesterProfileId
+      ? { directHumanRequesterProfileId: params.admittedRunContext.directHumanRequesterProfileId }
+      : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
@@ -270,6 +274,8 @@ export async function withGatewayToolCallerIdentity<T>(
     }
   }
   const operatorAuthority = inheritedOwner?.operatorAuthority ?? identity.operatorAuthority;
+  const directHumanRequesterProfileId =
+    inheritedOwner?.directHumanRequesterProfileId ?? identity.directHumanRequesterProfileId;
   const approvalAuthorityCheck =
     inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
   const signedAgentRuntimeIdentityToken =
@@ -336,6 +342,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
       ...(operatorAuthority ? { operatorAuthority } : {}),
+      ...(directHumanRequesterProfileId ? { directHumanRequesterProfileId } : {}),
       ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
       ...(identity.approvalOwnerPluginId?.trim()
         ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }

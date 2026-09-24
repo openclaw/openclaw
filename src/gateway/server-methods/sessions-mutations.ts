@@ -24,7 +24,7 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   projectAssignableSessionOwner,
-  projectSessionActor,
+  projectSessionOwner,
 } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -439,20 +439,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           },
         ),
     });
-    const projectedActor = assignment
-      ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
-      : null;
-    const projectedAssignedBy = assignment?.assignedBy
-      ? projectSessionActor(assignment.assignedBy, new Map(), cfg)
-      : undefined;
-    const projected =
-      assignment && projectedActor
-        ? {
-            actor: projectedActor,
-            ...(projectedAssignedBy ? { assignedBy: projectedAssignedBy } : {}),
-            ...(assignment.assignedAt !== undefined ? { assignedAt: assignment.assignedAt } : {}),
-          }
-        : undefined;
+    const projected = projectSessionOwner(
+      assignment ? { ...target.entry, owner: assignment } : undefined,
+      ownerIdentityById,
+      cfg,
+    );
     if (!projected) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
       return;

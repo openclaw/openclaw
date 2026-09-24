@@ -131,11 +131,14 @@ async function proveLegacyAuthority<
   const connection = new AbortController();
   const client = createClient({ deviceId: "legacy-reviewer" });
   client.connectionSignal = connection.signal;
-  if (autoReview) {
-    client.internal = createApprovalRuntimeClient("legacy-auto", "legacy-reviewer", {
-      agentId: "main",
-      sessionKey: "agent:main:legacy",
-    })?.internal;
+  using runtimeClient = autoReview
+    ? createApprovalRuntimeClient("legacy-auto", "legacy-reviewer", {
+        agentId: "main",
+        sessionKey: "agent:main:legacy",
+      })
+    : undefined;
+  if (runtimeClient) {
+    client.internal = runtimeClient.internal;
   }
   let nativeRevoked = false;
   const nativeGuard = vi.fn(() => {

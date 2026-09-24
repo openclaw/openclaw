@@ -262,7 +262,9 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "exec.approval.request",
+  "exec.approval.waitDecision",
   "plugin.approval.request",
+  "plugin.approval.waitDecision",
   "wake",
   "cron.list",
   "cron.get",

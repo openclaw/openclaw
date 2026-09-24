@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
@@ -17,6 +18,7 @@ import {
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
+import { resolveOwnerOnlyToolPolicy } from "../agents/owner-tool-policy.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -44,6 +46,7 @@ import {
   type CronCreatorToolAllowlistEntry,
   type CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -53,10 +56,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import {
-  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
-  GATEWAY_OWNER_ONLY_CORE_TOOLS,
-} from "../security/dangerous-tools.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
@@ -86,6 +86,7 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -255,10 +256,11 @@ export function resolveGatewayScopedTools(
             ),
         )
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter((name) => name !== "portal" || !sessionPortalTarget)
-      : [];
+  const ownerOnlyGatewayPolicy = resolveOwnerOnlyToolPolicy({
+    senderIsOwner: surface === "http" ? params.senderIsOwner === true : params.senderIsOwner,
+    operatorAuthority: params.operatorAuthority,
+    sessionPortalTarget,
+  });
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
@@ -276,7 +278,7 @@ export function resolveGatewayScopedTools(
     subagentPolicy,
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
-    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
+    ownerOnlyGatewayPolicy,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
@@ -654,7 +656,7 @@ export function resolveGatewayScopedTools(
   const gatewayDenySet = new Set(
     [
       ...defaultGatewayDeny,
-      ...ownerOnlyGatewayDeny,
+      ...(ownerOnlyGatewayPolicy?.deny ?? []),
       ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
       ...excludedToolNames,
     ].map(normalizeToolPolicyName),
@@ -691,7 +693,17 @@ export function resolveGatewayScopedTools(
 
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(filterRequesterYieldTools(tools, params.sessionKey)),
+    tools: applyToolAvailabilityDescriptions(
+      filterRequesterYieldTools(tools, params.sessionKey),
+    ).map((tool) =>
+      params.operatorAuthority
+        ? wrapToolWithGatewayCallerIdentity(tool, {
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            operatorAuthority: params.operatorAuthority,
+          })
+        : tool,
+    ),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

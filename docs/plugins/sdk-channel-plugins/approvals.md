@@ -29,16 +29,23 @@ custom approval payloads instead of the shared renderer.
 - `approvalCapability.authorizeActorAction` and
   `approvalCapability.getActionAvailabilityState` are the canonical
   approval-auth seam.
+- Use `prepareActorAction` for asynchronous identity preparation. An allowed
+  result must include `assertCurrent()`; core calls it again before committing
+  the decision. Core selects this hook when present, without falling back after
+  a denial or error. The synchronous `authorizeActorAction` contract remains
+  supported. Use `prepareChannelApprovalAuthority` from
+  `openclaw/plugin-sdk/approval-auth-runtime` to verify an administrator-attested
+  channel identity against the person's current approval scopes. Keep channel
+  enablement and explicit approver restrictions in the channel adapter.
 - Use `getActionAvailabilityState` for same-chat approval auth availability.
   Keep configured approvers available for `/approve` even when native delivery
   is disabled; use native initiating-surface state for delivery/setup guidance
-  instead.
+  instead. Actual request availability comes from the Gateway's delivery receipt.
 - If your channel exposes native exec approvals, use
   `approvalCapability.getExecInitiatingSurfaceState` for the
   initiating-surface/native-client state when it differs from same-chat
-  approval auth. Core uses that exec-specific hook to distinguish `enabled` vs
-  `disabled`, decide whether the initiating channel supports native exec
-  approvals, and include the channel in native-client fallback guidance.
+  approval auth. Core uses that exec-specific hook to decide whether an
+  originating channel can retain a request for manual approval.
   `createApproverRestrictedNativeApprovalCapability(...)` fills this in for
   the common case.
 - If a channel can infer stable owner-like DM identities from existing config,
@@ -53,23 +60,17 @@ custom approval payloads instead of the shared renderer.
   `isImplicitSameChatApprovalAuthorization(...)` before resolving so implicit
   fallback still goes through the channel's normal actor authorization.
 
-### Payload lifecycle and setup guidance
+### Payload lifecycle
 
 - Use `outbound.shouldSuppressLocalPayloadPrompt` or
   `outbound.beforeDeliverPayload` for channel-specific payload lifecycle
   behavior such as hiding duplicate local approval prompts or sending typing
   indicators before delivery.
-- Use `approvalCapability.describeExecApprovalSetup` when the channel wants
-  the disabled-path reply to explain the exact config knobs needed to enable
-  native exec approvals. The hook receives `{ channel, channelLabel, accountId }`;
-  named-account channels should render account-scoped paths such as
-  `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level
-  defaults.
-- Use `approvalCapability.describePluginApprovalSetup` when plugin approval
-  failure guidance is safe to show for plugin approval no-route and timeout
-  failures. `createApproverRestrictedNativeApprovalCapability(...)` does not
-  infer this from `describeExecApprovalSetup`; pass the same helper explicitly
-  only when plugin and exec approvals truly use the same native setup.
+- Pending results preserve the registered approval ID, expiry, and actual
+  delivery route. Disabled delivery on the originating channel does not make
+  a request unavailable when an authorized Gateway client received it.
+  Legacy setup-description fields remain accepted in plugin definitions;
+  core no longer guesses request availability or recovery instructions from them.
 
 ### Native approval delivery
 

@@ -5,6 +5,23 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    channelIdentities: {
+      title: "Channel identities",
+      description:
+        "Connect verified channel senders to people so their current server role applies to channel requests.",
+      manage: "Manage channel identities",
+      person: "Person",
+      choosePerson: "Choose a person",
+      channelId: "Channel",
+      accountId: "Channel account ID",
+      senderId: "Sender ID",
+      verify:
+        "Use the exact configured account and immutable sender ID. Linking attests that this account belongs to the selected person; a display name is not verification.",
+      link: "Link identity",
+      unlink: "Unlink",
+      unlinkLabel: "Unlink {identity}",
+      empty: "No channel identities linked.",
+    },
     access: {
       title: "Your access",
       admin: "You have permission to manage this server.",
@@ -72,6 +89,7 @@ export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
     en.profilePage.access = enProfile.profilePage.access;
+    en.profilePage.channelIdentities = enProfile.profilePage.channelIdentities;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },
   { catalog: enProfile },

@@ -12,6 +12,7 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assignSessionOwner,
@@ -25,8 +26,7 @@ import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js"
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
-import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -53,26 +53,19 @@ async function createHostedChildFixture(
   mismatchedParentOwner = false,
   humanParent = !system,
   sandboxRequired = false,
-  mergedParentCreator = false,
+  directHumanRequester = !system,
 ) {
   const storePath = path.join(temporaryDirs.make("openclaw-child-custody-"), "sessions.json");
   testState.sessionStorePath = storePath;
   const parentKey = "agent:main:parent";
   const childKey = "agent:main:dashboard:accepted-child";
   const existingOwnerId = "existing-child-owner";
-  const releaseProfileCatalog = mergedParentCreator ? retainUserProfileCatalog() : undefined;
-  const profile = ensureProfileForEmail(
-    mergedParentCreator ? "child-owner-current@example.test" : "child-owner@example.test",
-  );
-  const parentCreator = mergedParentCreator
-    ? ensureProfileForEmail("child-owner-historical@example.test")
-    : profile;
-  if (mergedParentCreator) {
-    linkEmail("child-owner-historical@example.test", profile.id);
-  }
+  const profile = ensureProfileForEmail("child-owner@example.test");
   const parentOwner = mismatchedParentOwner
-    ? ensureProfileForEmail("other-parent-owner@example.test")
-    : undefined;
+    ? { type: "human" as const, id: ensureProfileForEmail("other-parent-owner@example.test").id }
+    : !humanParent
+      ? { type: "agent" as const, id: "main" }
+      : undefined;
   await writeSessionStore({
     entries: {
       [parentKey]: {
@@ -84,7 +77,7 @@ async function createHostedChildFixture(
               createdActor: {
                 type: "human" as const,
                 source: "profile" as const,
-                id: parentCreator.id,
+                id: profile.id,
               },
               ...(sandboxRequired ? { sandbox: "required" as const } : {}),
             }
@@ -104,7 +97,7 @@ async function createHostedChildFixture(
     assignSessionOwner(
       { agentId: "main", sessionKey: parentKey, storePath },
       {
-        owner: { type: "human", id: parentOwner.id },
+        owner: parentOwner,
         assignedBy: { type: "system", id: "fixture" },
       },
     );
@@ -193,14 +186,24 @@ async function createHostedChildFixture(
           },
         },
       });
-  const parent = prepareSystemAgentRunAdmission(
-    getRuntimeConfig(),
-    "parent-run",
-    "main",
-    "hosted-child-custody-test",
-    undefined,
-    captured?.authority,
-  );
+  const parent = directHumanRequester
+    ? prepareChannelRunAdmission({
+        cfg: getRuntimeConfig(),
+        runId: "parent-run",
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "hosted-child-custody-test",
+        operatorAuthority: captured?.authority,
+        directHumanRequesterProfileId: profile.id,
+      })
+    : prepareSystemAgentRunAdmission(
+        getRuntimeConfig(),
+        "parent-run",
+        "main",
+        "hosted-child-custody-test",
+        undefined,
+        captured?.authority,
+      );
   const admitted = await parent.admit("embedded");
   // Only the parent, and later the accepted child, retain the issued source.
   captured?.release();
@@ -227,6 +230,7 @@ async function createHostedChildFixture(
         parentSessionKey: parentKey,
         spawnDepth: 1,
         task: "Continue independently.",
+        permissionMode: "workspace",
       },
       {
         via: "spawn",
@@ -284,6 +288,7 @@ async function createHostedChildFixture(
     scope,
     context,
     profileId: profile.id,
+    readChild: () => loadSessionEntry({ sessionKey: childKey, storePath }),
     existingOwnerId,
     beforeInputCommit,
     provider,
@@ -314,7 +319,6 @@ async function createHostedChildFixture(
       } finally {
         parent.close();
         captured?.release();
-        releaseProfileCatalog?.();
         dispatchInboundMessageMock.mockReset();
       }
     },
@@ -334,18 +338,34 @@ function userMessages(
 }
 
 describe("hosted creation transfers accepted child input", () => {
-  it("assigns the verified requester as the visible child owner", async () => {
-    const fixture = await createHostedChildFixture();
-    try {
-      await fixture.send();
-      expect(loadSessionEntry(fixture.scope())?.owner).toMatchObject({
-        actor: { type: "human", id: fixture.profileId },
-        assignedBy: { type: "agent", id: "main" },
-      });
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+  it.each(["requester", "another human", "shared agent"])(
+    "assigns the direct requester before child execution when the parent belongs to %s",
+    async (parentOwner) => {
+      const fixture = await createHostedChildFixture(
+        false,
+        false,
+        false,
+        parentOwner === "another human",
+        parentOwner !== "shared agent",
+      );
+      try {
+        const accepted = await fixture.send();
+        expect(accepted.runStarted).toBe(true);
+        expect(fixture.readChild()).toMatchObject({
+          createdVia: "spawn",
+          createdActor: { type: "agent", id: "main" },
+          owner: {
+            actor: { type: "human", id: fixture.profileId },
+            assignedBy: { type: "agent", id: "main" },
+          },
+          permissionMode: "workspace",
+        });
+        expect(fixture.provider).not.toHaveBeenCalled();
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it("does not replace the owner of an existing target session", async () => {
     const fixture = await createHostedChildFixture(false, false, true);
@@ -360,21 +380,20 @@ describe("hosted creation transfers accepted child input", () => {
     }
   });
 
-  it("inherits a historical owner alias into the requester's canonical profile", async () => {
-    const fixture = await createHostedChildFixture(false, false, false, false, true, false, true);
+  it("does not create a child after the direct requester's authority is revoked", async () => {
+    const fixture = await createHostedChildFixture();
     try {
-      await fixture.send();
-      expect(loadSessionEntry(fixture.scope())?.owner?.actor).toEqual({
-        type: "human",
-        id: fixture.profileId,
-      });
+      fixture.revokeSource();
+      await expect(fixture.send()).rejects.toThrow("original operator source revoked");
+      expect(fixture.readChild()).toBeUndefined();
+      expect(fixture.provider).not.toHaveBeenCalled();
     } finally {
       await fixture.cleanup();
     }
   });
 
-  it("does not inherit a different human owner's assignment", async () => {
-    const fixture = await createHostedChildFixture(false, false, false, true);
+  it("keeps agent ownership for autonomous work retaining human operator authority", async () => {
+    const fixture = await createHostedChildFixture(false, false, false, false, true, false, false);
     try {
       await fixture.send();
       expect(loadSessionEntry(fixture.scope())?.owner?.actor).toEqual({

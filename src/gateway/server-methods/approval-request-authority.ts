@@ -82,6 +82,13 @@ export function createApprovalRequestAuthority(options: GatewayRequestHandlerOpt
     }
   });
   const assertPolicyCurrent = () => {
+    client?.internal?.operatorRunAuthority?.assertCurrent();
+    if (
+      runtimeIdentity &&
+      options.context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) !== true
+    ) {
+      throw new Error("Approval requester runtime authority changed");
+    }
     const currentActor = resolveGatewayOperatorRoleActor(client);
     const legacy = method.startsWith("exec.approval.") || method.startsWith("plugin.approval.");
     const allowed = legacy

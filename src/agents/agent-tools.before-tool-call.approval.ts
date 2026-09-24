@@ -10,10 +10,6 @@ import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  describeNativePluginApprovalClientSetup,
-  resolveApprovalInitiatingSurfaceState,
-} from "../infra/exec-approval-surface.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -132,43 +128,6 @@ function resolvePermittedPluginApprovalResolution(
   return PluginApprovalResolutions.TIMEOUT;
 }
 
-function buildPluginApprovalFailureReason(params: {
-  fallbackReason: string;
-  ctx?: HookContext;
-}): string {
-  const turnSourceChannel = params.ctx?.turnSourceChannel;
-  if (!turnSourceChannel?.trim()) {
-    return params.fallbackReason;
-  }
-  const nativePluginSurface = resolveApprovalInitiatingSurfaceState({
-    channel: turnSourceChannel,
-    accountId: params.ctx?.turnSourceAccountId,
-    cfg: params.ctx?.config,
-    approvalKind: "plugin",
-  });
-  const setupText = describeNativePluginApprovalClientSetup({
-    channel: nativePluginSurface.channel,
-    channelLabel: nativePluginSurface.channelLabel,
-    accountId: nativePluginSurface.accountId,
-  });
-  if (!setupText) {
-    return params.fallbackReason;
-  }
-  const nativeDeliverySurface =
-    nativePluginSurface.kind === "disabled"
-      ? nativePluginSurface
-      : resolveApprovalInitiatingSurfaceState({
-          channel: turnSourceChannel,
-          accountId: params.ctx?.turnSourceAccountId,
-          cfg: params.ctx?.config,
-          approvalKind: "exec",
-        });
-  if (nativeDeliverySurface.kind !== "disabled") {
-    return params.fallbackReason;
-  }
-  return `${params.fallbackReason}\n\n${setupText}`;
-}
-
 function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): string | undefined {
   const trigger = ctx?.trigger?.trim();
   // Legacy/internal callers without run provenance still rely on the Gateway's
@@ -176,23 +135,11 @@ function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): strin
   if (!trigger) {
     return undefined;
   }
-  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
-    channel: ctx?.turnSourceChannel,
-    accountId: ctx?.turnSourceAccountId,
-    cfg: ctx?.config,
-    approvalKind: "plugin",
-  });
   if (trigger !== "user") {
     return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
   }
   if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
     return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
-  }
-  if (initiatingSurface.kind === "disabled") {
-    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface is disabled.`;
-  }
-  if (initiatingSurface.kind === "unsupported") {
-    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface does not support approvals.`;
   }
   return undefined;
 }
@@ -344,10 +291,7 @@ async function requestPluginToolApproval(params: {
           kind: "failure",
           disposition: "failed",
           deniedReason: "plugin-approval",
-          reason: buildPluginApprovalFailureReason({
-            fallbackReason: "Plugin approval unavailable (no approval route)",
-            ctx: params.ctx,
-          }),
+          reason: "Plugin approval unavailable (no approval route)",
           params: params.baseParams,
         };
       }
@@ -385,20 +329,12 @@ async function requestPluginToolApproval(params: {
     if (resolution === PluginApprovalResolutions.DENY) {
       return pluginApprovalDeniedOutcome(params.baseParams);
     }
-    const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
-    const timeoutReason =
-      requestResult?.deliveryRoute === "turn-source"
-        ? buildPluginApprovalFailureReason({
-            fallbackReason: fallbackTimeoutReason,
-            ctx: params.ctx,
-          })
-        : fallbackTimeoutReason;
     return {
       blocked: true,
       kind: approval.timeoutReason ? "veto" : "failure",
       disposition: "timed_out",
       deniedReason: "plugin-approval",
-      reason: timeoutReason,
+      reason: approval.timeoutReason ?? "Approval timed out",
       params: params.baseParams,
     };
   } catch (err) {

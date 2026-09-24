@@ -8,15 +8,19 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
-  createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createApproverRestrictedNativeApprovalCapability,
 } from "./approval-runtime.js";
-import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import {
+  shouldHandleDiscordApprovalRequest,
+  resolveDiscordApprovalRequestApprovers,
+} from "./approval-shared.js";
+import {
+  canUseLinkedDiscordApprover,
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
+  prepareDiscordApprovalAuthority,
 } from "./exec-approvals.js";
 
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
@@ -140,36 +144,34 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
 }
 
 function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecApprovalConfig | null) {
-  return createChannelApproverDmTargetResolver({
-    shouldHandleRequest: ({ cfg, accountId, request }) =>
-      shouldHandleDiscordApprovalRequest({
-        cfg,
-        accountId,
-        request,
-        configOverride,
-      }),
-    resolveApprovers: ({ cfg, accountId }) =>
-      getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }),
-    mapApprover: (approver) => ({ to: approver }),
-  });
+  return async (
+    params: Parameters<
+      NonNullable<NonNullable<ChannelApprovalCapability["native"]>["resolveApproverDmTargets"]>
+    >[0],
+  ) =>
+    (await resolveDiscordApprovalRequestApprovers({ ...params, configOverride })).map((to) => ({
+      to,
+    }));
 }
 
 function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
+  const originTarget = createDiscordOriginTargetResolver(configOverride);
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
-    describeExecApprovalSetup: ({
-      accountId,
-    }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
-      const prefix =
-        accountId && accountId !== "default"
-          ? `channels.discord.accounts.${accountId}`
-          : "channels.discord";
-      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
+    prepareActorAction: async (params) => {
+      const authority = await prepareDiscordApprovalAuthority({ ...params, configOverride });
+      return authority
+        ? { authorized: true as const, assertCurrent: authority.assertCurrent }
+        : {
+            authorized: false as const,
+            reason: `You are not authorized to approve ${params.approvalKind} requests on Discord.`,
+          };
     },
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
-      getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }).length > 0,
+      getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }).length > 0 ||
+      canUseLinkedDiscordApprover({ cfg, accountId, configOverride }),
     isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
       isDiscordExecApprovalApprover({ cfg, accountId, senderId, configOverride }),
     isNativeDeliveryEnabled: ({ cfg, accountId }) =>
@@ -178,7 +180,10 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
       configOverride?.target ??
       resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ??
       "dm",
-    resolveOriginTarget: createDiscordOriginTargetResolver(configOverride),
+    resolveOriginTarget: async (params) =>
+      (await resolveDiscordApprovalRequestApprovers({ ...params, configOverride })).length > 0
+        ? originTarget(params)
+        : null,
     resolveApproverDmTargets: createDiscordApproverDmTargetResolver(configOverride),
     notifyOriginWhenDmOnly: true,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({

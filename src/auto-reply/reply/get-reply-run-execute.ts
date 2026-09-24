@@ -34,7 +34,11 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
-import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import {
+  bindCommandOwnerAuthority,
+  getCommandOwnerAuthority,
+  resolveDirectHumanRequesterProfileId,
+} from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -388,6 +392,17 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     prompt: queuedBody,
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
+    directHumanRequesterProfileId: opts?.isHeartbeat
+      ? undefined
+      : resolveDirectHumanRequesterProfileId(
+          {
+            ...ctx,
+            InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+            InputProvenance: inputProvenance,
+            InboundEventKind: inboundEventKind,
+          },
+          opts?.operatorAuthority,
+        ),
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,

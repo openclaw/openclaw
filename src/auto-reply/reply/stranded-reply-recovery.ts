@@ -100,6 +100,7 @@ function buildStrandedReplyRetryFollowupRun(
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
     currentInboundContext: undefined,
+    directHumanRequesterProfileId: undefined,
     // Internally generated system turn: the client turn's lifecycle (gateway cancel
     // identity) completes with the parent run. turnAdoptionLifecycle is one-shot
     // WeakSet-tracked, so a shared object would be double-owned and free cancel

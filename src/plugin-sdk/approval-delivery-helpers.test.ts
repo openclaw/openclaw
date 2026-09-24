@@ -271,7 +271,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 });
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
-  it("builds the canonical approval capability and preserves legacy split compatibility", () => {
+  it("builds the canonical approval capability and preserves legacy split compatibility", async () => {
     const nativeRuntime = {
       availability: {
         isConfigured: vi.fn(),
@@ -301,6 +301,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
       channelLabel: "Matrix",
+      prepareActorAction: async () => ({ authorized: false, reason: "current identity denied" }),
       describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
@@ -356,6 +357,15 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     });
 
     const split = splitChannelApprovalCapability(capability);
+    await expect(
+      split.auth.prepareActorAction?.({
+        cfg: {} as never,
+        accountId: "work",
+        senderId: "@owner:example.com",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).resolves.toEqual({ authorized: false, reason: "current identity denied" });
     const legacy = createApproverRestrictedNativeApprovalAdapter({
       channel: "matrix",
       channelLabel: "Matrix",

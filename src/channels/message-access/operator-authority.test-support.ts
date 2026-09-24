@@ -80,7 +80,14 @@ async function createFixture(state: OpenClawTestState, authority: "role" | "iden
     const ingress = await ingressRuntime.resolveStable({
       channelId: "discord",
       accountId,
-      identity: { authentication: "verified" },
+      identity: {
+        authentication: "verified",
+        resolveParticipant: ({ stableId }) => ({
+          domain: "discord",
+          idKind: "user",
+          id: String(stableId),
+        }),
+      },
       subject: {
         stableId: senderId,
         ...(verified ? {} : { authentication: { stableId: "asserted" as const } }),

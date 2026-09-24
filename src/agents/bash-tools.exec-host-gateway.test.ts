@@ -73,13 +73,8 @@ import type {
 
 type SendExecApprovalFollowupResult =
   typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
-type BuildExecApprovalFollowupTarget =
-  typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
-type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
+type ExecApprovalFollowupTarget = Parameters<SendExecApprovalFollowupResult>[0];
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
-type BuildExecApprovalFollowupTargetMock = (
-  value: ExecApprovalFollowupTarget,
-) => ExecApprovalFollowupTarget | null;
 type MockAllowlistSegment = Omit<ExecCommandSegment, "raw"> & { raw?: string };
 type MockAllowlistResult = {
   allowlistMatches: unknown[];
@@ -132,9 +127,6 @@ const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() =>
   ),
 );
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
-  vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
-);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -420,7 +412,6 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
   buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
   buildHeadlessExecApprovalDeniedMessage: vi.fn(() => "denied"),
-  buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
   buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
   createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
@@ -462,14 +453,6 @@ function createAllowlistOnMissContext(): MockExecHostApprovalContext {
     hostAsk: "on-miss",
     askFallback: "deny",
   };
-}
-
-function requireBuildFollowupTargetInput(callIndex: number): ExecApprovalFollowupTarget {
-  const call = buildExecApprovalFollowupTargetMock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected build followup target call ${callIndex}`);
-  }
-  return call[0];
 }
 
 function requireSentFollowupTarget(
@@ -536,8 +519,6 @@ describe("processGatewayAllowlist", () => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockReturnValue(null);
     createExecApprovalDecisionStateMock.mockReset();
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
@@ -658,7 +639,6 @@ describe("processGatewayAllowlist", () => {
       session: { id: params.sessionId ?? "sess-1" },
       promise: Promise.resolve(params.outcome),
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
   }
 
   function useRealUnavailableApprovalGate() {
@@ -743,7 +723,6 @@ describe("processGatewayAllowlist", () => {
     askFallback: "full" | "allowlist";
     approvedByAsk: boolean;
   }) {
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: params.security,
@@ -1195,7 +1174,6 @@ describe("processGatewayAllowlist", () => {
         });
       try {
         if (approval === "human") {
-          buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
           resolveExecApprovalWaitOutcomeMock.mockImplementationOnce(async () => {
             changed = true;
             return {
@@ -1248,7 +1226,6 @@ describe("processGatewayAllowlist", () => {
         .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
         .mockReturnValue(false);
       try {
-        buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
         await runGatewayAllowlist({ command, approvalFollowupMode: "agent" });
         expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -2748,13 +2725,17 @@ EOF`,
   });
 
   it("uses sessionKey for followups when notifySessionKey is absent", async () => {
+    const delivered = createDeferredCore<ExecApprovalFollowupTarget>();
+    sendExecApprovalFollowupResultMock.mockImplementationOnce(async (target) => {
+      delivered.resolve(target);
+    });
     await runGatewayAllowlist({
       approvalFollowupMode: "agent",
       command: "echo ok",
       sessionKey: "agent:main:telegram:direct:123",
     });
 
-    expect(requireBuildFollowupTargetInput(0).sessionKey).toBe("agent:main:telegram:direct:123");
+    expect((await delivered.promise).sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
@@ -2792,7 +2773,6 @@ EOF`,
       session: { id: "sess-1" },
       promise: Promise.resolve(outcome),
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(async () =>
       [
@@ -2817,7 +2797,6 @@ EOF`,
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
-    expect(requireBuildFollowupTargetInput(0).direct).toBe(true);
 
     const followupTarget = requireSentFollowupTarget(0);
     expect(followupTarget?.direct).toBe(true);
@@ -2864,12 +2843,11 @@ EOF`,
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
-    expect(requireBuildFollowupTargetInput(0)).toMatchObject({
+    expect(requireSentFollowupTarget(0)).toMatchObject({
       direct: false,
       expectedSessionId: "approval-session",
       sessionStore: "/tmp/openclaw-sessions.json",
     });
-    expect(requireSentFollowupTarget(0)?.direct).toBe(false);
     expect(requireSentFollowupText(0)).toContain("done");
   });
 
@@ -2932,7 +2910,6 @@ EOF`,
   ])("consumes rejected detached pre-dispatch $name and fallback follow-ups", async (scenario) => {
     const unhandledRejections = captureProcessUnhandledRejections();
     resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce(scenario.outcome);
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     sendExecApprovalFollowupResultMock.mockRejectedValue(
       new Error("pre-dispatch denial follow-up failed"),
     );
@@ -3004,7 +2981,6 @@ EOF`,
       deniedReason: null,
     });
     commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     const captured = captureSecurityEvents();
 
     let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
@@ -3038,7 +3014,6 @@ EOF`,
       deniedReason: null,
     });
     commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     const captured = captureSecurityEvents();
 
     let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
@@ -3088,7 +3063,6 @@ EOF`,
     expect(result.deniedResult).toBeUndefined();
     expect(result.allowWithoutEnforcedCommand).toBe(true);
     expect(runExecProcessMock).not.toHaveBeenCalled();
-    expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
@@ -3109,7 +3083,6 @@ EOF`,
     expect(result.deniedResult).toBeUndefined();
     expect(result.allowWithoutEnforcedCommand).toBe(true);
     expect(runExecProcessMock).not.toHaveBeenCalled();
-    expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
@@ -3181,7 +3154,6 @@ EOF`,
       expect(result.deniedResult).toBeUndefined();
       expect(result.allowWithoutEnforcedCommand).toBe(true);
       expect(runExecProcessMock).not.toHaveBeenCalled();
-      expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     },
   );
@@ -3262,7 +3234,6 @@ EOF`,
     markBackgroundedMock.mockImplementation(() => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
@@ -3345,7 +3316,6 @@ EOF`,
         }
         return "allow-once";
       });
-      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
       runExecProcessMock.mockResolvedValue({
         session: { id: "sess-script-binding" },
         promise: Promise.resolve({
@@ -3398,7 +3368,6 @@ EOF`,
       approvedByAsk: true,
       deniedReason: null,
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
@@ -3455,7 +3424,6 @@ EOF`,
   it.skipIf(process.platform === "win32").each(["missing", "rotated"])(
     "resolves a %s GitHub credential only after delayed approval",
     async (credentialState) => {
-      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
       const followupDelivered = createDeferredCore();
       sendExecApprovalFollowupResultMock.mockImplementation(async () => {
         followupDelivered.resolve();
@@ -3579,7 +3547,6 @@ EOF`,
 
   it("drops detached execution and follow-up when the owning run is aborted", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockRejectedValue(runAbortedApprovalError);
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
@@ -3610,7 +3577,6 @@ EOF`,
       approvedByAsk: true,
       deniedReason: null,
     });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
     const abortController = new AbortController();
 
     const result = await runGatewayAllowlist({
@@ -3656,7 +3622,7 @@ EOF`,
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
-    expect(requireBuildFollowupTargetInput(0).direct).toBe(false);
+    expect(requireSentFollowupTarget(0).direct).toBe(false);
   });
 
   it("returns webchat approval denials as the foreground tool result", async () => {
@@ -4383,7 +4349,6 @@ EOF`,
           aggregated: "done",
         }),
       });
-      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
       const result = await runGatewayAllowlist({
         command: grantCommand,
         workdir,
@@ -4425,7 +4390,6 @@ EOF`,
           aggregated: "done",
         }),
       });
-      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
       const result = await runGatewayAllowlist({
         command: grantCommand,
         workdir,

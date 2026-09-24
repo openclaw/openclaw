@@ -72,8 +72,15 @@ describe("followup queue authority", () => {
       createAdmittedRunOperatorAuthority({ ...authority, source: {} }),
       undefined,
       authority,
+      authority,
+      authority,
     ];
-    const observed: Array<{ prompt: string; profileId?: string; scopes?: readonly string[] }> = [];
+    const observed: Array<{
+      prompt: string;
+      profileId?: string;
+      scopes?: readonly string[];
+      directHumanRequesterProfileId?: string;
+    }> = [];
     const failures: unknown[] = [];
     try {
       for (const [index, operatorAuthority] of variants.entries()) {
@@ -82,6 +89,7 @@ describe("followup queue authority", () => {
           {
             ...createRun({ prompt: `request ${index}`, originatingChannel: "webchat" }),
             operatorAuthority,
+            directHumanRequesterProfileId: index === 8 ? "guest" : undefined,
           },
           createQueueSettings(),
         );
@@ -95,6 +103,7 @@ describe("followup queue authority", () => {
           ingressKind: "channel",
           boundary: "auto-reply.agent-runner",
           operatorAuthority: run.operatorAuthority,
+          directHumanRequesterProfileId: run.directHumanRequesterProfileId,
         });
         try {
           await admitFollowupRunLifecycle(run);
@@ -106,6 +115,7 @@ describe("followup queue authority", () => {
             prompt: run.prompt,
             profileId: admitted?.profileId,
             scopes: beforeAdmission?.scopes,
+            directHumanRequesterProfileId: context.directHumanRequesterProfileId,
           });
         } catch (error) {
           failures.push(error);
@@ -124,6 +134,8 @@ describe("followup queue authority", () => {
         "guest",
         undefined,
         "guest",
+        "guest",
+        "guest",
       ]);
       expect(observed[0]?.prompt).toContain("request 0");
       expect(observed[0]?.prompt).toContain("request 1");
@@ -134,8 +146,14 @@ describe("followup queue authority", () => {
         ["request 5"],
         ["request 6"],
         ["request 7"],
+        ["request 8"],
+        ["request 9"],
       ]);
       expect(observed[2]?.scopes).toEqual(["operator.admin"]);
+      expect(observed.slice(-2).map((run) => run.directHumanRequesterProfileId)).toEqual([
+        "guest",
+        undefined,
+      ]);
       expect(source.references()).toBe(0);
     } finally {
       clearFollowupQueue(key);
@@ -229,11 +247,43 @@ describe("followup queue authority", () => {
     },
   );
 
+  it("keeps operator restrictions but clears human-request attribution on overflow summaries", async () => {
+    const key = "test-overflow-human-attribution";
+    const source = createOperatorAuthority();
+    const { calls, done, runFollowup } = createDrainRecorder(2);
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        enqueueFollowupRun(
+          key,
+          {
+            ...createRun({ prompt: `human request ${index}` }),
+            operatorAuthority: source.authority,
+            directHumanRequesterProfileId: "guest",
+          },
+          createQueueSettings({ cap: 1, dropPolicy: "summarize" }),
+        );
+      }
+      source.releaseRequest();
+      scheduleFollowupDrain(key, runFollowup);
+      await done.promise;
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("[Queue overflow]");
+      expect(calls[0]?.operatorAuthority).toBe(source.authority);
+      expect(calls[0]?.directHumanRequesterProfileId).toBeUndefined();
+      expect(calls[1]?.prompt).toContain("human request 1");
+      expect(calls[1]?.operatorAuthority).toBe(source.authority);
+      expect(calls[1]?.directHumanRequesterProfileId).toBe("guest");
+    } finally {
+      clearFollowupQueue(key);
+    }
+  });
+
   it("retains an independent operator source hold for a stranded delivery retry", async () => {
     const key = "test-operator-delivery-retry";
     const source = createOperatorAuthority();
     const parent = createRun({ prompt: "original request" });
     parent.operatorAuthority = source.authority;
+    parent.directHumanRequesterProfileId = "guest";
     parent.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: source.releaseRequest };
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
@@ -249,6 +299,7 @@ describe("followup queue authority", () => {
     if (recovery.kind !== "retry") {
       throw new Error("expected source delivery recovery");
     }
+    expect(recovery.run.directHumanRequesterProfileId).toBeUndefined();
     let delivered = false;
     const failures: unknown[] = [];
     try {

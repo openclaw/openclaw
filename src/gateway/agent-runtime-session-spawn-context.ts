@@ -8,7 +8,7 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 };
 
 export type AgentRuntimeSessionSpawnContext = {
-  /** Host-verified human requester; inherited ownership still requires a matching parent owner. */
+  /** Canonical profile of this turn's direct human requester, verified by the host. */
   requesterProfileId?: string;
   completionOwnerSessionKey?: string;
   resolvedModel?: ProviderModelRef;

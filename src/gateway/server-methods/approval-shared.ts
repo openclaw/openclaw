@@ -6,13 +6,17 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
-import type { ChannelApprovalKind } from "../../infra/approval-types.js";
+import type {
+  ApprovalRequestDeliveryRoute,
+  ChannelApprovalKind,
+} from "../../infra/approval-types.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload,
 } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalStoreGuard } from "../operator-approval-store.types.js";
@@ -60,6 +64,7 @@ type RequestedApprovalEvent<
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
+  requesterChannelIdentity?: ExecApprovalRecord<TPayload>["requesterChannelIdentity"];
 };
 
 type ResolvedApprovalEvent<TPayload> = {
@@ -69,8 +74,6 @@ type ResolvedApprovalEvent<TPayload> = {
   ts: number;
   request: TPayload;
 };
-
-type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
 
 type ApprovalResolveParams = {
   id: string;
@@ -91,6 +94,18 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
+  const authority = params.client?.internal?.operatorRunAuthority;
+  authority?.assertCurrent();
+  if (
+    authority?.requesterChannelIdentity &&
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.approvals"],
+      allowedScopes: authority.scopes,
+    })
+  ) {
+    params.record.requesterChannelIdentity = authority.requesterChannelIdentity;
+  }
 }
 
 export function bindApprovalReviewerDeviceIds<TPayload>(params: {
@@ -149,6 +164,9 @@ export function buildRequestedApprovalEvent<
     request: record.request,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
+    ...(record.requesterChannelIdentity
+      ? { requesterChannelIdentity: record.requesterChannelIdentity }
+      : {}),
   };
 }
 
@@ -239,8 +257,6 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
     return;
   }
-  const snapshot = await params.manager.getSnapshot(id, params.authority);
-  params.authority?.assertCurrent();
   const visible = (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
     return (
@@ -252,6 +268,16 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
       })
     );
   };
+  params.authority?.assertCurrent();
+  if (params.client?.internal?.agentRuntimeIdentity) {
+    const binding = params.manager.getLocalSnapshot(id);
+    if (!binding || !visible(binding)) {
+      respondUnknownOrExpiredApproval(params.respond);
+      return;
+    }
+  }
+  const snapshot = await params.manager.getSnapshot(id, params.authority);
+  params.authority?.assertCurrent();
   if (!snapshot || !visible(snapshot)) {
     params.respond(
       false,
@@ -517,8 +543,8 @@ export async function handleApprovalResolve<
     }
   };
   const custody = params.reviewer
-    ? prepareApprovalChannelCustody({
-        cfg: params.context.getRuntimeConfig(),
+    ? await prepareApprovalChannelCustody({
+        getConfig: params.context.getRuntimeConfig,
         approvalKind: params.approvalKind,
         reviewer: params.reviewer,
       })
@@ -600,13 +626,6 @@ export async function handleApprovalResolve<
     family: params.authority.guard.family,
     assertCurrent: () => {
       params.authority.assertCommitCurrent();
-      const currentCustody = params.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: params.context.getRuntimeConfig(),
-            approvalKind: params.approvalKind,
-            reviewer: params.reviewer,
-          })
-        : null;
       if (
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||
@@ -619,7 +638,7 @@ export async function handleApprovalResolve<
             ? { cfg: params.context.getRuntimeConfig() }
             : {}),
         }) ||
-        (params.reviewer && !currentCustody?.authorizes(resolved.snapshot))
+        (params.reviewer && !custody?.authorizes(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");
       }

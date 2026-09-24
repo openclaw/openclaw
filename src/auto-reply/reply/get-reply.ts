@@ -78,7 +78,7 @@ import {
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import {
-  prepareInternalGetReplyOptions,
+  withReplyOperatorAuthority,
   withExtractedFileImages,
   type InternalGetReplyOptions,
 } from "./get-reply.types.js";
@@ -213,12 +213,13 @@ function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, stri
   );
 }
 
-export async function getReplyFromConfig(
+export const getReplyFromConfig = withReplyOperatorAuthority(getReplyWithOperatorAuthority);
+
+async function getReplyWithOperatorAuthority(
   ctx: MsgContext,
-  options?: GetReplyOptions,
-  configOverride?: OpenClawConfig,
+  opts: InternalGetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const opts = prepareInternalGetReplyOptions(options);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined
@@ -258,7 +259,7 @@ export async function getReplyFromConfig(
     finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
   }
   const initialAgentScope = await resolverTiming.measure("reply.resolve_agent_scope", () =>
-    resolveReplyAgentScope({ cfg, ctx: finalized }),
+    resolveReplyAgentScope({ cfg, ctx: finalized, operatorAuthority: opts?.operatorAuthority }),
   );
   assertReplyPreprocessingActive(opts?.abortSignal);
   opts?.operatorAuthority?.assertCurrent();

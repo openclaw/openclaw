@@ -22,8 +22,9 @@ import {
   readGatewayDeviceSourceIdentity,
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
-  authorizeCurrentOperatorRoleScopes,
+  authorizeSessionAgentRun,
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -42,22 +43,24 @@ type OperatorSource = {
     invocation: object | undefined,
   ];
   membership: string | undefined;
+  isCurrent?: () => boolean;
   token: object;
   references: number;
 };
 
 // Comparison records live only while captured work retains their original authority.
-const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
+const operatorSources = new WeakMap<object, Set<OperatorSource>>();
 
 function retainOperatorSource(
-  client: GatewayClient,
+  sourceOwner: object,
   owners: OperatorSource["owners"],
   membership: string | undefined,
+  isCurrent?: () => boolean,
 ) {
-  let sources = operatorSources.get(client);
+  let sources = operatorSources.get(sourceOwner);
   if (!sources) {
     sources = new Set();
-    operatorSources.set(client, sources);
+    operatorSources.set(sourceOwner, sources);
   }
   let source =
     membership === undefined
@@ -65,10 +68,11 @@ function retainOperatorSource(
       : [...sources].find(
           (entry) =>
             entry.membership === membership &&
+            entry.isCurrent?.() !== false &&
             entry.owners.every((owner, index) => owner === owners[index]),
         );
   if (!source) {
-    source = { owners, membership, token: Object.freeze({}), references: 0 };
+    source = { owners, membership, isCurrent, token: Object.freeze({}), references: 0 };
     sources.add(source);
   }
   const retained = source;
@@ -84,13 +88,12 @@ function retainOperatorSource(
   };
 }
 
-/** Transfers the original operator restriction into accepted work, independently of its request. */
-export function captureGatewayOperatorRunAuthority(params: {
-  client: GatewayClient | null;
+type OperatorRunCaptureOptions = {
   context: Pick<
     GatewayRequestContext,
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
+  requesterChannelIdentity?: AdmittedRunOperatorAuthority["requesterChannelIdentity"];
   hasCurrentClientAuthority?: () => boolean;
   /** Prepared by the profile owner; avoids synchronous stores in resident projection callers. */
   preparedProfile?: Readonly<{
@@ -105,7 +108,14 @@ export function captureGatewayOperatorRunAuthority(params: {
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
   invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
-}): { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined {
+};
+
+/** Transfers the original operator restriction into accepted work, independently of its request. */
+export function captureGatewayOperatorRunAuthority(
+  params: OperatorRunCaptureOptions & {
+    client: GatewayClient | null;
+  },
+): { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined {
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
     assertAdmittedRunOperatorAuthority(inherited);
@@ -146,6 +156,27 @@ export function captureGatewayOperatorRunAuthority(params: {
     return undefined;
   }
   const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
+  return captureOperatorRunAuthority({
+    ...params,
+    source: client,
+    profileId,
+    scopes: client.connect.scopes ?? [],
+    sourceAuthority:
+      params.sourceAuthority !== undefined
+        ? params.sourceAuthority
+        : client.internal?.operatorAccessAuthority,
+  });
+}
+
+/** Browser and verified channel ingress share one person, policy, and execution lifetime. */
+export function captureOperatorRunAuthority(
+  params: OperatorRunCaptureOptions & {
+    source: object;
+    profileId: string;
+    scopes: readonly string[];
+  },
+): { authority: AdmittedRunOperatorAuthority; release: () => void } {
+  const { profileId } = params;
   const preparedProfile = params.preparedProfile;
   if (
     preparedProfile &&
@@ -169,22 +200,9 @@ export function captureGatewayOperatorRunAuthority(params: {
   const isGatewayCurrent = () =>
     !resolveGatewayContext ||
     (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext);
-  const sourceAuthority =
-    params.sourceAuthority !== undefined
-      ? params.sourceAuthority
-      : client.internal?.operatorAccessAuthority;
+  const sourceAuthority = params.sourceAuthority;
   const sourceAuthorities = [sourceAuthority, params.invocationAuthority];
-  const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
-  const policyClient: GatewayClient = {
-    connect: {
-      minProtocol: client.connect.minProtocol,
-      maxProtocol: client.connect.maxProtocol,
-      client: client.connect.client,
-      role: "operator",
-      scopes: [...scopes],
-    },
-    internal: { operatorRoleActor: { kind: "operator", profileId } },
-  };
+  const scopes = Object.freeze([...params.scopes]);
   let releaseSource: (() => void) | undefined;
   let references = 1;
   let revoked = false;
@@ -206,27 +224,12 @@ export function captureGatewayOperatorRunAuthority(params: {
     }
   };
   const assertRoleCurrent = () => {
-    if (preparedProfile) {
-      const policy = resolveOperatorRolePolicyForAssignment(
-        profileId,
-        preparedProfile.role,
-        getConfig(),
-      );
-      if (
-        policy &&
-        !roleScopesAllow({
-          role: "operator",
-          requestedScopes: scopes,
-          allowedScopes: policy.scopes,
-        })
-      ) {
-        throw new Error("Your operator role changed; reconnect before continuing.");
-      }
-      return;
-    }
-    const error = authorizeCurrentOperatorRoleScopes(policyClient, getConfig());
-    if (error) {
-      throw new Error(error.message);
+    const policy = resolveRole();
+    if (
+      policy &&
+      !roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: policy.scopes })
+    ) {
+      throw new Error("Your operator role changed; reconnect before continuing.");
     }
   };
   const readModelPolicy = () => {
@@ -255,7 +258,7 @@ export function captureGatewayOperatorRunAuthority(params: {
     return modelPolicy;
   };
   const revoke = (reason: unknown) => {
-    if (references > 0 && isGatewayCurrent()) {
+    if (references > 0) {
       revoked = true;
       revocation.abort(reason);
     }
@@ -284,7 +287,7 @@ export function captureGatewayOperatorRunAuthority(params: {
       assertProfileCurrent();
       assertRoleCurrent();
     } catch (error) {
-      revoked = true;
+      revoke(error);
       throw error;
     }
   };
@@ -319,7 +322,7 @@ export function captureGatewayOperatorRunAuthority(params: {
     });
     originalModelPolicy = modelPolicy;
     const source = retainOperatorSource(
-      client,
+      params.source,
       [
         gatewayContext ?? params.context,
         resolveGatewayContext,
@@ -330,6 +333,7 @@ export function captureGatewayOperatorRunAuthority(params: {
         params.invocationAuthority,
       ],
       readOperatorModelPolicyMembership(originalModelPolicy),
+      preparedProfile?.isCurrent,
     );
     releaseSource = source.release;
     subscriptions.push(
@@ -366,9 +370,36 @@ export function captureGatewayOperatorRunAuthority(params: {
       authority: createAdmittedRunOperatorAuthority({
         profileId,
         scopes,
+        requesterChannelIdentity: params.requesterChannelIdentity,
         gatewayAccessGrant: sourceAuthority === null ? null : sourceAuthority?.gatewayAccessGrant,
         source: source.token,
         assertCurrent,
+        assertSessionAllowed: (target) => {
+          assertCurrent();
+          if (params.requesterChannelIdentity) {
+            const admission = authorizeOperatorScopesForMethod("agent", scopes);
+            if (!admission.allowed) {
+              throw new Error(
+                `Your operator role cannot start an agent run (requires ${admission.missingScope}); ask a Gateway administrator to update your role.`,
+              );
+            }
+          }
+          const error = authorizeSessionAgentRun(
+            {
+              cfg: getConfig(),
+              client: null,
+              target: {
+                agentId: target.agentId,
+                canonicalKey: target.sessionKey,
+                entry: { sandbox: target.sandbox },
+              },
+            },
+            { policy: resolveRole() },
+          );
+          if (error) {
+            throw new Error(error.message);
+          }
+        },
         signal: revocation.signal,
         retain: () => {
           assertCurrent();

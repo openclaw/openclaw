@@ -18,6 +18,10 @@ type ApprovalContext = {
 type ApprovalActorContext = ApprovalContext & {
   senderId?: string | null;
 };
+type ApprovalActorActionContext = ApprovalActorContext & {
+  action: "approve";
+  approvalKind: ChannelApprovalKind;
+};
 type ChannelApprovalAuth = {
   resolveApprovers: (context: ApprovalContext) => string[];
   isAuthorizedSender: (context: ApprovalActorContext) => boolean;
@@ -33,18 +37,10 @@ const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
   "openclaw.implicitSameChatApprovalAuthorization",
 );
 
-/**
- * Marks an authorization result as the implicit same-chat fallback used when a
- * channel has no configured approver allowlist.
- */
+/** Empty approver lists permit same-chat replies without bypassing sender admission. */
 export function markImplicitSameChatApprovalAuthorization(
-  /** Authorization result to tag as the empty-approver same-chat fallback. */
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
-  // Keep this non-enumerable to avoid changing auth payload shape.
-  // Consumers must pass the same object reference to
-  // `isImplicitSameChatApprovalAuthorization`; spread/Object.assign/JSON clones
-  // drop this marker.
   Object.defineProperty(result, IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION, {
     value: true,
     enumerable: false,
@@ -52,69 +48,47 @@ export function markImplicitSameChatApprovalAuthorization(
   return result;
 }
 
-/**
- * Checks whether an authorization result came from the implicit same-chat
- * fallback instead of an explicitly configured approver allowlist.
- */
 export function isImplicitSameChatApprovalAuthorization(
-  /** Authorization result returned by approval auth helpers. */
   result: ApprovalAuthorizationResult | null | undefined,
 ): boolean {
-  return Boolean(
-    result &&
-    (
-      result as ApprovalAuthorizationResult & {
-        [IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION]?: true;
-      }
-    )[IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION],
-  );
+  return Boolean(result && Reflect.get(result, IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION));
 }
 
-/**
- * Builds the approval authorization adapter shared by channels that resolve
- * approvers from account-scoped config.
- */
+function authorizeApproverAction(
+  approvers: readonly string[],
+  allowed: boolean,
+  channelLabel: string,
+  kind: ChannelApprovalKind,
+): ApprovalAuthorizationResult {
+  if (allowed) {
+    return { authorized: true };
+  }
+  return approvers.length === 0
+    ? markImplicitSameChatApprovalAuthorization({ authorized: true })
+    : {
+        authorized: false,
+        reason: `❌ You are not authorized to approve ${kind} requests on ${channelLabel}.`,
+      };
+}
+
 export function createResolvedApproverActionAuthAdapter(params: {
-  /** Human-readable channel label used in denial messages. */
   channelLabel: string;
-  /** Resolves normalized approver ids from config and optional account scope. */
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  /** Optional sender normalizer; defaults to trimmed string normalization. */
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   return {
-    authorizeActorAction({
-      cfg,
-      accountId,
-      senderId,
-      approvalKind,
-    }: {
-      /** Full config used to resolve account-scoped approvers. */
-      cfg: OpenClawConfig;
-      /** Optional channel account id for account-scoped approver config. */
-      accountId?: string | null;
-      /** Actor attempting the approval action. */
-      senderId?: string | null;
-      /** Approval action being authorized. */
-      action: "approve";
-      /** Approval kind used in user-facing denial copy. */
-      approvalKind: ChannelApprovalKind;
-    }) {
+    authorizeActorAction({ cfg, accountId, senderId, approvalKind }: ApprovalActorActionContext) {
       const approvers = params.resolveApprovers({ cfg, accountId });
-      if (approvers.length === 0) {
-        // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
-        return markImplicitSameChatApprovalAuthorization({ authorized: true });
-      }
-      const normalizedSenderId = senderId ? normalizeSenderId(senderId) : undefined;
-      if (normalizedSenderId && approvers.includes(normalizedSenderId)) {
-        return { authorized: true } as const;
-      }
-      return {
-        authorized: false,
-        reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
-      } as const;
+      const normalizedSenderId =
+        approvers.length && senderId ? normalizeSenderId(senderId) : undefined;
+      return authorizeApproverAction(
+        approvers,
+        Boolean(normalizedSenderId && approvers.includes(normalizedSenderId)),
+        params.channelLabel,
+        approvalKind,
+      );
     },
   };
 }
@@ -135,15 +109,7 @@ export function createChannelApprovalAuth(params: {
 }): ChannelApprovalAuth {
   const normalizeSenderId =
     params.normalizeSenderId ?? ((value: string) => params.normalizeApprover(value));
-  const resolveApprovers = (context: ApprovalContext): string[] => {
-    const inputs = params.resolveInputs(context);
-    return resolveApprovalApprovers({
-      ...inputs,
-      normalizeApprover: params.normalizeApprover,
-      normalizeDefaultTo: params.normalizeDefaultTo,
-    });
-  };
-  const isAuthorizedSender = (context: ApprovalActorContext): boolean => {
+  const resolve = (context: ApprovalActorContext) => {
     const inputs = params.resolveInputs(context);
     const approvers = resolveApprovalApprovers({
       ...inputs,
@@ -151,47 +117,23 @@ export function createChannelApprovalAuth(params: {
       normalizeDefaultTo: params.normalizeDefaultTo,
     });
     const senderId = context.senderId ? normalizeSenderId(context.senderId) : undefined;
-    if (
-      params.isWildcardAuthorized?.({ purpose: "sender", senderId, inputs, approvers }) === true
-    ) {
-      return true;
-    }
-    return Boolean(senderId && approvers.includes(senderId));
+    return { inputs, approvers, senderId };
   };
+  const isAllowed = (purpose: "sender" | "action", resolved: ReturnType<typeof resolve>) =>
+    params.isWildcardAuthorized?.({ purpose, ...resolved }) === true ||
+    Boolean(resolved.senderId && resolved.approvers.includes(resolved.senderId));
   return {
-    resolveApprovers,
-    isAuthorizedSender,
+    resolveApprovers: (context) => resolve(context).approvers,
+    isAuthorizedSender: (context) => isAllowed("sender", resolve(context)),
     approvalAuth: {
-      authorizeActorAction(input: {
-        cfg: OpenClawConfig;
-        accountId?: string | null;
-        senderId?: string | null;
-        action: "approve";
-        approvalKind: ChannelApprovalKind;
-      }) {
-        const inputs = params.resolveInputs(input);
-        const approvers = resolveApprovalApprovers({
-          ...inputs,
-          normalizeApprover: params.normalizeApprover,
-          normalizeDefaultTo: params.normalizeDefaultTo,
-        });
-        const senderId = input.senderId ? normalizeSenderId(input.senderId) : undefined;
-        if (
-          params.isWildcardAuthorized?.({ purpose: "action", senderId, inputs, approvers }) === true
-        ) {
-          return { authorized: true } as const;
-        }
-        if (approvers.length === 0) {
-          // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
-          return markImplicitSameChatApprovalAuthorization({ authorized: true });
-        }
-        if (senderId && approvers.includes(senderId)) {
-          return { authorized: true } as const;
-        }
-        return {
-          authorized: false,
-          reason: `❌ You are not authorized to approve ${input.approvalKind} requests on ${params.channelLabel}.`,
-        } as const;
+      authorizeActorAction(input: ApprovalActorActionContext) {
+        const resolved = resolve(input);
+        return authorizeApproverAction(
+          resolved.approvers,
+          isAllowed("action", resolved),
+          params.channelLabel,
+          input.approvalKind,
+        );
       },
     },
   };

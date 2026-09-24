@@ -59,10 +59,6 @@ export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.execApproval);
 }
 
-export function hasExecApprovalUnavailablePayload(payload: ReplyPayload): boolean {
-  return isRecord(payload.channelData?.execApprovalUnavailable);
-}
-
 export function hasAskUserPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.askUser);
 }
@@ -71,7 +67,6 @@ export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolea
   return (
     resolveSendableOutboundReplyParts(payload).hasMedia ||
     hasExecApprovalPayload(payload) ||
-    hasExecApprovalUnavailablePayload(payload) ||
     hasAskUserPayload(payload)
   );
 }

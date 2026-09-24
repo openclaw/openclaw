@@ -1,6 +1,7 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -231,6 +232,8 @@ export type ExecApprovalRequestPayload = {
 };
 
 export type ExecApprovalRequest = {
+  /** Host-verified routing evidence; current approval authority is checked separately. */
+  requesterChannelIdentity?: Readonly<UserChannelIdentity>;
   /** Descriptive wire metadata; readers derive it from the payload when absent. */
   approvalKind?: "exec";
   id: string;

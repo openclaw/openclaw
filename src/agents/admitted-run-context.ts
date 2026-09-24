@@ -20,6 +20,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -33,15 +34,23 @@ export type AdmittedRunContext = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
   /** Scheduler-authored ingress authority, independent of optional audit collection. */
   admissionSource?: "operator-schedule" | "requester-schedule";
+  /** Positive direct-human input fact; delegated and scheduled admissions do not inherit it. */
+  directHumanRequesterProfileId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   scopes: readonly string[];
+  requesterChannelIdentity?: Readonly<UserChannelIdentity>;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: () => void;
+  assertSessionAllowed?: (target: {
+    agentId: string;
+    sessionKey: string;
+    sandbox?: "required";
+  }) => void;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
   source?: object;
@@ -64,12 +73,18 @@ export function createAdmittedRunOperatorAuthority(
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
+    ...(source.requesterChannelIdentity
+      ? { requesterChannelIdentity: Object.freeze({ ...source.requesterChannelIdentity }) }
+      : {}),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
     source: source.source ?? Object.freeze({}),
     signal,
     retain: source.retain,
+    ...(source.assertSessionAllowed
+      ? { assertSessionAllowed: source.assertSessionAllowed.bind(source) }
+      : {}),
     onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
@@ -441,6 +456,7 @@ export function prepareAgentRunAdmission(params: {
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
   assertSourceCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  directHumanRequesterProfileId?: string;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = params.operationalRunInstance;
   if (operationalRunInstance.runId !== params.facts.runId) {
@@ -450,6 +466,13 @@ export function prepareAgentRunAdmission(params: {
   const operatorAuthority = params.operatorAuthority;
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
+  }
+  if (
+    params.directHumanRequesterProfileId &&
+    (params.admissionSource ||
+      params.directHumanRequesterProfileId !== operatorAuthority?.profileId)
+  ) {
+    throw new Error("direct human requester must match the admitted foreground operator");
   }
   const assertOperatorCurrent = operatorAuthority?.assertCurrent;
   const releaseOperatorAuthority = operatorAuthority?.retain?.();
@@ -517,6 +540,7 @@ export function prepareAgentRunAdmission(params: {
         const context = admitPreparedAgentRun({
           cfg: params.cfg,
           admissionSource: params.admissionSource,
+          directHumanRequesterProfileId: params.directHumanRequesterProfileId,
           facts,
           operationalRunInstance,
           runtimeInstanceId: admittedRuntimeInstanceId,
@@ -592,6 +616,7 @@ function consumeRecoveryAdmission(params: {
 function admitPreparedAgentRun(params: {
   cfg: OpenClawConfig;
   admissionSource?: AdmittedRunContext["admissionSource"];
+  directHumanRequesterProfileId?: string;
   facts: ExecutionIdentityAdmissionFacts;
   operationalRunInstance: OperationalRunInstanceRef;
   runtimeInstanceId?: string;
@@ -604,6 +629,9 @@ function admitPreparedAgentRun(params: {
   const admitted = {
     operationalRunInstance,
     ...(params.admissionSource ? { admissionSource: params.admissionSource } : {}),
+    ...(params.directHumanRequesterProfileId
+      ? { directHumanRequesterProfileId: params.directHumanRequesterProfileId }
+      : {}),
   };
   // Consume the one-shot recovery lease even while collection is disabled so a
   // later operational instance cannot adopt evidence that belonged to this run.

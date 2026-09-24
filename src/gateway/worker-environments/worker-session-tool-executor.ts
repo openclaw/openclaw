@@ -99,6 +99,9 @@ export function createWorkerSessionToolExecutor(params: {
           operationalRunInstance: owner.operationalRunInstance,
           approvalAuthority: owner.delegatedAuthority,
           ...(owner.operatorAuthority ? { operatorAuthority: owner.operatorAuthority } : {}),
+          ...(owner.directHumanRequesterProfileId
+            ? { directHumanRequesterProfileId: owner.directHumanRequesterProfileId }
+            : {}),
           executionIdentityToken: owner.executionIdentityToken,
           receiptAuthority: owner.receiptAuthority,
           workerTurnClaim: owner.turnClaim,

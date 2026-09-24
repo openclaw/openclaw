@@ -1,4 +1,5 @@
 // OpenClaw system-agent approval payload kept live until operator decision.
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { ExecApprovalDecision } from "./exec-approvals-core.js";
 
 export type SystemAgentApprovalRequestPayload = {
@@ -18,6 +19,8 @@ export type SystemAgentApprovalRequestPayload = {
 };
 
 export type SystemAgentApprovalRequest = {
+  /** Host-verified routing evidence; current approval authority is checked separately. */
+  requesterChannelIdentity?: Readonly<UserChannelIdentity>;
   approvalKind?: "system-agent";
   id: string;
   request: SystemAgentApprovalRequestPayload;

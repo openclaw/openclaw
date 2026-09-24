@@ -56,7 +56,10 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/sess
 import type { SkillUsagePath } from "../../skills/types.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -1191,15 +1194,10 @@ async function prepareCliRunContextWithinReadFence(
           modelId,
         })
       : undefined;
-  const mcpToolAuthAgentDir = mcpContextBase
-    ? resolveRuntimeAuthProfileAgentDir(agentDir)
-    : undefined;
-  const mcpToolAuth = mcpContextBase
-    ? {
-        ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
-        store: authStore ?? loadScopedAuthStore(),
-      }
-    : undefined;
+  const mcpToolAuth = mcpContextBase && {
+    agentDir: resolveRuntimeAuthProfileAgentDir(agentDir),
+    store: authStore ?? loadScopedAuthStore(),
+  };
   const requestedLoopbackToolsAllow =
     runtimeToolsAllowPolicy ??
     (rootedExecution ? rootedToolsAllow : params.cliToolAvailability?.openClaw);
@@ -1218,6 +1216,7 @@ async function prepareCliRunContextWithinReadFence(
       ? (
           await resolveProjectedTools({
             cfg: runConfig,
+            operatorAuthority: readRunOperatorAuthority(params),
             signal: params.abortSignal,
             context: mcpProjectionContext,
             rootedExecution,

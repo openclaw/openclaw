@@ -67,13 +67,6 @@ const imessageApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
       inferIMessageTargetChatType(target.to) !== "group" ||
       getIMessageApprovalApprovers({ cfg, accountId }).length > 0,
   },
-  describeExecApprovalSetup: ({ accountId }) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.imessage.accounts.${accountId}`
-        : "channels.imessage";
-    return `iMessage supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows iMessage. Keep the macOS imsg bridge running and configure \`${prefix}.allowFrom\` to restrict approvers.`;
-  },
   render: {
     exec: {
       buildPendingPayload: ({ request, nowMs }) =>

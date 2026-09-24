@@ -139,8 +139,6 @@ const resolveMSTeamsApproverDmTargets = createChannelApproverDmTargetResolver({
 const msTeamsNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "msteams",
   channelLabel: "Microsoft Teams",
-  describeExecApprovalSetup: () =>
-    "Approve it from the Web UI or terminal UI for now. Microsoft Teams supports native approvals when the bot is configured. Configure `channels.msteams.allowFrom` or `channels.msteams.defaultTo` with Microsoft Entra object ID approvers.",
   listAccountIds: msteamsConfigAdapter.listAccountIds,
   hasApprovers: ({ cfg, accountId }) => getMSTeamsApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>

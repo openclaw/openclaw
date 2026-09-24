@@ -12,11 +12,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
-import {
-  hasAskUserPayload,
-  hasExecApprovalPayload,
-  hasExecApprovalUnavailablePayload,
-} from "./dispatch-from-config.payloads.js";
+import { hasAskUserPayload, hasExecApprovalPayload } from "./dispatch-from-config.payloads.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -130,7 +126,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (
       shouldSendToolSummaries() ||
       hasExecApprovalPayload(payload) ||
-      hasExecApprovalUnavailablePayload(payload) ||
       hasAskUserPayload(payload)
     ) {
       return payload;

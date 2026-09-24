@@ -18,6 +18,7 @@ import {
 } from "../infra/exec-auto-review.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { assertAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import {
@@ -28,6 +29,7 @@ import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
@@ -418,6 +420,24 @@ export function createModelExecAutoReviewer(params: {
     let callerFinished: Deferred | undefined;
     try {
       params.signal?.throwIfAborted();
+      const caller = "kind" in input ? undefined : getGatewayToolCallerIdentity();
+      const authority = caller?.operatorAuthority;
+      if (authority) {
+        assertAdmittedRunOperatorAuthority(authority);
+        authority.assertCurrent();
+      }
+      const systemPrompt =
+        "kind" in input
+          ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
+          : `${DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT}\nHOST_VERIFIED_CURRENT_AUTHORITY_JSON: ${JSON.stringify(
+              {
+                verifiedPerson: Boolean(authority),
+                directHumanRequest: Boolean(
+                  authority && caller?.directHumanRequesterProfileId === authority.profileId,
+                ),
+                scopes: authority?.scopes ?? [],
+              },
+            )}`;
       const serializedInput = stringifyInput(input);
       if (serializedInput.length > MAX_EXEC_REVIEWER_INPUT_CHARS) {
         return {
@@ -442,9 +462,11 @@ export function createModelExecAutoReviewer(params: {
             };
       }
       completionController = new AbortController();
-      const signal = params.signal
-        ? AbortSignal.any([completionController.signal, params.signal])
-        : completionController.signal;
+      const signal = AbortSignal.any(
+        [completionController.signal, params.signal, authority?.signal].filter(
+          (value): value is AbortSignal => value !== undefined,
+        ),
+      );
       const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
       const finished = createDeferredCore();
       callerFinished = finished;
@@ -476,9 +498,10 @@ export function createModelExecAutoReviewer(params: {
       }).catch((error: unknown) => preparedResult.reject(error));
       const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
         timeoutMs,
-        signal: params.signal,
+        signal,
         onTimeout: () => completionController?.abort(),
       });
+      authority?.assertCurrent();
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
@@ -496,10 +519,7 @@ export function createModelExecAutoReviewer(params: {
             auth: prepared.auth,
             cfg,
             context: {
-              systemPrompt:
-                "kind" in input
-                  ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+              systemPrompt,
               messages: [
                 {
                   role: "user",
@@ -521,11 +541,12 @@ export function createModelExecAutoReviewer(params: {
         ),
         {
           timeoutMs,
-          signal: params.signal,
+          signal,
           // Abort the provider request after the local timeout wins the race.
           onTimeout: () => completionController?.abort(),
         },
       );
+      authority?.assertCurrent();
       if (result === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }

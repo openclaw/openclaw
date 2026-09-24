@@ -17,6 +17,7 @@ export const COMMUNICATION_SETTINGS_TARGET_IDS = {
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
   identity: "settings-profile-identity",
+  channelIdentities: "settings-profile-channel-identities",
   personalInstructions: "settings-profile-personal-instructions",
   githubConnections: "settings-profile-github-connections",
 } as const;

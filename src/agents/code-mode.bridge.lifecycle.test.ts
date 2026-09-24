@@ -361,24 +361,18 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     }
   });
 
-  it.each([
-    { approval: "unavailable", outcome: "recovery" },
-    { approval: "unavailable", outcome: "error" },
-    { approval: "pending", outcome: "recovery" },
-    { approval: "pending", outcome: "rejected-notice" },
-  ] as const)(
-    "preserves $outcome delivery after a nested $approval approval notice",
-    async ({ approval, outcome }) => {
+  it.each(["recovery", "rejected-notice"] as const)(
+    "preserves pending approval custody after nested %s",
+    async (outcome) => {
       const onToolResult = vi.fn();
       const onPartialReply = vi.fn();
       const onBlockReply = vi.fn();
       const harness = createSubscribedCodeModeHarness({
-        name: `approval-${approval}-${outcome}`,
+        name: `approval-pending-${outcome}`,
         onToolResult,
         onPartialReply,
         onBlockReply,
       });
-      let unavailable = approval === "unavailable";
       const shell = pluginToolWithExecute("exec", "Run shell", async () =>
         buildExecApprovalPendingToolResult({
           host: "gateway",
@@ -388,9 +382,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           approvalId: "12345678-1234-1234-1234-123456789012",
           approvalSlug: "12345678",
           expiresAtMs: Date.now() + 60_000,
-          initiatingSurface: { kind: "disabled", channel: "discord", channelLabel: "Discord" },
-          sentApproverDms: false,
-          unavailableReason: unavailable ? "initiating-platform-disabled" : null,
+          deliveryRoute: "approval-client",
         }),
       );
       const browser = pluginToolWithExecute("browser", "Read pull requests", async () =>
@@ -412,35 +404,20 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       try {
         await callNestedTool(shell, "approval");
         expect(onToolResult).toHaveBeenCalledOnce();
-        expect(onToolResult.mock.calls[0]?.[0].text).toContain(
-          approval === "pending" ? "/approve 12345678" : "not configured on Discord",
-        );
+        expect(onToolResult.mock.calls[0]?.[0].text).toContain("pending in an approval client");
 
         if (outcome === "rejected-notice") {
-          unavailable = true;
           onToolResult.mockRejectedValueOnce(new Error("notice delivery failed"));
-          await callNestedTool(shell, "unavailable");
+          await callNestedTool(shell, "rejected-pending");
           expect(onToolResult).toHaveBeenCalledTimes(2);
         }
 
         const answer = "I found PR #123 in last week's channel messages.";
-        if (outcome !== "error") {
-          const recovered = await callNestedTool(browser, "recovery");
-          expect(recovered.details).toEqual({ pullRequests: [123] });
-          expect(browser.execute).toHaveBeenCalledOnce();
-          harness.emit({ type: "message_start", message: { role: "assistant", content: [] } });
-          emitAssistantTextDeltaAndEnd({ emit: harness.emit, text: answer });
-        } else {
-          harness.emit({
-            type: "message_end",
-            message: {
-              role: "assistant",
-              content: [],
-              stopReason: "error",
-              errorMessage: "rate limit exceeded",
-            },
-          });
-        }
+        const recovered = await callNestedTool(browser, "recovery");
+        expect(recovered.details).toEqual({ pullRequests: [123] });
+        expect(browser.execute).toHaveBeenCalledOnce();
+        harness.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+        emitAssistantTextDeltaAndEnd({ emit: harness.emit, text: answer });
         harness.emit({ type: "agent_end", messages: [], willRetry: false });
         await harness.subscription.waitForPendingEvents();
 
@@ -452,21 +429,11 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           didSendDeterministicApprovalPrompt:
             harness.subscription.didSendDeterministicApprovalPrompt(),
         });
-        if (approval === "pending") {
-          expect(onPartialReply).not.toHaveBeenCalled();
-          expect(onBlockReply).not.toHaveBeenCalled();
-          expect(payloads).not.toContainEqual(expect.objectContaining({ text: answer }));
-          if (outcome === "recovery") {
-            expect(payloads).toEqual([]);
-          }
-        } else if (outcome === "recovery") {
-          expect(onPartialReply).toHaveBeenCalledWith(expect.objectContaining({ text: answer }));
-          expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([answer]);
-          expect(payloads).toEqual([expect.objectContaining({ text: answer })]);
-        } else {
-          expect(payloads).toEqual([
-            expect.objectContaining({ isError: true, text: expect.stringMatching(/rate limit/i) }),
-          ]);
+        expect(onPartialReply).not.toHaveBeenCalled();
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(payloads).not.toContainEqual(expect.objectContaining({ text: answer }));
+        if (outcome === "recovery") {
+          expect(payloads).toEqual([]);
         }
       } finally {
         harness.dispose();

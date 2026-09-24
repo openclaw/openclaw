@@ -1,7 +1,5 @@
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { captureSessionPortalTarget } from "../../gateway/worker-environments/session-portal-target.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
-import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 export type SessionPortalToolTarget = {
@@ -10,34 +8,6 @@ export type SessionPortalToolTarget = {
   environmentId: string;
   assertCurrent(): void;
 };
-
-export function prepareSessionPortalToolAccess(input: {
-  sessionKey?: string;
-  agentId?: string;
-  sessionId?: string;
-  senderIsOwner?: boolean;
-  sandboxed: boolean;
-  hasAutomationGrant: boolean;
-}) {
-  const sessionPortalTarget =
-    input.senderIsOwner === false && !input.sandboxed
-      ? prepareSessionPortalToolTarget(input)
-      : undefined;
-  // Portal qualification grants only the scoped tool. Keep the existing exact-run
-  // automation exception without granting the remaining owner-only tools.
-  const ownerOnlyCoreToolDenylist =
-    input.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (name) =>
-            (name !== "portal" || !sessionPortalTarget) &&
-            (name !== AUTOMATIONS_TOOL_NAME || !input.hasAutomationGrant),
-        )
-      : [];
-  const ownerOnlyCoreToolPolicy = ownerOnlyCoreToolDenylist.length
-    ? { deny: ownerOnlyCoreToolDenylist }
-    : undefined;
-  return { sessionPortalTarget, ownerOnlyCoreToolDenylist, ownerOnlyCoreToolPolicy };
-}
 
 /** Availability uses resident execution facts; the scoped RPC still authorizes every call. */
 export function prepareSessionPortalToolTarget(input: {

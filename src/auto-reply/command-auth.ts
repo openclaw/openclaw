@@ -13,7 +13,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  prepareChannelOperatorAdmin,
+  prepareChannelOperatorAuthority,
   resolveChannelOperatorAdminAuthority,
   resolveUpdateChannelOperatorAdminIdentityAuthority,
 } from "../gateway/channel-operator-authority.js";
@@ -582,7 +582,13 @@ function captureCommandOwnerIdentity(
   cfg: OpenClawConfig,
   requester: { channel?: string; accountId?: string; senderId?: string },
   stateOptions: OpenClawStateDatabaseOptions,
-  resolveProfile: typeof resolveChannelOperatorAdminAuthority,
+  resolveProfile: (
+    config: OpenClawConfig,
+    identity: Parameters<typeof resolveChannelOperatorAdminAuthority>[1],
+    options: OpenClawStateDatabaseOptions,
+  ) =>
+    | { profileId: string; isCurrent: (config: OpenClawConfig) => boolean; signal?: AbortSignal }
+    | undefined,
 ): PreparedCommandOwnerAuthority {
   const captured = { ...requester };
   if (isConfiguredCommandOwner(cfg, captured)) {
@@ -619,6 +625,7 @@ export type PreparedCommandOwnerAuthority = Readonly<{
   isCurrent: (currentCfg: OpenClawConfig) => boolean;
   /** The original additional person-policy grant, never a substitute for the current check. */
   signal?: AbortSignal;
+  operator?: Awaited<ReturnType<typeof prepareChannelOperatorAuthority>>;
 }>;
 
 /** Worker admission fixes the original person; synchronous final checks never touch SQLite. */
@@ -628,16 +635,10 @@ export async function prepareCommandOwnerAuthority(
   stateOptions: OpenClawStateDatabaseOptions = {},
 ): Promise<PreparedCommandOwnerAuthority> {
   const captured = { ...requester };
-  if (isConfiguredCommandOwner(cfg, captured)) {
-    return Object.freeze({
-      source: "configured-owner",
-      isCurrent: (currentCfg: OpenClawConfig) => isConfiguredCommandOwner(currentCfg, captured),
-    });
-  }
   const providerId = normalizeAnyChannelId(captured.channel) ?? captured.channel;
-  const prepared =
+  const linked =
     providerId && captured.senderId
-      ? await prepareChannelOperatorAdmin(
+      ? await prepareChannelOperatorAuthority(
           cfg,
           {
             channelId: providerId,
@@ -647,8 +648,17 @@ export async function prepareCommandOwnerAuthority(
           stateOptions,
         )
       : undefined;
+  if (isConfiguredCommandOwner(cfg, captured)) {
+    return Object.freeze({
+      source: "configured-owner",
+      operator: linked,
+      isCurrent: (currentCfg: OpenClawConfig) => isConfiguredCommandOwner(currentCfg, captured),
+    });
+  }
+  const prepared = linked?.scopes.includes("operator.admin") ? linked : undefined;
   return Object.freeze({
     source: prepared ? `profile:${prepared.profileId}` : undefined,
+    operator: linked,
     ...(prepared?.signal ? { signal: prepared.signal } : {}),
     isCurrent: (currentCfg: OpenClawConfig) =>
       prepared !== undefined &&

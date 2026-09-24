@@ -44,6 +44,7 @@ const {
 describe("worker session tool topology", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
     operatorProfileId: "profile-worker-requester",
+    directHumanRequesterProfileId: "profile-worker-requester",
   });
   let placements: ReturnType<typeof getFixture>["placements"];
   let identity: ReturnType<typeof getFixture>["identity"];
@@ -249,6 +250,7 @@ describe("worker session tool topology", () => {
         executionIdentityToken: PARENT_EXECUTION_IDENTITY_TOKEN,
         operationalRunInstance: expect.objectContaining({ runId: sourceClaim.runId }),
         operatorAuthority: expect.objectContaining({ profileId: "profile-worker-requester" }),
+        directHumanRequesterProfileId: "profile-worker-requester",
         receiptAuthority: expect.any(Function),
         workerTurnClaim: sourceClaim,
       }),
@@ -465,6 +467,9 @@ describe("worker session tool topology", () => {
       PARENT_EXECUTION_IDENTITY_TOKEN,
       childExecutionIdentityToken,
     ]);
+    expect(
+      spawnCallerIdentity.mock.calls.map((call) => call[0]?.directHumanRequesterProfileId),
+    ).toEqual(["profile-worker-requester", undefined]);
     expect(sessionEntries.get(spawnedGrandchildKey!)).toMatchObject({
       parentSessionKey: spawnedChildKey,
       parentSessionId: CHILD.sessionId,

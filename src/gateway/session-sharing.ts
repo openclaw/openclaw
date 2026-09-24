@@ -13,6 +13,7 @@ import {
 } from "../shared/session-method-scopes-base.js";
 import {
   authorizeGatewaySessionCreation,
+  authorizeSessionAgentRun,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
@@ -42,7 +43,6 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeOwnSessionMutation,
-  authorizeSessionAgentRun,
   authorizeSessionSharingTarget,
   hiddenSessionNotFound,
   isGatewayAdmin,

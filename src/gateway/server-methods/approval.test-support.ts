@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
@@ -83,6 +84,7 @@ export function createContext(
     },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => cfg,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     approvalWebPushDelivery,
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
   } as unknown as GatewayRequestHandlerOptions["context"];

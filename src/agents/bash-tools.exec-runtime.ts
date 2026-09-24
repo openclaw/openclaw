@@ -10,10 +10,13 @@ import {
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
 import {
+  buildExecApprovalPendingReplyPayload,
+  type ExecApprovalPendingReplyParams,
+} from "../infra/exec-approval-reply.js";
+import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   type ExecHost,
-  type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -352,17 +355,14 @@ export function createApprovalSlug(id: string) {
 }
 
 /** Builds the user-facing approval-pending message for foreground exec. */
-export function buildApprovalPendingMessage(params: {
-  warningText?: string;
-  approvalSlug: string;
-  approvalId: string;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  command: string;
-  cwd: string | undefined;
-  host: "gateway" | "node";
-  nodeId?: string;
-  processContinuationAvailable?: boolean;
-}) {
+export function buildApprovalPendingMessage(
+  params: ExecApprovalPendingReplyParams & {
+    processContinuationAvailable?: boolean;
+  },
+) {
+  if (params.deliveryRoute === "approval-client") {
+    return buildExecApprovalPendingReplyPayload(params).text ?? "";
+  }
   const commandBlock = formatFencedCodeBlock(params.command, "sh");
   const lines: string[] = [];
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();

@@ -130,7 +130,15 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
         data-chat-select-value=${params.mode ?? ""}
         aria-label=${`${t("chat.permissionControls.label")}: ${label}`}
         aria-disabled=${disabled ? "true" : "false"}
-        title=${params.disabledReason ?? t("chat.permissionControls.help")}
+        title=${
+          params.disabledReason ??
+          (params.mode
+            ? t("chat.permissionControls.savedOverride", {
+                mode: modeLabel(params.mode),
+                defaultMode: modeLabel(null, params.defaultMode),
+              })
+            : t("chat.permissionControls.defaultDescription"))
+        }
         ?disabled=${disabled}
       >
         <span class="chat-controls__permission-icon" aria-hidden="true"
@@ -185,6 +193,7 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
                 <span>${modeLabel(mode, params.defaultMode)}</span>
               </span>
               <span class="chat-controls__permission-option-description">
+                ${selected && mode ? t("chat.permissionControls.saved") : nothing}
                 ${
                   mode
                     ? t(`chat.permissionControls.modes.${mode}.description`)

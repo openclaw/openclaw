@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
+import { prepareCodingToolsGatewayAccess } from "./agent-tools.caller.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -30,12 +30,14 @@ describe("coding tool delegation policy", () => {
         return { content: [], details: {} };
       },
     };
-    const wrap = createCodingToolsGatewayCaller({
+    const { wrapGatewayCaller } = prepareCodingToolsGatewayAccess({
       options: {},
       agentId,
       sessionKey,
       capabilityProfile,
     });
-    await expect(wrap(plugin).execute("run", {})).rejects.toThrow("exec is not allowed");
+    await expect(wrapGatewayCaller(plugin).execute("run", {})).rejects.toThrow(
+      "exec is not allowed",
+    );
   });
 });

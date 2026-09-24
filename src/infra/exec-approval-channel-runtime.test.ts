@@ -726,9 +726,24 @@ describe("createExecApprovalChannelRuntime", () => {
     });
   });
 
-  it("replays pending approvals after the gateway connection is ready", async () => {
-    mockReplayLists({ exec: [createExecReplayRequest()] });
-    const deliverRequested = vi.fn(async (request) => [{ id: request.id }]);
+  it("replays pending approvals with their verified requester routing evidence", async () => {
+    mockReplayLists({
+      exec: [
+        {
+          ...createExecReplayRequest(),
+          requesterChannelIdentity: {
+            channelId: "discord",
+            accountId: "work",
+            senderId: "123456789",
+          },
+        },
+      ],
+    });
+    const delivered = createDeferred<ExecApprovalRequest>();
+    const deliverRequested = vi.fn(async (request) => {
+      delivered.resolve(request);
+      return [{ id: request.id }];
+    });
     const runtime = createExecApprovalChannelRuntime({
       label: "test/replay",
       clientDisplayName: "Test Replay",
@@ -741,10 +756,15 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
 
-    await vi.waitFor(() => {
-      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
-      expectDeliveredRequestId(deliverRequested, "abc");
+    expect(await delivered.promise).toMatchObject({
+      id: "abc",
+      requesterChannelIdentity: {
+        channelId: "discord",
+        accountId: "work",
+        senderId: "123456789",
+      },
     });
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
   });
 
   it("round-trips old-shape replay requests without mutating their serialized form", async () => {

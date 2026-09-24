@@ -23,13 +23,13 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires explicit enablement even when owner approvers resolve", () => {
+  it("requires explicit native enablement and permits linked-requester discovery", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ enabled: true }),
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: buildConfig({ approvers: ["123"] }),

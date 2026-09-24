@@ -264,14 +264,9 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
     },
   );
 
-  it.each([
-    { delivery: "resolve", flush: false },
-    { delivery: "reject", flush: false },
-    { delivery: "resolve", flush: true },
-    { delivery: "reject", flush: true },
-  ] as const)(
-    "preserves recovery behind an unavailable notice ($delivery, block flush: $flush)",
-    async ({ delivery, flush }) => {
+  it.each([false, true])(
+    "preserves recovery after pending approval delivery fails (block flush: %s)",
+    async (flush) => {
       const entered = createDeferred();
       const notice = createDeferred();
       const order: string[] = [];
@@ -300,7 +295,7 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         },
       );
       const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-unavailable-${delivery}-${flush}`,
+        runId: `run-approval-delivery-failure-${flush}`,
         onToolResult,
         onPartialReply,
         onBlockReply,
@@ -320,14 +315,26 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
           toolCallId: "notice",
           isError: false,
           result: {
-            details: { status: "approval-unavailable", reason: "no-approval-route" },
+            details: {
+              status: "approval-pending",
+              approvalId: "12345678-1234-1234-1234-123456789012",
+              approvalSlug: "12345678",
+              deliveryRoute: "approval-client",
+              host: "gateway",
+              command: "echo pending",
+            },
           },
         });
         await entered.promise;
         expect(onToolResult).toHaveBeenCalledOnce();
         expect(onToolResult).toHaveBeenCalledWith(
           expect.objectContaining({
-            channelData: { execApprovalUnavailable: { reason: "no-approval-route" } },
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({
+                approvalId: "12345678-1234-1234-1234-123456789012",
+                deliveryRoute: "approval-client",
+              }),
+            }),
           }),
         );
         onBlockReplyFlush.mockClear();
@@ -354,11 +361,7 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         expect(onBlockReplyFlush).not.toHaveBeenCalled();
         expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
 
-        if (delivery === "reject") {
-          notice.reject(new Error("notice transport failed"));
-        } else {
-          notice.resolve();
-        }
+        notice.reject(new Error("notice transport failed"));
         await drain;
 
         expect(order).toEqual([
@@ -382,11 +385,9 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         );
         expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
         expect(subscription.getLastToolError()).toEqual(
-          delivery === "reject"
-            ? expect.objectContaining({
-                error: "Approval prompt delivery failed: notice transport failed",
-              })
-            : undefined,
+          expect.objectContaining({
+            error: "Approval prompt delivery failed: notice transport failed",
+          }),
         );
         expect(
           buildEmbeddedRunPayloads({

@@ -843,13 +843,6 @@ async function drainProtectedPriorityFollowup(
   return true;
 }
 
-function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
-  return sources.length > 0 &&
-    sources.every((source) => source.currentInboundEventKind === "room_event")
-    ? "room_event"
-    : undefined;
-}
-
 async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
   sources: FollowupRun[];
@@ -888,10 +881,9 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
-  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
-  const runtimeMetadata = collectRuntimeMetadata(params.sources);
   let admitted = false;
   await params.runFollowup({
+    ...collectRuntimeMetadata(params.sources, params.abortSignal, "overflow-summary"),
     prompt: params.prompt,
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
@@ -899,15 +891,6 @@ async function runSyntheticOverflowSummary(params: {
     userTurnTranscriptRecorder,
     run: resolveCollectedRun(params.sources, params.source.run),
     enqueuedAt: Date.now(),
-    abortSignal: params.abortSignal,
-    explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
-    channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
-    operatorAuthority: runtimeMetadata.operatorAuthority,
-    personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
-    toolsAllow: runtimeMetadata.toolsAllow,
-    disableTools: runtimeMetadata.disableTools,
-    queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
-    replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {
@@ -931,7 +914,6 @@ async function runSyntheticOverflowSummary(params: {
         }
       : {}),
     ...resolveOriginRoutingMetadata([params.source]),
-    ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
 }
 

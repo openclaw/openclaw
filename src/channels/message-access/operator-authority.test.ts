@@ -8,6 +8,8 @@ import {
   getCommandOwnerAuthority,
 } from "../../auto-reply/command-owner-authority.js";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { resolveFollowupDeliveryContextKey } from "../../auto-reply/reply/queue/delivery-context.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import {
   linkUserChannelIdentity,
@@ -86,6 +88,42 @@ it("recognizes every linked Team admin through host ingress and gives Guardian o
   });
 });
 
+it("collects unchanged channel identities but separates a relinked person's new requests", async () => {
+  await withAdminIngress(async ({ admins, context }) => {
+    const admin = admins[0]!;
+    const releases: Array<() => void> = [];
+    const capture = async () => {
+      const authority = getCommandOwnerAuthority(
+        await context(admin.identity.senderId),
+      )?.captureOperator();
+      if (!authority) {
+        throw new Error("Expected linked channel operator authority");
+      }
+      releases.push(authority.release);
+      return {
+        ...createQueueTestRun({ prompt: "queue this request" }),
+        operatorAuthority: authority.authority,
+      };
+    };
+    try {
+      const before = await capture();
+      const unchanged = await capture();
+      const originalKey = resolveFollowupDeliveryContextKey(before);
+      expect(resolveFollowupDeliveryContextKey(unchanged)).toBe(originalKey);
+      unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+      linkUserChannelIdentity(admin.profile.id, admin.identity);
+      const after = await capture();
+      expect(() => before.operatorAuthority.assertCurrent()).toThrow();
+      expect(resolveFollowupDeliveryContextKey(after)).not.toBe(originalKey);
+      expect(() => after.operatorAuthority.assertCurrent()).not.toThrow();
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+    }
+  });
+});
+
 it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
   "revokes admitted channel owner authority when its %s changes",
   async (change) => {
@@ -96,8 +134,11 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
         expect(
           resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
         ).toBe(true);
+        const operator = getCommandOwnerAuthority(ctx)?.captureOperator?.();
+        expect(operator?.authority.profileId).toBe(admin.profile.id);
         const prepared = prepareChannelRunAdmission({
           cfg,
+          operatorAuthority: operator?.authority,
           runId: `linked-admin-${change}`,
           agentId: "main",
           ingressKind: "channel",
@@ -131,7 +172,10 @@ it.each(["role", "role-scopes", "grant", "link", "reassign", "host"] as const)(
           resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true }).senderIsOwner,
         ).toBe(false);
         expect(() => assertCurrent?.()).toThrow();
+        expect(() => operator?.authority.assertCurrent()).toThrow();
+        expect(operator?.authority.signal?.aborted).toBe(true);
         prepared.close();
+        operator?.release();
       },
       change === "grant" ? "identity-grant" : "role",
     );

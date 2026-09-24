@@ -1,7 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   createPreparedTestApprovalManager,
   createTestApprovalFixture,
@@ -42,13 +49,13 @@ export function createExecApprovalClient(params: {
   deviceId?: string;
   scopes?: string[];
   approvalRuntime?: boolean;
-  agentRuntimeIdentity?: { agentId: string; sessionKey: string };
+  agentRuntimeIdentity?: AgentRuntimeIdentity;
 }): ExecApprovalRequestArgs["client"] {
   const internal = {
     ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
     ...(params.agentRuntimeIdentity
       ? {
-          agentRuntimeIdentity: { kind: "agentRuntime" as const, ...params.agentRuntimeIdentity },
+          agentRuntimeIdentity: params.agentRuntimeIdentity,
         }
       : {}),
   };
@@ -68,14 +75,31 @@ export function createApprovalRuntimeClient(
   deviceId?: string,
   agentRuntimeIdentity?: { agentId: string; sessionKey: string },
 ) {
-  return createExecApprovalClient({
+  const runtime = agentRuntimeIdentity
+    ? { ...agentRuntimeIdentity, operationalRunInstance: createOperationalRunInstanceRef(connId) }
+    : undefined;
+  const delegated = runtime
+    ? claimAgentRunDelegatedAuthority(runtime.operationalRunInstance)
+    : undefined;
+  const client = createExecApprovalClient({
     connId,
     clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
     deviceId,
     scopes: ["operator.approvals"],
     approvalRuntime: true,
-    agentRuntimeIdentity,
+    agentRuntimeIdentity:
+      runtime && delegated
+        ? { kind: "agentRuntime", ...runtime, delegatedAuthority: { kind: "local", ...delegated } }
+        : undefined,
   });
+  return {
+    ...expectDefined(client, "approval runtime client"),
+    [Symbol.dispose]() {
+      if (delegated) {
+        releaseAgentRunDelegatedAuthority(delegated);
+      }
+    },
+  };
 }
 
 function toExecApprovalRequestContext(context: {
@@ -94,6 +118,7 @@ function toExecApprovalResolveContext(
 ): ExecApprovalResolveArgs["context"] {
   return {
     getRuntimeConfig: () => ({}),
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     ...context,
   } as unknown as ExecApprovalResolveArgs["context"];
 }

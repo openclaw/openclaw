@@ -439,7 +439,7 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
     timeoutMs?: number | null;
   } = {},
 ): Promise<T> {
-  const requesterProfileId = getGatewayToolCallerIdentity()?.operatorAuthority?.profileId;
+  const requesterProfileId = getGatewayToolCallerIdentity()?.directHumanRequesterProfileId;
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(

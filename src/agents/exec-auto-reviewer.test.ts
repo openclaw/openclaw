@@ -6,79 +6,18 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
-
-const input = {
-  // Baseline approval request is read-only; individual cases override command
-  // text or analysis fields to exercise escalation behavior.
-  command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
-  host: "gateway" as const,
-  reason: "approval-required" as const,
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
-};
-
-function createReviewerHarness(
-  decision: "allow" | "ask" = "allow",
-  modelOverrides?: { maxTokens?: number },
-) {
-  const prepare = vi.fn(async () => ({
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: { provider: "openrouter", id: "reviewer", api: "openai" as const, ...modelOverrides },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  }));
-  const complete = vi.fn(async () => ({
-    stopReason: "stop" as const,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({
-          decision,
-          risk: decision === "allow" ? "low" : "medium",
-          rationale: "reviewer fixture",
-        }),
-      },
-    ],
-  }));
-  const reviewer = createModelExecAutoReviewer({
-    cfg: {},
-    deps: {
-      acquireSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-    },
-  });
-  return { reviewer, prepare, complete };
-}
+import { createReviewerHarness, input } from "./exec-auto-reviewer.test-support.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 async function reviewExecResponse(text: string) {
-  const prepare = vi.fn(async () => ({
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  }));
-  const complete = vi.fn(async () => ({
-    stopReason: "stop" as const,
-    content: [{ type: "text" as const, text }],
-  }));
-  const reviewer = createModelExecAutoReviewer({
-    cfg: {},
-    deps: {
-      acquireSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-    },
-  });
+  const { reviewer, complete } = createReviewerHarness();
+  complete.mockResolvedValueOnce(
+    makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text }],
+    }),
+  );
   return reviewer(input);
 }
 

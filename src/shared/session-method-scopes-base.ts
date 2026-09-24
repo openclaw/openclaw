@@ -107,6 +107,7 @@ const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "deleteTranscript",
   "expectedSessionId",
+  "expectedLifecycleRevision",
   "archivedOnly",
 ]);
 

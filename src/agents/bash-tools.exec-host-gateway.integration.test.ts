@@ -1,15 +1,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { pathLooksMutableForShellPayloadSync } from "../infra/system-run-mutable-file-policy.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -93,6 +101,62 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       messageProvider: "webchat",
     });
   }
+
+  it("waits for delivered operator approval when the initiating channel has approvals disabled", async () => {
+    const registry = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            approvalCapability: { getExecInitiatingSurfaceState: () => ({ kind: "disabled" }) },
+          },
+        },
+      ]),
+      null,
+      "default",
+    );
+    const waiting = createDeferredCore();
+    const decision = createDeferredCore<{ decision: string }>();
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _options, params) => {
+      if (method === "exec.approval.request") {
+        if (!isRecord(params) || typeof params.id !== "string") {
+          throw new Error("Expected a bound approval request id");
+        }
+        return {
+          id: params.id,
+          deliveryRoute: "approval-client",
+          expiresAtMs: Date.now() + 60_000,
+        };
+      }
+      if (method === "exec.approval.waitDecision") {
+        waiting.resolve();
+        return decision.promise;
+      }
+      return { ok: true };
+    });
+    try {
+      const tool = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode: "ask",
+        safeBins: [],
+        cwd: root,
+        messageProvider: "discord",
+      });
+      const result = tool.execute("approval-route-call", { command: "/usr/bin/true" });
+      await waiting.promise;
+      expect(spawn).not.toHaveBeenCalled();
+      decision.resolve({ decision: "allow-once" });
+      expect((await result).details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      decision.resolve({ decision: "deny" });
+      rollbackStagedPluginRegistry(registry);
+    }
+  });
 
   it.each([
     { approval: "auto", executable: "env", command: "env ls *.txt" },

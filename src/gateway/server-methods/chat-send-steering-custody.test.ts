@@ -94,6 +94,7 @@ describe("steering input custody", () => {
         });
         const cfg = fixture.context.getRuntimeConfig();
         run.operatorAuthority = captured.authority;
+        run.directHumanRequesterProfileId = profile.id;
         run.run = {
           ...run.run,
           config: cfg,

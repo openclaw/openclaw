@@ -29,12 +29,14 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  authorizeSessionAgentRun,
+} from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionSharingTarget,

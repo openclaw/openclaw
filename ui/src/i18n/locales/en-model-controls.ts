@@ -96,9 +96,11 @@ const enModelControls = {
     },
     permissionControls: {
       label: "Execution permissions",
-      help: "Choose what available tools may do in this session. This does not change the tool profile.",
       default: "Default",
       defaultDescription: "Follow the agent's configured execution permissions.",
+      saved: "Saved for this session.",
+      savedOverride:
+        "{mode} is saved for this session, overriding {defaultMode}. Your server role does not change this setting.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",

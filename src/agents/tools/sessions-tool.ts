@@ -486,7 +486,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           },
         });
       }
-      // Group catalog is global by contract. Owner-only tool gating protects mutations.
+      // The shared RPC owner authorizes global group catalog mutations.
       if (action === "group_set") {
         const names = readGroupNames(params.names);
         return jsonResult(await callGateway("sessions.groups.put", { names }));

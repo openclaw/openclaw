@@ -46,6 +46,7 @@ import "../../features/github-connections/github-connections.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
 import "./personal-instructions.ts";
+import "./channel-identities.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { renderProfileHero } from "./profile-hero.ts";
@@ -481,6 +482,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       ${
         connected
           ? html`
+              <openclaw-channel-identities></openclaw-channel-identities>
               ${this.renderModelAccounts()}
               <openclaw-github-connections></openclaw-github-connections>
               ${renderSettingsGroup(

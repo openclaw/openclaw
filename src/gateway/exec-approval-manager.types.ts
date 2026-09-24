@@ -1,6 +1,7 @@
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import type {
   PlacementStandingGrantMintSpec,
@@ -43,6 +44,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
   requestedByDeviceTokenAuth?: boolean;
+  /** Host-verified initiating person; routing evidence, not a grant. */
+  requesterChannelIdentity?: Readonly<UserChannelIdentity>;
   approvalReviewerDeviceIds?: string[];
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;

@@ -10,7 +10,6 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -2927,62 +2926,78 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 });
 
 describe("handleToolExecutionEnd exec approval prompts", () => {
-  it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
-    const { ctx } = createTestContext();
-    const onToolResult = vi.fn();
-    ctx.params.onToolResult = onToolResult;
+  it.each([undefined, "forwarder", "turn-source", "approval-client"] as const)(
+    "preserves the %s approval route through tool-result delivery",
+    async (deliveryRoute) => {
+      const { ctx } = createTestContext();
+      const onToolResult = vi.fn();
+      ctx.params.onToolResult = onToolResult;
 
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-approval",
-      isError: false,
-      result: {
-        details: {
-          status: "approval-pending",
+      await endTool(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            deliveryRoute,
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+            warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+          },
+        },
+      });
+
+      const result = requireMockCallArg(onToolResult, 0, "tool result");
+      const text = requireString(result.text, "tool result text");
+      if (deliveryRoute === "approval-client") {
+        expect(text).toContain("pending in an approval client");
+        expect(text).toContain("12345678-1234-1234-1234-123456789012");
+        expect(text).toContain("Expires in:");
+        expect(text).not.toContain("/approve");
+        expect(result.presentation).toBeUndefined();
+        expect(result.interactive).toBeUndefined();
+      } else {
+        expect(text).toContain("```txt\n/approve 12345678 allow-once\n```");
+      }
+      expectRecordFields(
+        requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+        "exec approval payload",
+        {
           approvalId: "12345678-1234-1234-1234-123456789012",
           approvalSlug: "12345678",
+          approvalKind: "exec",
+          deliveryRoute,
           expiresAtMs: 1_800_000_000_000,
-          host: "gateway",
-          command: "npm view diver name version description",
-          cwd: "/tmp/work",
-          warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
         },
-      },
-    });
-
-    const result = requireMockCallArg(onToolResult, 0, "tool result");
-    expect(requireString(result.text, "tool result text")).toContain(
-      "```txt\n/approve 12345678 allow-once\n```",
-    );
-    expectRecordFields(
-      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
-      "exec approval payload",
-      {
-        approvalId: "12345678-1234-1234-1234-123456789012",
-        approvalSlug: "12345678",
-        approvalKind: "exec",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    );
-    expectInteractiveApprovalButtons(result, [
-      {
-        label: "Allow Once",
-        value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
-        style: "success",
-      },
-      {
-        label: "Allow Always",
-        value: "/approve 12345678-1234-1234-1234-123456789012 allow-always",
-        style: "primary",
-      },
-      {
-        label: "Deny",
-        value: "/approve 12345678-1234-1234-1234-123456789012 deny",
-        style: "danger",
-      },
-    ]);
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
-  });
+      );
+      if (deliveryRoute !== "approval-client") {
+        expectInteractiveApprovalButtons(result, [
+          {
+            label: "Allow Once",
+            value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
+            style: "success",
+          },
+          {
+            label: "Allow Always",
+            value: "/approve 12345678-1234-1234-1234-123456789012 allow-always",
+            style: "primary",
+          },
+          {
+            label: "Deny",
+            value: "/approve 12345678-1234-1234-1234-123456789012 deny",
+            style: "danger",
+          },
+        ]);
+      }
+      expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+    },
+  );
 
   it("preserves filtered approval decisions from tool details", async () => {
     const { ctx } = createTestContext();
@@ -3032,139 +3047,6 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
   });
 
-  it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
-    const { ctx } = createTestContext();
-    const onToolResult = vi.fn();
-    const onAgentToolResult = vi.fn();
-    ctx.params.onToolResult = onToolResult;
-    ctx.params.onAgentToolResult = onAgentToolResult;
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-unavailable",
-      isError: false,
-      result: {
-        details: {
-          status: "approval-unavailable",
-          reason: "no-approval-route",
-          channel: "discord",
-          channelLabel: "Discord",
-          accountId: "work",
-          host: "node",
-          nodeId: "node-mac-1",
-        },
-      },
-    });
-
-    const text = requireString(
-      requireMockCallArg(onToolResult, 0, "tool result").text,
-      "tool result text",
-    );
-    expect(text).toContain("no interactive approval client is currently available");
-    expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
-    );
-    expect(text).toContain(
-      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
-    );
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("Pending command:");
-    expect(text).not.toContain("Host:");
-    expect(text).not.toContain("CWD:");
-    expect(onAgentToolResult).toHaveBeenCalledWith({
-      toolName: "exec",
-      result: expect.objectContaining({
-        details: expect.objectContaining({ status: "approval-unavailable" }),
-      }),
-      isError: true,
-    });
-    expect(ctx.state.toolMetas).toEqual([
-      expect.objectContaining({ toolName: "exec", isError: true }),
-    ]);
-    const [
-      { normalizeAgentRunTerminalReceipt },
-      { createUsageAccumulator },
-      { createEmbeddedRunContextRecoveryState },
-      { prepareEmbeddedRunTerminal },
-    ] = await Promise.all([
-      import("./agent-run-terminal-receipt.js"),
-      import("./embedded-agent-runner/usage-accumulator.js"),
-      import("./embedded-agent-runner/run/context-recovery-state.js"),
-      import("./embedded-agent-runner/run/terminal-preparation.js"),
-    ]);
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-test"),
-        sessionId: "session-test-id",
-        runId: "run-test",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "run",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: {
-        terminal: { kind: "ok" },
-        sessionIdUsed: "session-test-id",
-        messagesSnapshot: [],
-        assistantTexts: [],
-        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
-          toolName ? [{ ...entry, toolName }] : [],
-        ),
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-test-id",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
-    expect(
-      normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
-        ?.successfulToolNames,
-    ).toEqual([]);
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
-  });
-
-  it("emits the shared approver-DM notice when another approval client received the request", async () => {
-    const { ctx } = createTestContext();
-    const onToolResult = vi.fn();
-    ctx.params.onToolResult = onToolResult;
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-unavailable-dm-redirect",
-      isError: false,
-      result: {
-        details: {
-          status: "approval-unavailable",
-          reason: "initiating-platform-disabled",
-          channelLabel: "Telegram",
-          sentApproverDms: true,
-        },
-      },
-    });
-
-    expect(requireMockCallArg(onToolResult, 0, "tool result").text).toBe(
-      "Approval required. I sent approval DMs to the approvers for this account.",
-    );
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
-  });
-
   it("records an actionable failure when deterministic approval delivery rejects", async () => {
     const { ctx, warn } = createTestContext();
     ctx.params.onToolResult = vi.fn(async () => {
@@ -3205,36 +3087,6 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       toolResultFormat: "markdown",
     });
     expect(payloads[0]?.text).toBe("⚠️ Exec blocked");
-  });
-
-  it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
-    const { ctx, warn } = createTestContext();
-    ctx.params.onToolResult = vi.fn(async () => {
-      throw new Error("notice delivery failed");
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-unavailable-reject",
-      isError: false,
-      result: {
-        details: {
-          status: "approval-unavailable",
-          reason: "no-approval-route",
-          channelLabel: "Discord",
-        },
-      },
-    });
-
-    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("failed to deliver exec approval prompt: notice delivery failed"),
-    );
-    expect(ctx.state.lastToolError).toMatchObject({
-      toolName: "exec",
-      error: "Approval prompt delivery failed: notice delivery failed",
-      mutatingAction: false,
-    });
   });
 
   it("emits approval + blocked command item events when exec needs approval", async () => {

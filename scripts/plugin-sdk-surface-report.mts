@@ -407,7 +407,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
-      4570,
+      4568,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

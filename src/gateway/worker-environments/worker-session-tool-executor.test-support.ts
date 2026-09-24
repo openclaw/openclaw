@@ -166,6 +166,7 @@ type WorkerSessionToolTestMocks = {
 type WorkerSessionToolTestOptions = {
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
+  directHumanRequesterProfileId?: string;
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -236,6 +237,7 @@ async function createWorkerSessionToolTestFixture(
             assertCurrent: () => {},
           })
         : undefined,
+      options.directHumanRequesterProfileId,
     );
   });
   const identity: WorkerConnectionIdentity = {

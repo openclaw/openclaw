@@ -13,6 +13,7 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { canResolveOperatorApproval } from "../operator-approval-authorization.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
@@ -62,6 +63,17 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   client: GatewayClient | null;
   cfg?: OpenClawConfig;
 }): boolean {
+  const runtime = params.client?.internal?.agentRuntimeIdentity;
+  if (runtime && !canResolveOperatorApproval(params.client)) {
+    const run = params.record.agentRuntimeDelegatedAuthority?.operationalRunInstance;
+    const source = isRecord(params.record.request) ? params.record.request : undefined;
+    return (
+      run?.instanceId === runtime.operationalRunInstance.instanceId &&
+      run?.runId === runtime.operationalRunInstance.runId &&
+      source?.agentId === runtime.agentId &&
+      source?.sessionKey === runtime.sessionKey
+    );
+  }
   const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
@@ -121,6 +133,7 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     request: TPayload;
     createdAtMs: number;
     expiresAtMs: number;
+    requesterChannelIdentity?: ExecApprovalRecord<TPayload>["requesterChannelIdentity"];
   }>
 > {
   const records = await params.manager.listPendingRecords(params.authority);
@@ -136,12 +149,13 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
           ...(cfg ? { cfg } : {}),
         }),
     )
-    .map(({ id, request, createdAtMs, expiresAtMs }) => {
-      const approval = { id, request, createdAtMs, expiresAtMs };
-      return params.approvalKind
-        ? Object.assign(approval, { approvalKind: params.approvalKind })
-        : approval;
-    });
+    .map(({ id, request, createdAtMs, expiresAtMs, requesterChannelIdentity }) =>
+      Object.assign(
+        { id, request, createdAtMs, expiresAtMs },
+        requesterChannelIdentity ? { requesterChannelIdentity } : {},
+        params.approvalKind ? { approvalKind: params.approvalKind } : {},
+      ),
+    );
 }
 
 function resolveLookupError(params: {

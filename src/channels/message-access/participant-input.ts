@@ -1,5 +1,6 @@
 import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { captureOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { takeChannelParticipantInput } from "./admission-evidence.js";
 import type { ChannelIngressHostOwner } from "./ingress-host-owner.js";
@@ -57,14 +58,39 @@ export function bindChannelParticipantInput(params: {
   ) {
     return;
   }
-  const authority = batch.at(-1)?.commandOwnerAuthority;
-  if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
+  const input = batch.at(-1)!;
+  const authority = input.commandOwnerAuthority;
+  const operator = authority?.operator;
+  if (!authority || (!authority.source && !operator)) {
     return;
   }
+  const hostIsCurrent = () =>
+    params.owner.isLive() && params.owner.resolveGatewayContext?.() === gateway;
+  const operatorIsCurrent = () =>
+    hostIsCurrent() && operator?.isCurrent(gateway.getRuntimeConfig()) === true;
   bindCommandOwnerAuthority(params.context, {
-    isCurrent: () =>
-      params.owner.isLive() &&
-      params.owner.resolveGatewayContext?.() === gateway &&
-      authority.isCurrent(gateway.getRuntimeConfig()),
+    owner: Boolean(authority.source),
+    isCurrent: () => hostIsCurrent() && authority.isCurrent(gateway.getRuntimeConfig()),
+    ...(operator
+      ? {
+          directHumanRequesterProfileId: () =>
+            input.binding.inboundEventKind === "user_request" &&
+            input.identity.type === "remote" &&
+            input.identity.idKind === "user"
+              ? operator.profileId
+              : undefined,
+          captureOperator: () => {
+            return captureOperatorRunAuthority({
+              source: input.owner,
+              context: gateway,
+              profileId: operator.profileId,
+              scopes: operator.scopes,
+              preparedProfile: { ...operator, isCurrent: operatorIsCurrent },
+              sourceAuthority: operator.access,
+              requesterChannelIdentity: principal,
+            });
+          },
+        }
+      : {}),
   });
 }

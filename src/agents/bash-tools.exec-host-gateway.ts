@@ -82,7 +82,6 @@ import type {
 } from "./bash-tools.exec-host-gateway.types.js";
 import {
   buildHeadlessExecApprovalDeniedMessage,
-  buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
@@ -1170,10 +1169,7 @@ export async function processGatewayAllowlist(
       });
     const approvalRoute = await createExecApprovalRequestRoute({
       warnings: params.warnings,
-      approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceAccountId: params.turnSourceAccountId,
       register: registerGatewayApproval,
       askFallback,
       resolveTimedOut: (state) => {
@@ -1195,9 +1191,7 @@ export async function processGatewayAllowlist(
       warningText,
       expiresAtMs,
       preResolvedDecision,
-      initiatingSurface,
-      sentApproverDms,
-      unavailableReason,
+      deliveryRoute,
     } = approvalRoute;
     emitGatewayExecApprovalSecurityEvent({
       action: "exec.approval.requested",
@@ -1400,7 +1394,7 @@ export async function processGatewayAllowlist(
 
     // Keep the original run and its delivery callback until approval resolves.
     // Only callers with an explicit follow-up owner may detach this work.
-    if (unavailableReason === null && params.approvalFollowupMode === undefined) {
+    if (params.approvalFollowupMode === undefined) {
       if (params.runId) {
         emitAgentEvent({
           runId: params.runId,
@@ -1463,9 +1457,9 @@ export async function processGatewayAllowlist(
 
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    const followupTarget = buildExecApprovalFollowupTarget({
+    const followupTarget = {
       approvalId,
-      agentId: params.agentId,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.notifySessionKey ?? params.sessionKey,
       expectedSessionId: params.sessionId,
       sessionStore: params.sessionStore,
@@ -1475,7 +1469,7 @@ export async function processGatewayAllowlist(
       turnSourceAccountId: params.turnSourceAccountId,
       turnSourceThreadId: params.turnSourceThreadId,
       direct: params.approvalFollowupMode === "direct",
-    });
+    };
     const denyApprovalStateWriteFailure = async () => {
       emitGatewayExecApprovalSecurityEvent({
         action: "exec.approval.denied",
@@ -1694,9 +1688,7 @@ export async function processGatewayAllowlist(
         approvalId,
         approvalSlug,
         expiresAtMs,
-        initiatingSurface,
-        sentApproverDms,
-        unavailableReason,
+        deliveryRoute,
         allowedDecisions: approvalAllowedDecisions,
         processContinuationAvailable: params.processContinuationAvailable,
       }),

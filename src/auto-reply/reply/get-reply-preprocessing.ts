@@ -1,4 +1,5 @@
 // Optional utility preprocessing keeps its runtime loaders lazy and cancellation explicit.
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,7 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
-import type { RuntimeMsgContext as MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext, RuntimeMsgContext as MsgContext } from "../templating.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
@@ -88,7 +89,11 @@ export function assertReplyPreprocessingActive(signal: AbortSignal | undefined):
 }
 
 /** Refuse a changed channel choice before preparing an agent's model or workspace. */
-export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx: MsgContext }) {
+export async function resolveReplyAgentScope(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedRuntimeMsgContext;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+}) {
   const { cfg, ctx } = params;
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   if (
@@ -99,7 +104,7 @@ export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx:
     await assertPreparedConversationBindingRouteCurrent(ctx);
   }
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
-  return {
+  const scope = {
     agentSessionKey,
     agentId: resolveSessionAgentId({
       sessionKey: agentSessionKey,
@@ -107,4 +112,14 @@ export async function resolveReplyAgentScope(params: { cfg: OpenClawConfig; ctx:
       fallbackAgentId: ctx.AgentId,
     }),
   };
+  if (params.operatorAuthority?.requesterChannelIdentity) {
+    const { resolveReplySessionPreprocessingState } = await import("./session.js");
+    const existing = await resolveReplySessionPreprocessingState({ ctx, cfg });
+    params.operatorAuthority.assertSessionAllowed?.({
+      agentId: scope.agentId,
+      sessionKey: existing.sessionKey,
+      sandbox: existing.sessionEntry?.sandbox,
+    });
+  }
+  return scope;
 }

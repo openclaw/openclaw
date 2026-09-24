@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
+import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
 import {
   clearDeviceBootstrapTokens,
   issueDeviceBootstrapToken,
@@ -19,6 +20,7 @@ import {
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profiles.js";
+import { isConfiguredCommandOwner } from "../command-auth.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -196,82 +198,101 @@ it.each([
       setActivePluginRegistry(registry);
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
-          const params = buildCommandTestParams(
-            "/bootstrap-fixture",
-            cfg,
-            await context(admin.identity.senderId),
-            { workspaceDir: state.workspaceDir },
-          );
-          if (scenario === "allowed") {
-            const queries = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
-            try {
-              expect(params.command.assertOwnerCurrent).not.toThrow();
-              expect(queries).not.toHaveBeenCalled();
-            } finally {
-              queries.mockRestore();
-            }
-          }
           const deniedAtAdmission = [
             "missing-policy",
             "disabled-policy",
             "missing-grant",
             "expired-grant",
+            "configured-owner",
           ].includes(scenario);
-          const pending = handlePluginCommand(params, true);
-          try {
-            const phase = await Promise.race([
-              entered.promise.then(() => "entered"),
-              pending.then(() => "finished"),
-            ]);
-            if (scenario === "revoked" || scenario === "restored") {
-              grant.abort();
-            }
-            if (scenario === "restored") {
-              grant = new AbortController();
-            }
-            if (scenario === "changed-binding") {
-              cfg.gateway!.roles!.definitions.admin!.accessPolicyPlugin = "replacement-policy";
-            }
-            resume.resolve();
-            const outcome = await pending;
-            const allowed = scenario === "allowed" || scenario === "configured-owner";
-            expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(
-              allowed ? 1 : 0,
+          if (scenario === "configured-owner") {
+            expect(
+              isConfiguredCommandOwner(cfg, {
+                channel: admin.identity.channelId,
+                accountId: admin.identity.accountId,
+                senderId: admin.identity.senderId,
+              }),
+            ).toBe(true);
+          }
+          if (deniedAtAdmission) {
+            await expect(context(admin.identity.senderId)).rejects.toBeInstanceOf(
+              GatewayOperatorAccessDeniedError,
             );
-            expect(phase).toBe(deniedAtAdmission ? "finished" : "entered");
-            if (allowed) {
-              expect(outcome?.reply?.text).toBe("credential mutation accepted");
+            expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(0);
+          } else {
+            const params = buildCommandTestParams(
+              "/bootstrap-fixture",
+              cfg,
+              await context(admin.identity.senderId),
+              { workspaceDir: state.workspaceDir },
+            );
+            if (scenario === "allowed") {
+              const queries = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
+              try {
+                expect(params.command.assertOwnerCurrent).not.toThrow();
+                expect(queries).not.toHaveBeenCalled();
+              } finally {
+                queries.mockRestore();
+              }
             }
-            if (scenario === "restored") {
-              expect(params.command.assertOwnerCurrent).toThrow();
-              const next = buildCommandTestParams(
-                "/bootstrap-fixture",
-                cfg,
-                await context(admin.identity.senderId),
-                { workspaceDir: state.workspaceDir },
+            const pending = handlePluginCommand(params, true);
+            try {
+              const phase = await Promise.race([
+                entered.promise.then(() => "entered"),
+                pending.then(() => "finished"),
+              ]);
+              if (scenario === "revoked" || scenario === "restored") {
+                grant.abort();
+              }
+              if (scenario === "restored") {
+                grant = new AbortController();
+              }
+              if (scenario === "changed-binding") {
+                cfg.gateway!.roles!.definitions.admin!.accessPolicyPlugin = "replacement-policy";
+              }
+              resume.resolve();
+              const outcome = await pending;
+              const allowed = scenario === "allowed";
+              expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(
+                allowed ? 1 : 0,
               );
-              expect((await handlePluginCommand(next, true))?.reply?.text).toBe(
-                "credential mutation accepted",
-              );
-              expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(1);
-              expect(params.command.assertOwnerCurrent).toThrow();
+              expect(phase).toBe("entered");
+              if (allowed) {
+                expect(outcome?.reply?.text).toBe("credential mutation accepted");
+              }
+              if (scenario === "restored") {
+                expect(params.command.assertOwnerCurrent).toThrow();
+                const next = buildCommandTestParams(
+                  "/bootstrap-fixture",
+                  cfg,
+                  await context(admin.identity.senderId),
+                  { workspaceDir: state.workspaceDir },
+                );
+                expect((await handlePluginCommand(next, true))?.reply?.text).toBe(
+                  "credential mutation accepted",
+                );
+                expect(Object.keys(loadDeviceBootstrapTokenRecords(state.stateDir))).toHaveLength(
+                  1,
+                );
+                expect(params.command.assertOwnerCurrent).toThrow();
+              }
+            } finally {
+              resume.resolve();
+              await pending;
             }
-            if (["missing-policy", "disabled-policy", "configured-owner"].includes(scenario)) {
-              expect(authorize).not.toHaveBeenCalled();
-            } else {
-              expect(authorize).toHaveBeenCalledWith({
-                config: cfg,
-                profile: {
-                  profileId: admin.profile.id,
-                  emails: ["ada@example.test"],
-                  assignedRole: "admin",
-                },
-                requiredByRole: true,
-              });
-            }
-          } finally {
-            resume.resolve();
-            await pending;
+          }
+          if (["missing-policy", "disabled-policy", "configured-owner"].includes(scenario)) {
+            expect(authorize).not.toHaveBeenCalled();
+          } else {
+            expect(authorize).toHaveBeenCalledWith({
+              config: cfg,
+              profile: {
+                profileId: admin.profile.id,
+                emails: ["ada@example.test"],
+                assignedRole: "admin",
+              },
+              requiredByRole: true,
+            });
           }
         });
       } finally {

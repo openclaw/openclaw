@@ -30,26 +30,6 @@ vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
 }));
 
-vi.mock("../infra/exec-approval-surface.js", () => ({
-  describeNativeExecApprovalClientSetup: () => null,
-  listNativeExecApprovalClientLabels: () => [],
-  resolveExecApprovalInitiatingSurfaceState: (params: {
-    channel?: string | null;
-    accountId?: string | null;
-  }) => {
-    const channel = params.channel ?? undefined;
-    return {
-      kind: "enabled",
-      channel,
-      channelLabel:
-        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
-      accountId: params.accountId ?? undefined,
-    };
-  },
-  supportsNativeExecApprovalClient: (channel?: string | null) =>
-    !channel || channel === "internal" || channel === "tui",
-}));
-
 vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;

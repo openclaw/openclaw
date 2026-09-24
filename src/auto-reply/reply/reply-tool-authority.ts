@@ -15,6 +15,7 @@ import {
 } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
+import { resolveOwnerOnlyToolPolicy } from "../../agents/owner-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import {
@@ -25,8 +26,8 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { cloneConfigWithResolutionFacts } from "../../config/resolution-facts.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveDirectHumanRequesterProfileId } from "../command-owner-authority.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -38,6 +39,7 @@ import type {
 
 export type ReplyToolAuthorityInput = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  directHumanRequesterProfileId?: string;
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
@@ -101,6 +103,10 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   const { ctx } = params;
   return {
     operatorAuthority: params.operatorAuthority,
+    directHumanRequesterProfileId: resolveDirectHumanRequesterProfileId(
+      ctx,
+      params.operatorAuthority,
+    ),
     permissionMode: params.sessionEntry?.permissionMode,
     toolOverrides: params.sessionEntry?.toolOverrides,
     originatingChannel: ctx.OriginatingChannel,
@@ -152,6 +158,7 @@ function snapshotFollowupRunToolAuthority(run: ReplyToolAuthorityInput): ReplyTo
   return {
     originatingChannel: run.originatingChannel,
     operatorAuthority: run.operatorAuthority,
+    directHumanRequesterProfileId: run.directHumanRequesterProfileId,
     toolsAllow,
     disableTools: run.disableTools === true,
     run: {
@@ -181,6 +188,7 @@ function applyReplyToolAuthorityOverlay(
     ...snapshot,
     originatingChannel: overlay.originatingChannel,
     operatorAuthority: overlay.operatorAuthority,
+    directHumanRequesterProfileId: overlay.directHumanRequesterProfileId,
     toolsAllow: overlay.toolsAllow,
     disableTools: overlay.disableTools,
     run: {
@@ -277,7 +285,10 @@ function isReplyToolAllowed(
   });
   return isToolAllowedByPolicies(toolName, [
     ...Object.values(policies),
-    input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
+    resolveOwnerOnlyToolPolicy({
+      senderIsOwner: input.run.senderIsOwner,
+      operatorAuthority: input.operatorAuthority,
+    }),
   ]);
 }
 
@@ -366,6 +377,7 @@ function resolveReplyToolAuthorityInputFingerprint(
                 resolveReplyOperatorAuthorityKey(authority),
             }
           : undefined,
+        directHumanRequesterProfileId: snapshot.directHumanRequesterProfileId,
         toolsAllow: snapshot.toolsAllow,
         toolsAllowIntersection: snapshot.toolsAllow
           ? readToolAllowlistIntersection(snapshot.toolsAllow)

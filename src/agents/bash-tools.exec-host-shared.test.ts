@@ -618,64 +618,17 @@ describe("resolveExecApprovalWaitOutcome", () => {
   });
 });
 
-describe("buildExecApprovalPendingToolResult", () => {
-  function buildDisabledSurfaceApprovalResult(params: {
-    channel: "discord" | "telegram";
-    channelLabel: "Discord" | "Telegram";
-    unavailableReason: "initiating-platform-disabled" | null;
-    allowedDecisions?: readonly ("allow-once" | "deny")[];
-  }) {
-    return buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "npm view diver name version description",
-      cwd: process.cwd(),
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: params.channel,
-        channelLabel: params.channelLabel,
-        accountId: "default",
-      },
-      sentApproverDms: false,
-      unavailableReason: params.unavailableReason,
-      ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
-    });
-  }
-
-  it("does not infer approver DM delivery from unavailable approval state", async () => {
-    const state = await createExecApprovalRequestRoute({
-      warnings: [],
-      approvalRunningNoticeMs: 1_000,
-      createApprovalSlug: (approvalId) => approvalId,
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "default",
-      register: async (approvalId) => ({
-        id: approvalId,
-        expiresAtMs: Date.now() + 60_000,
-        finalDecision: null,
-      }),
-      askFallback: "deny",
-      requiresExplicitApproval: false,
-    });
-    expect(state.sentApproverDms).toBe(false);
-    expect(state.unavailableReason).toBe("no-approval-route");
-  });
-
-  const createRoute = (finalDecision: string | null | undefined, turnSourceChannel?: string) =>
+describe("registered exec approval routes", () => {
+  const createRoute = (finalDecision: string | null | undefined) =>
     createExecApprovalRequestRoute({
       warnings: [],
-      approvalRunningNoticeMs: 1_000,
       createApprovalSlug: (approvalId) => approvalId,
-      turnSourceChannel,
       register: async (approvalId) => ({ id: approvalId, expiresAtMs: 60_000, finalDecision }),
       askFallback: "deny",
       requiresExplicitApproval: false,
     });
 
-  it("resolves terminal no-route approvals inline", async () => {
+  it("settles a terminal registration before returning", async () => {
     await expect(createRoute(null)).resolves.toMatchObject({
       kind: "inline",
       preResolvedDecision: null,
@@ -683,19 +636,14 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
   });
 
-  it.each([
-    ["a live route", undefined, "webchat"],
-    ["an explicit decision", "allow-once", undefined],
-    ["a disabled initiating platform without a terminal decision", undefined, "discord"],
-  ])("keeps waiting for %s", async (_name, finalDecision, channel) => {
-    await expect(createRoute(finalDecision, channel)).resolves.toMatchObject({ kind: "wait" });
+  it.each([undefined, "allow-once"])("keeps the registered decision %s", async (decision) => {
+    await expect(createRoute(decision)).resolves.toMatchObject({ kind: "wait" });
   });
 
-  it("applies strict approval ordering to an inline route", async () => {
+  it("does not let timeout fallback satisfy an explicit approval requirement", async () => {
     await expect(
       createExecApprovalRequestRoute({
         warnings: [],
-        approvalRunningNoticeMs: 1_000,
         createApprovalSlug: (approvalId) => approvalId,
         register: async (approvalId) => ({
           id: approvalId,
@@ -711,41 +659,7 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
   });
 
-  it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "discord",
-      channelLabel: "Discord",
-      unavailableReason: null,
-      allowedDecisions: ["allow-once", "deny"],
-    });
-
-    expect(result.details.status).toBe("approval-pending");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("/approve approval-slug allow-once");
-    expect(text).not.toContain("native chat exec approvals are not configured on Discord");
-  });
-
-  it("returns an unavailable reply when Discord exec approvals are disabled", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "discord",
-      channelLabel: "Discord",
-      unavailableReason: "initiating-platform-disabled",
-    });
-
-    const details = result.details as Record<string, unknown>;
-    expect(details.status).toBe("approval-unavailable");
-    expect(details.reason).toBe("initiating-platform-disabled");
-    expect(details.channel).toBe("discord");
-    expect(details.channelLabel).toBe("Discord");
-    expect(details.accountId).toBe("default");
-    expect(details.host).toBe("gateway");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("Pending command:");
-  });
-
-  it("preserves node metadata in unavailable recovery guidance", () => {
+  it("preserves the pending receipt for an explicitly delegated continuation", () => {
     const result = buildExecApprovalPendingToolResult({
       host: "node",
       nodeId: "node-mac-1",
@@ -754,50 +668,25 @@ describe("buildExecApprovalPendingToolResult", () => {
       warningText: "",
       approvalId: "approval-id",
       approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "enabled",
-        channel: undefined,
-        channelLabel: "Web UI",
-      },
-      sentApproverDms: false,
-      unavailableReason: "no-approval-route",
+      expiresAtMs: 60_000,
+      deliveryRoute: "approval-client",
+      allowedDecisions: ["allow-once", "deny"],
     });
-
     expect(result.details).toMatchObject({
-      status: "approval-unavailable",
+      status: "approval-pending",
+      approvalId: "approval-id",
+      expiresAtMs: 60_000,
+      deliveryRoute: "approval-client",
       host: "node",
       nodeId: "node-mac-1",
     });
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain(
-      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
-    );
-    expect(text).toContain(
-      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
-    );
-  });
-
-  it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "telegram",
-      channelLabel: "Telegram",
-      unavailableReason: "initiating-platform-disabled",
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining("Approval is pending in an approval client"),
     });
-
-    const details = result.details as Record<string, unknown>;
-    expect(details.status).toBe("approval-unavailable");
-    expect(details.reason).toBe("initiating-platform-disabled");
-    expect(details.channel).toBe("telegram");
-    expect(details.channelLabel).toBe("Telegram");
-    expect(details.accountId).toBe("default");
-    expect(details.sentApproverDms).toBe(false);
-    expect(details.host).toBe("gateway");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("native chat exec approvals are not configured on Telegram");
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("approval-id");
+    expect(text).toContain("Expires in:");
     expect(text).not.toContain("/approve");
-    expect(text).not.toContain("Pending command:");
-    expect(text).not.toContain("Approver DMs were sent");
   });
 });
 
@@ -826,9 +715,9 @@ describe("buildHeadlessExecApprovalDeniedMessage", () => {
       askFallback: "deny",
     });
 
-    expect(text).toContain("Headless runs cannot wait for interactive exec approval");
+    expect(text).toContain("No interactive approval route is available. The command did not run.");
     expect(text).toContain("rerun interactively");
-    expect(text).toContain("Control UI, TUI, or a chat channel with exec approvals");
+    expect(text).toContain("Control UI, a connected app, or a chat channel with exec approvals");
     expect(text).not.toContain("standing grant");
   });
 });

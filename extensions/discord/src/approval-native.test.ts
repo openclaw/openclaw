@@ -4,9 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getDiscordApprovalCapability } from "./approval-native.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
+
+const linkedApprover = vi.hoisted(() => ({ allowed: true, current: true }));
+vi.mock("openclaw/plugin-sdk/approval-auth-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/approval-auth-runtime")>()),
+  prepareChannelApprovalAuthority: async ({ senderId }: { senderId: string }) =>
+    linkedApprover.allowed && senderId === "123456789"
+      ? {
+          assertCurrent: () => {
+            if (!linkedApprover.current) {
+              throw new Error("linked authority revoked");
+            }
+          },
+        }
+      : undefined,
+}));
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
@@ -35,6 +50,81 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("routes auto approval only to the verified requester and retains its revocation guard", async () => {
+    const capability = getDiscordApprovalCapability();
+    const cfg = { channels: { discord: { execApprovals: { enabled: "auto" as const } } } };
+    const request = {
+      id: "linked-approval",
+      createdAtMs: 1,
+      expiresAtMs: 60_000,
+      requesterChannelIdentity: {
+        channelId: "discord",
+        accountId: "default",
+        senderId: "123456789",
+      },
+      request: { command: "pwd", turnSourceChannel: "discord", turnSourceAccountId: "default" },
+    };
+    const input = { cfg, accountId: "default", approvalKind: "exec" as const, request };
+    linkedApprover.allowed = true;
+    linkedApprover.current = true;
+    try {
+      expect(await capability.native?.resolveApproverDmTargets?.(input)).toEqual([
+        { to: "123456789" },
+      ]);
+      const approval = await capability.prepareActorAction?.({
+        ...input,
+        action: "approve",
+        senderId: "123456789",
+      });
+      const legacy = capability.authorizeActorAction?.({
+        ...input,
+        cfg: { channels: { discord: { execApprovals: { approvers: ["123456789"] } } } },
+        action: "approve",
+        senderId: "123456789",
+      });
+      expect(legacy?.authorized).toBe(true);
+      expect(approval?.authorized).toBe(true);
+      approval?.assertCurrent?.();
+      linkedApprover.current = false;
+      expect(() => approval?.assertCurrent?.()).toThrow("linked authority revoked");
+      linkedApprover.current = true;
+      linkedApprover.allowed = false;
+      expect(await capability.native?.resolveApproverDmTargets?.(input)).toEqual([]);
+      linkedApprover.allowed = true;
+      for (const disabled of [false, undefined] as const) {
+        expect(
+          await capability.native?.resolveApproverDmTargets?.({
+            ...input,
+            cfg: { channels: { discord: { execApprovals: { enabled: disabled } } } },
+          }),
+        ).toEqual([]);
+      }
+      expect(
+        await capability.native?.resolveApproverDmTargets?.({
+          ...input,
+          cfg: { channels: { discord: { execApprovals: { enabled: "auto", approvers: [] } } } },
+        }),
+      ).toEqual([]);
+      expect(
+        await capability.native?.resolveApproverDmTargets?.({
+          ...input,
+          request: { ...request, requesterChannelIdentity: undefined },
+        }),
+      ).toEqual([]);
+      expect(
+        await capability.native?.resolveApproverDmTargets?.({
+          ...input,
+          request: {
+            ...request,
+            requesterChannelIdentity: { ...request.requesterChannelIdentity, accountId: "other" },
+          },
+        }),
+      ).toEqual([]);
+    } finally {
+      linkedApprover.allowed = true;
+      linkedApprover.current = true;
+    }
+  });
   it("subscribes the native runtime to system-agent approval events", () => {
     expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
   });
@@ -138,29 +228,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(
       shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "ops", request }),
     ).toBe(true);
-  });
-
-  it("describes the correct Discord exec-approval setup path", () => {
-    const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
-      channel: "discord",
-      channelLabel: "Discord",
-    });
-
-    expect(text).toContain("`channels.discord.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.discord.dm.allowFrom`");
-  });
-
-  it("describes the named-account Discord exec-approval setup path", () => {
-    const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
-      channel: "discord",
-      channelLabel: "Discord",
-      accountId: "work",
-    });
-
-    expect(text).toContain("`channels.discord.accounts.work.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.discord.execApprovals.approvers`");
   });
 
   it("normalizes prefixed turn-source channel ids", async () => {

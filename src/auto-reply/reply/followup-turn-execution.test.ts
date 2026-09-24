@@ -743,15 +743,6 @@ describe("executeFollowupTurn", () => {
       },
     },
     {
-      label: "unavailable exec approvals",
-      payload: {
-        text: "Exec approval is unavailable.",
-        channelData: {
-          execApprovalUnavailable: { reason: "no-approval-route" },
-        },
-      },
-    },
-    {
       label: "ask-user prompts",
       payload: {
         text: "Question for you: Where should this deploy?",

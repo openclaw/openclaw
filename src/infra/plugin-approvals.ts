@@ -1,5 +1,6 @@
 // Defines plugin approval request/resolution payloads and actions.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ExecApprovalDecision } from "./exec-approvals-core.js";
 
@@ -64,6 +65,8 @@ export type PluginApprovalRequestPayload = {
 
 /** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
+  /** Host-verified routing evidence; current approval authority is checked separately. */
+  requesterChannelIdentity?: Readonly<UserChannelIdentity>;
   /** Descriptive wire metadata; readers derive it from the payload when absent. */
   approvalKind?: "plugin";
   id: string;

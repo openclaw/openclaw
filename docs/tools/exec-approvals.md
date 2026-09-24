@@ -99,8 +99,13 @@ pending approval message. Matrix seeds reaction shortcuts (`✅` allow once,
 message as a fallback.
 </Tip>
 
-For native chat approval surfaces, a node exec waits for the decision within
-the originating tool call and returns the command output there. Closing or
+An exec waits for a delivered approval within the originating tool call and
+returns the command output there. The Gateway's delivery receipt determines
+whether approval is pending in a connected client or channel. Disabling native
+approvals in the initiating channel does not prevent an authorized Control UI
+client from receiving the request. Pending results retain the approval ID and
+expiry. With no available route, the Gateway expires the request before reporting
+that approval is unavailable. Closing or
 cancelling that turn invalidates its pending authority. A late approval cannot
 restart it. A typed `SYSTEM_RUN_DENIED` result means the node rejected execution,
 not that the command may have run.

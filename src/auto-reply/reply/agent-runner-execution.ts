@@ -489,6 +489,10 @@ async function executeAgentTurnInternal(
   const gatewayContextResolver =
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const assertOwnerCurrent =
+    params.followupRun.run.senderIsOwner === true
+      ? captureCommandOwnerAssertion(params.followupRun.run)
+      : undefined;
   const preparedRunAdmission = prepareChannelRunAdmission({
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
@@ -496,11 +500,16 @@ async function executeAgentTurnInternal(
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
     operatorAuthority: params.followupRun.operatorAuthority,
+    directHumanRequesterProfileId: params.followupRun.directHumanRequesterProfileId,
     evidence: params.followupRun.channelAdmissionEvidence,
-    assertSourceCurrent:
-      params.followupRun.run.senderIsOwner === true
-        ? captureCommandOwnerAssertion(params.followupRun.run)
-        : undefined,
+    assertSourceCurrent: () => {
+      assertOwnerCurrent?.();
+      params.followupRun.operatorAuthority?.assertSessionAllowed?.({
+        agentId: params.followupRun.run.agentId,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionId,
+        sandbox: params.getActiveSessionEntry()?.sandbox,
+      });
+    },
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;

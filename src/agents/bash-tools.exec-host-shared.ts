@@ -4,14 +4,8 @@
  * follow-up dispatch, and approval-pending tool result rendering.
  */
 import crypto from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
-import {
-  type ExecApprovalInitiatingSurfaceState,
-  resolveExecApprovalInitiatingSurfaceState,
-} from "../infra/exec-approval-surface.js";
 import {
   minSecurity,
   maxAsk,
@@ -31,10 +25,7 @@ import {
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
-import {
-  buildApprovalPendingMessage,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "./bash-tools.exec-runtime.js";
+import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -66,26 +57,6 @@ type ExecHostApprovalContext = {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 };
 
-/** Pending approval state shared by gateway/node exec hosts. */
-type ExecApprovalPendingState = {
-  warningText: string;
-  expiresAtMs: number;
-  preResolvedDecision: string | null | undefined;
-};
-
-/** Pending approval state plus human-readable notice timing. */
-type ExecApprovalRequestState = ExecApprovalPendingState & {
-  noticeSeconds: number;
-};
-
-const EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS = 0;
-
-/** Why an approval request cannot be delivered interactively. */
-type ExecApprovalUnavailableReason =
-  | "no-approval-route"
-  | "initiating-platform-disabled"
-  | "initiating-platform-unsupported";
-
 /** Context returned after a default approval request is registered. */
 type RegisteredExecApprovalRequestContext = {
   approvalId: string;
@@ -93,9 +64,7 @@ type RegisteredExecApprovalRequestContext = {
   warningText: string;
   expiresAtMs: number;
   preResolvedDecision: string | null | undefined;
-  initiatingSurface: ExecApprovalInitiatingSurfaceState;
-  sentApproverDms: boolean;
-  unavailableReason: ExecApprovalUnavailableReason | null;
+  deliveryRoute: ExecApprovalRegistration["deliveryRoute"];
 };
 
 /** Destination and context for async exec approval follow-up delivery. */
@@ -122,75 +91,6 @@ type ExecApprovalFollowupResultDeps = {
   sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
   logWarn?: typeof logWarn;
 };
-
-/** Builds pending approval state with warnings and a bounded expiry. */
-function createExecApprovalPendingState(params: {
-  warnings: string[];
-  timeoutMs: number;
-}): ExecApprovalPendingState {
-  const expiresAtMs =
-    resolveExpiresAtMsFromDurationMs(params.timeoutMs) ?? EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS;
-  return {
-    warningText: params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "",
-    expiresAtMs,
-    preResolvedDecision: undefined,
-  };
-}
-
-/** Builds pending approval state plus rounded notice duration. */
-function createExecApprovalRequestState(params: {
-  warnings: string[];
-  timeoutMs: number;
-  approvalRunningNoticeMs: number;
-}): ExecApprovalRequestState {
-  const pendingState = createExecApprovalPendingState({
-    warnings: params.warnings,
-    timeoutMs: params.timeoutMs,
-  });
-  return {
-    ...pendingState,
-    noticeSeconds: Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000)),
-  };
-}
-
-/** Creates a fresh approval id/slug/context key for a pending request. */
-function createExecApprovalRequestContext(params: {
-  warnings: string[];
-  timeoutMs: number;
-  approvalRunningNoticeMs: number;
-  createApprovalSlug: (approvalId: string) => string;
-}): ExecApprovalRequestState & {
-  approvalId: string;
-  approvalSlug: string;
-  contextKey: string;
-} {
-  const approvalId = crypto.randomUUID();
-  const pendingState = createExecApprovalRequestState({
-    warnings: params.warnings,
-    timeoutMs: params.timeoutMs,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-  });
-  return {
-    ...pendingState,
-    approvalId,
-    approvalSlug: params.createApprovalSlug(approvalId),
-    contextKey: `exec:${approvalId}`,
-  };
-}
-
-/** Creates a pending approval context using the default approval timeout. */
-function createDefaultExecApprovalRequestContext(params: {
-  warnings: string[];
-  approvalRunningNoticeMs: number;
-  createApprovalSlug: (approvalId: string) => string;
-}) {
-  return createExecApprovalRequestContext({
-    warnings: params.warnings,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-    createApprovalSlug: params.createApprovalSlug,
-  });
-}
 
 /** Converts a raw approval decision plus fallback policy into execution state. */
 function resolveBaseExecApprovalDecision(params: {
@@ -245,147 +145,11 @@ export async function resolveExecHostApprovalContext(params: {
   return { approvals, hostSecurity, hostAsk, askFallback };
 }
 
-/** Resolves approval delivery availability for the initiating channel/account. */
-function resolveExecApprovalUnavailableState(params: {
-  turnSourceChannel?: string;
-  turnSourceAccountId?: string;
-  preResolvedDecision: string | null | undefined;
-}): {
-  initiatingSurface: ExecApprovalInitiatingSurfaceState;
-  sentApproverDms: boolean;
-  unavailableReason: ExecApprovalUnavailableReason | null;
-} {
-  const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
-    channel: params.turnSourceChannel,
-    accountId: params.turnSourceAccountId,
-  });
-  // Native approval runtimes emit routed-elsewhere notices after actual delivery.
-  // Avoid claiming approver DMs were sent from config-only guesses here.
-  const sentApproverDms = false;
-  const unavailableReason =
-    params.preResolvedDecision === null
-      ? "no-approval-route"
-      : initiatingSurface.kind === "disabled"
-        ? "initiating-platform-disabled"
-        : initiatingSurface.kind === "unsupported"
-          ? "initiating-platform-unsupported"
-          : null;
-  return {
-    initiatingSurface,
-    sentApproverDms,
-    unavailableReason,
-  };
-}
-
 type DefaultExecApprovalRequestParams = {
   warnings: string[];
-  approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
-  turnSourceChannel?: string;
-  turnSourceAccountId?: string;
   register: (approvalId: string) => Promise<ExecApprovalRegistration>;
 };
-
-/** Creates, registers, and normalizes a default approval request context. */
-async function createAndRegisterDefaultExecApprovalRequest(
-  params: DefaultExecApprovalRequestParams,
-): Promise<RegisteredExecApprovalRequestContext> {
-  const {
-    approvalId,
-    approvalSlug,
-    warningText,
-    expiresAtMs: defaultExpiresAtMs,
-    preResolvedDecision: defaultPreResolvedDecision,
-  } = createDefaultExecApprovalRequestContext({
-    warnings: params.warnings,
-    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-    createApprovalSlug: params.createApprovalSlug,
-  });
-  const registration = await params.register(approvalId);
-  const preResolvedDecision = registration.finalDecision;
-  const { initiatingSurface, sentApproverDms, unavailableReason } =
-    resolveExecApprovalUnavailableState({
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceAccountId: params.turnSourceAccountId,
-      preResolvedDecision,
-    });
-
-  return {
-    approvalId,
-    approvalSlug,
-    warningText,
-    expiresAtMs: registration.expiresAtMs ?? defaultExpiresAtMs,
-    preResolvedDecision:
-      registration.finalDecision === undefined
-        ? defaultPreResolvedDecision
-        : registration.finalDecision,
-    initiatingSurface,
-    sentApproverDms,
-    unavailableReason,
-  };
-}
-
-/** Builds the immutable follow-up target passed to async approval continuations. */
-export function buildExecApprovalFollowupTarget(
-  params: ExecApprovalFollowupTarget,
-): ExecApprovalFollowupTarget {
-  return {
-    approvalId: params.approvalId,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-    expectedSessionId: params.expectedSessionId,
-    sessionStore: params.sessionStore,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
-    direct: params.direct,
-    bashElevated: params.bashElevated,
-  };
-}
-
-/** Builds mutable approval decision state from a raw decision. */
-function createExecApprovalDecisionState(params: {
-  decision: string | null | undefined;
-  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
-}) {
-  const baseDecision = resolveBaseExecApprovalDecision({
-    decision: params.decision ?? null,
-    askFallback: params.askFallback,
-  });
-  return {
-    baseDecision,
-    approvedByAsk: baseDecision.approvedByAsk,
-    deniedReason: baseDecision.deniedReason,
-  };
-}
-
-/** Prevents fallback approval from satisfying strict inline-eval/human-review paths. */
-function enforceStrictInlineEvalApprovalBoundary(params: {
-  baseDecision: {
-    timedOut: boolean;
-  };
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-  requiresInlineEvalApproval: boolean;
-  requiresAutoReviewHumanApproval?: boolean;
-}): {
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-} {
-  const requiresRealApproval =
-    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
-  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
-    return {
-      approvedByAsk: params.approvedByAsk,
-      deniedReason: params.deniedReason,
-    };
-  }
-  return {
-    approvedByAsk: false,
-    deniedReason: params.deniedReason ?? "approval-timeout",
-  };
-}
 
 type ExecApprovalDecisionParams<TTimeoutContext> = {
   decision: string | null;
@@ -409,24 +173,23 @@ type ExecApprovalDecisionParams<TTimeoutContext> = {
   requiresAutoReviewHumanApproval?: boolean;
 };
 
-type ExecApprovalDecisionState<TTimeoutContext> = ReturnType<
-  typeof createExecApprovalDecisionState
-> & { timeoutContext: TTimeoutContext | undefined };
+type ExecApprovalDecisionState<TTimeoutContext> = {
+  baseDecision: ReturnType<typeof resolveBaseExecApprovalDecision>;
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  timeoutContext: TTimeoutContext | undefined;
+};
 
 /** Resolves explicit, timeout-fallback, and strict-human approval policy in one owner. */
 async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
   params: ExecApprovalDecisionParams<TTimeoutContext>,
 ): Promise<ExecApprovalDecisionState<TTimeoutContext>> {
-  const initial = createExecApprovalDecisionState({
-    decision: params.decision,
-    askFallback: params.askFallback,
-  });
-  let approvedByAsk = initial.approvedByAsk;
-  let deniedReason = initial.deniedReason;
+  const baseDecision = resolveBaseExecApprovalDecision(params);
+  let { approvedByAsk, deniedReason } = baseDecision;
   let timeoutContext: TTimeoutContext | undefined;
 
-  if (initial.baseDecision.timedOut && params.resolveTimedOut) {
-    const timedOut = await params.resolveTimedOut(initial);
+  if (baseDecision.timedOut && params.resolveTimedOut) {
+    const timedOut = await params.resolveTimedOut({ baseDecision, approvedByAsk, deniedReason });
     approvedByAsk = timedOut.approvedByAsk;
     deniedReason = timedOut.deniedReason;
     timeoutContext = timedOut.context;
@@ -438,19 +201,15 @@ async function resolveExecApprovalDecisionState<TTimeoutContext = undefined>(
     typeof params.requiresExplicitApproval === "function"
       ? params.requiresExplicitApproval(timeoutContext)
       : params.requiresExplicitApproval;
-  const strictDecision = enforceStrictInlineEvalApprovalBoundary({
-    baseDecision: initial.baseDecision,
-    approvedByAsk,
-    deniedReason,
-    requiresInlineEvalApproval: requiresExplicitApproval,
-    requiresAutoReviewHumanApproval: params.requiresAutoReviewHumanApproval,
-  });
-  return {
-    baseDecision: initial.baseDecision,
-    approvedByAsk: strictDecision.approvedByAsk,
-    deniedReason: strictDecision.deniedReason,
-    timeoutContext,
-  };
+  if (
+    baseDecision.timedOut &&
+    approvedByAsk &&
+    (requiresExplicitApproval || params.requiresAutoReviewHumanApproval === true)
+  ) {
+    approvedByAsk = false;
+    deniedReason ??= "approval-timeout";
+  }
+  return { baseDecision, approvedByAsk, deniedReason, timeoutContext };
 }
 
 type ExecApprovalRequestRoute<TTimeoutContext> =
@@ -466,8 +225,16 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
   params: DefaultExecApprovalRequestParams &
     Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision">,
 ): Promise<ExecApprovalRequestRoute<TTimeoutContext>> {
-  const request = await createAndRegisterDefaultExecApprovalRequest(params);
-  if (request.unavailableReason !== "no-approval-route" || request.preResolvedDecision !== null) {
+  const registration = await params.register(crypto.randomUUID());
+  const request: RegisteredExecApprovalRequestContext = {
+    approvalId: registration.id,
+    approvalSlug: params.createApprovalSlug(registration.id),
+    warningText: params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "",
+    expiresAtMs: registration.expiresAtMs,
+    preResolvedDecision: registration.finalDecision,
+    deliveryRoute: registration.deliveryRoute,
+  };
+  if (request.preResolvedDecision !== null) {
     return { ...request, kind: "wait" };
   }
   const state = await resolveExecApprovalDecisionState({ ...params, decision: null });
@@ -514,16 +281,17 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   ask: ExecAsk;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
-  const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
   // The TUI and chat channels never receive automation approval cards
   // (server-request-context canDeliverApprovals), so only name surfaces that
   // can actually answer this run's approval.
   const approvalSurfaceFix =
     params.trigger === "cron" && params.host === "gateway"
       ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
-      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
+      : "- rerun interactively and approve when prompted (Control UI, a connected app, or a chat channel with exec approvals)";
   return [
-    `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
+    params.trigger === "cron"
+      ? "exec denied: Automation runs cannot wait for interactive exec approval."
+      : "exec denied: No interactive approval route is available. The command did not run.",
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
     `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
     "Fix one of these:",
@@ -587,7 +355,7 @@ export async function sendExecApprovalFollowupResult(
   });
 }
 
-/** Renders an approval-pending or approval-unavailable exec tool result. */
+/** Renders a registered pending approval for callers that explicitly own follow-up delivery. */
 export function buildExecApprovalPendingToolResult(params: {
   host: "gateway" | "node";
   command: string;
@@ -596,9 +364,7 @@ export function buildExecApprovalPendingToolResult(params: {
   approvalId: string;
   approvalSlug: string;
   expiresAtMs: number;
-  initiatingSurface: ExecApprovalInitiatingSurfaceState;
-  sentApproverDms: boolean;
-  unavailableReason: ExecApprovalUnavailableReason | null;
+  deliveryRoute?: ExecApprovalRegistration["deliveryRoute"];
   allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
   processContinuationAvailable?: boolean;
@@ -608,57 +374,21 @@ export function buildExecApprovalPendingToolResult(params: {
     content: [
       {
         type: "text",
-        text:
-          params.unavailableReason !== null
-            ? (buildExecApprovalUnavailableReplyPayload({
-                warningText: params.warningText,
-                reason: params.unavailableReason,
-                channel: params.initiatingSurface.channel,
-                channelLabel: params.initiatingSurface.channelLabel,
-                accountId: params.initiatingSurface.accountId,
-                sentApproverDms: params.sentApproverDms,
-                host: params.host,
-                nodeId: params.nodeId,
-              }).text ?? "")
-            : buildApprovalPendingMessage({
-                warningText: params.warningText,
-                approvalSlug: params.approvalSlug,
-                approvalId: params.approvalId,
-                allowedDecisions,
-                command: params.command,
-                cwd: params.cwd,
-                host: params.host,
-                nodeId: params.nodeId,
-                processContinuationAvailable: params.processContinuationAvailable,
-              }),
+        text: buildApprovalPendingMessage({ ...params, allowedDecisions }),
       },
     ],
-    details:
-      params.unavailableReason !== null
-        ? ({
-            status: "approval-unavailable",
-            reason: params.unavailableReason,
-            channel: params.initiatingSurface.channel,
-            channelLabel: params.initiatingSurface.channelLabel,
-            accountId: params.initiatingSurface.accountId,
-            sentApproverDms: params.sentApproverDms,
-            host: params.host,
-            command: params.command,
-            cwd: params.cwd,
-            nodeId: params.nodeId,
-            warningText: params.warningText,
-          } satisfies ExecToolDetails)
-        : ({
-            status: "approval-pending",
-            approvalId: params.approvalId,
-            approvalSlug: params.approvalSlug,
-            expiresAtMs: params.expiresAtMs,
-            allowedDecisions,
-            host: params.host,
-            command: params.command,
-            cwd: params.cwd,
-            nodeId: params.nodeId,
-            warningText: params.warningText,
-          } satisfies ExecToolDetails),
+    details: {
+      status: "approval-pending",
+      approvalId: params.approvalId,
+      approvalSlug: params.approvalSlug,
+      expiresAtMs: params.expiresAtMs,
+      deliveryRoute: params.deliveryRoute,
+      allowedDecisions,
+      host: params.host,
+      command: params.command,
+      cwd: params.cwd,
+      nodeId: params.nodeId,
+      warningText: params.warningText,
+    } satisfies ExecToolDetails,
   };
 }

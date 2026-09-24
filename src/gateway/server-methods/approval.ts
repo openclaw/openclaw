@@ -337,8 +337,8 @@ export function createApprovalHandlers(
       }
       const { guard: approvalGuard, readCurrent } = prepared;
       const custody = resolveParams?.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: context.getRuntimeConfig(),
+        ? await prepareApprovalChannelCustody({
+            getConfig: context.getRuntimeConfig,
             approvalKind: record.kind,
             reviewer: resolveParams.reviewer,
           })
@@ -383,13 +383,6 @@ export function createApprovalHandlers(
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
         const currentCfg = context.getRuntimeConfig();
-        const currentCustody = resolveParams?.reviewer
-          ? prepareApprovalChannelCustody({
-              cfg: currentCfg,
-              approvalKind: record.kind,
-              reviewer: resolveParams.reviewer,
-            })
-          : null;
         if (
           client?.invalidated ||
           !canAccessOperatorApproval({
@@ -404,7 +397,7 @@ export function createApprovalHandlers(
               sessionKey: record.source.sessionKey,
               agentId: record.source.agentId,
             })) ||
-          (resolveParams?.reviewer && (!liveRecord || !currentCustody?.authorizes(liveRecord)))
+          (resolveParams?.reviewer && (!liveRecord || !custody?.authorizes(liveRecord)))
         ) {
           throw new Error("approval resolver authority is no longer active");
         }

@@ -291,14 +291,4 @@ describe("Microsoft Teams native approval capability", () => {
       }),
     ).toBe(false);
   });
-
-  it("describes the existing Teams allowlist and default destination setup", () => {
-    const guidance = msTeamsApprovalCapability.describeExecApprovalSetup?.({
-      channel: "msteams",
-      channelLabel: "Microsoft Teams",
-    });
-
-    expect(guidance).toContain("`channels.msteams.allowFrom`");
-    expect(guidance).toContain("`channels.msteams.defaultTo`");
-  });
 });

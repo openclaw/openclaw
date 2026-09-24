@@ -118,12 +118,8 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
-  const observerIsError = evt.isError || isToolResultError(result);
+  const isToolError = evt.isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
-  const approvalUnavailable =
-    isExecToolName(toolName) &&
-    readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
-  const isToolError = observerIsError && !approvalUnavailable;
   if (!isToolError) {
     const channelView = readMcpAppChannelView(result);
     if (channelView) {
@@ -139,7 +135,7 @@ export async function handleToolExecutionEnd(
     ctx.params.onAgentToolResult?.({
       toolName,
       result: sanitizedResult,
-      isError: observerIsError,
+      isError: isToolError,
     });
   } catch (error) {
     ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
@@ -192,7 +188,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     meta,
     replaySafe: callSummary.replaySafe,
-    isError: observerIsError,
+    isError: isToolError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
     ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
@@ -485,30 +481,18 @@ export async function handleToolExecutionEnd(
   if (isExecToolName(toolName)) {
     // Use sanitizedResult so `aggregated` is redacted before reaching command_output.
     const commandItemId = buildCommandItemId(toolCallId);
-    if (
-      execDetails?.status === "approval-pending" ||
-      execDetails?.status === "approval-unavailable"
-    ) {
-      const approvalStatus = execDetails.status === "approval-pending" ? "pending" : "unavailable";
+    if (execDetails?.status === "approval-pending") {
       const approvalData: AgentApprovalEventData = {
         phase: "requested",
         kind: "exec",
-        status: approvalStatus,
-        title:
-          approvalStatus === "pending"
-            ? "Command approval requested"
-            : "Command approval unavailable",
+        status: "pending",
+        title: "Command approval requested",
         itemId: commandItemId,
         toolCallId,
-        ...(execDetails.status === "approval-pending"
-          ? {
-              approvalId: execDetails.approvalId,
-              approvalSlug: execDetails.approvalSlug,
-            }
-          : {}),
+        approvalId: execDetails.approvalId,
+        approvalSlug: execDetails.approvalSlug,
         command: execDetails.command,
         host: execDetails.host,
-        ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
       emitToolActivityEvent(ctx, {
@@ -639,5 +623,5 @@ export async function handleToolExecutionEnd(
       });
   }
   terminal.executedArguments ??= startArgs;
-  return Object.assign(terminal, { isError: observerIsError });
+  return Object.assign(terminal, { isError: isToolError });
 }

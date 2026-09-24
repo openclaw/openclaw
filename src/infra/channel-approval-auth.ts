@@ -9,23 +9,26 @@ type ApprovalCommandAuthorization = {
   authorized: boolean;
   reason?: string;
   explicit: boolean;
+  assertCurrent?: () => void;
 };
 
 /** Resolves whether a chat `/approve` command is authorized by channel-specific approval policy. */
-export function resolveApprovalCommandAuthorization(params: {
+export async function resolveApprovalCommandAuthorization(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
   senderId?: string | null;
   kind: ChannelApprovalKind;
-}): ApprovalCommandAuthorization {
+}): Promise<ApprovalCommandAuthorization> {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel) {
     // Non-channel command paths keep legacy behavior: allow, but do not count as explicit chat auth.
     return { authorized: true, explicit: false };
   }
   const approvalCapability = resolveChannelApprovalCapability(getChannelPlugin(channel));
-  const resolved = approvalCapability?.authorizeActorAction?.({
+  const authorize =
+    approvalCapability?.prepareActorAction ?? approvalCapability?.authorizeActorAction;
+  const resolved = await authorize?.({
     cfg: params.cfg,
     accountId: params.accountId,
     senderId: params.senderId,
@@ -47,6 +50,7 @@ export function resolveApprovalCommandAuthorization(params: {
   return {
     authorized: resolved.authorized,
     reason: resolved.reason,
+    ...(resolved.assertCurrent ? { assertCurrent: resolved.assertCurrent } : {}),
     explicit: resolved.authorized
       ? !implicitSameChatAuthorization && availability?.kind !== "disabled"
       : true,

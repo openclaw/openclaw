@@ -76,6 +76,7 @@ export type ReplyToolAuthorityRoute = Readonly<{
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  directHumanRequesterProfileId?: string;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;
