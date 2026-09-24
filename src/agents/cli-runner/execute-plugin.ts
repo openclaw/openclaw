@@ -1,6 +1,7 @@
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ReplyBackendQueueMessageOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -10,6 +11,7 @@ import {
 } from "../../plugin-sdk/windows-spawn.js";
 import type {
   CliBackendExecute,
+  CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
   CliBackendUserInputRequest,
@@ -41,6 +43,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
+import { persistSteeredCliUserTurn } from "./execute-plugin.steered-transcript.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
@@ -521,15 +524,40 @@ export async function executePluginOwnedProcess(params: {
     watchdog.reset(),
   );
 
+  let messageInjection: CliBackendMessageInjection | undefined;
   const replyBackendHandle = run.replyOperation
     ? {
         kind: "cli" as const,
         runId: run.runId,
         toolAuthorityFingerprint: run.toolAuthorityFingerprint,
         terminalReplyExpectation: resolveReplyExpectation(run),
+        // Admission compares these against the arriving message: a handle that
+        // omits them rejects message-tool-only and gateway task-suggestion turns,
+        // which then wait for the turn to end instead of joining it.
+        sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+        taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
         cancel: () => {
           termination.reason = "manual-cancel";
           controller.abort(createCliAbortError());
+        },
+        messageInjectionV2: {
+          version: 2 as const,
+          isAvailable: () => !signal.aborted && messageInjection?.isAvailable() === true,
+          queueMessage: async (
+            text: string,
+            options: ReplyBackendQueueMessageOptions | undefined,
+            assertInjectionCurrent: () => void,
+          ) => {
+            if (!messageInjection) {
+              throw new Error("CLI plugin runtime does not accept input during its turn.");
+            }
+            // The plugin invokes this at its final write; both host fences must still hold.
+            await messageInjection.queueMessage(text, () => {
+              assertInjectionCurrent();
+              assertCurrent();
+            });
+            return await persistSteeredCliUserTurn(options, run.cwd ?? run.workspaceDir);
+          },
         },
       }
     : undefined;
@@ -589,6 +617,13 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
+      ...(replyBackendHandle
+        ? {
+            registerMessageInjection: (injection: CliBackendMessageInjection) => {
+              messageInjection = injection;
+            },
+          }
+        : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
