@@ -711,58 +711,81 @@ describe("runtime postbuild static assets", () => {
     await expectPathMissing(path.join(targetDir, "runtime-model-auth.runtime.js"));
   });
 
-  it("forwards default exports through stable and legacy aliases", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+  it.each(["formatted", "compact"])(
+    "forwards %s default exports through stable and legacy aliases",
+    async (format) => {
+      const rootDir = createTempDir("openclaw-runtime-postbuild-");
+      const distDir = path.join(rootDir, "dist");
+      await fs.mkdir(distDir, { recursive: true });
+      await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}\n', "utf8");
+      await fs.writeFile(
+        path.join(distDir, "text-transforms.runtime-Hash111.mjs"),
+        `function reconcile(value) { return value; }${format === "compact" ? "" : "\n"}export { reconcile as default };\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(distDir, "mixed.contract-Hash222.mjs"),
+        `export const named = true;${format === "compact" ? "" : "\n"}export default function run() {}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(distDir, "named-only.runtime-Hash333.js"),
+        'const marker = "export { marker as default }";\nexport { marker };\n',
+        "utf8",
+      );
+
+      writeStableRootRuntimeAliases({ rootDir });
+      writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+      const stable = await import(
+        pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href
+      );
+      const legacy = await import(
+        pathToFileURL(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js")).href
+      );
+      const mixed = await import(pathToFileURL(path.join(distDir, "mixed.contract.js")).href);
+      const namedOnly = await import(
+        pathToFileURL(path.join(distDir, "named-only.runtime.js")).href
+      );
+
+      expect(stable.default("stable")).toBe("stable");
+      expect(legacy.default("legacy")).toBe("legacy");
+      expect(mixed.default).toBeTypeOf("function");
+      expect(mixed.named).toBe(true);
+      expect(namedOnly.marker).toBe("export { marker as default }");
+      expect(namedOnly).not.toHaveProperty("default");
+
+      rewriteRootRuntimeImportsToStableAliases({ rootDir });
+      writeStableRootRuntimeAliases({ rootDir });
+      writeLegacyRootRuntimeCompatAliases({ rootDir });
+      expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
+        'export * from "./text-transforms.runtime-Hash111.mjs";\n' +
+          'export { default } from "./text-transforms.runtime-Hash111.mjs";\n',
+      );
+
+      const stableAfterRerun = await import(
+        `${pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href}?rerun=1`
+      );
+      expect(stableAfterRerun.default("rerun")).toBe("rerun");
+    },
+  );
+
+  it("does not infer default exports from comment and template contents", async () => {
+    const rootDir = createTempDir("openclaw-runtime-default-decoys-");
     const distDir = path.join(rootDir, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}\n', "utf8");
+    await fs.mkdir(distDir);
+    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}\n');
+    const marker = "\nexport default function decoy() {}\n";
     await fs.writeFile(
-      path.join(distDir, "text-transforms.runtime-Hash111.mjs"),
-      "function reconcile(value) { return value; }\nexport { reconcile as default };\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "mixed.contract-Hash222.mjs"),
-      "export const named = true;\nexport default function run() {}\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(distDir, "named-only.runtime-Hash333.js"),
-      'const marker = "export { marker as default }";\nexport { marker };\n',
-      "utf8",
+      path.join(distDir, "decoy.runtime-Hash123.mjs"),
+      `/*${marker}*/\nexport const marker = \`${marker}\`;`,
     );
 
     writeStableRootRuntimeAliases({ rootDir });
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
 
-    const stable = await import(
-      pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href
-    );
-    const legacy = await import(
-      pathToFileURL(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js")).href
-    );
-    const mixed = await import(pathToFileURL(path.join(distDir, "mixed.contract.js")).href);
-    const namedOnly = await import(pathToFileURL(path.join(distDir, "named-only.runtime.js")).href);
-
-    expect(stable.default("stable")).toBe("stable");
-    expect(legacy.default("legacy")).toBe("legacy");
-    expect(mixed.default).toBeTypeOf("function");
-    expect(mixed.named).toBe(true);
-    expect(namedOnly.marker).toBe("export { marker as default }");
-    expect(namedOnly).not.toHaveProperty("default");
-
-    rewriteRootRuntimeImportsToStableAliases({ rootDir });
-    writeStableRootRuntimeAliases({ rootDir });
-    writeLegacyRootRuntimeCompatAliases({ rootDir });
-    expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
-      'export * from "./text-transforms.runtime-Hash111.mjs";\n' +
-        'export { default } from "./text-transforms.runtime-Hash111.mjs";\n',
-    );
-
-    const stableAfterRerun = await import(
-      `${pathToFileURL(path.join(distDir, "text-transforms.runtime.js")).href}?rerun=1`
-    );
-    expect(stableAfterRerun.default("rerun")).toBe("rerun");
+    const loaded = await import(pathToFileURL(path.join(distDir, "decoy.runtime.js")).href);
+    expect(loaded.marker).toBe(marker);
+    expect(loaded).not.toHaveProperty("default");
   });
 
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
@@ -829,7 +852,7 @@ describe("runtime postbuild static assets", () => {
     );
     await fs.writeFile(
       path.join(distDir, "runtime-model-auth.runtime-Wrap456.mjs"),
-      'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
+      '/*!#region src/runtime-facade.ts*/import { auth } from "./runtime-model-auth.runtime-Impl123.js";export { auth };',
       "utf8",
     );
 
@@ -838,6 +861,29 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-model-auth.runtime-Wrap456.mjs";\n',
     );
+  });
+
+  it("rejects implementation chunks containing facade-looking literal decoys", async () => {
+    const rootDir = createTempDir("openclaw-runtime-facade-decoys-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir);
+    await fs.writeFile(
+      path.join(distDir, "collision.runtime-Impl123.mjs"),
+      "export const value = true;",
+    );
+    await fs.writeFile(
+      path.join(distDir, "collision.runtime-Decoy456.mjs"),
+      "export const source = 'export * from \"./collision.runtime-Impl123.mjs\";';",
+    );
+    const importer = path.join(distDir, "caller.mjs");
+    const source = 'export * from "./collision.runtime-Decoy456.mjs";';
+    await fs.writeFile(importer, source);
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+
+    await expectPathMissing(path.join(distDir, "collision.runtime.js"));
+    expect(await fs.readFile(importer, "utf8")).toBe(source);
   });
 
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {

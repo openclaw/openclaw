@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { readEmittedModuleRegions } from "./emitted-module-regions.mts";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { parseReleaseVersion } from "./release-version.mjs";
 import {
@@ -92,13 +93,16 @@ function moduleFiles(root: string): string[] {
   return files.toSorted();
 }
 
-function ownerAt(source: string, offset: number): string | undefined {
+function ownerAt(
+  regions: ReturnType<typeof readEmittedModuleRegions>,
+  offset: number,
+): string | undefined {
   let owner: string | undefined;
-  for (const match of source.matchAll(/^\/\/#region (.+)$/gm)) {
-    if (match.index > offset) {
+  for (const region of regions) {
+    if (region.index > offset) {
       break;
     }
-    owner = match[1];
+    owner = region.owner;
   }
   return owner;
 }
@@ -178,17 +182,13 @@ export function recordUpdateCompatibilityRelease(params: {
   const chunks = new Map<string, UpdateCompatibilityChunk>();
   for (const file of moduleFiles(distDir)) {
     const source = fs.readFileSync(file, "utf8");
-    if (
-      !source.includes("import(") ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
-        ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
-      )
-    ) {
+    const regions = readEmittedModuleRegions(source);
+    if (!source.includes("import(") || !regions.some(({ owner }) => POST_SWAP_OWNER.test(owner))) {
       continue;
     }
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        const owner = ownerAt(source, node.getStart());
+        const owner = ownerAt(regions, node.getStart());
         // The wizard's only lazy command import starts the update, before replacement.
         if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
           const specifier = node.arguments[0];
@@ -472,9 +472,7 @@ export function writeUpdateCompatibilityChunks(params: {
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||
-      ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
-        ([, owner]) => owner !== undefined && ownerModules.has(owner),
-      )
+      !readEmittedModuleRegions(source).some(({ owner }) => ownerModules.has(owner))
     ) {
       continue;
     }

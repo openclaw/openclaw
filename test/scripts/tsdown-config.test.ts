@@ -15,6 +15,7 @@ import {
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -353,6 +354,148 @@ describe("tsdown config", () => {
       }
     },
   );
+
+  it("preserves names, literal bytes, notices, and runtime identity in emitted runtime graphs", async () => {
+    const shared = configs.find(
+      (config) => config.dts === false && hasWorkerEntry(config, "entry", "src/entry.ts"),
+    );
+    if (!shared) {
+      throw new Error("Missing shared runtime graph");
+    }
+    const root = fs.realpathSync(createTempDir("openclaw-runtime-codegen-"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    const source = path.join(root, "source");
+    fs.mkdirSync(source);
+    fs.writeFileSync(
+      path.join(source, "shared.ts"),
+      [
+        "/*! @license Runtime codegen fixture MIT */",
+        "/* @preserve Runtime codegen attribution */",
+        "//! Runtime codegen legal notice",
+        'export const identity = Symbol("shared runtime identity");',
+        'export function namedFunction() { return "  alpha\\tbeta\\n\\u0000"; }',
+        "export class NamedRecord { value = String.raw`a\\nb`; }",
+      ].join("\n"),
+    );
+    for (const name of ["observer", "lazy"]) {
+      fs.writeFileSync(
+        path.join(source, `${name}.ts`),
+        'export { identity, namedFunction, NamedRecord } from "./shared.ts";',
+      );
+    }
+    fs.writeFileSync(
+      path.join(source, "entry.ts"),
+      [
+        'export { identity, namedFunction, NamedRecord } from "./shared.ts";',
+        'export const loadLazy = () => import("./lazy.ts");',
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(source, "worker.ts"),
+      [
+        'import { parentPort } from "node:worker_threads";',
+        'import { namedFunction, NamedRecord } from "./shared.ts";',
+        "parentPort.postMessage({ functionName: namedFunction.name, className: NamedRecord.name, text: namedFunction(), raw: new NamedRecord().value });",
+        "parentPort.close();",
+      ].join("\n"),
+    );
+    const standalone = Object.entries(standaloneRuntimeProcessBuildEntries).map(
+      ([name, sourcePath]) => {
+        const config = configs.find(
+          (candidate) => candidate.dts === false && hasWorkerEntry(candidate, name, sourcePath),
+        );
+        if (!config) {
+          throw new Error(`Missing standalone runtime graph: ${name}`);
+        }
+        return { name, config };
+      },
+    );
+    for (const { name, config, entry } of [
+      {
+        name: "shared",
+        config: shared,
+        entry: {
+          entry: path.join(source, "entry.ts"),
+          observer: path.join(source, "observer.ts"),
+        },
+      },
+      ...standalone.map(({ name: entryName, config: buildConfig }) => ({
+        name: entryName,
+        config: buildConfig,
+        entry: { [entryName]: path.join(source, "worker.ts") },
+      })),
+    ]) {
+      const { bundles } = await build({
+        ...config,
+        config: false,
+        cwd: root,
+        entry,
+        outDir: path.join(root, "dist"),
+        clean: false,
+        tsconfig: false,
+        dts: false,
+        logLevel: "silent",
+      });
+      try {
+        const chunks = bundles.flatMap((bundle) =>
+          bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+        );
+        const code = chunks.map((chunk) => chunk.code).join("\n");
+        for (const notice of [
+          "@license Runtime codegen fixture MIT",
+          "@preserve Runtime codegen attribution",
+          "Runtime codegen legal notice",
+        ]) {
+          expect(code, name).toContain(notice);
+        }
+        if (name === "shared") {
+          expect(chunks.some((chunk) => !chunk.isEntry)).toBe(true);
+          expect(chunks.some((chunk) => chunk.dynamicImports.length > 0)).toBe(true);
+        } else {
+          expect(chunks.map((chunk) => chunk.fileName)).toEqual([`${name}.js`]);
+        }
+      } finally {
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
+      }
+    }
+    fs.rmSync(source, { recursive: true });
+    const script = `
+      import assert from "node:assert/strict";
+      import { once } from "node:events";
+      import { Worker } from "node:worker_threads";
+      import * as entry from "./dist/entry.js";
+      import * as observer from "./dist/observer.js";
+      for (const value of [entry, observer, await entry.loadLazy()]) {
+        assert.equal(value.identity, entry.identity);
+        assert.equal(value.namedFunction, entry.namedFunction);
+        assert.equal(value.NamedRecord, entry.NamedRecord);
+        assert.equal(value.namedFunction.name, "namedFunction");
+        assert.equal(value.NamedRecord.name, "NamedRecord");
+        assert.equal(Buffer.from(value.namedFunction()).toString("hex"), "2020616c70686109626574610a00");
+        assert.equal(Buffer.from(new value.NamedRecord().value).toString("hex"), "615c6e62");
+      }
+      for (const name of ${JSON.stringify(standalone.map(({ name }) => name))}) {
+        const worker = new Worker(new URL("./dist/" + name + ".js", import.meta.url), { execArgv: [] });
+        const [[message], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+        assert.equal(code, 0);
+        assert.equal(message.functionName, "namedFunction");
+        assert.equal(message.className, "NamedRecord");
+        assert.equal(Buffer.from(message.text).toString("hex"), "2020616c70686109626574610a00");
+        assert.equal(Buffer.from(message.raw).toString("hex"), "615c6e62");
+      }
+    `;
+    const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
+      execFile(
+        testNodeExecPath,
+        ["--input-type=module", "-e", script],
+        { cwd: root, timeout: 30_000 },
+        (error, _stdout, stderr) => resolve({ error, stderr }),
+      );
+    });
+    expect(result.error, result.stderr).toBeNull();
+  });
 
   it("routes HTML-only mail and advances the cursor through packaged imap-watch", async () => {
     const entryName = "extensions/imap/index";

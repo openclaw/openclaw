@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
+import * as ts from "typescript/unstable/ast";
 import {
   readRuntimeDependencyOwnership,
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
@@ -16,7 +17,10 @@ import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-contr
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -171,6 +175,7 @@ function resolveStableRootRuntimeAliasCandidate(
   aliasFileName: string,
   candidates: RuntimeAliasCandidate[],
   pluginInstallCandidates: RuntimeAliasCandidate[],
+  parser: NativeTypeScriptParser,
 ) {
   const implementationCandidates = candidates.filter(
     ({ source }) => !isRuntimeAliasSource(source, aliasFileName),
@@ -185,14 +190,25 @@ function resolveStableRootRuntimeAliasCandidate(
     );
     return matches.length === 1 ? (matches[0]?.candidate ?? null) : null;
   }
-  const wrappers = implementationCandidates.filter(({ candidate, source }) =>
-    candidateNames.some(
-      (target) =>
-        target !== candidate &&
-        source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
-    ),
-  );
+  const wrappers = implementationCandidates.filter(({ candidate, source }) => {
+    const { statements } = parser.parseSourceFile(candidate, source);
+    return (
+      statements.every(
+        (statement) => ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement),
+      ) &&
+      statements.some((statement) => {
+        const specifier =
+          ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
+            ? statement.moduleSpecifier
+            : undefined;
+        return (
+          specifier &&
+          ts.isStringLiteral(specifier) &&
+          candidateNames.some((target) => target !== candidate && specifier.text === `./${target}`)
+        );
+      })
+    );
+  });
   return wrappers.length === 1 ? (wrappers[0]?.candidate ?? null) : null;
 }
 
@@ -207,9 +223,15 @@ function listStableRootRuntimeAliasOutputs(params: RuntimeFsParams = {}) {
     distDir,
     fsImpl,
   );
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   return [...candidatesByAlias]
     .filter(([aliasFileName, candidates]) =>
-      resolveStableRootRuntimeAliasCandidate(aliasFileName, candidates, pluginInstallCandidates),
+      resolveStableRootRuntimeAliasCandidate(
+        aliasFileName,
+        candidates,
+        pluginInstallCandidates,
+        parser,
+      ),
     )
     .map(([aliasFileName]) => `dist/${aliasFileName}`)
     .toSorted((left, right) => left.localeCompare(right));
@@ -319,9 +341,6 @@ export function copyExportHtmlTemplates(params: RuntimeFsParams = {}) {
   }
 }
 
-const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
-  /(^|\n)\s*export\b\s*(?:default\b|\{[^}]*(?:\bas\s+default\b|\bdefault\b\s*(?=[,}]))[^}]*\})/u;
-
 function formatRuntimeAliasSource(targetFileName: string, forwardDefault = false) {
   const specifier = JSON.stringify(`./${targetFileName}`);
   const starSource = `export * from ${specifier};\n`;
@@ -344,7 +363,12 @@ function isRuntimeAliasSource(source: string, targetFileName: string) {
  * count reconcile failed this way with "TypeError: reconcile is not a
  * function" on every compaction).
  */
-function buildRuntimeAliasSource(targetFileName: string, distDir: string, fsImpl: typeof fs) {
+function buildRuntimeAliasSource(
+  targetFileName: string,
+  distDir: string,
+  fsImpl: typeof fs,
+  parser: NativeTypeScriptParser,
+) {
   let targetSource;
   try {
     targetSource = fsImpl.readFileSync(path.join(distDir, targetFileName), "utf8");
@@ -353,7 +377,21 @@ function buildRuntimeAliasSource(targetFileName: string, distDir: string, fsImpl
   }
   return formatRuntimeAliasSource(
     targetFileName,
-    RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource),
+    parser
+      .parseSourceFile(targetFileName, targetSource)
+      .statements.some(
+        (statement) =>
+          (ts.isExportAssignment(statement) && !statement.isExportEquals) ||
+          ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+            statement.modifiers?.some(
+              (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword,
+            )) ||
+          (ts.isExportDeclaration(statement) &&
+            statement.exportClause &&
+            (ts.isNamedExports(statement.exportClause)
+              ? statement.exportClause.elements.some((element) => element.name.text === "default")
+              : statement.exportClause.name.text === "default")),
+      ),
   );
 }
 
@@ -394,6 +432,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       aliasFileName,
       candidates,
       pluginInstallCandidates,
+      parser,
     );
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
@@ -411,7 +450,7 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
               fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
             ),
           )
-        : buildRuntimeAliasSource(candidate, distDir, fsImpl);
+        : buildRuntimeAliasSource(candidate, distDir, fsImpl, parser);
     const owner = ownership?.chunks[candidate];
     if (ownership && owner) {
       const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));
@@ -443,11 +482,13 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   const { entries, candidatesByAlias, pluginInstallCandidates } =
     collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
   const runtimeAliasFiles = new Map<string, string>();
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const candidate = resolveStableRootRuntimeAliasCandidate(
       aliasFileName,
       candidates,
       pluginInstallCandidates,
+      parser,
     );
     if (candidate) {
       if (ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES.has(aliasFileName)) {
@@ -508,6 +549,7 @@ export function writeLegacyRootRuntimeCompatAliases(params: RuntimeFsParams = {}
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [legacyFileName, aliasFileName] of LEGACY_ROOT_RUNTIME_COMPAT_ALIASES) {
     const legacyPath = path.join(distDir, legacyFileName);
     if (fsImpl.existsSync(legacyPath)) {
@@ -516,7 +558,10 @@ export function writeLegacyRootRuntimeCompatAliases(params: RuntimeFsParams = {}
     if (!fsImpl.existsSync(path.join(distDir, aliasFileName))) {
       continue;
     }
-    writeTextFileIfChanged(legacyPath, buildRuntimeAliasSource(aliasFileName, distDir, fsImpl));
+    writeTextFileIfChanged(
+      legacyPath,
+      buildRuntimeAliasSource(aliasFileName, distDir, fsImpl, parser),
+    );
   }
 }
 

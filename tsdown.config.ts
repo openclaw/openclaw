@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createEmittedModuleRegionsPlugin } from "./scripts/lib/emitted-module-regions.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
@@ -906,8 +907,14 @@ const configs: UserConfig[] = [
       // Explicit ESM chunks avoid repeated package-format parsing in Node;
       // named entrypoints retain their public .js paths.
       outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
+      minify: {
+        codegen: { removeWhitespace: true, legalComments: "inline" },
+        compress: false,
+        mangle: false,
+      },
       plugins: [
         createStateSchemaInlinePlugin(),
+        createEmittedModuleRegionsPlugin(),
         createGatewayRunChunkMetadataPlugin(),
         createRuntimeDependencyOwnershipBuildPlugin(),
       ],
@@ -961,7 +968,12 @@ const configs: UserConfig[] = [
             shouldAlwaysBundleDependency(id) || shouldBundleRuntimeSqliteDependency(id),
         },
         outputOptions: { codeSplitting: false },
-        plugins: [createStateSchemaInlinePlugin()],
+        minify: {
+          codegen: { removeWhitespace: true, legalComments: "inline" },
+          compress: false,
+          mangle: false,
+        },
+        plugins: [createStateSchemaInlinePlugin(), createEmittedModuleRegionsPlugin()],
       },
       false,
     ),

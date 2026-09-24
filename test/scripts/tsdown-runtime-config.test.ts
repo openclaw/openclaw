@@ -6,6 +6,7 @@ import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import type { TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
@@ -159,24 +160,30 @@ describe("tsdown config", () => {
     },
   );
 
-  it("minifies only the sealed deploy worker while preserving runtime names", () => {
+  it("compacts only shared and standalone runtime graphs without compression or mangling", () => {
     const configs = asConfigArray(tsdownConfig);
-    const deployWorker = configs.find((config) => entryKeys(config).includes("worker/worker"));
-    const rsyncReceiver = configs.find((config) =>
-      entryKeys(config).includes("worker/workspace-rsync-receiver"),
+    const compactGraphs = new Set([
+      requireUnifiedDistGraph(),
+      ...Object.keys(standaloneRuntimeProcessBuildEntries).map(requireStandaloneRuntimeGraph),
+    ]);
+    const sealedGraphs = new Set(
+      ["worker/worker", "worker/image-processor.worker", "worker/sqlite-store.worker"].map(
+        requireStandaloneRuntimeGraph,
+      ),
     );
-    const githubExecLauncher = configs.find((config) =>
-      entryKeys(config).includes("worker/github-exec-launcher"),
-    );
-
-    expect(deployWorker?.minify).toEqual({
-      codegen: true,
-      compress: true,
-      mangle: { keepNames: true },
-    });
-    expect(rsyncReceiver?.minify).toBeUndefined();
-    expect(githubExecLauncher?.minify).toBeUndefined();
-    expect(requireUnifiedDistGraph().minify).toBeUndefined();
+    for (const config of configs) {
+      expect(config.minify).toEqual(
+        compactGraphs.has(config)
+          ? {
+              codegen: { removeWhitespace: true, legalComments: "inline" },
+              compress: false,
+              mangle: false,
+            }
+          : sealedGraphs.has(config)
+            ? { codegen: true, compress: true, mangle: { keepNames: true } }
+            : undefined,
+      );
+    }
   });
 
   it.each([

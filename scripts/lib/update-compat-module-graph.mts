@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { readEmittedModuleRegions } from "./emitted-module-regions.mts";
 import type { NativeTypeScriptParser } from "./native-typescript.mts";
 import { buildUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
@@ -51,7 +52,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
     const resolvedFile = target(specifier);
     return resolvedFile ? { file: resolvedFile, symbol } : { external: specifier, symbol };
   };
-  const regions = [...sourceFile.text.matchAll(/^\/\/#region (.+)$/gm)];
+  const regions = sourceModule === undefined ? readEmittedModuleRegions(sourceFile.text) : [];
   let regionIndex = 0;
   let regionOwner: string | undefined;
   for (const statement of sourceFile.statements) {
@@ -117,7 +118,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
       if (!region || region.index >= statement.getStart()) {
         break;
       }
-      regionOwner = region[1];
+      regionOwner = region.owner;
       regionIndex += 1;
     }
     const owner = sourceModule ?? regionOwner;
