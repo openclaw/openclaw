@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { repairSqliteIndexCorruption } from "./sqlite-index-corruption.js";
+import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 import { createPrivateSqliteTempDirectorySync } from "./sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 

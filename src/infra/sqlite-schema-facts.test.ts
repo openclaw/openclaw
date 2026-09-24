@@ -10,7 +10,7 @@ import {
 } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema } from "./sqlite-schema-facts.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 describe("admitted SQLite schema facts", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,6 +37,68 @@ describe("admitted SQLite schema facts", () => {
         database.close();
       }
     }
+  });
+
+  it.each(["transaction", "implicit snapshot"])(
+    "observes foreign commits on the next read while preserving an active %s",
+    (pin) => {
+      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
+      const reader = openDatabase(undefined, true, filename);
+      reader.exec("PRAGMA journal_mode=WAL");
+      // Bypass local schema publications, as a worker or another process does.
+      const writer = new DatabaseSync(filename);
+      databases.push(writer);
+      const hasTable = (name: string) =>
+        runSqliteReadOperationSync(reader, () => tableExists(reader, name));
+      expect(hasTable("committed")).toBe(false);
+      writer.exec("BEGIN; CREATE TABLE committed (id); PRAGMA user_version = 2; COMMIT;");
+      expect(hasTable("committed")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+
+      const readSnapshot = () => {
+        expect(hasTable("later")).toBe(false);
+        writer.exec("BEGIN; CREATE TABLE later (id); PRAGMA user_version = 3; COMMIT;");
+        expect(hasTable("later")).toBe(false);
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+      };
+      if (pin === "transaction") {
+        reader.exec("BEGIN");
+        try {
+          reader.prepare("SELECT id FROM original").all();
+          readSnapshot();
+        } finally {
+          reader.exec("COMMIT");
+        }
+      } else {
+        runSqlitePinnedReadSnapshotSync(reader, readSnapshot);
+      }
+      expect(hasTable("later")).toBe(true);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
+    },
+  );
+
+  it("ends nested read scopes on exceptions and before async continuations", async () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
+    const reader = openDatabase(undefined, true, filename);
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    const hasTable = (name: string) =>
+      runSqliteReadOperationSync(reader, () => tableExists(reader, name));
+    expect(() =>
+      runSqliteReadOperationSync(reader, () => {
+        expect(hasTable("committed")).toBe(false);
+        throw new Error("read failed");
+      }),
+    ).toThrow("read failed");
+    writer.exec("CREATE TABLE committed (id)");
+    expect(hasTable("committed")).toBe(true);
+
+    await runSqliteReadOperationSync(reader, async () => {
+      expect(hasTable("later")).toBe(false);
+      await Promise.resolve();
+      writer.exec("CREATE TABLE later (id)");
+      expect(hasTable("later")).toBe(true);
+    });
   });
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {

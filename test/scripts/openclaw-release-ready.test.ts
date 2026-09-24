@@ -139,7 +139,6 @@ describe("release readiness contract", () => {
         tag,
         npm_dist_tag: channel,
         stable_soak_waiver: "Operator accepted missing soak",
-        lane_waiver: "Telegram lane blocked: operator approved",
         publish_openclaw_npm: true,
         publish_docker_only: false,
       }),
@@ -147,7 +146,6 @@ describe("release readiness contract", () => {
     expect(value).toEqual({
       ...inputs({ tag, npm_dist_tag: channel }),
       stable_soak_waiver: "Operator accepted missing soak",
-      lane_waiver: "Telegram lane blocked: operator approved",
       plugin_publish_scope: "all-publishable",
       publish_openclaw_npm: "true",
       publish_docker_only: "false",

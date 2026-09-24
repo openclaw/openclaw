@@ -1,4 +1,9 @@
-import { executeAuthProfileReadCommand } from "../agents/auth-profiles/read.worker.js";
+import {
+  readAuthProfileRows,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "../agents/auth-profiles/sqlite-json.js";
+import { isMissingDatabasePath } from "../agents/auth-profiles/sqlite-read-pool.js";
+import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import {
   readNativeHookRelayBridgeSnapshotFromDatabase,
   listNativeHookRelayBridgeSnapshotsInDatabase,
@@ -92,14 +97,9 @@ import {
 } from "../plugins/official-external-plugin-catalog-snapshot-store.kernel.js";
 import { HostedCatalogSignedFeedMonotonicityError } from "../plugins/official-external-plugin-catalog-source.js";
 import {
-  ensureProjectRegistrySchema,
-  insertProjectRegistryInDatabase,
-  listProjectRegistryInDatabase,
-  removeProjectRegistryInDatabase,
-  resolveProjectCloneRefreshOwnerInDatabase,
-  resolveProjectRegistryInDatabase,
-  resolveRecordedProjectRootInDatabase,
-} from "../projects/project-registry.kernel.js";
+  executeProjectRegistryCommand,
+  isProjectRegistryCommand,
+} from "../projects/project-registry.worker.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -121,6 +121,7 @@ import {
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
@@ -132,13 +133,13 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerRuntimeCommand,
   OpenClawStateWorkerInspectionOperations,
   OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
+import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
 
@@ -197,7 +198,40 @@ export function executeSharedStateCommand(
     command.type === "authProfiles.sharedOwnership" ||
     command.type === "authProfiles.personal"
   ) {
-    return executeAuthProfileReadCommand(command, context.databasePath);
+    const read = () => {
+      const options = {
+        path: context.databasePath,
+        env: getSqliteWorkerStateContext().environment,
+      };
+      if (command.type === "authProfiles.sharedOwnership") {
+        return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
+      }
+      if (command.type === "authProfiles.personal") {
+        return readUserModelAuthProfile(command.input.profileId, options);
+      }
+      const missing: AuthProfileRowRead = {
+        store: { status: "missing", reason: "database" },
+        state: { status: "missing", reason: "database" },
+        cacheable: false,
+      };
+      try {
+        return (
+          withExistingOpenClawStateDatabaseReadOnly(
+            ({ db }) => readAuthProfileRows(db, context.databasePath, "shared-state"),
+            options,
+          ) ?? missing
+        );
+      } catch {
+        return isMissingDatabasePath(context.databasePath)
+          ? missing
+          : {
+              store: { status: "unreadable" as const },
+              state: { status: "unreadable" as const },
+              cacheable: false,
+            };
+      }
+    };
+    return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
   }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
     return executePromotionCommand(
@@ -446,18 +480,6 @@ export function executeSharedStateCommand(
   if (command.type === "nativeHookRelay.listSnapshots") {
     return listNativeHookRelayBridgeSnapshotsInDatabase(database);
   }
-  if (
-    command.type === "nativeHookRelay.write" ||
-    command.type === "nativeHookRelay.renew" ||
-    command.type === "nativeHookRelay.deleteOwned" ||
-    command.type === "nativeHookRelay.prune"
-  ) {
-    return executeNativeHookRelayMutation(command, {
-      database,
-      path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
-    });
-  }
   if (command.type === "sessionUpstream.listWatched") {
     return listWatchedSessionUpstreamLinksInDatabase(database.db);
   }
@@ -472,6 +494,14 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (
+    command.type === "nativeHookRelay.write" ||
+    command.type === "nativeHookRelay.renew" ||
+    command.type === "nativeHookRelay.deleteOwned" ||
+    command.type === "nativeHookRelay.prune"
+  ) {
+    return executeNativeHookRelayMutation(command, writeOptions);
+  }
   if (command.type === "sandboxRegistry.insertIfMissing") {
     return importSandboxRegistryRow(command.input, writeOptions);
   }
@@ -584,67 +614,14 @@ export function executeSharedStateCommand(
       writeOptions,
     );
   }
-  if (command.type === "projects.findRoot") {
-    ensureProjectRegistrySchema(writeOptions);
-    return resolveRecordedProjectRootInDatabase(database.db, command.input.repoRoot);
-  }
-  if (command.type === "projects.list") {
-    ensureProjectRegistrySchema(writeOptions);
-    return listProjectRegistryInDatabase(database.db);
-  }
   if (isWorktreeRegistryReadCommand(command)) {
     return executeWorktreeRegistryReadCommand(database.db, command);
   }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);
   }
-  if (command.type === "projects.resolve") {
-    ensureProjectRegistrySchema(writeOptions);
-    return resolveProjectRegistryInDatabase(database.db, command.input.id);
-  }
-  if (command.type === "projects.insert") {
-    ensureProjectRegistrySchema(writeOptions);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project registry mutation requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return insertProjectRegistryInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.insert" },
-    );
-  }
-  if (command.type === "projects.resolveRefreshOwner") {
-    ensureProjectRegistrySchema(writeOptions);
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project refresh requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return resolveProjectCloneRefreshOwnerInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.refresh-owner.resolve" },
-    );
-  }
-  if (command.type === "projects.remove") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const { project, lease } = command.input;
-        if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-          throw new Error("Project registry mutation requires its checkout lifecycle lease");
-        }
-        assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-        return removeProjectRegistryInDatabase(db, project);
-      },
-      writeOptions,
-      { operationLabel: "projects.registry.remove" },
-    );
+  if (isProjectRegistryCommand(command)) {
+    return executeProjectRegistryCommand(command, writeOptions);
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

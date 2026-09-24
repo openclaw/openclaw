@@ -22,6 +22,7 @@ import {
 } from "./doctor-config-preflight-plugin-index.js";
 import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
 import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
+import { isRecord, visitAgentConfigScopes } from "./doctor/shared/legacy-config-record-shared.js";
 
 export function createDoctorConfigRepairPlanner(params: {
   options: DoctorConfigPreflightOptions;
@@ -76,6 +77,34 @@ export function createDoctorLegacyConfigMigration(params: {
   };
 }
 
+function assertPreJuneConfigMigrated(config: unknown): void {
+  if (!isRecord(config)) {
+    return;
+  }
+  const retired = Object.hasOwn(config, "heartbeat") ? ["heartbeat"] : [];
+  visitAgentConfigScopes(config, (scope, configPath) => {
+    const keys =
+      configPath === "agents.defaults"
+        ? ["llm", "embeddedPi", "embeddedHarness"]
+        : ["embeddedPi", "embeddedHarness"];
+    for (const key of keys) {
+      if (Object.hasOwn(scope, key)) {
+        retired.push(`${configPath}.${key}`);
+      }
+    }
+    if (isRecord(scope.sandbox) && Object.hasOwn(scope.sandbox, "perSession")) {
+      retired.push(`${configPath}.sandbox.perSession`);
+    }
+  });
+  if (retired.length > 0) {
+    throw new Error(
+      `Config contains retired pre-June keys: ${retired.join(", ")}. Doctor cannot remove these settings safely. ` +
+        `Install OpenClaw 2026.9.5, run "${formatCliCommand("openclaw doctor --fix")}", then upgrade to latest. ` +
+        "See https://docs.openclaw.ai/install/updating#upgrading-very-old-versions.",
+    );
+  }
+}
+
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
   enabled: boolean;
@@ -85,6 +114,8 @@ export async function prepareDoctorConfigRecovery(params: {
 }) {
   let snapshotRead = params.snapshotRead;
   let snapshot = snapshotRead.snapshot;
+  // Refuse before backup recovery or unknown-key cleanup can discard authored settings.
+  assertPreJuneConfigMigrated(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
   let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
   if (params.enabled && snapshot.exists && !snapshot.valid) {
     const pendingPluginInstallConfig =

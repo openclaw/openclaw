@@ -13,7 +13,7 @@ How the chat pane behaves: the session rail, the composer, and how the transcrip
 
 ## Session rail and side chat
 
-While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
+While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
 
 Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset or deletion, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw` or `/side` in the main Control UI composer and press Enter to open the rail and focus its question box. Selecting `/btw` from the slash menu does the same. Add a question after either command to send it to Side chat; focus moves to its question box when the request finishes. Other clients keep their existing BTW behavior.
 
@@ -22,6 +22,14 @@ Opening Side chat, reopening its panel, or selecting its tab focuses the questio
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+
+Drop an image onto Side chat or paste one into its question box. You can send it
+with a written question or on its own. Side chat accepts image attachments, not
+other file types; its previews never add attachments to the main composer.
+Images are available only for the current question and are not retained in the
+restored text thread. Reattach an image when asking a later question about it.
+A failed question keeps its image for **Retry** while the current pane is retained;
+reloading the page discards that failed input.
 
 Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
@@ -433,11 +441,15 @@ cancel native clipboard writes that the browser has already accepted.
 
 ### Markdown tables
 
-Markdown tables wrap headings and cell text to fit the conversation. On wide panes,
-top-level assistant tables can use extra space without widening the surrounding prose.
-Dense tables still scroll horizontally; ordinary inline tables grow with the conversation
-instead of adding a vertical scrollbar. **Copy table** copies tab-separated cells, and
-**Expand table** above the table opens a larger view with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
+Markdown tables wrap headings and cell text to fit the conversation. On wide desktop
+panes, top-level assistant tables stay at the reading width when their content fits
+and use extra space only as needed, without widening the surrounding prose. Long
+cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Wide desktop tables use compact icon-only controls above the header. Mobile and
+phone-landscape views retain larger touch controls and a visible **Expand table** label.
+Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
+**Copy table** copies tab-separated cells, and **Expand table** opens a larger view
+with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 

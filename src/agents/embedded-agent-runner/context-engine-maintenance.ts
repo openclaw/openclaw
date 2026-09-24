@@ -2,7 +2,6 @@
  * Schedules and runs deferred context-engine turn maintenance.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSameContextEngineInstance,
@@ -25,12 +24,9 @@ import {
 import {
   completeTaskRunByRunIdAsync,
   failTaskRunByRunIdAsync,
+  startTaskRunByRunIdAsync,
 } from "../../tasks/detached-task-runtime.async.js";
-import {
-  createQueuedTaskRun,
-  recordTaskRunProgressByRunId,
-  startTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
+import { recordTaskRunProgressByRunId } from "../../tasks/detached-task-runtime.js";
 import {
   cancelTaskByIdForOwner,
   findTaskByRunIdForOwner,
@@ -41,16 +37,15 @@ import {
   createSessionMaintenanceOwner,
   waitForSessionMaintenance,
 } from "../session-maintenance/coordinator.js";
+import { executeContextEngineMaintenance } from "./context-engine-maintenance-execution.js";
 import {
-  executeContextEngineMaintenance,
-  type ContextEngineMaintenanceParams,
-} from "./context-engine-maintenance-execution.js";
-import {
+  buildTurnMaintenanceTaskDescriptor,
   disposeDeferredMaintenanceContextEngine,
   mergeContextEngineFactoryWork,
   runContextEngineMaintenanceWork,
   type ContextEngineMaintenanceResources,
 } from "./context-engine-maintenance-work.js";
+import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
 
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
@@ -58,6 +53,7 @@ const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
+
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   contextEngine: ContextEngine;
   sessionKey: string;
@@ -177,33 +173,6 @@ export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: stri
   await waitForSessionMaintenance(sessionKey);
 }
 
-function buildTurnMaintenanceTaskDescriptor(params: {
-  sessionKey: string;
-  runId?: string;
-  notifyPolicy?: "silent" | "done_only" | "state_changes";
-  deliveryStatus?: "not_applicable" | "pending";
-}) {
-  const runId =
-    params.runId ??
-    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
-  return createQueuedTaskRun({
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-    sourceId: TURN_MAINTENANCE_TASK_KIND,
-    requesterSessionKey: params.sessionKey,
-    ownerKey: params.sessionKey,
-    scopeKind: "session",
-    runId,
-    label: "Context engine turn maintenance",
-    task: "Deferred context-engine maintenance after turn.",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    // Fast maintenance stays silent and must not create a one-task flow.
-    // Long-running and failed workers promote it to pending before notifying.
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    preferMetadata: true,
-  });
-}
-
 async function runDeferredTurnMaintenanceWorker(
   params: DeferredTurnMaintenanceScheduleParams & {
     abortSignal: AbortSignal;
@@ -223,13 +192,17 @@ async function runDeferredTurnMaintenanceWorker(
 
   try {
     const runningAt = Date.now();
-    startTaskRunByRunId({
-      ...taskRun,
-      startedAt: runningAt,
-      lastEventAt: runningAt,
-      progressSummary: "Running deferred maintenance.",
-      eventSummary: "Starting deferred maintenance.",
-    });
+    // Admit running state through the same retained workers that will settle completion.
+    await startTaskRunByRunIdAsync(
+      {
+        ...taskRun,
+        startedAt: runningAt,
+        lastEventAt: runningAt,
+        progressSummary: "Running deferred maintenance.",
+        eventSummary: "Starting deferred maintenance.",
+      },
+      params.assertActive,
+    );
     const longRunningTimer = setTimeout(() => {
       try {
         makeTaskVisible("state_changes");
@@ -308,10 +281,7 @@ async function runDeferredTurnMaintenanceWorker(
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!sessionKey) {
-    return undefined;
-  }
+  const { sessionKey } = params;
   if (isGatewayDraining()) {
     params.onScheduleFailure?.(new GatewayDrainingError());
     return undefined;

@@ -3,9 +3,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { repairSqliteIndexCorruption } from "./sqlite-index-corruption.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
+import { repairSqliteIndexCorruption } from "./sqlite-index-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

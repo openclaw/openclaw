@@ -582,8 +582,11 @@ async function planWorkflowAdmission(input) {
         requested: requestedBaselines,
       });
     } else {
-      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
-        await import("./lib/upgrade-survivor-policy.mjs");
+      const {
+        assertSupportedUpgradeSurvivorBaselineSpec,
+        normalizeUpgradeSurvivorBaselineSpec,
+        parseUpgradeSurvivorBaselineSpecs,
+      } = await import("./lib/upgrade-survivor-policy.mjs");
       const specs = [
         normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
         ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
@@ -591,6 +594,7 @@ async function planWorkflowAdmission(input) {
       if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
         throw new Error("unresolved upgrade baselines at the execution boundary");
       }
+      specs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
     }
   }
   const sourcePaths = new Set();
@@ -987,13 +991,8 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     tooling: source,
     selected: createFrozenTargetSource(roots.selected, input.selected.sha),
   };
-  const {
-    DEFAULT_LIVE_RETRIES,
-    parseLaneSelection,
-    parseLiveMode,
-    parseProfile,
-    resolveDockerE2ePlan,
-  } = await import("./lib/docker-e2e-plan.mts");
+  const { parseLaneSelection, parseLiveMode, parseProfile, resolveDockerE2ePlan } =
+    await import("./lib/docker-e2e-plan.mts");
   const { classifyReleaseTrain, parseReleaseVersion } = await import("./lib/release-version.mjs");
   const { resolveFrozenCodexCompatibility } = await import("./resolve-frozen-codex-live-suite.mjs");
   const { resolveFsSafeNativeContract } = await import("./resolve-fs-safe-native-contract.mjs");
@@ -1054,7 +1053,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       frozenTarget: { mode: "inert", source: sources.selected },
       includeOpenWebUI: normalizedDocker.includeOpenWebUI,
       liveMode: normalizedDocker.liveMode,
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: (lanes) => lanes,
       planReleaseAll: normalizedDocker.planReleaseAll,
       profile: normalizedDocker.profile,

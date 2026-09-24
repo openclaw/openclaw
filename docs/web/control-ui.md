@@ -37,12 +37,15 @@ The sidebar loads automation status once per connection and refreshes after auto
 
 Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
 
-While an agent works, the working indicator shows its latest completed commentary
-or preamble when the model and runtime provide one. New updates replace that
-status, and the status disappears when the run ends. Approval and startup messages
-take priority. Earlier updates remain in the transcript; **Keep commentary** in
-the chat view menu controls whether commentary stays visible after the run.
-Runtimes without commentary keep the usual working indicator.
+While an agent works, completed commentary or preambles appear inline in the
+conversation when the model and runtime provide them. Narration keeps its
+formatting and position alongside tool activity; the working indicator remains
+a separate status for execution, startup, or approval. **Keep commentary** in
+the chat view menu controls whether commentary stays visible after the run,
+not whether the active run’s narration survives a history refresh. Completed
+dashboard turns collapse their narration and tool activity under **Worked for …**
+above the answer. Expanding it restores the sequence with the existing tool-call
+groups. When no run duration is available, the heading reads **Worked**.
 
 Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
 and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.

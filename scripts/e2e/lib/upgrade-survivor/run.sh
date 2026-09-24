@@ -191,49 +191,31 @@ export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON" "$ARTIFACT_ROOT/backup-rollback.json" "$ARTIFACT_ROOT/baseline-companion.json"
 : >"$PHASE_LOG"
 
-validate_baseline_package_spec() {
-  local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-    return 0
-  fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
-  return 1
+normalize_baseline_spec() {
+  node --input-type=module - "$1" <<'NODE'
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
+  normalizeUpgradeSurvivorBaselineSpec,
+} from "./scripts/lib/upgrade-survivor-policy.mjs";
+const spec = normalizeUpgradeSurvivorBaselineSpec(process.argv[2]);
+if (!spec) throw new Error("OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty");
+assertSupportedUpgradeSurvivorBaselineSpec(spec);
+process.stdout.write(spec);
+NODE
 }
 
 normalize_baseline() {
-  local raw="${BASELINE_RAW//[[:space:]]/}"
-  if [ -z "$raw" ]; then
-    echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty" >&2
-    return 1
-  fi
-  case "$raw" in
-    openclaw@*)
-      baseline_spec="$raw"
-      baseline_version="${raw#openclaw@}"
-      ;;
-    *@*)
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@<version> or a bare version" >&2
-      return 1
-      ;;
-    *)
-      baseline_version="$raw"
-      baseline_spec="openclaw@$raw"
-      ;;
-  esac
+  baseline_spec="$(normalize_baseline_spec "$BASELINE_RAW")" || return "$?"
+  baseline_version="${baseline_spec#openclaw@}"
   case "$baseline_version" in
     latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
-    dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
-      return 1
-      ;;
     *)
       baseline_version_expected="1"
       ;;
   esac
-  validate_baseline_package_spec "$baseline_spec"
 }
 
 validate_update_restart_mode() {
@@ -1010,6 +992,7 @@ install_baseline() {
     return 1
   fi
   installed_version="$(read_installed_version)"
+  normalize_baseline_spec "$installed_version" >/dev/null || return "$?"
   if [ "$baseline_version_expected" = "1" ] && [ "$installed_version" != "$baseline_version" ]; then
     echo "baseline package version mismatch: expected $baseline_version, got $installed_version" >&2
     cat "$(package_root)/package.json" >&2 || true
@@ -1592,10 +1575,15 @@ update_candidate() {
 }
 
 assert_workshop_published_refusal() {
+  local damage_kind="${1:-catalog}"
   local refusal_exit=0
   update_candidate || refusal_exit=$?
   node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs refusal \
-    "$initial_update_observation_root" "$(package_root)" "$refusal_exit" || return "$?"
+    "$initial_update_observation_root" "$(package_root)" "$refusal_exit" "$damage_kind" || return "$?"
+  if [ "$damage_kind" = "physical" ]; then
+    cp "$UPDATE_JSON" "$ARTIFACT_ROOT/physical-baseline-update.json"
+    cp "$UPDATE_ERR" "$ARTIFACT_ROOT/physical-baseline-update.err"
+  fi
   update_outcome="refused-before-candidate"
 }
 
@@ -2245,6 +2233,9 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase resolve-workshop-candidate resolve_candidate_version
   phase capture-workshop-baseline node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
+  phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
+  phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
+  phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore
   phase seed-workshop-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed baseline
   phase assert-workshop-published-refusal assert_workshop_published_refusal
   phase repair-workshop-baseline run_workshop_doctor baseline "$ARTIFACT_ROOT/baseline-doctor.log"
@@ -2254,6 +2245,9 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase seed-workshop-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed candidate
   phase repair-workshop-candidate run_workshop_doctor candidate "$DOCTOR_LOG"
   phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
+  phase seed-physical-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed candidate
+  phase repair-physical-candidate run_workshop_doctor candidate-physical "$ARTIFACT_ROOT/physical-candidate-doctor.log"
+  phase assert-physical-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-doctor "$workshop_doctor_observation_root" "$ARTIFACT_ROOT/physical-candidate-doctor.log"
   phase assert-workshop-recovery node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs complete
   run_completed="1"
   echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor, recovered upgrade, and explicit candidate Doctor succeeded."

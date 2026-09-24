@@ -30,7 +30,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 // The installed package retains dispatcher composition under Bun.
 import { Agent, fetch as undiciFetch } from "undici/index.js";
-import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -43,6 +42,8 @@ import {
   findTelegramRequestAuthorityError,
   getTelegramRequestAuthority,
 } from "./request-authority.js";
+
+export { normalizeTelegramApiRoot as resolveTelegramApiBase } from "./api-root.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -219,10 +220,6 @@ function buildTelegramConnectOptions(params: {
   return connect;
 }
 
-function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyAgentConfigured(env);
-}
-
 function resolveOpenClawProxyUrlForTelegram(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -383,32 +380,14 @@ function logResolverNetworkDecisions(params: {
 
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-
-  let queueIndex = 0;
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex++];
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    if (typeof current === "object") {
+  for (const current of collectErrorGraphCandidates(err, (candidate) => [
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ])) {
+    if (current && typeof current === "object") {
       const code = (current as { code?: unknown }).code;
       if (typeof code === "string" && code.trim()) {
         codes.add(code.trim().toUpperCase());
-      }
-      const cause = (current as { cause?: unknown }).cause;
-      if (cause && !seen.has(cause)) {
-        queue.push(cause);
-      }
-      const errors = (current as { errors?: unknown }).errors;
-      if (Array.isArray(errors)) {
-        for (const nested of errors) {
-          if (nested && !seen.has(nested)) {
-            queue.push(nested);
-          }
-        }
       }
     }
   }
@@ -421,7 +400,7 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
-function shouldUseTelegramTransportFallback(err: unknown): boolean {
+export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
   if (findTelegramRequestAuthorityError(err)) {
     return false;
   }
@@ -474,10 +453,6 @@ function describeProxyTunnelFailure(
     }
   }
   return undefined;
-}
-
-export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
-  return shouldUseTelegramTransportFallback(err);
 }
 
 export type TelegramTransport = {
@@ -610,7 +585,7 @@ export function resolveTelegramTransport(
   const explicitProxyUrl = effectiveProxyFetch
     ? getProxyUrlFromFetch(effectiveProxyFetch)
     : undefined;
-  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyAgentConfigured();
   const managedProxyUrl =
     !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
@@ -687,7 +662,7 @@ export function resolveTelegramTransport(
   };
 
   const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {
-    if (!shouldUseTelegramTransportFallback(err)) {
+    if (!shouldRetryTelegramTransportFallback(err)) {
       return;
     }
     const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
@@ -810,7 +785,7 @@ export function resolveTelegramTransport(
         return response;
       } catch (caught) {
         signal?.throwIfAborted();
-        if (!shouldUseTelegramTransportFallback(caught)) {
+        if (!shouldRetryTelegramTransportFallback(caught)) {
           throw caught;
         }
         const response = await requestFetch(input, init ?? {});
@@ -868,7 +843,7 @@ export function resolveTelegramTransport(
           );
         }
         err = caught;
-        if (!shouldUseTelegramTransportFallback(err)) {
+        if (!shouldRetryTelegramTransportFallback(err)) {
           throw err;
         }
         recordAttemptFailure(attemptIndex, err);
@@ -906,11 +881,4 @@ export function resolveTelegramFetch(
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }
 
-/**
- * Resolve the Telegram Bot API base URL from an optional `apiRoot` config value.
- * Returns a trimmed URL without trailing slash, or the standard default.
- */
-export function resolveTelegramApiBase(apiRoot?: string): string {
-  return normalizeTelegramApiRoot(apiRoot);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

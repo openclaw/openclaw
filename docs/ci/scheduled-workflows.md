@@ -306,6 +306,16 @@ Quality stays separate from security so quality findings can be scheduled, measu
 
 ## Maintenance workflows
 
+### PR CI Sweeper
+
+`PR CI Sweeper` checks recent pull requests hourly at minute 7. It repairs missing
+`pull_request` CI and GitHub `startup_failure` runs through a bounded close/reopen
+cycle, warning when it starts infrastructure recovery. Drafts, recently updated
+or conflicted PRs, and PRs with auto-merge enabled remain unchanged. Attached
+queued, running, failed, or canceled CI prevents recovery: cancellation does not
+prove a provider failure or that tests never executed, so the sweeper never
+automatically re-executes those workflows.
+
 ### Comment automation
 
 Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer

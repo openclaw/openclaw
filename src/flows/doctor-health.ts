@@ -185,7 +185,15 @@ async function runDoctorHealthFlowWithResult(
           return undefined;
         }
       }
-      const schemas = databasePreflight ?? (await prepareDoctorDatabasePreflight());
+      // An update may supply discovery from before maintenance excluded config publishers.
+      const refreshRecoveryInventory =
+        maintenance &&
+        databasePreflight?.agentDatabaseMigrationDiscovery?.discovery.deletionJournal.status ===
+          "unavailable";
+      let schemas =
+        databasePreflight && !refreshRecoveryInventory
+          ? databasePreflight
+          : await prepareDoctorDatabasePreflight();
       const { recordAgentDatabaseAdmissions } =
         await import("../state/agent-database-admission.js");
       // Repair owns fresh file decisions until its migration graph finishes.
@@ -207,11 +215,13 @@ async function runDoctorHealthFlowWithResult(
           repairOpenClawStateDatabaseReadabilityForDoctor,
         } = await import("../state/openclaw-state-db.js");
         // Restore physical indexes, then legacy catalog readability before config discovery.
+        let repairedState = false;
         for (const repair of [
           repairOpenClawStateDatabaseIndexesForDoctor,
           repairOpenClawStateDatabaseReadabilityForDoctor,
         ]) {
           const result = repair({ env: process.env });
+          repairedState ||= result.changes.length > 0;
           if (result.warnings.length > 0) {
             throw new Error(result.warnings.join("\n"));
           }
@@ -219,6 +229,23 @@ async function runDoctorHealthFlowWithResult(
             effectiveRuntime.log(change);
           }
         }
+        if (repairedState) {
+          schemas = await prepareDoctorDatabasePreflight();
+        }
+      }
+
+      const { repairDoctorAgentDeletionJournal } =
+        await import("../commands/doctor-agent-deletion-journal.js");
+      const deletionJournal = await repairDoctorAgentDeletionJournal({
+        preflight: schemas,
+        shouldRepair: prompter.shouldRepair,
+        env: process.env,
+      });
+      for (const message of deletionJournal.changes) {
+        effectiveRuntime.log(message);
+      }
+      for (const message of deletionJournal.warnings) {
+        effectiveRuntime.log(message);
       }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
@@ -276,6 +303,7 @@ async function runDoctorHealthFlowWithResult(
         stateDirExistedAtStart,
         gatewayMaintenanceActive: maintenance !== undefined,
         agentDatabaseRefusals,
+        updateWarnings: deletionJournal.warnings,
         preparedAgentCount: Math.max(
           admissionSchemas.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets.length ??
             0,

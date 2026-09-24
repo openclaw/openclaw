@@ -86,6 +86,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     } as unknown as import("./server-methods/types.js").GatewayRequestContext;
     routing.load.mockImplementation(() => ({
       ...target,
+      agentId: "main",
       canonicalKey: target.sessionKey,
       cfg: {},
       entry: loadSessionEntry(target),

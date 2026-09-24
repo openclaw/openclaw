@@ -168,7 +168,7 @@ alpha tag and matching alpha branch.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
-intentionally want the broad advisory provider/media matrix. Stable and full
+intentionally want the broad provider/media matrix. Stable and full
 release checks always run the exhaustive live/E2E and Docker release-path soak;
 the beta profile can opt in with `run_release_soak=true`.
 
@@ -180,7 +180,7 @@ CLI's own first-scenario cancellation.
 
 - `beta` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
-- `full` runs the broad advisory provider/media matrix.
+- `full` runs the broad provider/media matrix.
 
 The umbrella records dispatched child run ids, and `Verify full validation`
 checks them during that parent attempt. Parent cancellation or timeout leaves
@@ -189,9 +189,8 @@ needed.
 
 For recovery, classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
-product failure changes the Code SHA. Use one diagnosis, one fix when needed,
-and one narrow `rerun_group` retry, then reassess; never widen automatically to
-`all`. Narrow evidence is not publish authorization by itself.
+product failure changes the Code SHA. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
+validation run; never retry a failed test automatically or widen to `all`. Narrow evidence is not publish authorization by itself.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 

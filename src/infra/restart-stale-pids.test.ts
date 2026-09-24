@@ -95,7 +95,8 @@ vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: mockReadGatewayOwnerLease,
 }));
 
-vi.mock("../shared/pid-alive.js", () => ({
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
   getFileLockProcessStartTime: mockGetProcessStartTime,
   isPidDefinitelyDead: mockIsPidDefinitelyDead,
 }));
