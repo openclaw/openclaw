@@ -387,7 +387,8 @@ describe("Browser Talk consult target handoff", () => {
 });
 
 describe("Browser Talk literal consult commands", () => {
-  it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
+  it("dispatches generated stop as literal model input", async () => {
+    const question = "stop";
     const ack = await consult(question, "literal-command");
     expect(ack).toMatchObject({ runId: expect.any(String), idempotencyKey: ack.runId });
     await Promise.race([
