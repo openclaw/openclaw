@@ -13,6 +13,11 @@ Runner placement is separate from coverage selection. On automatic canonical hyb
 
 ## Scope and routing
 
+Full main CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci).
+Main-push lane selection below describes the opt-in `OPENCLAW_CI_ON_PUSH=true`
+path. Hourly runs use ordinary full manual coverage, including Android, without
+changed-path filtering.
+
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, and generated-native-locale decisions while still verifying native sources.
 
 Labeler skips PR edits without title or base-branch changes. These ignored edits use isolated per-run concurrency groups so they cannot cancel running labeling or replace useful pending work. Opened, reopened, synchronize, and title/base-edit events retain the shared per-PR group and supersede older labeling runs. Issue labeling and manual backfills retain their existing non-cancelling ref group.
@@ -47,7 +52,7 @@ The iOS, macOS, and both shared OpenClawKit Periphery scans use Xcode 27 on GitH
 - **macOS fixture support** changes select the existing Mac Node gate so the shared managed-command and concurrency owner receives Darwin proof independently of Swift/app changes.
 - **macOS Swift build caches** retain the original nanosecond timestamps and content hashes of their source inputs inside `apps/macos/.build`. The restore helper replays timestamps only for byte-identical regular files with matching permissions in the current input inventory; changed, missing, linked, or invalid entries keep their checkout metadata and invalidate through SwiftPM normally. The v6 archive keys include the phase, helper, toolchain, package graph, and source identities, with same-phase, same-graph prefix reuse. Each phase starts with a cold seed instead of restoring the former combined build archive, then records metadata immediately before its own trusted save. Both phases may restore the shared SwiftPM dependency cache; its sole eligible writer is `tests` in regular CI or `release` in full validation. Candidate cache trust is unchanged: cache-off validation compiles every selected phase cold. Historical targets retain their target-owned build commands.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
-- **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
+- **Docs on opt-in `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
 - **TUI PTY** runs two built-CLI artifact canaries in `build-artifacts` on main and ordinary manual/release CI: a local model roundtrip and a real Gateway connection. The complete suite is defined in `test/vitest/vitest.tui-pty.config.ts`; canonical pull-request fallbacks and manual/release full plans retain its `core-runtime-tui-pty` descriptor. CI consumes that descriptor only through the built-artifact selection flag, so the full suite has no executing matrix row; manual and release CI also run only the canaries. Canonical `main` push compaction omits the full descriptor while keeping the canaries.
 - **SQLite session lifecycle** runs on main and ordinary manual/release CI. Main selects the built-CLI migration, restart, compaction, cleanup, and session RPC proof only when the diff touches its direct storage/session owners or a reachable session path in the embedded runner. The `build-artifacts` verifier wave runs it against the runtime already built in that job, after the isolated startup-memory measurement. It overlaps independent readers on Blacksmith and stays serial on hosted runners; manual and release dispatches always select it when the target contains the proof.
 - **CI routing-only edits, the small set of core-test fixtures the fast task runs directly, and narrow plugin contract helper edits** use a fast Node-only manifest path: `preflight`, `security-fast`, and only the fast lanes the change touches — a single `checks-fast-core` CI-routing task, the plugin contract job, or both. That path skips build artifacts, Node 24 minimum compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices.
@@ -63,8 +68,8 @@ not replace their process proofs. Push gates compare the triggering event's
 every commit in that push. They do not accumulate changes from earlier pushes
 whose pending runs were coalesced away (cancelled). If a coalesced or otherwise
 cancelled main run never executes a selected owner-path proof, that proof can
-remain unexecuted until a later non-cancelled main run selects the same lane or
-applicable manual/release validation runs. The published-upgrade survivor is
+remain unexecuted until hourly full CI, a later non-cancelled opt-in main run
+selecting the same lane, or applicable manual/release validation runs. The published-upgrade survivor is
 selected on every admitted canonical main run, so it does not depend on a later
 owner-path match. Ordinary manual CI and Full Release Validation also select it
 independently of changed paths, subject to the target's Docker seed capability.

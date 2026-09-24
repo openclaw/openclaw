@@ -163,6 +163,15 @@ ClawHub, npm postpublish verification, Docker publication, dependency/release
 evidence, and GitHub finalization. Reuse successful immutable child artifacts
 on recovery; never rebuild or republish successful versions.
 
+As soon as `openclaw@<version>` is visible on npm under the target dist-tag,
+flip the GitHub release public: un-draft it and mark it latest for stable.
+Never wait for Docker, ClawHub, the app publishers, or the parent's finalize
+step; the macOS publisher requires the public release. Dispatch the
+`sync_beta_to_stable` dist-tag sync right after core npm and before the parent's
+completion verify, which fails on a stale `beta` tag. If the parent has not
+flipped it, run
+`gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`.
+
 Native applications use [platform publication](platform-publication.md) as
 independent tasks; beta runs them only if requested. Their approval, build,
 signing or promotion does not delay npm/GitHub finalization. Recover an app

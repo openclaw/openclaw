@@ -18,8 +18,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfig: mocks.loadConfig,

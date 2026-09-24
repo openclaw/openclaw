@@ -80,6 +80,8 @@ permissions:
 run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}
 
 concurrency:
+  # Hourly children share one non-canceling slot with a coalesced pending tip.
+  # Ordinary manual/release runs remain independent; pushes cannot displace hourly work.
   # Canonical main uses run-number parity for two non-canceling slots. Each
   # slot keeps GitHub's single coalesced pending tip while its active run finishes.
   # Passive draft events must not replace runnable CI before job gates: pending
@@ -88,6 +90,7 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
         github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
+        github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'hourly-main-') && format('{0}-hourly-main-v1', github.workflow) ||
         github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -108,7 +111,9 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    # Full main CI is hourly by default; security-fast still runs on every admitted push.
+    if: (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
@@ -2535,6 +2540,26 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
+      # Full manual CI compares main with itself. Keep differential protections
+      # on the actual push range rather than losing them between hourly runs.
+      - name: Setup differential guard dependencies
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Check main push ratchets and protocol additions
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true'
+        env:
+          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
+          PROTOCOL_SINCE_BASE_SHA: ${{ steps.diff_base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          pnpm check:max-lines-ratchet --base "$BASE_SHA"
+          pnpm check:assertion-safety --base "$BASE_SHA"
+          node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
+
   # Build dist once for the built-artifact checks in this job.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
@@ -3535,10 +3560,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             coercion-helpers)
               pnpm check:coercion-helpers
@@ -5178,6 +5203,8 @@ jobs:
     name: ${{ matrix.check_name || 'checks-windows' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
+    # Full Release Validation records this native lane as advisory; it never gates npm publication.
+    continue-on-error: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     runs-on: ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'windows-2025' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'windows-2025' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
     timeout-minutes: 60
     env:
@@ -5366,6 +5393,8 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
+    # Full Release Validation records this native lane as advisory; it never gates npm publication.
+    continue-on-error: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     # Independent package builds must not consume the app test job's budget.
     # Full validation also compiles the optimized app, within the same two-job cap.
     strategy:
@@ -6678,7 +6707,7 @@ jobs:
       - docker-seed-e2e
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # The gate only aggregates job results; keep it independent of Blacksmith capacity.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -6686,6 +6715,8 @@ jobs:
       - name: Verify selected CI lanes
         shell: bash
         env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          RELEASE_PRIORITY_RUN: ${{ vars.OPENCLAW_RELEASE_PRIORITY_RUN }}
           JOB_RESULTS: |
             preflight=${{ needs.preflight.result }}|true
             security-fast=${{ needs.security-fast.result }}|true
@@ -6720,6 +6751,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # A deferred run must stay unmergeable: a skipped gate would satisfy branch protection.
+          if [[ -n "${RELEASE_PRIORITY_RUN:-}" && "${PREFLIGHT_RESULT:-}" == "skipped" ]]; then
+            echo "::error title=Deferred for release ${RELEASE_PRIORITY_RUN}::CI deferred while Full Release Validation ${RELEASE_PRIORITY_RUN} holds hosted-runner priority; pnpm frv prioritize --restore reruns it after the release seals."
+            exit 1
+          fi
+
           # Preserve raw fields: IFS splitting can erase malformed trailing
           # delimiters and turn invalid results or selection into accepted values.
           failures=0
@@ -6740,3 +6777,9 @@ jobs:
           done <<< "$JOB_RESULTS"
 
           exit "$failures"
+
+      # Downstream write-capable consumers inspect this step in the exact run
+      # attempt. A green workflow with skipped full CI is not validation evidence.
+      - name: Confirm validated workflow revision
+        if: success() && needs.preflight.outputs.checkout_revision == github.sha && (github.event_name != 'workflow_dispatch' || (!inputs.release_gate && inputs.target_ref == '' && inputs.release_scope == 'full' && inputs.include_android))
+        run: echo "Full CI validated the immutable workflow revision."

@@ -54,6 +54,10 @@ Use the original successful child run IDs and evidence output path with the
 beta verifier. Restore the draft, dependency evidence asset, proof section and
 finalization from that evidence. Never rerun publication for bytes already
 published. A failed postpublish confidence lane does not authorize unpublishing.
+Do not leave the GitHub release drafted while you recover: once npm is out, run
+`gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`
+first (see [regular release](regular-release.md#publish-and-verify)), then repair
+the parent.
 
 Follow `docs/reference/RELEASING.md`: once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm

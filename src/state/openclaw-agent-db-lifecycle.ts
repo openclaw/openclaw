@@ -81,6 +81,10 @@ export type PendingAgentDatabaseOpen = {
   promise: Promise<OpenClawAgentDatabase>;
   assertHeld?: () => void;
   operations: number;
+  /** Shared physical preparation; caller cancellation never owns another waiter. */
+  lifecyclePrepared?: Promise<void>;
+  /** Latest admitted waiter deadline; each waiter still owns its own shorter timer. */
+  lifecycleDeadlineMs?: number;
   releaseBorrow?: () => void;
   validation?: OpenClawAgentDatabaseValidation;
 };

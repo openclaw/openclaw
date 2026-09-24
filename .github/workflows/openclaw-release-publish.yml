@@ -1750,6 +1750,7 @@ jobs:
         id: core_start
         env:
           STABLE_SOAK_WAIVER: ${{ inputs.stable_soak_waiver }}
+          LANE_WAIVER: ${{ inputs.lane_waiver }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
@@ -1815,6 +1816,7 @@ jobs:
             -f tag="${RELEASE_TAG}" \
             -f preflight_only=false \
             -f stable_soak_waiver="${STABLE_SOAK_WAIVER:-}" \
+            -f lane_waiver="${LANE_WAIVER:-}" \
             -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
             -f release_publish_run_id="${GITHUB_RUN_ID}" \
             -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \

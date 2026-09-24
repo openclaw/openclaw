@@ -116,7 +116,6 @@ extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts

@@ -154,7 +154,7 @@ describe("Gateway RPC fixture session writes", () => {
           throw new Error("Projection completed without retaining the fixture history read");
         }),
       ]);
-      releasing = releaseGatewaySessionStoreFixture(dir, { settleSuiteProjection: true });
+      releasing = releaseGatewaySessionStoreFixture(dir);
       void releasing.catch(() => {});
       await boundary.promise;
       release.resolve();
@@ -301,7 +301,7 @@ describe("Gateway RPC fixture session writes", () => {
     });
     // Observe failures before disposal can revoke the queued operation.
     const outcome = Promise.allSettled([recorded]);
-    const releasing = releaseGatewaySessionStoreFixture(dir, { settleSuiteProjection: true });
+    const releasing = releaseGatewaySessionStoreFixture(dir);
     void releasing.catch(() => {});
     try {
       await yieldToEventLoop();

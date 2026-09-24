@@ -119,3 +119,38 @@ export function cacheValidityTokensEqual(
     left.sessionNodesGeneration === right.sessionNodesGeneration
   );
 }
+
+class SessionEntryRevisionConflictError extends Error {
+  readonly code = "invalid_state";
+}
+
+/** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
+export function createSessionEntryRevisionGuard(
+  database: DatabaseSync,
+  assertSourceCurrent: () => void,
+  matches: () => boolean,
+): () => void {
+  let verified: SqliteSessionEntryRevision | undefined;
+  return () => {
+    assertSourceCurrent();
+    const before = readSessionEntryCacheValidityToken(database);
+    if (verified && cacheValidityTokensEqual(verified, before)) {
+      assertSourceCurrent();
+      return;
+    }
+    if (!matches()) {
+      throw new SessionEntryRevisionConflictError(
+        "Prepared session entry facts are no longer current",
+      );
+    }
+    const after = readSessionEntryCacheValidityToken(database);
+    assertSourceCurrent();
+    // A foreign commit during the predicate must not be hidden by its later revision.
+    if (!cacheValidityTokensEqual(before, after)) {
+      throw new SessionEntryRevisionConflictError(
+        "Session entry facts changed during their mutation check",
+      );
+    }
+    verified = after;
+  };
+}

@@ -1253,7 +1253,7 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
         `child: ${childRunId} OpenClaw Release Checks completed/failure`,
       );
       expect(result.stdout).toContain(
-        "advisory: releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
+        "::warning title=Advisory lane failed::releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
       );
       expect(result.stdout).toContain(
         "advisory: releaseChecksCandidate completed/success cross_os_release_checks / macOS / packaged fresh",

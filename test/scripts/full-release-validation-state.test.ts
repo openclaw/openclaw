@@ -1317,6 +1317,72 @@ describe("release child attempt composition", () => {
 });
 
 describe("release decision policy", () => {
+  const nativeCiJobs = [
+    "checks-windows-node-test-1",
+    "checks-windows-node-test-2",
+    "macos-swift (tests)",
+    "macos-swift (packages)",
+  ].map((name) => ({ name, conclusion: "failure", status: "completed" }));
+
+  it.each(["beta", "stable", "full"])(
+    "records Windows Node shard and macOS Swift failures of the CI child without blocking %s publication",
+    (releaseProfile) => {
+      const snapshot = child("normalCi", {
+        conclusion: "success",
+        jobs: [
+          ...nativeCiJobs,
+          { name: "macos-node", conclusion: "success", status: "completed" },
+          { name: "openclaw/ci-gate", conclusion: "success", status: "completed" },
+        ],
+        status: "completed",
+      });
+      const result = classifyReleaseSnapshot({
+        children: [snapshot],
+        releaseProfile,
+        workflowRef: "main",
+      });
+      expect(result).toMatchObject({ blockers: [], blockerCount: 0, errors: [], state: "passed" });
+      expect(
+        formatReleaseStateOutcome(
+          buildReleaseStateArtifact({
+            children: [snapshot],
+            decision: result,
+            executionPlan: { parentRunAttempt: 1, sha256: "x" },
+            expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
+            mode: "decision",
+            releaseProfile,
+            rerunGroup: "all",
+          }),
+        ),
+      ).toContain(
+        "- Advisory: normalCi advisory lane checks-windows-node-test-1 ended failure; fix it in parallel, it does not block npm/ClawHub publication",
+      );
+    },
+  );
+
+  it.each(["checks-node-core-test-nondist-shard", "checks-fast-core"])(
+    "keeps CI %s blocking alongside advisory native failures",
+    (name) => {
+      const result = classifyReleaseSnapshot({
+        children: [
+          child("normalCi", {
+            conclusion: "failure",
+            jobs: [
+              ...nativeCiJobs,
+              { name, conclusion: "failure", status: "completed" },
+              { name: "openclaw/ci-gate", conclusion: "failure", status: "completed" },
+            ],
+            status: "completed",
+          }),
+        ],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      });
+      expect(result.blockers.map((blocker) => blocker.job)).toEqual([name, "openclaw/ci-gate"]);
+      expect(result.state).toBe("blocked_complete");
+    },
+  );
+
   it.each(["beta", "stable", "full"])(
     "records Windows/macOS failures without blocking %s publication",
     (releaseProfile) => {
@@ -3766,6 +3832,12 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
   it.each([
     { rerunGroup: "ci", childKey: "normalCi", jobName: "test", conclusion: "success" },
     {
+      rerunGroup: "ci",
+      childKey: "normalCi",
+      jobName: "checks-windows-node-test-1",
+      conclusion: "failure",
+    },
+    {
       rerunGroup: "cross-os",
       childKey: "releaseChecks",
       jobName: "cross_os_release_checks / Windows / packaged fresh",
@@ -3908,9 +3980,17 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       expect(valid.status, valid.stderr).toBe(0);
 
       expect(JSON.parse(readFileSync(manifestPath, "utf8")).advisoryJobs).toEqual(
-        childKey === "releaseChecks"
-          ? [{ child: childKey, job: jobName, status: "completed", conclusion, policy: "advisory" }]
-          : [],
+        jobName === "test"
+          ? []
+          : [
+              {
+                child: childKey,
+                job: jobName,
+                status: "completed",
+                conclusion,
+                policy: "advisory",
+              },
+            ],
       );
       const changed = {
         ...manifest,
@@ -4649,7 +4729,7 @@ describe("operator lane waiver", () => {
 
   it("waives a lost first-hop lane only behind green survivor lanes", () => {
     const firstHop =
-      "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-first-hop-compat)";
+      "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (update-first-hop-compat-2026.9.5)";
     const survivor = (conclusion: string) =>
       job(
         "Run package acceptance / Docker product acceptance (artifact-only) / Docker E2E targeted lanes (upgrade-survivor)",

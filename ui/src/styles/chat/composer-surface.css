@@ -347,6 +347,10 @@
   outline: none;
 }
 
+.agent-chat__composer-combobox > textarea {
+  field-sizing: content;
+}
+
 .agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;

@@ -103,6 +103,7 @@ import {
   canEnumerateAllFeishuPeers,
   isFeishuGroupReadAllowed,
   isFeishuGroupReadEnabled,
+  readFeishuChatInfoWithAuthorization,
   resolveFeishuChatReadPreliminaryAuthorization,
 } from "./read-policy.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -911,27 +912,15 @@ async function getAuthorizedFeishuChatInfo(params: {
     throw new ToolAuthorizationError("Feishu read target is not allowed.");
   }
   const client = await createFeishuActionClient(params.account);
-  let chat: Awaited<ReturnType<typeof params.runtime.getChatInfo>>;
-  try {
-    chat = await params.runtime.getChatInfo(client, preliminary.chatId);
-  } catch (error) {
-    if (preliminary.decision === "needs-metadata") {
-      assertFeishuChatReadAllowed({
-        cfg: params.ctx.cfg,
-        account: params.account,
-        chatId: preliminary.chatId,
-        ctx: params.ctx,
-      });
-    }
-    throw error;
-  }
-  assertFeishuChatReadAllowed({
-    cfg: params.ctx.cfg,
-    account: params.account,
-    chatId: preliminary.chatId,
-    chatType: resolveFeishuChatType(chat),
-    ctx: params.ctx,
-  });
+  const chat = await readFeishuChatInfoWithAuthorization(
+    {
+      cfg: params.ctx.cfg,
+      account: params.account,
+      ctx: params.ctx,
+      preliminary,
+    },
+    (chatId) => params.runtime.getChatInfo(client, chatId),
+  );
   return { chat, client };
 }
 
