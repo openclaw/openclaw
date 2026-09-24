@@ -102,13 +102,7 @@ function coerceTextInputValue(
   if (currentBranch === "string" && stringCandidateValid) {
     return value;
   }
-  if (numberCandidate !== undefined) {
-    return numberCandidate;
-  }
-  if (stringCandidateValid) {
-    return value;
-  }
-  return value;
+  return numberCandidate ?? value;
 }
 
 function stringConstraintMessage(
@@ -505,20 +499,20 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       onPatch(path, candidate);
     }
   };
+  const renderStepButton = (direction: -1 | 1) =>
+    params.compact
+      ? nothing
+      : html` <button
+          type="button"
+          class="btn btn--sm btn--icon"
+          aria-label=${`${label}: ${direction < 0 ? "-" : "+"}${numericStep}`}
+          ?disabled=${disabled}
+          @click=${() => step(direction)}
+        >
+          ${direction < 0 ? "−" : "+"}
+        </button>`;
   const control = html`
-    ${
-      params.compact
-        ? nothing
-        : html` <button
-            type="button"
-            class="btn btn--sm btn--icon"
-            aria-label=${`${label}: -${numericStep}`}
-            ?disabled=${disabled}
-            @click=${() => step(-1)}
-          >
-            −
-          </button>`
-    }
+    ${renderStepButton(-1)}
     <input
       ${ref((element) =>
         syncScalarInputIdentity(
@@ -606,19 +600,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         );
       }}
     />
-    ${
-      params.compact
-        ? nothing
-        : html` <button
-            type="button"
-            class="btn btn--sm btn--icon"
-            aria-label=${`${label}: +${numericStep}`}
-            ?disabled=${disabled}
-            @click=${() => step(1)}
-          >
-            +
-          </button>`
-    }
+    ${renderStepButton(1)}
   `;
 
   return renderFieldRow({
@@ -668,20 +650,15 @@ export function renderSelect(
           target.value = selectedValue;
           return;
         }
-        if (nextSelection === unset) {
-          const accepted =
-            params.isRequired && schema.default !== undefined
+        const accepted =
+          nextSelection === unset
+            ? params.isRequired && schema.default !== undefined
               ? onPatch(path, structuredClone(schema.default))
               : params.onRemove
                 ? params.onRemove(path)
-                : onPatch(path, undefined);
-          if (accepted === false) {
-            target.value = selectedValue;
-          }
-          return;
-        }
-        const candidate = nextSelection === nullValue ? null : options[Number(nextSelection)];
-        if (onPatch(path, candidate) === false) {
+                : onPatch(path, undefined)
+            : onPatch(path, nextSelection === nullValue ? null : options[Number(nextSelection)]);
+        if (accepted === false) {
           target.value = selectedValue;
         }
       }}

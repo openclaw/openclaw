@@ -199,8 +199,6 @@ export function createHarness(
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
-    acceptIdleWorkspaceReconciliation: (params) =>
-      placementStore.acceptIdleWorkspaceReconciliation(params),
     startDispatch: (params) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params);

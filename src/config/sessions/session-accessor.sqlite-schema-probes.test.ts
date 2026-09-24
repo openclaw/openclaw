@@ -56,15 +56,11 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       worker: await worker.execute({ type: "read", input: undefined }),
     };
     console.log(JSON.stringify(results));
-    for (const result of Object.values(results)) {
+    for (const result of Object.values(results).flatMap(Object.values)) {
       expect(result.admitted).toBe(true);
       expect(result.schemaVersion).toBe(0);
       expect(result.userVersion).toBe(0);
-      // Freshness probes run on every use so foreign commits are visible on the next
-      // read; today one session read passes through 9-11 layered uses depending on the
-      // entry point. The bound holds that ceiling until the layers share one probe per
-      // operation.
-      expect(result.dataVersion).toBeLessThanOrEqual(12 * 100);
+      expect(result.dataVersion).toBeLessThanOrEqual(100);
     }
     if (typeof writer.db.setAuthorizer === "function") {
       let allowed = true;

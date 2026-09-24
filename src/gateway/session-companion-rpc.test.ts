@@ -5,7 +5,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";

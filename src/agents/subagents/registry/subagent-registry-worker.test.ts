@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateReadContext: mocks.context,
   captureOpenClawStateWorkerContext: mocks.context,
 }));
 vi.mock("../../../state/openclaw-state-worker-store.js", () => ({

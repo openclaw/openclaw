@@ -29,7 +29,8 @@ export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolea
   return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
 }
 
-function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, string> {
+/** Collects config env vars safe to inject into runtime process environments. */
+export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   const envConfig = cfg?.env;
   if (!envConfig) {
     return {};
@@ -37,26 +38,11 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
 
   const entries: Record<string, string> = {};
 
-  if (envConfig.vars) {
-    for (const [rawKey, value] of Object.entries(envConfig.vars)) {
-      if (typeof value !== "string" || !value.trim()) {
-        continue;
-      }
-      const key = normalizeEnvVarKey(rawKey, { portable: true });
-      if (!key) {
-        continue;
-      }
-      if (!isConfigRuntimeEnvVarAllowed(key, value)) {
-        continue;
-      }
-      entries[key] = value;
-    }
-  }
-
-  for (const [rawKey, value] of Object.entries(envConfig)) {
-    if (rawKey === "shellEnv" || rawKey === "vars") {
-      continue;
-    }
+  const candidates = [
+    ...Object.entries(envConfig.vars ?? {}),
+    ...Object.entries(envConfig).filter(([key]) => key !== "shellEnv" && key !== "vars"),
+  ];
+  for (const [rawKey, value] of candidates) {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
@@ -231,15 +217,10 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
   return proxy;
 }
 
-/** Collects config env vars safe to inject into runtime process environments. */
-export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string, string> {
-  return collectConfigEnvVarsByTarget(cfg);
-}
-
 /** Collects config env vars safe to persist into managed service environments. */
 export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   // Runtime and service envs intentionally share filtering until a target-specific contract exists.
-  return collectConfigEnvVarsByTarget(cfg);
+  return collectConfigRuntimeEnvVars(cfg);
 }
 
 /** Builds a cloned environment with config env vars applied without mutating the base env. */
@@ -708,9 +689,8 @@ export function applyConfigEnvVars(
   const previousOwnedEnv = resolveAppliedConfigEnvOwnership(env);
   const entries = collectConfigRuntimeEnvVars(cfg);
   const lowerPrecedenceEntries = Object.entries(options.lowerPrecedenceEnv ?? {});
-  const normalizeKey = (key: string) => (process.platform === "win32" ? key.toUpperCase() : key);
   const lowerPrecedenceEnv = new Map(
-    lowerPrecedenceEntries.map(([key, value]) => [normalizeKey(key), value]),
+    lowerPrecedenceEntries.map(([key, value]) => [envSnapshotKey(key), value]),
   );
   const configEnvKeys = expandEnvNormalizationKeys(Object.keys(entries));
   const configValuesByKey = new Map<string, Set<string>>();
@@ -740,7 +720,7 @@ export function applyConfigEnvVars(
   }
   const replacedLowerPrecedenceKeys: string[] = [];
   for (const [key, value] of lowerPrecedenceEntries) {
-    if (configEnvKeys.has(normalizeKey(key)) && env[key] === value) {
+    if (configEnvKeys.has(envSnapshotKey(key)) && env[key] === value) {
       delete env[key];
       replacedLowerPrecedenceKeys.push(key);
     }
@@ -749,20 +729,13 @@ export function applyConfigEnvVars(
     options.onLowerPrecedenceKeysReplaced?.(replacedLowerPrecedenceKeys);
   }
   for (const [key, value] of Object.entries(entries)) {
-    const higherPrecedenceValue = higherPrecedenceValues.get(normalizeKey(key));
+    const higherPrecedenceValue = higherPrecedenceValues.get(envSnapshotKey(key));
     if (higherPrecedenceValue !== undefined) {
       env[key] = higherPrecedenceValue;
       continue;
     }
     const currentValue = env[key];
-    if (currentValue?.trim() && lowerPrecedenceEnv.get(normalizeKey(key)) !== currentValue) {
-      continue;
-    }
-    // Skip values containing unresolved ${VAR} references — applyConfigEnvVars runs
-    // before env substitution, so these would pollute process.env with literal placeholders
-    // (e.g. process.env.OPENCLAW_GATEWAY_TOKEN = "${VAULT_TOKEN}") which downstream auth
-    // resolution would accept as valid credentials.
-    if (containsEnvVarReference(value)) {
+    if (currentValue?.trim() && lowerPrecedenceEnv.get(envSnapshotKey(key)) !== currentValue) {
       continue;
     }
     env[key] = value;

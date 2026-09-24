@@ -9,6 +9,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
@@ -46,6 +47,8 @@ import {
 } from "./full-release-validation-policy.mjs";
 import { inspectActionsArtifactZip } from "./lib/actions-artifact-archive.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
+import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
   execGhRead,
   execGhReadAsync,
@@ -53,6 +56,7 @@ import {
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -220,33 +224,69 @@ const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
   ["qa", ["releaseChecks"]],
 ]);
 
+function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 export function runReleaseCiGh(args, params = {}) {
   const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   const timeoutMs = params.timeoutMs ?? GH_COMMAND_TIMEOUT_MS;
   const stdio = params.stdio ?? ["ignore", "pipe", "pipe"];
-  return execGhRead(
-    args,
-    {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio,
-      timeout: timeoutMs,
-    },
-    { execFileSyncImpl },
-  );
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return execGhRead(
+        args,
+        {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 64 * 1024 * 1024,
+          stdio,
+          timeout: timeoutMs,
+        },
+        { execFileSyncImpl },
+      );
+    } catch (error) {
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        evidenceReadRetryDelay(args, error, attempt),
+      );
+    }
+  }
 }
 
 function gh(args) {
   return runReleaseCiGh(args);
 }
 
-function ghAsync(args) {
-  return execGhReadAsync(args, {
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: GH_COMMAND_TIMEOUT_MS,
-  });
+async function ghAsync(args) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await execGhReadAsync(args, {
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: GH_COMMAND_TIMEOUT_MS,
+      });
+    } catch (error) {
+      await sleep(evidenceReadRetryDelay(args, error, attempt));
+    }
+  }
 }
 
 function jsonGh(args) {
@@ -1277,6 +1317,8 @@ export function validateParentManifest(value, expected) {
   }
   const sourceAdmission = validatePublicationSourceBinding(value, expected);
   const publicationAdmission = validatePublicationAdmissionBinding(value, expected);
+  const publishInputs =
+    value.publishInputs === undefined ? undefined : resolveReleasePublishInputs(value);
   normalizeReleaseTelegramWaiver({
     ...validationInputs,
     candidateVersion: candidateBinding?.package.version,
@@ -1299,12 +1341,9 @@ export function validateParentManifest(value, expected) {
       validationInputs.targetContextRef || String(value.targetRef ?? ""),
       validationInputs.targetVersion,
     ) ||
-      controls.performanceBlocking !== true ||
       controls.stableSoakRequired !== true)
   ) {
-    throw new Error(
-      "npm stable coverage policy requires release context, blocking performance, and stable soak",
-    );
+    throw new Error("npm stable coverage policy requires release context and stable soak");
   }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   const advisoryJobs = releaseAdvisoryJobEvidence(
@@ -1460,6 +1499,7 @@ export function validateParentManifest(value, expected) {
   }
   return {
     advisoryJobs,
+    ...(publishInputs ? { publishInputs } : {}),
     ...(Object.hasOwn(value, "knownFlakyJobs") ? { knownFlakyJobs: value.knownFlakyJobs } : {}),
     ...(Object.hasOwn(value, "automaticRetries")
       ? { automaticRetries: value.automaticRetries }
@@ -2162,6 +2202,9 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
+    validateChildReuse(selection, request) {
+      return validateReusableReleaseChild(selection, request);
+    },
     getWorkflowSource(sha) {
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
       const payload = githubRestJson(
@@ -2497,7 +2540,9 @@ export function resolveVerifierIdentity(
 async function validateStrictChildRun({
   child,
   childEvidence,
+  childReuse,
   client,
+  executionPlan,
   parentEvidence,
   parentJobs,
   plannedChild,
@@ -2506,7 +2551,15 @@ async function validateStrictChildRun({
   runId,
   expectedRunAttempts,
 }) {
-  const run = await client.getRun(runId);
+  const reused = childReuse
+    ? await client.validateChildReuse(childReuse, {
+        inputs: childReuse.inputs,
+        repository,
+        role: child.manifestKey,
+        targetSha: parentEvidence.manifest.targetSha,
+      })
+    : undefined;
+  const run = reused?.run ?? (await client.getRun(runId));
   const effectiveRunAttempt = normalizePositiveInteger(
     run.run_attempt,
     `${child.name} run attempt`,
@@ -2523,12 +2576,9 @@ async function validateStrictChildRun({
       throw new Error(`execution plan child dispatch tuple mismatch: ${child.name}`);
     }
   }
-  const originAttempt = resolveManifestChildOriginAttempt(
-    run,
-    child,
-    parentEvidence.manifest,
-    parentJobs,
-  );
+  const originAttempt = reused
+    ? childReuse.sourceParentAttempt
+    : resolveManifestChildOriginAttempt(run, child, parentEvidence.manifest, parentJobs);
   if (originAttempt === undefined) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
@@ -2536,20 +2586,39 @@ async function validateStrictChildRun({
     parentJobs,
     child,
     parentEvidence.manifest,
-    originAttempt,
+    reused ? executionPlan.parentRunAttempt : originAttempt,
     { requireSkippedCarryForward: plannedChild !== undefined },
   );
-  validateManifestChildRun(
-    run,
-    child,
-    runId,
-    parentEvidence.manifest,
-    parentJobs,
-    await client.getJobLog(parentJob.id),
-    repository,
-    plannedChild?.runAttempt,
-    plannedChild !== undefined,
-  );
+  const parentLog = await client.getJobLog(parentJob.id);
+  if (reused) {
+    const selectionSha256 = releaseChildReuseSha256(childReuse);
+    const witnesses = [
+      ...String(parentLog).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu),
+    ];
+    if (witnesses.length !== 1 || witnesses[0][1] !== selectionSha256) {
+      throw new Error(`release child reuse adoption witness mismatch: ${child.name}`);
+    }
+    validateReleaseChildDispatchBinding({
+      child: plannedChild,
+      coveragePolicy: parentEvidence.manifest.validationInputs?.coveragePolicy,
+      log: parentLog,
+      plannedRunAttempt: plannedChild.runAttempt,
+      repository,
+      targetSha: parentEvidence.manifest.targetSha,
+    });
+  } else {
+    validateManifestChildRun(
+      run,
+      child,
+      runId,
+      parentEvidence.manifest,
+      parentJobs,
+      parentLog,
+      repository,
+      plannedChild?.runAttempt,
+      plannedChild !== undefined,
+    );
+  }
   let jobs;
   let composite;
   if (plannedChild && childEvidence) {
@@ -2641,7 +2710,7 @@ async function validateStrictChildRun({
       parentEvidence.manifest.validationInputs?.laneWaiver,
     ),
     conclusion: run.conclusion,
-    dispatchNonce: `full-release-validation-${parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
+    dispatchNonce: `full-release-validation-${reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId}-${originAttempt}${child.suffix}`,
     displayTitle: run.display_title,
     event: run.event,
     headBranch: run.head_branch,
@@ -2660,7 +2729,7 @@ async function validateStrictChildRun({
     runAttempt: effectiveRunAttempt,
     runId: String(run.id),
     sourceParentAttempt: originAttempt,
-    sourceParentRunId: parentEvidence.manifest.runId,
+    sourceParentRunId: reused ? childReuse.sourceParentRunId : parentEvidence.manifest.runId,
     status: run.status,
     url: run.html_url,
     workflowSha: run.head_sha,
@@ -3010,7 +3079,9 @@ export async function validateReleaseRunEvidence(
       validateStrictChildRun({
         child,
         childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
+        childReuse: executionPlan?.childReuse?.[child.manifestKey],
         client: evidenceClient,
+        executionPlan,
         parentEvidence: dispatchEvidence,
         parentJobs,
         plannedChild: child.plannedChild,
@@ -3561,6 +3632,9 @@ async function main() {
     const selectedKeys = requiredChildKeysForManifest(sourceManifest);
     if (sourceManifest.validationInputs?.laneWaiver) {
       console.log(`lane-waiver: ${sourceManifest.validationInputs.laneWaiver}`);
+    }
+    if (sourceManifest.publishInputs?.stableSoakWaiver) {
+      console.log(`soak-waiver: ${sourceManifest.publishInputs.stableSoakWaiver}`);
     }
     for (const job of sourceManifest.advisoryJobs) {
       const failed = job.status === "completed" && job.conclusion !== "success";

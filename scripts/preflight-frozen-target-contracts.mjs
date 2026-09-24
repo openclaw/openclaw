@@ -21,6 +21,8 @@ const toolingClosure = [
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -582,8 +584,11 @@ async function planWorkflowAdmission(input) {
         requested: requestedBaselines,
       });
     } else {
-      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
-        await import("./lib/upgrade-survivor-policy.mjs");
+      const {
+        assertSupportedUpgradeSurvivorBaselineSpec,
+        normalizeUpgradeSurvivorBaselineSpec,
+        parseUpgradeSurvivorBaselineSpecs,
+      } = await import("./lib/upgrade-survivor-policy.mjs");
       const specs = [
         normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
         ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
@@ -591,6 +596,7 @@ async function planWorkflowAdmission(input) {
       if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
         throw new Error("unresolved upgrade baselines at the execution boundary");
       }
+      specs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
     }
   }
   const sourcePaths = new Set();

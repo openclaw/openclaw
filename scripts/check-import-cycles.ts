@@ -3,12 +3,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
   collectSourceFiles,
   collectStronglyConnectedComponents,
   formatCycle,
 } from "./lib/import-cycle-graph.ts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "scripts"] as const;
@@ -81,7 +82,7 @@ function importDeclarationHasRuntimeEdge(node: ts.ImportDeclaration): boolean {
   if (!node.importClause) {
     return true;
   }
-  if (node.importClause.isTypeOnly) {
+  if (node.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword) {
     return false;
   }
   const bindings = node.importClause.namedBindings;
@@ -105,13 +106,8 @@ function exportDeclarationHasRuntimeEdge(node: ts.ExportDeclaration): boolean {
 function collectRuntimeStaticImports(
   file: string,
   resolveSource: ReturnType<typeof createSourceResolver>,
+  sourceFile: ts.SourceFile,
 ) {
-  const sourceFile = ts.createSourceFile(
-    file,
-    readFileSync(path.join(repoRoot, file), "utf8"),
-    ts.ScriptTarget.Latest,
-    false,
-  );
   const imports: string[] = [];
   const visit = (node: ts.Node) => {
     let specifier: string | undefined;
@@ -133,13 +129,14 @@ function collectRuntimeStaticImports(
         imports.push(resolved);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return imports.toSorted((left, right) => left.localeCompare(right));
 }
 
 function main(): number {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const files = scanRoots.flatMap((root) =>
     collectSourceFiles(path.join(repoRoot, root), {
       repoRoot,
@@ -151,7 +148,11 @@ function main(): number {
   const graph = new Map(
     files.map((file): [string, string[]] => [
       file,
-      collectRuntimeStaticImports(file, resolveSource),
+      collectRuntimeStaticImports(
+        file,
+        resolveSource,
+        parser.parseSourceFile(file, readFileSync(path.join(repoRoot, file), "utf8")),
+      ),
     ]),
   );
   const components = collectStronglyConnectedComponents(graph);

@@ -2,11 +2,8 @@ import {
   type WorkerAdmissionHandshake,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  StaleWorkerBuildError,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -56,7 +53,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const { store } = options;
   const tunnels = options.tunnelManager;
   const now = options.now;
-  const inference = { cancelEnvironment: options.cancelInferenceEnvironment };
   const inState = options.inState;
   const move = options.move;
   const serviceError = options.serviceError;
@@ -106,7 +102,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   ): Promise<{ credentialHash: string; grant: MintedWorkerCredential }> => {
     const previous = store.getCredential(request.environmentId);
     if (previous) {
-      inference.cancelEnvironment(request.environmentId);
+      options.cancelInferenceEnvironment(request.environmentId);
     }
     const material = credentialMaterial(claim);
     const credential = {
@@ -263,10 +259,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
-      if (
-        !current.bootstrapReceipt ||
-        !verifyWorkerAdmissionHandshake(current.bootstrapReceipt, currentBuild)
-      ) {
+      if (!current.bootstrapReceipt || !sameWorkerBuild(current.bootstrapReceipt, currentBuild)) {
         throw new StaleWorkerBuildError();
       }
       const material = credentialMaterial();

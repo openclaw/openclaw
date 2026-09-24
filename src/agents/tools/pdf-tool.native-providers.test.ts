@@ -16,16 +16,11 @@ import {
 } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
-const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return { ...actual, complete: completeMock };
+  return { ...actual, completeSimple: completeMock };
 });
-
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
 
 const { createPdfModelRegistry, stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 

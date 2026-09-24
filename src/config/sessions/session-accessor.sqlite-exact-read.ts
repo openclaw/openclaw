@@ -1,15 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  retainOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -22,6 +30,7 @@ import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.s
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRowValidated,
+  readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
@@ -213,6 +222,97 @@ type PhysicalSessionEntryReadScope = {
   projection?: SessionEntryReadScope["projection"];
 };
 
+export function assertCapturedSessionEntryReadSource(
+  source: CapturedSessionEntryReadSource,
+  database?: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
+): void {
+  if (typeof source.databaseIdentity === "string" && (!database || database.path !== source.path)) {
+    assertExistingDatabaseIdentity(source.path, `file:${source.databaseIdentity}`);
+  }
+  if (!database) {
+    if (typeof source.databaseIdentity === "symbol") {
+      throw new Error("Captured session database is no longer open");
+    }
+    return;
+  }
+  const physical = readOpenClawAgentDatabaseIdentity(database);
+  if (
+    database.agentId !== source.agentId ||
+    physical.identity !== source.databaseIdentity ||
+    physical.birthtime !== source.databaseBirthtime ||
+    !isOpenClawAgentDatabasePathCurrent(database)
+  ) {
+    throw new Error("Captured session database changed before read");
+  }
+}
+
+/** Retain the recorded physical owner without selecting a replacement database. */
+function retainCapturedSessionEntryReadSource(
+  source: CapturedSessionEntryReadSource,
+  env?: NodeJS.ProcessEnv,
+) {
+  const retained = retainOpenClawAgentDatabaseReadOnly({
+    agentId: source.agentId,
+    path: source.path,
+    env,
+  });
+  if (!retained.found) {
+    throw new Error("Captured session database is unavailable");
+  }
+  const assertCurrent = () => {
+    retained.claim.assertCurrent();
+    assertCapturedSessionEntryReadSource(source, retained.database);
+  };
+  try {
+    assertCurrent();
+    return {
+      database: retained.database,
+      assertCurrent,
+      release: retained.claim.release,
+    };
+  } catch (error) {
+    retained.claim.release();
+    throw error;
+  }
+}
+
+/** Retained windows occupy a key even when they have no current readable entry. */
+export function retainSessionEntryKeyAbsence(params: {
+  source: CapturedSessionEntryReadSource;
+  sessionKeys: readonly string[];
+  canonicalKey: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const source = retainCapturedSessionEntryReadSource(params.source, params.env);
+  const assertCurrent = () => {
+    source.assertCurrent();
+    if (!params.sessionKeys.length) {
+      return;
+    }
+    const occupied = executeSqliteQueryTakeFirstSync(
+      source.database.db,
+      getSessionKysely(source.database.db)
+        .selectFrom("session_nodes")
+        .select("session_key")
+        .where("session_key", "in", sqliteStringSet(params.sessionKeys))
+        .limit(1),
+    );
+    source.assertCurrent();
+    if (occupied) {
+      throw new Error(
+        `Session "${params.canonicalKey}" has ambiguous stored identity. Select an unambiguous session; stored rows and history were not changed.`,
+      );
+    }
+  };
+  try {
+    assertCurrent();
+    return { assertCurrent, release: source.release };
+  } catch (error) {
+    source.release();
+    throw error;
+  }
+}
+
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
 export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {
   return loadExactSessionEntryCandidates({
@@ -252,20 +352,13 @@ export function loadExactSessionEntryCandidates(
           ...(scope.env ? { env: scope.env } : {}),
         }
       : toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }));
-  // Alias candidates share a store; fresh handles must not rescan canonical state per key.
   const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">) => {
     const physical = readOpenClawAgentDatabaseIdentity(database);
-    if (
-      scope.expectedSource &&
-      (database.agentId !== scope.expectedSource.agentId ||
-        physical.identity !== scope.expectedSource.databaseIdentity ||
-        physical.birthtime !== scope.expectedSource.databaseBirthtime ||
-        !isOpenClawAgentDatabasePathCurrent(database))
-    ) {
-      throw new Error("Captured session database changed before read");
+    if (scope.expectedSource) {
+      assertCapturedSessionEntryReadSource(scope.expectedSource, database);
     }
     const entries = sessionKeys.flatMap((key) => {
-      const entry = readExactSessionEntryRowValidated(database, key, scope.projection)?.entry;
+      const entry = readExactSessionEntryRow(database, key, scope.projection, "canonical")?.entry;
       return entry ? [{ sessionKey: key, entry }] : [];
     });
     scope.onReadSource?.(
@@ -277,10 +370,7 @@ export function loadExactSessionEntryCandidates(
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(options));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readWithCanonicalSessionAdmission(database, () => read(database)),
-    options,
-  );
+  const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
 }
 

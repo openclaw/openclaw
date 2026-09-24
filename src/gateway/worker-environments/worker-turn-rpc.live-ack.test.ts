@@ -9,7 +9,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnOwner, signalWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
@@ -47,11 +47,10 @@ async function recoveredTurn(ackedSeq = 5) {
   const instance = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(instance);
   registerAgentRunContext(claim.runId, target, authority.claimId);
-  bindWorkerTurnOwner(placements, claim, undefined, instance, target, () => undefined);
+  await bindWorkerTurnOwner(placements, claim, undefined, instance, target, () => undefined);
   const liveEvents = createWorkerLiveEventReceiver();
   support.testState.releaseTurnOwners.push(() => {
     liveEvents.clear();
-    signalWorkerTurnClaimClosed(support.testState.stateDb.path, claim);
     releaseAgentRunDelegatedAuthority(authority);
   });
   const workerService = support.createService(support.createProvider(), {

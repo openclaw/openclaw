@@ -536,6 +536,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionid: String?
     public let sessionkey: String?
     public let expectedexistingsessionid: String?
+    public let expectedexistingsessionlifecyclerevision: AnyCodable?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
@@ -586,6 +587,7 @@ public struct AgentParams: Codable, Sendable {
         sessionid: String? = nil,
         sessionkey: String? = nil,
         expectedexistingsessionid: String? = nil,
+        expectedexistingsessionlifecyclerevision: AnyCodable? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
         attachments: [AnyCodable]? = nil,
@@ -635,6 +637,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.expectedexistingsessionid = expectedexistingsessionid
+        self.expectedexistingsessionlifecyclerevision = expectedexistingsessionlifecyclerevision
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
@@ -686,6 +689,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case expectedexistingsessionid = "expectedExistingSessionId"
+        case expectedexistingsessionlifecyclerevision = "expectedExistingSessionLifecycleRevision"
         case thinking
         case deliver
         case attachments
@@ -1055,17 +1059,20 @@ public struct AgentsFilesSetParams: Codable, Sendable {
     public let name: String
     public let content: String
     public let expectedhash: String?
+    public let expectedmissing: Bool?
 
     public init(
         agentid: String,
         name: String,
         content: String,
-        expectedhash: String? = nil)
+        expectedhash: String? = nil,
+        expectedmissing: Bool? = nil)
     {
         self.agentid = agentid
         self.name = name
         self.content = content
         self.expectedhash = expectedhash
+        self.expectedmissing = expectedmissing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1073,6 +1080,7 @@ public struct AgentsFilesSetParams: Codable, Sendable {
         case name
         case content
         case expectedhash = "expectedHash"
+        case expectedmissing = "expectedMissing"
     }
 }
 
@@ -8202,6 +8210,8 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
 
 public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
     public let status: String
+    public let ownerid: String?
+    public let phase: AnyCodable?
     public let expiresatms: Int
     public let retryafterms: Int
     public let activecount: Int
@@ -8210,6 +8220,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
     public init(
         status: String,
+        ownerid: String? = nil,
+        phase: AnyCodable? = nil,
         expiresatms: Int,
         retryafterms: Int,
         activecount: Int,
@@ -8217,6 +8229,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
         writecustody: [[String: AnyCodable]]? = nil)
     {
         self.status = status
+        self.ownerid = ownerid
+        self.phase = phase
         self.expiresatms = expiresatms
         self.retryafterms = retryafterms
         self.activecount = activecount
@@ -8226,6 +8240,8 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case status
+        case ownerid = "ownerId"
+        case phase
         case expiresatms = "expiresAtMs"
         case retryafterms = "retryAfterMs"
         case activecount = "activeCount"
@@ -8236,35 +8252,43 @@ public struct GatewaySuspendStatusDrainingResult: Codable, Sendable {
 
 public struct GatewaySuspendStatusParams: Codable, Sendable {
     public let suspensionid: String
+    public let includelifecycle: Bool?
 
     public init(
-        suspensionid: String)
+        suspensionid: String,
+        includelifecycle: Bool? = nil)
     {
         self.suspensionid = suspensionid
+        self.includelifecycle = includelifecycle
     }
 
     private enum CodingKeys: String, CodingKey {
         case suspensionid = "suspensionId"
+        case includelifecycle = "includeLifecycle"
     }
 }
 
 public struct GatewaySuspendStatusReadyResult: Codable, Sendable {
     public let status: String
+    public let ownerid: String?
     public let expiresatms: Int
     public let writecustody: [[String: AnyCodable]]?
 
     public init(
         status: String,
+        ownerid: String? = nil,
         expiresatms: Int,
         writecustody: [[String: AnyCodable]]? = nil)
     {
         self.status = status
+        self.ownerid = ownerid
         self.expiresatms = expiresatms
         self.writecustody = writecustody
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
+        case ownerid = "ownerId"
         case expiresatms = "expiresAtMs"
         case writecustody = "writeCustody"
     }
@@ -9433,6 +9457,24 @@ public struct NodeHostStatsPayload: Codable, Sendable {
         case memoryfreebytes = "memoryFreeBytes"
         case disktotalbytes = "diskTotalBytes"
         case diskavailablebytes = "diskAvailableBytes"
+    }
+}
+
+public struct NodeInvokeCancelEvent: Codable, Sendable {
+    public let invokeid: String
+    public let nodeid: String
+
+    public init(
+        invokeid: String,
+        nodeid: String)
+    {
+        self.invokeid = invokeid
+        self.nodeid = nodeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case invokeid = "invokeId"
+        case nodeid = "nodeId"
     }
 }
 
@@ -10910,17 +10952,20 @@ public struct PluginRuntimeApplication: Codable, Sendable {
     public let generation: Int
     public let pluginids: [String]
     public let sourcedigests: [String: AnyCodable]?
+    public let selectedentries: [String: AnyCodable]?
 
     public init(
         operationid: String,
         generation: Int,
         pluginids: [String],
-        sourcedigests: [String: AnyCodable]? = nil)
+        sourcedigests: [String: AnyCodable]? = nil,
+        selectedentries: [String: AnyCodable]? = nil)
     {
         self.operationid = operationid
         self.generation = generation
         self.pluginids = pluginids
         self.sourcedigests = sourcedigests
+        self.selectedentries = selectedentries
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -10928,6 +10973,7 @@ public struct PluginRuntimeApplication: Codable, Sendable {
         case generation
         case pluginids = "pluginIds"
         case sourcedigests = "sourceDigests"
+        case selectedentries = "selectedEntries"
     }
 }
 
@@ -22782,6 +22828,22 @@ public struct TickEvent: Codable, Sendable {
     }
 }
 
+public struct ToolAccessDiagnostics: Codable, Sendable {
+    public let checked: AnyCodable
+    public let profiles: [[String: AnyCodable]]
+    public let tools: [[String: AnyCodable]]
+
+    public init(
+        checked: AnyCodable,
+        profiles: [[String: AnyCodable]],
+        tools: [[String: AnyCodable]])
+    {
+        self.checked = checked
+        self.profiles = profiles
+        self.tools = tools
+    }
+}
+
 public struct ToolCatalogEntry: Codable, Sendable {
     public let id: String
     public let label: String
@@ -23034,17 +23096,20 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     public let profile: String
     public let groups: [ToolsEffectiveGroup]
     public let notices: [ToolsEffectiveNotice]?
+    public let toolaccess: ToolAccessDiagnostics?
 
     public init(
         agentid: String,
         profile: String,
         groups: [ToolsEffectiveGroup],
-        notices: [ToolsEffectiveNotice]? = nil)
+        notices: [ToolsEffectiveNotice]? = nil,
+        toolaccess: ToolAccessDiagnostics? = nil)
     {
         self.agentid = agentid
         self.profile = profile
         self.groups = groups
         self.notices = notices
+        self.toolaccess = toolaccess
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -23052,6 +23117,7 @@ public struct ToolsEffectiveResult: Codable, Sendable {
         case profile
         case groups
         case notices
+        case toolaccess = "toolAccess"
     }
 }
 
@@ -24051,6 +24117,7 @@ public struct UpdateRunRecord: Codable, Sendable {
     public let phase: String
     public let status: String
     public let reason: AnyCodable
+    public let admission: [String: AnyCodable]?
     public let origin: [String: AnyCodable]
     public let target: [String: AnyCodable]
     public let before: [String: AnyCodable]
@@ -24070,6 +24137,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         phase: String,
         status: String,
         reason: AnyCodable,
+        admission: [String: AnyCodable]? = nil,
         origin: [String: AnyCodable],
         target: [String: AnyCodable],
         before: [String: AnyCodable],
@@ -24088,6 +24156,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         self.phase = phase
         self.status = status
         self.reason = reason
+        self.admission = admission
         self.origin = origin
         self.target = target
         self.before = before
@@ -24108,6 +24177,7 @@ public struct UpdateRunRecord: Codable, Sendable {
         case phase
         case status
         case reason
+        case admission
         case origin
         case target
         case before

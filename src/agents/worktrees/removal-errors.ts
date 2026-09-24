@@ -1,5 +1,7 @@
 import { WorktreeRemovalContentionError } from "./registry.js";
 
+export class WorktreeBranchMovedError extends Error {}
+
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
   readonly snapshotError: string;

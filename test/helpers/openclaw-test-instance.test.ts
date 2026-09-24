@@ -31,6 +31,7 @@ import {
   formatGatewayReadinessDiagnostic,
   GatewayStartupRefusedError,
   type GatewayReadinessDiagnostic,
+  type OpenClawTestInstance,
   testing,
 } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
@@ -457,6 +458,24 @@ async function isPortReserved(port: number): Promise<boolean> {
   }
 }
 
+async function startGatewayForPortLifecycle(
+  instance: OpenClawTestInstance,
+  signal: AbortSignal,
+): Promise<void> {
+  // Port custody is ordered by real child exit/readiness, not native bootstrap speed.
+  // Freeze only startup policy time; HTTP, child events, and teardown stay real.
+  signal.throwIfAborted();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  const restoreClock = () => clock.mockRestore();
+  signal.addEventListener("abort", restoreClock, { once: true });
+  try {
+    await trackOperation(instance.startGateway());
+  } finally {
+    restoreClock();
+    signal.removeEventListener("abort", restoreClock);
+  }
+}
+
 function createGatewayProcessState(
   overrides: Partial<{
     pid: number;
@@ -505,21 +524,34 @@ function createStalledReadinessFetch(phase: "headers" | "body") {
 }
 
 describe("openclaw test instance", () => {
-  it("reserves its idle port through refusal, CLI work, and stopped restarts", async () => {
+  it("reserves its idle port through refusal, CLI work, and stopped restarts", async ({
+    signal,
+  }) => {
     const { instance, readAttempts } = await createFakeGateway("unrelated,cli,ready,ready");
     const reserved = {
       created: await isPortReserved(instance.port),
       refused: false,
       stopped: false,
     };
-    await expect(instance.startGateway()).rejects.toThrow("unrelated startup failure");
+    await expect(startGatewayForPortLifecycle(instance, signal)).rejects.toThrow(
+      "unrelated startup failure",
+    );
+    expect(instance.readiness).toMatchObject([
+      { outcome: "child-exit", child: { exitCode: 1, signalCode: null } },
+    ]);
     expect(instance.child).toBeUndefined();
     reserved.refused = await isPortReserved(instance.port);
     await expect(instance.cli(["0"])).resolves.toMatchObject({ code: 0, signal: null });
-    await instance.startGateway();
+    await startGatewayForPortLifecycle(instance, signal);
+    expect(instance.readiness).toMatchObject([
+      { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+    ]);
     await instance.stopGateway();
     reserved.stopped = await isPortReserved(instance.port);
-    await instance.startGateway();
+    await startGatewayForPortLifecycle(instance, signal);
+    expect(instance.readiness).toMatchObject([
+      { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+    ]);
     const attempts = await readAttempts();
     expect(attempts).toHaveLength(4);
     expect(
@@ -548,13 +580,18 @@ describe("openclaw test instance", () => {
     expect(reserved).toEqual({ created: true, refused: true, stopped: true });
   });
 
-  it("releases reservation probe connections before startup and terminal cleanup", async () => {
+  it("releases reservation probe connections before startup and terminal cleanup", async ({
+    signal,
+  }) => {
     const { instance } = await createFakeGateway("ready");
     const serverSpy = vi.spyOn(net, "createServer");
     const probe = net.connect(instance.port, "127.0.0.1");
     try {
       await withTestTimeout(once(probe, "close"), 1_000, "reservation retained a probe connection");
-      await instance.startGateway();
+      await startGatewayForPortLifecycle(instance, signal);
+      expect(instance.readiness).toMatchObject([
+        { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+      ]);
       await instance.stopGateway();
       const reservation = serverSpy.mock.results.find(
         (result) => result.type === "return" && result.value.listening,

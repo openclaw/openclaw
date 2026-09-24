@@ -12,6 +12,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { readResponsiveTableGeometry } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -47,7 +48,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     await server?.close();
   });
 
-  it("fits prose tables, preserves the reading column, and keeps expanded headers visible", async () => {
+  it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     const rows = Array.from(
@@ -70,7 +71,11 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 
 | A | B | C | D | E | F | G | H |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |`,
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+
+| Service | Owner | Region | Status | Version | Deployment | Incidents | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |`,
             },
           ],
           timestamp: Date.now(),
@@ -85,8 +90,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       const compact = message.locator(".markdown-table__viewport");
       const expand = shell.getByRole("button", { name: "Expand table" });
       await shell.waitFor({ state: "visible" });
-      for (const width of [1440, 760, 390]) {
-        await page.setViewportSize({ width, height: 1000 });
+      for (const width of [1920, 1440, 1280, 760, 390, 932]) {
+        const desktop = width > 932;
+        await page.setViewportSize({ width, height: width === 932 ? 430 : 1000 });
         await page.locator(".chat-thread").evaluate((element) => {
           element.scrollTop = 0;
         });
@@ -94,50 +100,50 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
           .poll(() =>
             shell.evaluate((element) => {
               const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
-              return viewport.scrollWidth - viewport.clientWidth;
+              const pane = element.closest<HTMLElement>(".chat-thread")!;
+              const column = pane.querySelector<HTMLElement>(".chat-thread-inner")!;
+              return (
+                viewport.scrollWidth <= viewport.clientWidth + 1 &&
+                getComputedStyle(pane).getPropertyValue("--chat-transcript-column-width").trim() ===
+                  `${column.clientWidth}px`
+              );
             }),
           )
-          .toBeLessThanOrEqual(1);
+          .toBe(true);
         expect(
           await compact.evaluateAll((elements) =>
-            elements.slice(1).every((element) => element.scrollWidth <= element.clientWidth + 1),
+            elements.slice(1, 3).every((element) => element.scrollWidth <= element.clientWidth + 1),
           ),
         ).toBe(true);
-        const geometry = await shell.evaluate((element) => {
-          const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
-          const table = element.querySelector("table")!;
-          const cells = table.querySelectorAll("tbody tr:first-child td");
-          const paragraph = element.parentElement!.querySelector("p")!;
-          const pane = element.closest(".chat-thread")!;
-          const action = element.querySelector("button")!;
-          const rect = element.getBoundingClientRect();
-          const paneRect = pane.getBoundingClientRect();
-          const header = table.querySelector("th")!.getBoundingClientRect();
-          return {
-            width: rect.width,
-            prose: paragraph.getBoundingClientRect().width,
-            withinPane: rect.left >= paneRect.left && rect.right <= paneRect.right,
-            verticalOverflow: viewport.scrollHeight - viewport.clientHeight,
-            columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
-            topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),
-            headerPainted: table.contains(
-              document.elementFromPoint(header.left + 4, header.top + 4),
-            ),
-            actionAboveTable:
-              action.getBoundingClientRect().bottom <= table.getBoundingClientRect().top,
-          };
-        });
+        const geometry = await shell.evaluate(readResponsiveTableGeometry);
         expect(geometry.withinPane).toBe(true);
         expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
         expect(geometry.topAligned).toBe(true);
         expect(geometry.headerPainted).toBe(true);
         expect(geometry.actionAboveTable).toBe(true);
         expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
-        if (width === 1440) {
-          expect(geometry.width).toBeGreaterThan(geometry.prose + 100);
+        if (desktop) {
+          expect(geometry.width).toBeCloseTo(geometry.prose, 0);
+          expect(
+            geometry.compactWidths.every((value) => Math.abs(value - geometry.prose) <= 1),
+          ).toBe(true);
+          expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
+          expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
+          expect(geometry.controlHeight).toBe(32);
+          expect(geometry.visibleExpandLabel).toBe(false);
+          expect(geometry.controlsGap).toBe(0);
+          expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
           expect(geometry.prose).toBeLessThanOrEqual(768);
         } else {
-          expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
+          expect(geometry.controlHeight).toBe(40);
+          expect(geometry.visibleExpandLabel).toBe(true);
+          expect(geometry.controlsGap).toBe(4);
+          expect(geometry.denseOverflow).toBeGreaterThan(0);
+          if (width === 932) {
+            expect(geometry.width).toBeCloseTo(900, 0);
+          } else {
+            expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
+          }
         }
         if (captureProof) {
           await page.screenshot({ path: path.join(artifactDir, `wrap-${width}.png`) });
@@ -190,7 +196,12 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     }
   });
 
-  it("contains widened tables after restoring a percentage reading width", async () => {
+  it("contains content-sized tables after restoring a percentage reading width", async () => {
+    const overflowTable = [
+      `| ${Array.from({ length: 14 }, (_, index) => `Configuration${index + 1}`).join(" | ")} |`,
+      `| ${Array(14).fill("---").join(" | ")} |`,
+      `| ${Array(14).fill("Available").join(" | ")} |`,
+    ].join("\n");
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -205,7 +216,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 | Failure | Recorded implementation author |
 | --- | --- |
 | Quiet mode displays reasoning and an unwanted exit message after a queued run is cancelled | Morgan, with Riley as coauthor on the follow-up repair |
-| A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |`,
+| A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |
+
+${overflowTable}`,
             },
           ],
           timestamp: Date.now(),
@@ -219,7 +232,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await widthInput.fill("82%");
       await widthInput.press("Tab");
       await page.goto(`${server.baseUrl}chat`);
-      const shell = page.locator('[data-entry-id="percentage-table"] .markdown-table');
+      const tables = page.locator('[data-entry-id="percentage-table"] .markdown-table');
+      const shell = tables.first();
+      const overflow = tables.nth(1);
       await shell.waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -231,24 +246,56 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         )
         .toBe("82%");
       const contained = () =>
-        shell.evaluate((element) => {
-          const pane = element.closest(".chat-thread")!.getBoundingClientRect();
-          const bounds = element.getBoundingClientRect();
-          return bounds.left >= pane.left && bounds.right <= pane.right;
-        });
+        tables.evaluateAll((elements) =>
+          elements.every((element) => {
+            const thread = element.closest<HTMLElement>(".chat-thread")!;
+            const pane = thread.getBoundingClientRect();
+            const column = thread.querySelector<HTMLElement>(".chat-thread-inner")!;
+            const bounds = element.getBoundingClientRect();
+            return (
+              bounds.left >= pane.left &&
+              bounds.right <= pane.right &&
+              getComputedStyle(thread).getPropertyValue("--chat-transcript-column-width").trim() ===
+                `${column.clientWidth}px`
+            );
+          }),
+        );
       for (const width of [1440, 1920, 1280]) {
         await page.setViewportSize({ width, height: 1000 });
-        await expect.poll(contained).toBe(true);
-        await expect
-          .poll(() =>
-            shell.evaluate(
+        for (const direction of ["ltr", "rtl"]) {
+          await page.evaluate((value) => {
+            document.documentElement.dir = value;
+          }, direction);
+          await expect.poll(contained).toBe(true);
+          const sizing = await overflow.evaluate((element) => {
+            const pane = element.closest(".chat-thread")!;
+            const bounds = element.getBoundingClientRect();
+            const paneBounds = pane.getBoundingClientRect();
+            const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+            return {
+              leadingGap: bounds.left - paneBounds.left,
+              trailingGap: paneBounds.right - bounds.right,
+              overflow: viewport.scrollWidth - viewport.clientWidth,
+              paneOverflow: pane.scrollWidth - pane.clientWidth,
+            };
+          });
+          // The 18px gutter plus 12px inset is independent of native scrollbar width.
+          expect(sizing.leadingGap).toBeGreaterThanOrEqual(29);
+          expect(sizing.trailingGap).toBeGreaterThanOrEqual(29);
+          expect(sizing.overflow).toBeGreaterThan(0);
+          expect(sizing.paneOverflow).toBeLessThanOrEqual(1);
+          expect(
+            await shell.evaluate(
               (element) =>
-                element.getBoundingClientRect().width >
+                element.getBoundingClientRect().width -
                 element.parentElement!.getBoundingClientRect().width,
             ),
-          )
-          .toBe(true);
+          ).toBeLessThanOrEqual(1);
+        }
       }
+      await page.evaluate(() => {
+        document.documentElement.dir = "ltr";
+      });
       await page.setViewportSize({ width: 1440, height: 1000 });
       await expect.poll(contained).toBe(true);
       if (captureProof) {

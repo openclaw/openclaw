@@ -593,7 +593,6 @@ export function createGatewayWorkerPlacementRuntime(
           params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;
-          unsubscribeMachineShape();
           uninstallSessionIdentityMutation();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
@@ -601,6 +600,7 @@ export function createGatewayWorkerPlacementRuntime(
         const currentStop = (async () => {
           await Promise.allSettled(
             [
+              unsubscribeMachineShape(),
               placementReconcile.current,
               diskSpaceSweep.current,
               placementIdleSuspend.current,

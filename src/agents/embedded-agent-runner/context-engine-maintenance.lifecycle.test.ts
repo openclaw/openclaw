@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetAllLanes } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -43,6 +44,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
       configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
 
       const sessionKey = "agent:main:context-maintenance-lifecycle";
+      const maintenanceStarted = createDeferred();
       let releaseMaintenance: (() => void) | undefined;
       let deferredMaintenance: Promise<void> | undefined;
       await runContextEngineMaintenance({
@@ -56,6 +58,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
           assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
           compact: async () => ({ ok: true, compacted: false }),
           maintain: async () => {
+            maintenanceStarted.resolve();
             await new Promise<void>((resolve) => {
               releaseMaintenance = resolve;
             });
@@ -71,6 +74,7 @@ describe("deferred context-engine maintenance lifecycle", () => {
         },
       });
 
+      await maintenanceStarted.promise;
       await vi.advanceTimersByTimeAsync(11_000);
       const task = listTasksForOwnerKey(sessionKey).find(
         (candidate) =>

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
 import {
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
@@ -10,21 +11,16 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
-import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
+import {
+  MAX_RELEASE_ARTIFACT_BYTES,
+  serializeReleaseArtifact,
+} from "./lib/full-release-evidence.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
-// Full profiles carry over 500 job records. Keep complete evidence under one
-// shared wire budget instead of letting producers exceed smaller reader limits.
-export const MAX_RELEASE_ARTIFACT_BYTES = 1024 * 1024;
-
-export function serializeReleaseArtifact(payload) {
-  const json = `${JSON.stringify(payload)}\n`;
-  if (Buffer.byteLength(json, "utf8") > MAX_RELEASE_ARTIFACT_BYTES) {
-    throw new Error("release artifact exceeds the size limit");
-  }
-  return json;
-}
+export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact };
 
 export function buildReleaseValidationManifest({ plan, drain, context }) {
   const childEvidence = Object.fromEntries(
@@ -65,6 +61,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
     targetSha: plan.targetSha,
     candidateBinding: plan.candidate,
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
+    publishInputs: context.publishInputs,
     childEvidence,
     executionPlanSha256: plan.sha256,
     sourceParentRunAttempt: Number(plan.parentRunAttempt),
@@ -134,7 +131,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
         },
         controls: {
           stableSoakRequired: ["stable", "full"].includes(context.releaseProfile),
-          performanceBlocking: context.releaseProfile !== "beta",
+          performanceBlocking: false,
           performanceReportPublication: "artifact-only",
         },
         childRuns: {
@@ -147,7 +144,7 @@ export function buildReleaseValidationManifest({ plan, drain, context }) {
           productPerformance: {
             runId: runs.productPerformance ?? "",
             conclusion: drain?.children?.productPerformance?.conclusion ?? "",
-            blocking: context.releaseProfile !== "beta",
+            blocking: false,
           },
         },
       };
@@ -526,9 +523,11 @@ export function normalizeReleaseCoveragePolicy({
   candidateVersion,
   crossOsSuiteFilter = "",
 }) {
-  // All-group evidence may omit advisory OS lanes, never required Linux suites.
-  if (rerunGroup === "all" && !hasRequiredLinuxCrossOsSuites(crossOsSuiteFilter)) {
-    throw new Error("release coverage policy requires all Linux cross-OS suites");
+  // All-group evidence records every OS Gateway lane; only Linux outcomes are proof.
+  if (rerunGroup === "all" && !hasRequiredCrossOsSuites(crossOsSuiteFilter)) {
+    throw new Error(
+      "release coverage policy requires all Linux, Windows, and macOS cross-OS suites",
+    );
   }
   if (coveragePolicy === undefined) {
     return undefined;
@@ -638,8 +637,8 @@ export function normalizeReleaseTelegramWaiver({
   return telegramWaiver;
 }
 
-// An operator lane waiver keeps non-proof lane failures advisory. It is bound
-// to the sealed plan and manifest, never to the raw dispatch input.
+// The explicit first-hop escape hatch is bound to the sealed plan and manifest,
+// never to the raw dispatch input. Other non-proof lanes are advisory by default.
 export function normalizeReleaseLaneWaiver(value) {
   return boundedString(value, MAX_MESSAGE_LENGTH);
 }
@@ -1126,6 +1125,7 @@ function releaseExecutionPlanShape(payload) {
     ...new Set([
       ...basePlanKeys,
       ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
+      ...(Object.hasOwn(payload, "childReuse") ? ["childReuse"] : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
       ...(Object.hasOwn(payload, "laneWaiver") ? ["laneWaiver"] : []),
@@ -1136,7 +1136,7 @@ function releaseExecutionPlanShape(payload) {
         ? ["publicationAdmissionContract", "publicationAdmission"]
         : []),
     ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  ].toSorted((left, right) => (left === right ? 0 : left < right ? -1 : 1));
   const expectedChildKeys = hasAttemptEvidence
     ? ATTEMPT_AWARE_EXECUTION_PLAN_CHILD_KEYS
     : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
@@ -1201,6 +1201,7 @@ function executionPlanDigestPayload(plan) {
     ...publication,
     ...waiver,
     ...coverage,
+    ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
     ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
     ...lane,
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
@@ -1235,6 +1236,7 @@ export function buildReleaseExecutionPlanArtifact({
   candidate = null,
   coveragePolicy,
   children,
+  childReuse,
   errors = [],
   evidenceReuse,
   expected,
@@ -1307,6 +1309,7 @@ export function buildReleaseExecutionPlanArtifact({
       : {}),
     ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
+    ...(childReuse !== undefined ? { childReuse: structuredClone(childReuse) } : {}),
     ...(lane ? { laneWaiver: lane } : {}),
     version: 1,
     kind: "openclaw.full-release-execution-plan",
@@ -1327,8 +1330,10 @@ export function buildReleaseExecutionPlanArtifact({
   validatePlanSourceAdmission(basePlan, expected);
   validatePlanPublicationAdmission(basePlan, expected);
   if (!attemptAware) {
-    if (coveragePolicy !== undefined) {
-      throw new Error("release coverage policy requires a phase-three execution plan");
+    if (coveragePolicy !== undefined || childReuse !== undefined) {
+      throw new Error(
+        "release coverage policy and child reuse require an attempt-aware execution plan",
+      );
     }
     const result = { ...basePlan, sha256: releaseExecutionPlanSha256(basePlan) };
     serializeReleaseArtifact(result);
@@ -1344,6 +1349,7 @@ export function buildReleaseExecutionPlanArtifact({
     candidate: candidate === null ? null : validateFullReleaseCandidateBinding(candidate),
   };
   validateCandidatePlanBinding(plan, expected.candidateRequest);
+  validateChildReuseBindings(plan);
   const result = { ...plan, sha256: releaseExecutionPlanSha256(plan) };
   serializeReleaseArtifact(result);
   return result;
@@ -1389,7 +1395,7 @@ function validatePlanSourceAdmission(plan, expected) {
 }
 
 function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
-  const request = validateFullReleaseCandidateRequest(plan.candidateRequest);
+  const request = validateRecordedFullReleaseCandidateRequest(plan.candidateRequest);
   if (plan.coveragePolicy !== undefined && plan.attemptEvidenceVersion !== 3) {
     throw new Error("release coverage policy requires a phase-three execution plan");
   }
@@ -1410,7 +1416,7 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   if (
     expectedCandidateRequest !== undefined &&
     JSON.stringify(request) !==
-      JSON.stringify(validateFullReleaseCandidateRequest(expectedCandidateRequest))
+      JSON.stringify(validateRecordedFullReleaseCandidateRequest(expectedCandidateRequest))
   ) {
     throw new Error("release candidate request differs from the expected plan inputs");
   }
@@ -1495,6 +1501,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     sourceParentAttempt: shape !== "historical",
   });
   validateExecutionPlanChildBindings(children, payload);
+  validateChildReuseBindings(payload);
   const plan = {
     ...payload,
     parentRunAttempt: positiveInteger(payload.parentRunAttempt),
@@ -1509,7 +1516,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
       ? {
           attemptEvidenceVersion: payload.attemptEvidenceVersion,
           repository: String(payload.repository),
-          candidateRequest: validateFullReleaseCandidateRequest(payload.candidateRequest),
+          candidateRequest: validateRecordedFullReleaseCandidateRequest(payload.candidateRequest),
           candidate:
             payload.candidate === null
               ? null
@@ -1550,13 +1557,34 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
+// Publication requires package and upgrade proof; all other execution lanes
+// remain recorded confidence evidence regardless of the release profile.
+const REQUIRED_PROOF_JOB_PATTERNS = [
+  /install[-_ ]smoke/iu,
+  /upgrade-survivor/u,
+  /update-first-hop-compat/u,
+  /pack budget|npm-pack|Qualify release npm/iu,
+  /Package integrity/u,
+  /resolve_target/u,
+  // Linux Gateway install/upgrade lanes are proof; Windows/macOS variants are advisory.
+  /cross_os_release_checks \/ Linux \//u,
+];
+const DERIVATIVE_GATE_JOB_PATTERN =
+  /^(?:openclaw\/ci-gate|Verify release checks|Run package acceptance \/ Verify package acceptance)$/u;
+const FIRST_HOP_JOB_PATTERN = /update-first-hop-compat/u;
+const SURVIVOR_JOB_PATTERN = /upgrade-survivor/u;
+const POLICY_CHILD_KEYS = new Set([...CHILD_SPECS, ...LEGACY_CHILD_SPECS].map(({ key }) => key));
+
+function isRequiredProofJob(jobName) {
+  return REQUIRED_PROOF_JOB_PATTERNS.some((pattern) => pattern.test(jobName));
+}
+
 function isReleaseChecksChild(key) {
   return ["releaseChecks", "releaseChecksIndependent", "releaseChecksCandidate"].includes(key);
 }
 
-// Aggregators restate waived lane failures only when every failed lane is waived.
-const DERIVATIVE_GATE_JOB_PATTERN =
-  /^(?:openclaw\/ci-gate|Verify release checks|Run package acceptance \/ Verify package acceptance)$/u;
+// The recorded lane waiver is an escape hatch for these children only; it
+// never widens the advisory set beyond the first-hop proof lane below.
 const LANE_WAIVER_CHILD_KEYS = new Set([
   "normalCi",
   "pluginPrerelease",
@@ -1567,15 +1595,6 @@ const LANE_WAIVER_CHILD_KEYS = new Set([
   "releaseChecksCandidate",
   "productPerformance",
 ]);
-// Proof lanes stay blocking under any lane waiver.
-const REQUIRED_PROOF_JOB_PATTERNS = [
-  /install[-_ ]smoke/iu,
-  /upgrade-survivor/u,
-  /pack budget|npm-pack|Qualify release npm/iu,
-  /resolve_target/u,
-];
-const FIRST_HOP_JOB_PATTERN = /update-first-hop-compat/u;
-const SURVIVOR_JOB_PATTERN = /upgrade-survivor/u;
 
 function isFailedJob(job) {
   return (
@@ -1592,14 +1611,14 @@ function survivorLanesGreen(jobs) {
 }
 
 function isLaneAdvisory({ childKey, jobName, laneWaiver, jobs }) {
-  if (!laneWaiver || !LANE_WAIVER_CHILD_KEYS.has(childKey)) {
+  if (!POLICY_CHILD_KEYS.has(childKey)) {
     return false;
   }
-  if (FIRST_HOP_JOB_PATTERN.test(jobName)) {
-    // A lost first-hop lane is covered by green survivor lanes in the same child.
+  if (FIRST_HOP_JOB_PATTERN.test(jobName) && laneWaiver && LANE_WAIVER_CHILD_KEYS.has(childKey)) {
+    // The retained explicit escape hatch requires green survivor proof.
     return survivorLanesGreen(jobs);
   }
-  return !REQUIRED_PROOF_JOB_PATTERNS.some((pattern) => pattern.test(jobName));
+  return !isRequiredProofJob(jobName);
 }
 
 function isReleaseJobAdvisory({
@@ -1617,7 +1636,10 @@ function isReleaseJobAdvisory({
     laneWaiver: normalizeReleaseLaneWaiver(laneWaiver),
     jobs,
   };
-  if (context.laneWaiver && DERIVATIVE_GATE_JOB_PATTERN.test(jobName)) {
+  if (DERIVATIVE_GATE_JOB_PATTERN.test(jobName)) {
+    if (!POLICY_CHILD_KEYS.has(childKey)) {
+      return false;
+    }
     // A gate failing without any failed lane is its own finding and blocks.
     const lanes = jobs.filter(
       (job) => isFailedJob(job) && !DERIVATIVE_GATE_JOB_PATTERN.test(stringValue(job.name)),
@@ -1630,7 +1652,11 @@ function isReleaseJobAdvisory({
   return isLaneAdvisory({ ...context, jobName });
 }
 
+// "" blocks, "policy" is advisory regardless, "lane_waiver" only under the waiver.
 export function releaseJobAdvisoryReason(input) {
+  if (isReleaseJobAdvisory({ ...input, laneWaiver: "" })) {
+    return "policy";
+  }
   return isReleaseJobAdvisory(input) ? "lane_waiver" : "";
 }
 
@@ -1701,15 +1727,18 @@ export function terminalPolicyPass(child, releaseProfile, workflowRef, laneWaive
   if (child.conclusion === "success") {
     return failedJobsForPolicy(child, releaseProfile, workflowRef, laneWaiver).length === 0;
   }
+  if (
+    ["npmTelegram", "productPerformance"].includes(child.key) &&
+    failedJobsForPolicy(child, releaseProfile, workflowRef, laneWaiver).length === 0
+  ) {
+    return true;
+  }
   const gate = isReleaseChecksChild(child.key)
     ? "Verify release checks"
     : child.key === "normalCi"
       ? "openclaw/ci-gate"
       : undefined;
-  if (
-    gate === undefined &&
-    !(normalizeReleaseLaneWaiver(laneWaiver) && LANE_WAIVER_CHILD_KEYS.has(child.key))
-  ) {
+  if (!POLICY_CHILD_KEYS.has(child.key)) {
     return false;
   }
   // A failed workflow passes only with complete terminal job evidence whose
@@ -2059,6 +2088,81 @@ function validateExecutionPlanChildBindings(children, payload) {
     ) {
       throw new Error(`release execution plan child identity is invalid: ${child.key}`);
     }
+  }
+}
+
+function validateChildReuseBindings(plan) {
+  if (plan.childReuse === undefined) {
+    return;
+  }
+  if (
+    plan.attemptEvidenceVersion !== 3 ||
+    plan.evidenceReuse.requested ||
+    !plan.childReuse ||
+    typeof plan.childReuse !== "object" ||
+    Array.isArray(plan.childReuse)
+  ) {
+    throw new Error("release child reuse requires an independent phase-three plan");
+  }
+  for (const [role, selection] of Object.entries(plan.childReuse)) {
+    const child = plan.children.find((entry) => entry.key === role);
+    const spec = releaseChildSpec(role);
+    if (
+      !child?.selected ||
+      child.source !== "reused" ||
+      child.result !== "success" ||
+      selection?.role !== role ||
+      selection.repository !== plan.repository ||
+      selection.targetSha !== plan.targetSha ||
+      child.runId !== selection.runId ||
+      child.runAttempt !== 1 ||
+      child.workflowSha !== selection.workflowSha ||
+      child.workflowRef !== selection.workflowRef ||
+      child.displayTitle !== selection.displayTitle ||
+      child.url !== selection.url ||
+      child.sourceParentAttempt !== selection.sourceParentAttempt ||
+      !/^[1-9][0-9]*$/u.test(selection.sourceParentRunId) ||
+      !Number.isSafeInteger(selection.sourceParentAttempt) ||
+      selection.sourceParentAttempt < 1 ||
+      child.displayTitle !==
+        `${spec.displayName} full-release-validation-${selection.sourceParentRunId}-${selection.sourceParentAttempt}${spec.suffix}` ||
+      !Number.isSafeInteger(selection.runAttempt) ||
+      selection.runAttempt < 1 ||
+      !/^[a-f0-9]{40}$/u.test(selection.workflowSha) ||
+      !/^[a-f0-9]{64}$/u.test(selection.receiptSha256) ||
+      !selection.inputs ||
+      typeof selection.inputs !== "object" ||
+      Array.isArray(selection.inputs) ||
+      Object.values(selection.inputs).some((value) => typeof value !== "string") ||
+      Object.hasOwn(selection.inputs, "dispatch_id")
+    ) {
+      throw new Error(`release child reuse differs from its immutable plan: ${role}`);
+    }
+    const targetKey =
+      role === "npmTelegram"
+        ? "harness_ref"
+        : role.startsWith("releaseChecks")
+          ? "ref"
+          : "target_ref";
+    if (
+      selection.inputs[targetKey] !== plan.targetSha ||
+      (role.endsWith("Candidate") && selection.inputs.phase !== "candidate") ||
+      (role.endsWith("Independent") && selection.inputs.phase !== "independent") ||
+      (selection.inputs.candidate_artifact_json &&
+        (!plan.candidate ||
+          selection.inputs.candidate_artifact_json !==
+            candidateArtifactJsonFromBinding(plan.candidate)))
+    ) {
+      throw new Error(`release child reuse target or candidate changed: ${role}`);
+    }
+  }
+  if (
+    plan.children.some(
+      (child) =>
+        child.selected && child.source === "reused" && !Object.hasOwn(plan.childReuse, child.key),
+    )
+  ) {
+    throw new Error("release child reuse omitted a selected receipt");
   }
 }
 
@@ -2646,6 +2750,7 @@ export function affectedActiveRunIds(children, blockers, cancelledRunIds = new S
   return children
     .filter(
       (child) =>
+        child.source !== "reused" &&
         child.status !== "completed" &&
         affected.has(String(child.runId)) &&
         !cancelledRunIds.has(String(child.runId)),

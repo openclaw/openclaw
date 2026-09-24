@@ -26,6 +26,7 @@ import {
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
+import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import {
   normalizeTag,
   readPackageVersion,
@@ -82,6 +83,11 @@ export async function executeMutableUpdate(
   params: MutableUpdateExecutionParams,
 ): Promise<MutableUpdateExecutionResult | null> {
   const { opts, updateStepTimeoutMs } = params;
+  const candidateAdmissionChecks =
+    params.updateInstallKind === "package" ? opts.run?.candidateAdmissionChecks : undefined;
+  const configValidation = candidateAdmissionChecks?.includes("config")
+    ? ("candidate" as const)
+    : undefined;
   const inspectContexts = (roots: string[]) =>
     inspectUpdateDatabaseContexts({
       ...params,
@@ -90,6 +96,7 @@ export async function executeMutableUpdate(
       updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
       jsonMode: Boolean(opts.json),
       timeoutMs: updateStepTimeoutMs,
+      candidateAdmissionChecks,
     });
   const originalRun = opts.run;
   const requesterAuthority = originalRun?.requesterAuthority;
@@ -136,6 +143,7 @@ export async function executeMutableUpdate(
         updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
+        candidateAdmissionChecks,
       },
       admission,
       versions,
@@ -144,9 +152,15 @@ export async function executeMutableUpdate(
   };
   const preflightPlugins = async (targetVersion: string | null) => {
     await recheckSchemas(admittedTargetSchemaVersions);
+    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
+    if (
+      candidateAdmissionChecks?.includes("plugin-availability") &&
+      isCandidateAdmissionContextCovered(context.env)
+    ) {
+      return;
+    }
     const { preflightConfiguredNpmPluginTargets } =
       await import("./update-command-plugin-preflight.js");
-    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
     const warnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
@@ -414,7 +428,8 @@ export async function executeMutableUpdate(
         }
       }
       const snapshot =
-        validatedConfigSnapshot ?? (await readUpdateCandidateSource(env, params.legacyConfigPlan));
+        validatedConfigSnapshot ??
+        (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
       const validation = await validateUpdateCandidateCanary({
         root,
         config: snapshot.config,
@@ -451,7 +466,9 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan);
+    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
+      configValidation,
+    });
     if (
       validatedConfigSnapshot?.hash !== undefined &&
       snapshot.hash !== validatedConfigSnapshot.hash

@@ -734,7 +734,7 @@ describe("message tool gateway timeout", () => {
   it("advertises scoped source-reply finality without exposing idempotency controls", () => {
     expect(getToolProperties(createMessageTool()).final).toMatchObject({
       type: "boolean",
-      description: expect.stringContaining("Ignored for other sends"),
+      description: expect.stringContaining("user explicitly requested the reaction"),
     });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });

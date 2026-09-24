@@ -13,6 +13,7 @@ import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 // Mistral provider adapts Mistral streams and tool calls to the runtime.
@@ -54,7 +55,6 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   formatToolResultText,
-  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;

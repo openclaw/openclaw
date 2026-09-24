@@ -18,10 +18,8 @@ import type {
   MonitorOptions,
   NativeSubagentMonitorClient,
   NativeSubagentMonitorRuntime,
-  ParentState,
   NativeModelToolInputRequest,
   NativeModelMapping,
-  NativeModelSource,
   NativeModelSourceCapture,
   NativeModelSourceRequest,
 } from "./native-subagent-monitor-types.js";
@@ -59,29 +57,21 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
 ) {
   const monitors = new WeakMap<CodexAppServerClient, NativeMonitor>();
 
-  function registerMonitor(params: {
-    client: CodexAppServerClient;
-    parentThreadId: string;
-    requesterSessionKey?: string;
-    taskRuntimeScope?: ParentState["taskRuntimeScope"];
-    historyOwner?: ParentState["historyOwner"];
-    submissionStore?: ParentState["submissionStore"];
-    agentId?: string;
-    runtime?: NativeSubagentMonitorRuntime;
-    retainClient?: () => (() => void) | undefined;
-    retainParentThread?: (threadId: string) => (() => void) | undefined;
-    claimDirectChild?: (threadId: string) => (() => void) | undefined;
-    rejectPendingDirectChild?: (threadId: string, reason: string) => void;
-    onDirectChildAccepted?: () => void;
-    modelSource?: NativeModelSource;
-    configurationQualification?: NativeParentRegistration["configurationQualification"];
-    unqualifiedModelExecution?: true;
-    onUnqualifiedModelCancelled?: NativeParentRegistration["onUnqualifiedModelCancelled"];
-  }): {
+  function registerMonitor({
+    client,
+    runtime,
+    retainClient,
+    retainParentThread,
+    ...registration
+  }: NativeParentRegistration &
+    Pick<MonitorOptions, "retainClient" | "retainParentThread"> & {
+      client: CodexAppServerClient;
+      runtime?: NativeSubagentMonitorRuntime;
+    }): {
     bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
     unregister: () => Promise<void>;
   } {
-    let monitor = monitors.get(params.client);
+    let monitor = monitors.get(client);
     if (!monitor) {
       // Native start/completion can race; serialize each child so only its
       // original claim handle may publish or release the same subscription.
@@ -99,22 +89,22 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
           childThreadOwnership.delete(threadId);
         }
       };
-      monitor = new Monitor(params.client, params.runtime ?? defaultNativeSubagentMonitorRuntime, {
-        retainClient: params.retainClient,
+      monitor = new Monitor(client, runtime ?? defaultNativeSubagentMonitorRuntime, {
+        retainClient,
         interruptModelExecution: (threadId, turnId) => {
-          void interruptCodexTurnAndWaitBestEffort(params.client, { threadId, turnId });
+          void interruptCodexTurnAndWaitBestEffort(client, { threadId, turnId });
         },
-        retainParentThread: params.retainParentThread,
+        retainParentThread,
         hasObservationBacking: (parentThreadId, childThreadId) =>
-          hasCodexAppServerLiveThread(params.client, parentThreadId) ||
-          hasCodexAppServerLiveThread(params.client, childThreadId),
+          hasCodexAppServerLiveThread(client, parentThreadId) ||
+          hasCodexAppServerLiveThread(client, childThreadId),
         claimChildThread: (threadId) =>
           childThreadTransitions.enqueue(threadId, async () => {
             // Codex subscribes fresh children before thread/started; they have
             // no idle entry yet but must already be fenced from manual adoption.
             let ownership: CodexAppServerLiveThreadOwnership | undefined;
             let invalidated = false;
-            ownership = await claimCodexAppServerLiveThread(params.client, threadId, () => {
+            ownership = await claimCodexAppServerLiveThread(client, threadId, () => {
               invalidated = true;
               if (childThreadOwnership.get(threadId) === ownership) {
                 childThreadOwnership.delete(threadId);
@@ -122,7 +112,7 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
               ownership = undefined;
               void childThreadTransitions
                 .enqueue(threadId, async () => {
-                  if (!hasCodexAppServerLiveThread(params.client, threadId)) {
+                  if (!hasCodexAppServerLiveThread(client, threadId)) {
                     monitor?.releasePendingModelInputs(threadId);
                   }
                 })
@@ -146,20 +136,13 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
             }
             let retained = false;
             try {
-              retained = await retainCodexAppServerLiveThread(
-                params.client,
-                threadId,
-                ownership.release,
-              );
+              retained = await retainCodexAppServerLiveThread(client, threadId, ownership.release);
               return retained;
             } finally {
               // A full idle pool can reject terminal child ownership. Release
               // its exact branded claim before the monitor forgets that child.
               if (!retained) {
-                await ownership.release(threadId);
-                if (childThreadOwnership.get(threadId) === ownership) {
-                  childThreadOwnership.delete(threadId);
-                }
+                await releaseOwnership(threadId, ownership);
               }
             }
           }),
@@ -173,23 +156,9 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
             return ownership?.forget;
           }),
       });
-      monitors.set(params.client, monitor);
+      monitors.set(client, monitor);
     }
-    return monitor.registerParent({
-      parentThreadId: params.parentThreadId,
-      requesterSessionKey: params.requesterSessionKey,
-      taskRuntimeScope: params.taskRuntimeScope,
-      historyOwner: params.historyOwner,
-      submissionStore: params.submissionStore,
-      agentId: params.agentId,
-      claimDirectChild: params.claimDirectChild,
-      rejectPendingDirectChild: params.rejectPendingDirectChild,
-      onDirectChildAccepted: params.onDirectChildAccepted,
-      configurationQualification: params.configurationQualification,
-      unqualifiedModelExecution: params.unqualifiedModelExecution,
-      onUnqualifiedModelCancelled: params.onUnqualifiedModelCancelled,
-      ...(Object.hasOwn(params, "modelSource") ? { modelSource: params.modelSource } : {}),
-    });
+    return monitor.registerParent(registration);
   }
 
   return {

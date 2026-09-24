@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
   loadControlUiTranslationMemory,
   materializePreparedControlUiLocaleCatalog,
@@ -20,6 +20,7 @@ import {
   compareStringArrays,
   extractTranslationPlaceholders,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -131,46 +132,55 @@ export function verifyControlUiReferencedKeys(
   let literalReferences = 0;
   let templatePrefixReferences = 0;
 
-  for (const { content, relativeFile } of sourceFiles) {
-    const sourceFile = ts.createSourceFile(relativeFile, content, ts.ScriptTarget.Latest, true);
-    const reportMissing = (node: ts.Node, description: string) => {
-      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-      errors.push(`${relativeFile}:${line}: ${description}`);
-    };
-    const verifyArgument = (rawArgument: ts.Expression): void => {
-      const argument = ts.isParenthesizedExpression(rawArgument)
-        ? rawArgument.expression
-        : ts.isAsExpression(rawArgument) || ts.isTypeAssertionExpression(rawArgument)
+  const parser = createNativeTypeScriptParser({ cwd: ROOT });
+  try {
+    const sources = sourceFiles.map(({ content, relativeFile }) => ({
+      fileName: relativeFile,
+      text: content,
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const relativeFile = toRepoPath(sourceFile.fileName);
+      const reportMissing = (node: ts.Node, description: string) => {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        errors.push(`${relativeFile}:${line}: ${description}`);
+      };
+      const verifyArgument = (rawArgument: ts.Expression): void => {
+        const argument = ts.isParenthesizedExpression(rawArgument)
           ? rawArgument.expression
-          : rawArgument;
-      if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
-        literalReferences += 1;
-        if (!sourceFlat.has(argument.text)) {
-          reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+          : ts.isAsExpression(rawArgument) || ts.isTypeAssertion(rawArgument)
+            ? rawArgument.expression
+            : rawArgument;
+        if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) {
+          literalReferences += 1;
+          if (!sourceFlat.has(argument.text)) {
+            reportMissing(argument, `missing English catalog key ${JSON.stringify(argument.text)}`);
+          }
+        } else if (ts.isTemplateExpression(argument)) {
+          templatePrefixReferences += 1;
+          const prefix = argument.head.text;
+          if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
+            reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+          }
+        } else if (ts.isConditionalExpression(argument)) {
+          verifyArgument(argument.whenTrue);
+          verifyArgument(argument.whenFalse);
         }
-      } else if (ts.isTemplateExpression(argument)) {
-        templatePrefixReferences += 1;
-        const prefix = argument.head.text;
-        if (prefix && !sourceKeys.some((key) => key.startsWith(prefix))) {
-          reportMissing(argument, `missing English catalog subtree ${JSON.stringify(prefix)}`);
+      };
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "t" &&
+          node.arguments[0]
+        ) {
+          verifyArgument(node.arguments[0]);
         }
-      } else if (ts.isConditionalExpression(argument)) {
-        verifyArgument(argument.whenTrue);
-        verifyArgument(argument.whenFalse);
-      }
-    };
-    const visit = (node: ts.Node) => {
-      if (
-        ts.isCallExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === "t" &&
-        node.arguments[0]
-      ) {
-        verifyArgument(node.arguments[0]);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
+        node.forEachChild(visit);
+      };
+      visit(sourceFile);
+    }
+  } finally {
+    parser.close();
   }
 
   if (errors.length > 0) {

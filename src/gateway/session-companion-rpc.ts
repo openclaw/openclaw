@@ -12,7 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";

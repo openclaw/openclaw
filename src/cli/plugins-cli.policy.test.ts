@@ -259,7 +259,14 @@ describe("plugins cli policy mutations", () => {
         ok: true,
         pluginIds: ids,
         restartRequired,
-        runtime: { operationId: "reload-selected", generation: 2, pluginIds: ids },
+        runtime: {
+          operationId: "reload-selected",
+          generation: 2,
+          pluginIds: ids,
+          selectedEntries: Object.fromEntries(
+            ids.map((id) => [id, `/plugins/${id}/dist/index.js`]),
+          ),
+        },
       };
       const review = buildPluginCapabilityConsentReview({
         pluginId: "alpha",
@@ -312,6 +319,11 @@ describe("plugins cli policy mutations", () => {
           expect(pluginsCliRuntimeLogs).toEqual([]);
         }
       } else {
+        for (const id of ids) {
+          expect(pluginsCliRuntimeLogs).toContain(
+            `${id}: Selected entry: /plugins/${id}/dist/index.js. Rebuild compiled output after source edits.`,
+          );
+        }
         expect(pluginsCliRuntimeLogs).toContain(
           restartRequired
             ? 'Reloaded registrations for plugin "alpha" (generation 2). Gateway restart required to load edited code.'
