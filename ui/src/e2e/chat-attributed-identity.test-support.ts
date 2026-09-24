@@ -83,6 +83,7 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
         permissions: ["clipboard-read", "clipboard-write"],
       },
       async ({ page }) => {
+        await page.clock.install();
         const reply = "The reply, its metadata, and its controls stay together.";
         const timestamp = Date.now() - 7_200_000;
         await installMockGateway(page, {
@@ -169,11 +170,13 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
         expect(centered.y).toBeLessThanOrEqual(1);
         expect(await copy.boundingBox()).toEqual(target);
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(reply);
+        await page.clock.fastForward(1_500);
         await expect(copy).not.toHaveAttribute("data-copy-state", "copied");
         if (width === 390) {
           await copy.focus();
           await page.keyboard.press("Enter");
           await expect(copy).toHaveAttribute("data-copy-state", "copied");
+          await page.clock.fastForward(1_500);
           await expect(copy).not.toHaveAttribute("data-copy-state", "copied");
         }
         await agent.locator(".chat-bubble").tap();
