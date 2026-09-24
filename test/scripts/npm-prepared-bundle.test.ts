@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import {
 } from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
@@ -619,7 +620,7 @@ describe("prepared npm bundle", () => {
         "--pack-destination",
         fixture.outputDir,
       ],
-      ["run", "postpack"],
+      ["run", "--if-present", "postpack"],
     ]);
     expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
       fixture.sourceDir,
@@ -666,26 +667,22 @@ describe("prepared npm bundle", () => {
     const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
     const marker = join(fixture.sourceDir, "candidate-typescript-loaded");
     const distRoot = join(fixture.sourceDir, "dist");
-    const candidateTypescriptRoot = join(fixture.sourceDir, "node_modules/typescript");
-    const installedTypescriptRoot = dirname(require.resolve("typescript/package.json"));
-    const installedTypescriptEntry = require.resolve("typescript");
     mkdirSync(join(fixture.sourceDir, "scripts"));
-    mkdirSync(join(fixture.sourceDir, "node_modules"), { recursive: true });
-    cpSync(installedTypescriptRoot, candidateTypescriptRoot, { recursive: true });
+    materializeNativeCompiler(fixture.sourceDir);
     mkdirSync(distRoot);
     writeFileSync(
       join(fixture.sourceDir, "scripts/tsx.mjs"),
       `await import(${JSON.stringify(pathToFileURL(require.resolve("tsx/esm")).href)});\n`,
     );
-    const candidateTypescriptEntry = join(
-      candidateTypescriptRoot,
-      installedTypescriptEntry.slice(installedTypescriptRoot.length + 1),
+    const candidateCompilerResolver = join(
+      fixture.sourceDir,
+      "node_modules/typescript/lib/getExePath.js",
     );
     writeFileSync(
-      candidateTypescriptEntry,
+      candidateCompilerResolver,
       [
-        `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        readFileSync(candidateTypescriptEntry, "utf8"),
+        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "loaded");`,
+        readFileSync(candidateCompilerResolver, "utf8"),
       ].join("\n"),
     );
     writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
@@ -706,6 +703,9 @@ describe("prepared npm bundle", () => {
         join(fixture.sourceDir, ".release-harness/sanitize-bundler-helper-dts-exports.mts"),
       ),
     ).toBe(false);
+    expect(existsSync(join(fixture.sourceDir, ".release-harness/native-typescript.mts"))).toBe(
+      false,
+    );
   });
 
   it.each([true, false])(

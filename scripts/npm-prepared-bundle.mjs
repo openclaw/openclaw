@@ -702,24 +702,30 @@ export function prepareNpmPackageBundle({
   npmDistTag,
   producer,
   sanitizeRootDeclarations = (distRoot) => {
-    const stagedSanitizer = join(
-      sourceDir,
-      ".release-harness/sanitize-bundler-helper-dts-exports.mts",
-    );
-    mkdirSync(join(sourceDir, ".release-harness"), { recursive: true });
-    // The frozen candidate owns the installed compiler used to parse its declarations.
-    copyFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "lib/sanitize-bundler-helper-dts-exports.mts"),
-      stagedSanitizer,
-    );
+    const harnessDir = join(sourceDir, ".release-harness");
+    const toolingLibDir = join(dirname(fileURLToPath(import.meta.url)), "lib");
+    const harnessFiles = ["sanitize-bundler-helper-dts-exports.mts", "native-typescript.mts"];
+    mkdirSync(harnessDir, { recursive: true });
+    // Stage the sanitizer's complete runtime closure so its compiler resolves
+    // from the frozen candidate instead of the current tooling checkout.
+    for (const file of harnessFiles) {
+      copyFileSync(join(toolingLibDir, file), join(harnessDir, file));
+    }
     try {
       execFileSync(
         process.execPath,
-        ["--import", join(sourceDir, "scripts/tsx.mjs"), stagedSanitizer, distRoot],
+        [
+          "--import",
+          join(sourceDir, "scripts/tsx.mjs"),
+          join(harnessDir, harnessFiles[0]),
+          distRoot,
+        ],
         { cwd: sourceDir, stdio: "inherit" },
       );
     } finally {
-      rmSync(stagedSanitizer, { force: true });
+      for (const file of harnessFiles) {
+        rmSync(join(harnessDir, file), { force: true });
+      }
     }
   },
   refreshRootDistInventory = (directory) => {
@@ -795,7 +801,7 @@ export function prepareNpmPackageBundle({
         { cwd: directory, env, stdio: "inherit", timeout: 30 * 60 * 1000 },
       );
     } finally {
-      execFileSync("pnpm", ["run", "postpack"], {
+      execFileSync("pnpm", ["run", "--if-present", "postpack"], {
         cwd: directory,
         env,
         stdio: "inherit",
