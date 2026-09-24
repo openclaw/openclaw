@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
-import type { TaskRunOwner } from "../../tasks/task-registry.process-state.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import type { TaskRunOwner } from "../../tasks/task-run-owner.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
@@ -80,6 +80,15 @@ function taskReceipt(
 ): CreatedDetachedTaskRun {
   return {
     task,
+    async bindRunOwner(cancel, assertCurrent) {
+      assertCurrent();
+      const release = mocks.bindTaskRunOwner(task, cancel);
+      const owner = mocks.getTaskRunOwner(task);
+      if (!owner) {
+        throw new Error("Expected the bound fixture task owner");
+      }
+      return { owner, release };
+    },
     settleUnstarted,
     finalizeActive: (terminal, canSettle) => mocks.finalizeActive(task, terminal, canSettle),
   };
@@ -111,6 +120,103 @@ describe("Gateway dispatch task creation ownership", () => {
       return { payloads: [], meta: {} };
     });
   });
+
+  it("joins a captured terminal save when command startup fails before its delivery hook", async () => {
+    const { runId, sessionKey, context, entry } = createTrackedDispatch();
+    const finishCommand = createDeferred();
+    const saving = createDeferred();
+    const finishSave = createDeferred();
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      await finishCommand.promise;
+      throw new Error("Synthetic startup failure");
+    });
+    const emitFinal = vi.fn();
+    const completion = dispatchAgentRunFromGateway({
+      admittedRunEntry: entry,
+      ingressOpts: {
+        message: "Synthetic startup",
+        sessionKey,
+        allowModelOverride: false,
+        abortSignal: entry.controller.signal,
+      },
+      runId,
+      dedupeKeys: [],
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "none",
+    });
+    try {
+      const producer = entry.resolveTerminalProducer?.();
+      expect(
+        producer?.handoff(async (producerCompleted) => {
+          await producerCompleted;
+          saving.resolve();
+          await finishSave.promise;
+        }),
+      ).toBe(true);
+      entry.controller.abort();
+      finishCommand.resolve();
+      await saving.promise;
+      expect(emitFinal).not.toHaveBeenCalled();
+      finishSave.resolve();
+      await completion;
+      expect(emitFinal).toHaveBeenCalledOnce();
+      expect(entry.resolveTerminalProducer?.()).toBeUndefined();
+    } finally {
+      finishCommand.resolve();
+      finishSave.resolve();
+      await completion;
+    }
+  });
+
+  it.each(["registration", "controller", "session", "instance"] as const)(
+    "rejects captured transcript custody after %s replacement",
+    async (replacement) => {
+      const { runId, sessionKey, context, entry } = createTrackedDispatch();
+      const finish = createDeferred();
+      mocks.agentCommand.mockImplementationOnce(async () => {
+        await finish.promise;
+        return { payloads: [], meta: {} };
+      });
+      const completion = dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        ingressOpts: {
+          message: "Synthetic stale producer",
+          sessionKey,
+          allowModelOverride: false,
+          abortSignal: entry.controller.signal,
+        },
+        runId,
+        dedupeKeys: [],
+        abortController: entry.controller,
+        cleanupAbortController: vi.fn(),
+        io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+        context,
+        taskTrackingMode: "none",
+      });
+      try {
+        const producer = entry.resolveTerminalProducer?.();
+        expect(producer).toBeDefined();
+        if (replacement === "registration") {
+          context.chatAbortControllers.set(runId, { ...entry });
+        } else if (replacement === "controller") {
+          entry.controller = new AbortController();
+        } else if (replacement === "session") {
+          entry.sessionId = "successor-session";
+        } else {
+          entry.operationalRunInstance = { runId, instanceId: "successor-instance" };
+        }
+        const save = vi.fn(async () => {});
+        expect(producer?.handoff(save)).toBe(false);
+        expect(save).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await completion;
+      }
+    },
+  );
 
   it.each(["success", "failure", "cancelled"] as const)(
     "awaits the captured active terminal owner before Gateway completion (%s)",

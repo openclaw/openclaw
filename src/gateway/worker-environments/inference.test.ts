@@ -39,6 +39,12 @@ const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
+const SESSION_TARGET = {
+  agentId: "main",
+  sessionId: REQUEST.sessionId,
+  sessionKey: "agent:main:inference",
+  storePath: "inference-sessions.sqlite",
+};
 const IDENTITY: WorkerConnectionIdentity = {
   environmentId: "w",
   credentialHash: "d",
@@ -134,6 +140,7 @@ function terminalFrames(frames: Parameters<WorkerInferenceSink["send"]>[0][]) {
 
 function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
   const result = manager.start({
+    sessionTarget: SESSION_TARGET,
     identity: IDENTITY,
     request: REQUEST,
     sink: createSink().sink,
@@ -265,6 +272,7 @@ describe("worker inference manager", () => {
           registerWorkerInferenceSessionControl(workerService, {
             beginDrain: instance.beginSessionDrain,
             captureCancel: instance.captureSessionCancellation,
+            resolveTarget: instance.resolveSessionTargetForRunId,
           });
           const original = createSink();
           const successor = createSink("successor");
@@ -366,7 +374,12 @@ describe("worker inference manager", () => {
     const execute = vi.fn<WorkerInferenceExecutor>(async () => ERROR);
     const limited = createWorkerInferenceManager({ execute, store, requestMaxBytes: 32 });
     expect(
-      limited.start({ identity: IDENTITY, request: REQUEST, sink: createSink().sink }),
+      limited.start({
+        sessionTarget: SESSION_TARGET,
+        identity: IDENTITY,
+        request: REQUEST,
+        sink: createSink().sink,
+      }),
     ).toEqual({
       ok: false,
       reason: "invalid-context",
@@ -381,6 +394,7 @@ describe("worker inference manager", () => {
     const competing = { ...REQUEST, runId: "run-b", turnId: "turn-b" };
     expect(
       instance.start({
+        sessionTarget: SESSION_TARGET,
         identity: identityFor(competing),
         request: competing,
         sink: createSink().sink,
@@ -439,6 +453,7 @@ describe("worker inference manager", () => {
     const replacementIdentity = identityFor(replacementRequest);
     expect(
       instance.start({
+        sessionTarget: SESSION_TARGET,
         identity: replacementIdentity,
         request: replacementRequest,
         sink: createSink().sink,
@@ -451,6 +466,7 @@ describe("worker inference manager", () => {
     drain.release();
     expect(
       instance.start({
+        sessionTarget: SESSION_TARGET,
         identity: replacementIdentity,
         request: replacementRequest,
         sink: createSink().sink,
@@ -589,7 +605,14 @@ describe("worker inference manager", () => {
       [{ ...IDENTITY, sessionId: "other" }, "session-not-attached"],
       [{ ...IDENTITY, ownerEpoch: REQUEST.runEpoch + 1 }, "epoch-mismatch"],
     ] as const) {
-      expect(instance.start({ identity, request: REQUEST, sink: createSink().sink })).toEqual({
+      expect(
+        instance.start({
+          sessionTarget: SESSION_TARGET,
+          identity,
+          request: REQUEST,
+          sink: createSink().sink,
+        }),
+      ).toEqual({
         ok: false,
         reason,
       });

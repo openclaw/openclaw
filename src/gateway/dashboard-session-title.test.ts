@@ -185,29 +185,35 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("preserves the configured primary auth profile for explicit utility models", async () => {
-    const profiledCfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5@personal" },
-          utilityModel: "openai/gpt-5.6-luna",
+  it.each([false, true])(
+    "preserves the native primary auth profile for utility models (ACP=%s)",
+    async (acp) => {
+      const profiledCfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5@personal" },
+            utilityModel: "openai/gpt-5.6-luna",
+          },
+          entries: {
+            main: acp ? { model: "harness-only@harness-profile", runtime: { type: "acp" } } : {},
+          },
         },
-      },
-    } as OpenClawConfig;
-    resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
+      } as OpenClawConfig;
+      resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
 
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
-    ).resolves.toBe(true);
+      await expect(
+        maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
+      ).resolves.toBe(true);
 
-    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        utilityModelRef: "openai/gpt-5.6-luna",
-        regularModelRef: "openai/gpt-5.5@personal",
-        preferredProfile: "personal",
-      }),
-    );
-  });
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          utilityModelRef: "openai/gpt-5.6-luna",
+          regularModelRef: "openai/gpt-5.5@personal",
+          preferredProfile: "personal",
+        }),
+      );
+    },
+  );
 
   it("goes directly to the regular model when utility routing is disabled", async () => {
     resolveUtilityModelRefForAgent.mockReturnValue(undefined);

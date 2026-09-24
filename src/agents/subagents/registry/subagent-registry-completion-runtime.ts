@@ -23,11 +23,15 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
     source: string,
+    isCurrent: () => boolean,
   ) {
     for (const message of [
       "failed to complete subagent run; retrying completion",
       "failed to complete subagent run after retry; retrying ended cleanup",
     ]) {
+      if (!isCurrent()) {
+        return;
+      }
       try {
         await completeSubagentRun(params);
         return;
@@ -39,16 +43,15 @@ export function createSubagentRegistryCompletionRuntime(config: {
           childSessionKey: current?.childSessionKey,
           error,
         });
-        if (!current || (params.expectedEntry && current !== params.expectedEntry)) {
+        if (!isCurrent()) {
           return;
         }
       }
     }
 
-    // Reaching here means the loop's final catch already confirmed the row is
-    // still the bound one, and nothing awaits between that check and this read,
-    // so the fallback below reopens cleanup on the request's own entry rather
-    // than on a same-id successor.
+    if (!isCurrent()) {
+      return;
+    }
     const latest = runs.get(params.runId);
     if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
@@ -75,6 +78,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     expectedEntry: SubagentRunRecord,
   ) {
     const expectedGeneration = expectedEntry.generation;
+    const ownedParams = { ...params, expectedEntry };
     const timer = setTimeout(() => {
       retryTimers.delete(timer);
       const current = runs.get(params.runId);
@@ -82,7 +86,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         return;
       }
       completeSubagentRunInBackground(
-        params,
+        ownedParams,
         source,
         "failed to retry subagent completion after gateway restart",
       );
@@ -95,13 +99,27 @@ export function createSubagentRegistryCompletionRuntime(config: {
     params: SubagentCompletionRequest,
     source: string,
   ) {
+    const entry = runs.get(params.runId);
+    if (!entry || (params.expectedEntry && params.expectedEntry !== entry)) {
+      return;
+    }
+    const generation = entry.generation;
+    const runId = params.runId;
+    const isCurrent = () =>
+      runs.get(runId) === entry &&
+      entry.generation === generation &&
+      params.isRecoveryCurrent?.() !== false;
+    const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
     // Each controller attempt owns its terminal transition, while this outer
     // lease outlives the launch scope and spans retries and fallback cleanup.
     try {
       await runWithGatewayDetachedWorkContinuation(async () => {
-        await completeSubagentRunWithRecoveryAttempt(params, source);
+        await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
       if (!isGatewayRestartDraining()) {
         throw error;
       }
@@ -109,10 +127,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         source,
         runId: params.runId,
       });
-      const current = runs.get(params.runId);
-      if (current && (!params.expectedEntry || current === params.expectedEntry)) {
-        scheduleSubagentCompletionRetryAfterRestart(params, source, current);
-      }
+      scheduleSubagentCompletionRetryAfterRestart(params, source, entry);
     }
   }
 

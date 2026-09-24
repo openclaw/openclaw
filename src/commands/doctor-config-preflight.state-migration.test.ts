@@ -40,7 +40,6 @@ const {
   doctorMaintenanceRelease,
   noteSessionTranscriptHealth,
   autoMigrateLegacyPluginDoctorState,
-  autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
   collectCronCodexRuntimePolicyTargetsReadOnly,
   readMigrationCheckpointStatus,
@@ -263,7 +262,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
@@ -366,7 +364,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(beforeStateMigrations).toHaveBeenCalledTimes(2);
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 
   it("runs full state migrations after reading the config snapshot", async () => {
@@ -911,7 +908,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyPluginDoctorState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
     expect(beforeStateMigrations).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ valid: true }),
@@ -935,7 +931,6 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
     expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
       config: { gateway: { mode: "local", port: 19091 } },
       env: process.env,

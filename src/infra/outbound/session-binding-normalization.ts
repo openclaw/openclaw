@@ -55,3 +55,24 @@ export function normalizeConversationRef<T extends ConversationRefShape>(ref: T)
 export function buildChannelAccountKey(params: { channel: string; accountId: string }): string {
   return `${normalizeLowercaseStringOrEmpty(params.channel)}:${normalizeAccountId(params.accountId)}`;
 }
+
+// The public inspection shape stays unchanged; private request scope survives
+// prepared-result copies even when the selected record belongs to a parent.
+const INSPECTED_CONVERSATION = Symbol.for("openclaw.sessionBinding.inspectedConversation");
+type ScopedBindingInspection = {
+  status: "available" | "unavailable";
+  [INSPECTED_CONVERSATION]?: Readonly<ConversationRefShape>;
+};
+
+export function withSessionBindingInspectionConversation<T extends ScopedBindingInspection>(
+  inspection: T,
+  conversation: ConversationRefShape,
+): T {
+  return Object.assign(inspection, {
+    [INSPECTED_CONVERSATION]: Object.freeze({ ...conversation }),
+  });
+}
+
+export function readSessionBindingInspectionConversation(inspection: ScopedBindingInspection) {
+  return inspection[INSPECTED_CONVERSATION];
+}

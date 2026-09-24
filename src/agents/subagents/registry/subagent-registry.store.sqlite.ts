@@ -390,7 +390,7 @@ export function loadSubagentRunsForSessionFromSqlite(
 /** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }

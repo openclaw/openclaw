@@ -18,7 +18,7 @@ export type CanonicalSessionValidationRow = {
   retained_window_id: string | null;
 };
 
-class SessionCanonicalKeyMigrationRequiredError extends Error {
+export class SessionCanonicalKeyMigrationRequiredError extends Error {
   readonly code = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
   constructor(detail: string) {
     super(`${detail}; stop the Gateway and run openclaw doctor --fix`);
@@ -35,7 +35,7 @@ export function canonicalSessionKeyMigrationRequiredError(
 /** One validator serves full Doctor scans, pending rows, and final writer certification. */
 export function validateCanonicalSessionRow(
   row: CanonicalSessionValidationRow,
-  canonicalMainKey: string,
+  mode: "admission" | "read" = "admission",
 ): SessionEntry | undefined {
   if (
     row.entry_json === "{}" &&
@@ -44,8 +44,9 @@ export function validateCanonicalSessionRow(
   ) {
     return undefined;
   }
+  // Raw writes clear writer proof; selected reads still validate their current source bytes.
   const record =
-    row.entry_valid === 1
+    row.entry_valid === 1 || (mode === "read" && row.entry_valid === 0)
       ? parseSqliteSessionEntryRecord({
           entry_json: row.entry_json,
           current_session_id: row.current_session_id,
@@ -78,8 +79,7 @@ export function validateCanonicalSessionRow(
   if (
     row.session_key !== trimmed ||
     normalizeStoreSessionKey(trimmed) !== trimmed ||
-    (!parsed && trimmed !== "global" && trimmed !== "unknown") ||
-    (parsed && parsed.rest === "main" && canonicalMainKey !== "main")
+    (!parsed && trimmed !== "global" && trimmed !== "unknown")
   ) {
     throw canonicalSessionKeyMigrationRequiredError(
       `non-canonical persisted row resolves to session key ${trimmed || row.session_key}`,
@@ -93,8 +93,7 @@ export function validateCanonicalSessionRow(
     const lineageParsed = parseAgentSessionKey(normalized);
     if (
       normalized !== lineageKey ||
-      (!lineageParsed && normalized !== "global" && normalized !== "unknown") ||
-      (lineageParsed?.rest === "main" && canonicalMainKey !== "main")
+      (!lineageParsed && normalized !== "global" && normalized !== "unknown")
     ) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${normalized || lineageKey}`,

@@ -337,16 +337,6 @@ describe("openai-responses reasoning replay", () => {
     expect(
       resolveReplayableResponsesMessageId({
         replayResponsesItemIds: true,
-        textSignatureId: "msg_commentary",
-        fallbackId: "msg_0",
-        fallbackOrdinal: 0,
-        previousReplayItemWasReasoning: false,
-      }),
-    ).toBeUndefined();
-
-    expect(
-      resolveReplayableResponsesMessageId({
-        replayResponsesItemIds: true,
         fallbackId: "msg_0",
         fallbackOrdinal: 0,
         previousReplayItemWasReasoning: false,

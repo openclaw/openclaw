@@ -6,11 +6,11 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";

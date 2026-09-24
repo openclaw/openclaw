@@ -23,7 +23,7 @@ import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -94,6 +94,17 @@ type ClientAuthority = Pick<
   NonNullable<GatewayRequestHandlerOptions["client"]>,
   "internal" | "authenticatedUserProfile" | "connectionSignal"
 >;
+
+function namedAdministrator(): ClientAuthority {
+  return {
+    authenticatedUserProfile: {
+      profileId: "11111111-2222-4333-8444-555555555555",
+      displayName: "Example administrator",
+      hasAvatar: false,
+      updatedAt: 0,
+    },
+  };
+}
 
 async function invoke(
   params: Record<string, unknown>,
@@ -206,6 +217,70 @@ afterEach(async () => {
 });
 
 describe("Report action from the authoritative update ledger", () => {
+  it.each(["identity", "attempt", "digest"] as const)(
+    "retires named administrator consent when %s changes during final validation",
+    async (change) => {
+      recordFailure();
+      const authority = namedAdministrator();
+      const { previewDigest } = await preview(authority);
+      const paused = createDeferred();
+      const resume = createDeferred();
+      // Read admission, validate before reservation, validate after artifact staging.
+      mocks.sentinel
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async () => {
+          paused.resolve();
+          await resume.promise;
+          return change === "digest" ? matchingSentinel() : null;
+        });
+      const submitting = invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      await paused.promise;
+      if (change === "identity") {
+        authority.authenticatedUserProfile!.profileId = "another-administrator";
+      } else if (change === "attempt") {
+        createUpdateRun({ trigger: "control-ui" });
+      }
+      resume.resolve();
+      const response = await submitting;
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+      expect(mocks.runGh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never authenticates the host after owner demotion during artifact publication", async () => {
+    recordFailure();
+    const authority = namedAdministrator();
+    authority.authenticatedUserProfile!.profileId = GATEWAY_OWNER_PROFILE_ID;
+    const { previewDigest } = await preview(authority);
+    const rename = fs.rename.bind(fs);
+    const publication = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (String(args[0]).includes(`${path.sep}update-reports${path.sep}`)) {
+        authority.authenticatedUserProfile!.profileId = "named-administrator";
+      }
+    });
+    try {
+      const response = await invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(mocks.runGh).not.toHaveBeenCalled();
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+    } finally {
+      publication.mockRestore();
+    }
+  });
+
   it.each(["compact", "direct-success", "other-scope"] as const)(
     "enriches only the same scoped attempt in lifecycle order: %s",
     async (mode) => {
@@ -657,6 +732,18 @@ describe("Report action from the authoritative update ledger", () => {
       expect(readUpdateFailureReportReceipt(runId)?.previewDigest === previewDigest).toBe(
         !changedPreview,
       );
+      if (outcome === "pending") {
+        const callsBefore = mocks.runGh.mock.calls.length;
+        const named = await invoke(
+          { action: "submit", attemptId: runId, previewDigest },
+          undefined,
+          namedAdministrator(),
+        );
+        expect(named).toHaveBeenCalledWith(true, expect.objectContaining({ status: "pending" }));
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("url");
+        expect(mocks.runGh).toHaveBeenCalledTimes(callsBefore);
+      }
       const response = await invoke({ action: "submit", attemptId: runId, previewDigest });
       expect(response).toHaveBeenCalledWith(
         true,

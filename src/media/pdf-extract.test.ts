@@ -16,11 +16,22 @@ describe("extractPdfContent", () => {
     extractDocumentContentMock.mockReset();
   });
 
-  it("dispatches PDF extraction through document extractors", async () => {
+  it("dispatches PDF extraction and preserves completeness metadata", async () => {
+    const metadata = {
+      pages: {
+        processed: [1, 2],
+        total: 3,
+        selection: "automatic" as const,
+        truncated: true,
+      },
+      textTruncated: true,
+      imagesTruncated: false,
+    };
     extractDocumentContentMock.mockResolvedValue({
       text: "extracted pdf",
       images: [],
       extractor: "pdf",
+      metadata,
     });
 
     await expect(
@@ -30,7 +41,7 @@ describe("extractPdfContent", () => {
         maxPixels: 100,
         minTextChars: 10,
       }),
-    ).resolves.toEqual({ text: "extracted pdf", images: [] });
+    ).resolves.toEqual({ text: "extracted pdf", images: [], metadata });
     expect(extractDocumentContentMock).toHaveBeenCalledWith({
       buffer: Buffer.from("%PDF-1.4"),
       mimeType: "application/pdf",

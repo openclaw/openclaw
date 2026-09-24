@@ -7,6 +7,7 @@ import type {
   SessionEntry,
   SessionToolOverrides,
 } from "../config/sessions.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -66,6 +67,7 @@ export type CreateGatewaySessionResult =
 
 export type CreateGatewaySessionParams = {
   cfg: OpenClawConfig;
+  operatorAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   key?: string;
   agentId?: string;
   label?: string;
@@ -165,6 +167,7 @@ export type CreateGatewaySessionParams = {
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
   /** Non-throwing notification of the exact newly committed row, before initial-turn work. */
   onCreatedSessionCommitted?: (created: CreatedGatewaySession) => void;
+  afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 };

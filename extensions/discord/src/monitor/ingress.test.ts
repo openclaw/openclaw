@@ -84,7 +84,9 @@ describe("Discord durable ingress", () => {
   it("does not normalize or dispatch before the durable append completes", async () => {
     await withQueue(async (queue) => {
       const appendGate = createDeferred<void>();
+      const appendStarted = createDeferred<void>();
       const enqueue = vi.fn(async (...args: Parameters<typeof queue.enqueue>) => {
+        appendStarted.resolve();
         await appendGate.promise;
         return await queue.enqueue(...args);
       });
@@ -100,9 +102,10 @@ describe("Discord durable ingress", () => {
         dispatch,
       });
       monitor.start();
+      const accepted = monitor.accept(createRawMessage("1001"));
       try {
-        const accepted = monitor.accept(createRawMessage("1001"));
-        await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
+        await Promise.race([appendStarted.promise, accepted]);
+        expect(enqueue).toHaveBeenCalledTimes(1);
 
         expect(dispatch).not.toHaveBeenCalled();
 
@@ -110,7 +113,12 @@ describe("Discord durable ingress", () => {
         await accepted;
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
       } finally {
-        await monitor.stop();
+        appendGate.resolve();
+        try {
+          await accepted;
+        } finally {
+          await monitor.stop();
+        }
       }
     });
   });

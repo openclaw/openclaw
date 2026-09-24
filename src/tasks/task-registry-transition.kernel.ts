@@ -2,7 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   hasAuthoritativeTaskBackingFromRecords,
+  readManagedTaskBacking,
+  sameTaskBackingInstance,
   selectCurrentCanonicalTaskBacking,
+  type TaskBackingInstance,
 } from "./task-backing-records.js";
 import { readTaskFlowRecord } from "./task-flow-registry.store.kernel.js";
 import {
@@ -20,9 +23,10 @@ import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.j
 
 export type { TaskRecordTransitionReceipt } from "./task-registry-transition.operation.js";
 
-type TaskWorkerTransitionInput = Extract<TaskRecordTransitionInput, { kind: "state" }> & {
+export type TaskWorkerTransitionInput = TaskRecordTransitionInput & {
   expectedTask: TaskPersistenceReceipt;
   selection?: never;
+  selectedTask?: { taskId: string; backing?: TaskBackingInstance };
 };
 
 export function hasAuthoritativeTaskBackingInDatabase(db: DatabaseSync, task: TaskRecord): boolean {
@@ -58,7 +62,22 @@ export function transitionTaskRecordInDatabase(
       if (!db.isTransaction) {
         throw new Error("Task transition requires a write transaction");
       }
-      return readTaskRecord(db, input.taskId);
+      const current = readTaskRecord(db, input.taskId);
+      const selected = input.selectedTask;
+      if (current && selected && current.taskId !== selected.taskId) {
+        const managed = readManagedTaskBacking(current.detail);
+        if (
+          !selected.backing ||
+          !managed ||
+          managed.taskId !== selected.taskId ||
+          !sameTaskBackingInstance(managed.instance, selected.backing) ||
+          !current.parentFlowId ||
+          readTaskFlowRecord(db, current.parentFlowId)?.syncMode !== "managed"
+        ) {
+          return undefined;
+        }
+      }
+      return current;
     },
     hasAuthoritativeBacking: (task) => hasAuthoritativeTaskBackingInDatabase(db, task),
     write,

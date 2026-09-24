@@ -173,9 +173,11 @@ describe("direct session model catalogs", () => {
               : {}),
           },
         );
-        await expect(f.request({ sessionKey, view: "configured" })).rejects.toThrow(
-          `Session "${sessionKey}" was not found.`,
-        );
+        const respond = await f.request({ sessionKey, view: "configured" });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `Session "${sessionKey}" was not found.`,
+        });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);

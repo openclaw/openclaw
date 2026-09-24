@@ -25,6 +25,11 @@ import {
   verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
 import { verifyPreparedNpmRegistry } from "../../scripts/plugin-npm-prepared-release.mjs";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -293,11 +298,16 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     return spawnSync(
       testNodeExecPath,
       [
-        "--import",
-        resolve("node_modules/tsx/dist/loader.mjs"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyBeta),
+          testNodeExecPath,
+        ).slice(0, -1),
         "--import",
         timers,
-        resolve("scripts/release-verify-beta.ts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyBeta),
+          testNodeExecPath,
+        ).slice(-1),
         version,
         "--skip-postpublish",
         "--skip-github-release",
@@ -368,6 +378,7 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
                 });
               },
             });
+            return undefined;
           },
         },
       };
@@ -383,6 +394,21 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(tarballState === "exact");
     },
   );
+
+  it("reports a superseded plugin readback as a warning line, not a failure", async () => {
+    const fixture = workflowFixture({}, true, undefined, {
+      version,
+      distTag: "beta",
+      tags: { openclaw: { beta: version }, "@openclaw/demo": { beta: version } },
+    });
+    const note = "@openclaw/demo@2026.9.6 superseded by 2026.9.7; dist-tag latest stays.";
+    const lines = await verifyBetaRelease(fixture.args, {
+      rootDir: fixture.rootDir,
+      pluginNpmReadback: { evidence: [], verify: async () => note },
+    });
+    expect(lines).toContain(`plugin npm WARN: ${note}`);
+    expect(lines).toContain("plugin npm OK: 1");
+  });
 
   it.each(["E404", "ETARGET"])(
     "retains CLI diagnostics after core npm %s exhaustion without a success receipt",

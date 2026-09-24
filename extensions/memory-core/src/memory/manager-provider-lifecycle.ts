@@ -25,7 +25,6 @@ import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
-  type EmbeddingProviderRequest,
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
@@ -111,7 +110,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract readonly cacheKey: string;
   protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
-  protected abstract readonly requestedProvider: EmbeddingProviderRequest;
   protected abstract providerInitPromise: Promise<void> | null;
   protected abstract providerInitialized: boolean;
   protected abstract embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
@@ -380,7 +378,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.providerInitialized = false;
     this.providerInitPromise = null;
     this.providerUnavailableReason = undefined;
-    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.settings.provider);
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {

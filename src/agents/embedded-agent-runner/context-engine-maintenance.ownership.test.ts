@@ -9,6 +9,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import { listTasksForOwnerKey } from "../../tasks/task-registry.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -42,6 +43,7 @@ async function withTranscriptOwners(
   run: (owners: Awaited<ReturnType<typeof createTranscriptOwners>>) => Promise<void>,
 ) {
   await withStateDirEnv("openclaw-maintenance-owners-", async ({ stateDir }) => {
+    using deliveries = captureTaskDeliveryWork();
     resetCommandQueueStateForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -49,10 +51,17 @@ async function withTranscriptOwners(
     try {
       await run(owners);
     } finally {
-      await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
-      resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await waitForDeferredTurnMaintenanceForSession(owners.target.sessionKey);
+      } finally {
+        try {
+          await deliveries.settle();
+        } finally {
+          resetCommandQueueStateForTest();
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
+      }
     }
   });
 }
@@ -228,7 +237,9 @@ describe("context-engine maintenance transcript ownership", () => {
     async (executionMode) => {
       await withTranscriptOwners(async ({ memory, durable, params, target }) => {
         const release = createDeferredCore();
+        const foreignStarted = createDeferredCore();
         const foreignMaintain = vi.fn(async () => {
+          foreignStarted.resolve();
           await release.promise;
           return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
         });
@@ -241,7 +252,8 @@ describe("context-engine maintenance transcript ownership", () => {
         });
         let run: Promise<unknown> | undefined;
         try {
-          await vi.waitFor(() => expect(foreignMaintain).toHaveBeenCalledOnce());
+          await foreignStarted.promise;
+          expect(foreignMaintain).toHaveBeenCalledOnce();
           const tasksBefore = listTasksForOwnerKey(target.sessionKey);
           const maintain = vi.fn(async () => ({
             changed: false,

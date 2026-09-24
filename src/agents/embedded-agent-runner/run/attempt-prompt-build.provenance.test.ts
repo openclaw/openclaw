@@ -41,10 +41,10 @@ vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () =>
   completeTerminalEffects: vi.fn(async () => {}),
 }));
 
-vi.mock("../../../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(() => []),
-  failTaskRunByRunId: vi.fn(() => []),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+vi.mock("../../../tasks/detached-task-runtime.async.js", () => ({
+  completeTaskRunByRunIdAsync: vi.fn(async () => []),
+  failTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 registerAgentSessionLoopTestLifecycle();

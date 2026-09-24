@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { callGateway } from "../../../gateway/call.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
+import { onAgentEvent } from "../../../infra/agent-events.js";
 import {
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
@@ -13,16 +16,29 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
-  testing,
 } from "./subagent-registry.test-helpers.js";
 
-const callGateway = vi.fn().mockResolvedValue({ status: "pending" });
+vi.mock("../../../gateway/call.js", { spy: true });
+vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
+vi.mock("../../../infra/agent-events.js", { spy: true });
+vi.mock("./subagent-registry.store.sqlite.js", { spy: true });
+
+beforeEach(() => {
+  vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
+  vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
+  vi.mocked(onAgentEvent).mockReturnValue(() => {});
+});
+
 afterEach(() => {
   resetSubagentRegistryForTests({ persist: false });
-  testing.setDepsForTest();
+  vi.mocked(callGateway).mockReset();
+  vi.mocked(bindGatewayLifecycleRequest).mockReset();
+  vi.mocked(onAgentEvent).mockReset();
+  vi.mocked(saveSubagentRegistryChangesToSqlite).mockReset();
 });
 
 describe("registered completion source custody", () => {
@@ -42,7 +58,6 @@ describe("registered completion source custody", () => {
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      testing.setDepsForTest({ callGateway, onAgentEvent: () => () => {} });
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
@@ -83,11 +98,8 @@ describe("registered completion source custody", () => {
               }),
           );
         if (ending === "registration-rejected") {
-          testing.setDepsForTest({
-            callGateway,
-            persistSubagentRunsToDiskOrThrow: () => {
-              throw new Error("write refused");
-            },
+          vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
+            throw new Error("write refused");
           });
           expect(register).toThrow("write refused");
           source.release();
@@ -201,15 +213,11 @@ describe("registered completion source custody", () => {
           );
           releaseSubagentRun("successor");
         } else if (ending === "release-rejected") {
-          testing.setDepsForTest({
-            callGateway,
-            persistSubagentRunsToDiskOrThrow: () => {
-              throw new Error("write refused");
-            },
+          vi.mocked(saveSubagentRegistryChangesToSqlite).mockImplementationOnce(() => {
+            throw new Error("write refused");
           });
           expect(() => releaseSubagentRun(entry.runId)).toThrow("write refused");
           expect(source.authority.assertCurrent).not.toThrow();
-          testing.setDepsForTest({ callGateway, onAgentEvent: () => () => {} });
           releaseSubagentRun(entry.runId);
         } else {
           revoked.abort(new Error("operator revoked"));

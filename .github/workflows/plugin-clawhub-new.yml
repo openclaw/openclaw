@@ -633,6 +633,7 @@ jobs:
               break
             fi
             [[ "${attempt}" -lt 5 ]] || exit 1
+            echo "::warning::Uploaded artifact metadata is unavailable; retrying GitHub acquisition (${attempt}/5)." >&2
             sleep 2
           done
           size="$(
