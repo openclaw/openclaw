@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
+import type { AuditRecoveryProgress } from "./state-migrations.audit-recovery-protocol.js";
 import {
   buildAuditScrubbedContent,
   configAuditRecord,
@@ -160,26 +161,39 @@ describe("legacy audit recovery byte handling", () => {
     });
   });
 
-  it("resumes restoration after an interrupted rollback write", async () => {
-    await withAuditMigrationFixture(async (audit) => {
-      const { raw: rawPath, restore: restorePath } = audit.system;
-      const originalContent = `${JSON.stringify(systemAuditEvent("restore after restart"))}\n`;
-      const originalBytes = Buffer.from(originalContent, "utf8");
-      const interruptedRestore = buildAuditScrubbedContent(originalBytes.length);
-      originalBytes.subarray(0, Math.floor(originalBytes.length / 2)).copy(interruptedRestore);
-      await audit.seedRawArchive(audit.system, interruptedRestore);
-      await writeAuditRestoreJournal(rawPath, originalBytes, {
-        restoredBytes: Math.floor(originalBytes.length / 2),
-        scrubbedBytes: originalBytes.length,
+  it.each(["committed", "pending"] as const)(
+    "resumes restoration after an interrupted rollback write with %s progress",
+    async (progressKind) => {
+      await withAuditMigrationFixture(async (audit) => {
+        const { raw: rawPath, restore: restorePath } = audit.system;
+        const originalContent = `${JSON.stringify(systemAuditEvent("restore after restart"))}\n`;
+        const originalBytes = Buffer.from(originalContent, "utf8");
+        const interruptedRestore = buildAuditScrubbedContent(originalBytes.length);
+        originalBytes.subarray(0, Math.floor(originalBytes.length / 2)).copy(interruptedRestore);
+        await audit.seedRawArchive(audit.system, interruptedRestore);
+        await writeAuditRestoreJournal(rawPath, originalBytes, {
+          restoredBytes: Math.floor(originalBytes.length / 2),
+          scrubbedBytes: originalBytes.length,
+        });
+        if (progressKind === "pending") {
+          const progressPath = `${rawPath}.doctor-scrub-progress`;
+          const progress: AuditRecoveryProgress = JSON.parse(
+            await fs.readFile(progressPath, "utf8"),
+          );
+          await fs.writeFile(
+            progressPath,
+            `${JSON.stringify({ ...progress, committedBytes: 0, pendingEnd: originalBytes.length })}\n`,
+          );
+        }
+
+        const result = await audit.migrate();
+
+        expect(result.warnings).toEqual([]);
+        expect(audit.systemSummaries()).toEqual(["restore after restart"]);
+        await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
       });
-
-      const result = await audit.migrate();
-
-      expect(result.warnings).toEqual([]);
-      expect(audit.systemSummaries()).toEqual(["restore after restart"]);
-      await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+    },
+  );
 
   it("retries raw archive recovery when sanitized archive hardening fails", async () => {
     await withAuditMigrationFixture(async (audit) => {
