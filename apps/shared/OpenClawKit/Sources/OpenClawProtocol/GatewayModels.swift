@@ -536,6 +536,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionid: String?
     public let sessionkey: String?
     public let expectedexistingsessionid: String?
+    public let expectedexistingsessionlifecyclerevision: AnyCodable?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
@@ -586,6 +587,7 @@ public struct AgentParams: Codable, Sendable {
         sessionid: String? = nil,
         sessionkey: String? = nil,
         expectedexistingsessionid: String? = nil,
+        expectedexistingsessionlifecyclerevision: AnyCodable? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
         attachments: [AnyCodable]? = nil,
@@ -635,6 +637,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.expectedexistingsessionid = expectedexistingsessionid
+        self.expectedexistingsessionlifecyclerevision = expectedexistingsessionlifecyclerevision
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
@@ -686,6 +689,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case expectedexistingsessionid = "expectedExistingSessionId"
+        case expectedexistingsessionlifecyclerevision = "expectedExistingSessionLifecycleRevision"
         case thinking
         case deliver
         case attachments
@@ -1055,17 +1059,20 @@ public struct AgentsFilesSetParams: Codable, Sendable {
     public let name: String
     public let content: String
     public let expectedhash: String?
+    public let expectedmissing: Bool?
 
     public init(
         agentid: String,
         name: String,
         content: String,
-        expectedhash: String? = nil)
+        expectedhash: String? = nil,
+        expectedmissing: Bool? = nil)
     {
         self.agentid = agentid
         self.name = name
         self.content = content
         self.expectedhash = expectedhash
+        self.expectedmissing = expectedmissing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1073,6 +1080,7 @@ public struct AgentsFilesSetParams: Codable, Sendable {
         case name
         case content
         case expectedhash = "expectedHash"
+        case expectedmissing = "expectedMissing"
     }
 }
 

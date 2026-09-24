@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +32,8 @@ const closure = [
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-source.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -105,7 +108,14 @@ function fixture(
   const selected = commit(selectedRoot, layout === "nested-tooling" ? [".release-harness"] : []);
   const tooling = commit(toolingRoot, layout === "nested-selected" ? ["selected"] : []);
   if (parser) {
-    cpSync(join(repo, "node_modules/typescript"), join(toolingRoot, "node_modules/typescript"), {
+    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
+    cpSync(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
+      recursive: true,
+      dereference: true,
+    });
+    cpSync(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
       recursive: true,
       dereference: true,
     });
@@ -529,25 +539,28 @@ describe("frozen admission bootstrap repairs", () => {
   const reader = "scripts/lib/frozen-target-source.mjs";
   const shell = "scripts/lib/frozen-target-compat.sh";
 
-  it.each([reader, "scripts/lib/docker-e2e-scenarios.mts", shell])(
-    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
-    (path) => {
-      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
-      const sentinel = join(f.root, "dependent-code-executed");
-      const file = join(f.tooling.root, path);
-      const payload =
-        path === shell
-          ? `\nprintf executed > '${sentinel}'\n`
-          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
-      writeFileSync(file, readFileSync(file, "utf8") + payload);
-      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: ["onboard"] });
-      expect(existsSync(sentinel), result.stderr).toBe(false);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
-      expect(result.stdout).toBe("");
-    },
-  );
+  it.each([
+    reader,
+    "scripts/lib/docker-e2e-scenarios.mts",
+    shell,
+    "scripts/lib/trusted-native-typescript.mjs",
+    "scripts/lib/native-typescript.mts",
+  ])("rejects dirty executable %s before any dependent code runs at unchanged HEAD", (path) => {
+    const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+    const sentinel = join(f.root, "dependent-code-executed");
+    const file = join(f.tooling.root, path);
+    const payload =
+      path === shell
+        ? `\nprintf executed > '${sentinel}'\n`
+        : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+    writeFileSync(file, readFileSync(file, "utf8") + payload);
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({ consumers: ["onboard"] });
+    expect(existsSync(sentinel), result.stderr).toBe(false);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`tooling closure does not match committed source: ${path}`);
+    expect(result.stdout).toBe("");
+  });
 
   it.each([
     entrypoint,

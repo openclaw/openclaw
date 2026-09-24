@@ -134,6 +134,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/tsdown-declaration-boundary.mts
+scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cache-slots.mts
@@ -689,6 +690,7 @@ src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
 src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
+src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
 src/infra/npm-registry-spec.ts

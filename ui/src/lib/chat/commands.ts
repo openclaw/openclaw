@@ -313,18 +313,6 @@ function clampText(value: unknown, maxLength: number): string {
   return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
 }
 
-function getEntryArgs(
-  entry: CommandEntry | Record<string, unknown>,
-): Array<Record<string, unknown>> {
-  const rawArgs = "args" in entry ? entry.args : undefined;
-  if (!Array.isArray(rawArgs)) {
-    return [];
-  }
-  return rawArgs
-    .map((arg) => asRecord(arg))
-    .filter((arg): arg is Record<string, unknown> => arg !== null);
-}
-
 function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
   if (arg.dynamic === true) {
     return [];
@@ -431,7 +419,9 @@ function normalizeCommandEntry(
   if (!primaryName || reservedLocalNames.has(primaryName)) {
     return null;
   }
-  const args = getEntryArgs(entry)
+  const args = (Array.isArray(entry.args) ? entry.args : [])
+    .map((arg) => asRecord(arg))
+    .filter((arg) => arg !== null)
     .slice(0, MAX_REMOTE_ARGS)
     .map((arg) => ({
       name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
@@ -568,25 +558,13 @@ export function getSlashCommandCompletions(
     commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
   }
 
-  return commands.toSorted((a, b) => {
-    if (lower) {
-      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
-      if (relevance !== 0) {
-        return relevance;
-      }
-    }
-    const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
-    const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
-    if (aTier !== bTier) {
-      return aTier - bTier;
-    }
-    const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
-    const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
-    if (ai !== bi) {
-      return ai - bi;
-    }
-    return 0;
-  });
+  return commands.toSorted(
+    (a, b) =>
+      (lower ? getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower) : 0) ||
+      (TIER_ORDER[a.tier ?? "standard"] ?? 1) - (TIER_ORDER[b.tier ?? "standard"] ?? 1) ||
+      CATEGORY_ORDER.indexOf(a.category ?? "session") -
+        CATEGORY_ORDER.indexOf(b.category ?? "session"),
+  );
 }
 
 export type InlineSlashCompletion = {
@@ -619,9 +597,6 @@ export function findInlineSlashCompletion(
     end += 1;
   }
   const query = match[1] ?? "";
-  if (!/^[^\s/:]*$/u.test(query)) {
-    return null;
-  }
   return {
     query,
     start,

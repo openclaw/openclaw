@@ -4,7 +4,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -31,6 +32,8 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const testNodeExecPath = resolveTestNodeExecPath();
 import {
   previousReleaseInventory,
@@ -1275,7 +1278,10 @@ describe("previous release update compatibility", () => {
     (variant) => {
       const facade =
         'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
-      const alias = buildUpdateConfigRuntimeAlias("io.runtime-abcdefgh.mjs", facade);
+      const alias = buildUpdateConfigRuntimeAlias(
+        "io.runtime-abcdefgh.mjs",
+        parser.parseSourceFile("facade.mjs", facade),
+      );
       const record = () =>
         recordImportedFixture('(await import("./io.runtime.js"))', {
           "io.runtime.js":
@@ -1941,14 +1947,19 @@ describe("previous release update compatibility", () => {
     expect(loaded.runner).toBe(current.x);
   });
 
-  it.each(["present", "missing"])(
-    "excludes the isolated config-doctor graph when the runtime binding is %s",
-    async (runtime) => {
+  it.each([
+    ["config-doctor", "present"],
+    ["config-doctor", "missing"],
+    ["native-hook-relay", "present"],
+    ["native-hook-relay", "missing"],
+  ])(
+    "excludes the isolated %s graph when the runtime binding is %s",
+    async (directory, runtime) => {
       const inventory = recordFixture();
       const root = createTempDir("update-compat-isolated-graph-");
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
-      write(root, "dist/config-doctor/inspect.mjs", fsSync.readFileSync(current, "utf8"));
+      write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);

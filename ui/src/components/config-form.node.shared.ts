@@ -98,10 +98,6 @@ export function formatConfigValueText(value: unknown): string {
   return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
-export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
-  return { ...schema, default: value };
-}
-
 export function isSecretRefObject(value: unknown): value is {
   source: string;
   id: string;
@@ -110,11 +106,10 @@ export function isSecretRefObject(value: unknown): value is {
   if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+  if (typeof value.source !== "string" || typeof value.id !== "string") {
     return false;
   }
-  return candidate.provider === undefined || typeof candidate.provider === "string";
+  return value.provider === undefined || typeof value.provider === "string";
 }
 
 export function getSensitiveRenderState(params: {

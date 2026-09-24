@@ -223,6 +223,7 @@ async function showTableDialog(
       html`
         <div
           class="markdown-table-dialog chat-text"
+          dir=${getComputedStyle(table).direction}
           @click=${dismissLink}
           @auxclick=${dismissLink}
           @keydown=${dismissLink}

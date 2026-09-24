@@ -2,10 +2,13 @@
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -29,12 +32,12 @@ function resolveRelativeSource(importer: string, specifier: string): string | nu
 }
 
 function staticValueSpecifiers(filePath: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) {
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
       if (

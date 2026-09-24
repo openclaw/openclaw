@@ -283,7 +283,21 @@ export function readSqliteCacheDataVersion(database: DatabaseSync): number {
   }
   if (owner) {
     if (owner.dataVersion !== row.data_version) {
-      invalidate(owner);
+      const facts = owner.facts;
+      // Data commits preserve schema-derived caches; compare both markers in one snapshot.
+      const unchanged =
+        facts &&
+        runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
+          const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+            s.get(),
+          );
+          return (
+            facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version
+          );
+        });
+      if (!unchanged) {
+        invalidate(owner);
+      }
       owner.dataVersion = row.data_version;
     }
     if (owner.readDepth > 0 && !owner.authorizerActive) {
@@ -319,7 +333,7 @@ export function admitSqliteSchema(database: DatabaseSync): void {
   getAdmittedSqliteSchemaFacts(database);
 }
 
-/** DDL and foreign commits revoke the admission; ordinary reads consume its recorded facts. */
+/** Schema changes revoke the admission; ordinary reads consume its recorded facts. */
 export function getAdmittedSqliteSchemaFacts(
   database: DatabaseSync,
 ): SqliteSchemaFacts | undefined {
@@ -350,11 +364,8 @@ export function getAdmittedSqliteSchemaFacts(
   if (!owner.facts) {
     owner.snapshot = snapshot;
     owner.transactionalFacts = database.isTransaction;
-    owner.facts = runSqlitePinnedReadSnapshotSync(database, () => {
+    owner.facts = runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
       const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-        s.get(),
-      );
-      const schemaVersion = executeWithCachedStatement(database, "PRAGMA schema_version", [], (s) =>
         s.get(),
       );
       const tables = executeWithCachedStatement(
@@ -366,7 +377,7 @@ export function getAdmittedSqliteSchemaFacts(
       return {
         revision: owner.revision,
         userVersion: Number(userVersion?.user_version ?? 0),
-        schemaVersion: Number(schemaVersion?.schema_version),
+        schemaVersion,
         tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
       };
     });

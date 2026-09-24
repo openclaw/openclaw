@@ -15,6 +15,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
@@ -213,6 +214,8 @@ const frozenAdmissionClosure = [
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -385,7 +388,14 @@ function frozenWorkflowFixture(
     return result;
   }
   function provisionParser() {
-    cpSync("node_modules/typescript", join(tooling, "node_modules/typescript"), {
+    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
+    cpSync(dirname(installedParser), join(tooling, "node_modules/typescript"), {
+      recursive: true,
+      dereference: true,
+    });
+    cpSync(dirname(installedNative), join(tooling, "node_modules", nativeName), {
       recursive: true,
       dereference: true,
     });

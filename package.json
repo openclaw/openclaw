@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.9.5",
+  "version": "2026.9.6",
   "openclaw": {
     "schemaVersions": {
       "state": 18,
@@ -414,7 +414,6 @@
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
-    "scripts/lib/guard-inventory-utils.mjs",
     "scripts/lib/package-dist-imports.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/recommended-tool-installs.json",
@@ -1693,6 +1692,7 @@
     "android:version:sync": "node --import ./scripts/tsx.mjs scripts/android-sync-versioning.ts --write",
     "audit:seams": "node --import ./scripts/tsx.mjs scripts/audit-seams.mts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
+    "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
     "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
@@ -2246,6 +2246,9 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
     "@anthropic-ai/sdk": "0.126.0",
+    "@babel/generator": "7.29.8",
+    "@babel/parser": "7.29.8",
+    "@babel/traverse": "7.29.8",
     "@clack/core": "1.5.1",
     "@clack/prompts": "1.8.1",
     "@earendil-works/pi-tui": "0.85.1",
@@ -2272,6 +2275,7 @@
     "diff": "9.0.0",
     "dotenv": "17.4.2",
     "entities": "8.1.0",
+    "esbuild": "0.28.2",
     "execa": "10.0.1",
     "express": "5.2.1",
     "file-type": "22.1.0",
@@ -2302,7 +2306,6 @@
     "tar": "7.5.22",
     "tslog": "5.2.0",
     "typebox": "1.3.32",
-    "typescript": "6.0.3",
     "undici": "8.10.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.27.0",
@@ -2313,6 +2316,7 @@
   "devDependencies": {
     "@a2ui/lit": "0.11.0",
     "@a2ui/web_core": "0.11.0",
+    "@babel/types": "7.29.8",
     "@copilotkit/aimock": "1.42.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
@@ -2326,6 +2330,8 @@
     "@shikijs/engine-javascript": "4.4.3",
     "@shikijs/engine-oniguruma": "4.4.3",
     "@sindresorhus/slugify": "3.0.1",
+    "@types/babel__generator": "7.27.0",
+    "@types/babel__traverse": "7.28.0",
     "@types/express": "5.0.6",
     "@types/hosted-git-info": "3.0.5",
     "@types/jsdom": "30.0.0",
@@ -2340,7 +2346,6 @@
     "acpx": "0.19.1",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
-    "esbuild": "0.28.2",
     "htmlparser2": "12.0.0",
     "ipaddr.js": "2.5.0",
     "jscpd": "5.2.1",
@@ -2370,7 +2375,7 @@
     "tree-sitter-bash": "0.25.1",
     "tsdown": "0.23.0",
     "tsx": "4.23.13",
-    "typescript-native": "npm:typescript@7.0.2",
+    "typescript": "7.0.2",
     "unrun": "0.3.1",
     "vite": "8.3.0",
     "vitest": "5.0.1"

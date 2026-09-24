@@ -149,8 +149,9 @@ const repositoryScriptEntries = [
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  // The frozen compatibility shell invokes this CLI and imports it from inline bundle resolution.
+  // The frozen compatibility shell invokes the source CLI and imports trusted tooling.
   "scripts/lib/frozen-target-source.mjs!",
+  "scripts/lib/frozen-target-compat.sh!",
   // CI loads the native Vitest reporter through its CLI path.
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
@@ -280,7 +281,17 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
     : "";
 }
 
-function compileUpgradeSurvivorShellConsumers(source: string, filePath: string): string {
+function compileShellConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/lib/frozen-target-compat.sh")) {
+    // These URLs resolve beside this shell file; keep the export edges tied to its actual imports.
+    return [
+      ...source.matchAll(
+        /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(new URL\("(\.\/[^"\r\n]+\.mjs)", pathToFileURL\(trustedHelper\)\)\)/gu,
+      ),
+    ]
+      .map(([, names, specifier]) => `import {${names}} from ${JSON.stringify(specifier)};`)
+      .join("\n");
+  }
   if (path.resolve(filePath) !== path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh")) {
     return "";
   }
@@ -586,7 +597,7 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
-  compilers: { yml: compileFrvWorkflowConsumers, sh: compileUpgradeSurvivorShellConsumers },
+  compilers: { yml: compileFrvWorkflowConsumers, sh: compileShellConsumers },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.
