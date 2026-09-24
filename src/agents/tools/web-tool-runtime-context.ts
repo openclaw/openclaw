@@ -23,37 +23,6 @@ type ResolvedWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetadata>
   runtimeMetadata?: TMetadata;
 };
 
-function resolveConfiguredWebProviderId(
-  config: OpenClawConfig | undefined,
-  kind: WebProviderKind,
-): string {
-  const provider = config?.tools?.web?.[kind]?.provider;
-  return typeof provider === "string" ? provider.trim().toLowerCase() : "";
-}
-
-function resolveRuntimeWebProviderId(metadata: WebProviderRuntimeMetadata | undefined): string {
-  return metadata?.selectedProvider ?? metadata?.providerConfigured ?? "";
-}
-
-function shouldPreferRuntimeProviders(params: {
-  config?: OpenClawConfig;
-  kind: WebProviderKind;
-  providerSelectionId: string;
-}): boolean {
-  // Agent-side web_search must use the live runtime registry; runWebSearch
-  // applies manifest ownership only as a load-scope hint after that.
-  if (!params.providerSelectionId || params.kind === "search") {
-    return true;
-  }
-  // Built-in providers are handled by core; plugin-owned selections should route through plugins.
-  return !resolveManifestContractOwnerPluginId({
-    contract: "webFetchProviders",
-    value: params.providerSelectionId,
-    origin: "bundled",
-    config: params.config,
-  });
-}
-
 function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetadata>(params: {
   capturedConfig?: OpenClawConfig;
   capturedRuntimeMetadata?: TMetadata;
@@ -70,16 +39,22 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
     params.lateBindRuntimeConfig === true
       ? (getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
+  const configuredProvider = config?.tools?.web?.[params.kind]?.provider;
   const providerSelectionId =
-    resolveRuntimeWebProviderId(runtimeMetadata) ||
-    resolveConfiguredWebProviderId(config, params.kind);
+    (runtimeMetadata?.selectedProvider ?? runtimeMetadata?.providerConfigured) ||
+    (typeof configuredProvider === "string" ? configuredProvider.trim().toLowerCase() : "");
   return {
     config,
-    preferRuntimeProviders: shouldPreferRuntimeProviders({
-      config,
-      kind: params.kind,
-      providerSelectionId,
-    }),
+    // Search uses the live registry; only fetch routes bundled selections by manifest ownership.
+    preferRuntimeProviders:
+      !providerSelectionId ||
+      params.kind === "search" ||
+      !resolveManifestContractOwnerPluginId({
+        contract: "webFetchProviders",
+        value: providerSelectionId,
+        origin: "bundled",
+        config,
+      }),
     providerSelectionId,
     runtimeMetadata,
   };
@@ -91,17 +66,15 @@ export function resolveWebSearchToolRuntimeContext(params: {
   lateBindRuntimeConfig?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
 }) {
-  const resolved = resolveWebToolRuntimeContext({
+  const { runtimeMetadata, ...resolved } = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebSearch,
     kind: "search",
     lateBindRuntimeConfig: params.lateBindRuntimeConfig,
   });
   return {
-    config: resolved.config,
-    preferRuntimeProviders: resolved.preferRuntimeProviders,
-    providerSelectionId: resolved.providerSelectionId,
-    runtimeWebSearch: resolved.runtimeMetadata,
+    ...resolved,
+    runtimeWebSearch: runtimeMetadata,
   };
 }
 
@@ -111,16 +84,14 @@ export function resolveWebFetchToolRuntimeContext(params: {
   lateBindRuntimeConfig?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
 }) {
-  const resolved = resolveWebToolRuntimeContext({
+  const { runtimeMetadata, ...resolved } = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebFetch,
     kind: "fetch",
     lateBindRuntimeConfig: params.lateBindRuntimeConfig,
   });
   return {
-    config: resolved.config,
-    preferRuntimeProviders: resolved.preferRuntimeProviders,
-    providerSelectionId: resolved.providerSelectionId,
-    runtimeWebFetch: resolved.runtimeMetadata,
+    ...resolved,
+    runtimeWebFetch: runtimeMetadata,
   };
 }

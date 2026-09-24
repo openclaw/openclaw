@@ -4,6 +4,7 @@
  * The default path blocks common credential names and suspicious value shapes while allowing
  * ordinary process environment needed for shells and Node-based tools.
  */
+import { isDeepStrictEqual } from "node:util";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
@@ -11,22 +12,7 @@ import { SECRET_ENV_NAME_RE } from "../../secrets/secret-env-name.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
-  /^ANTHROPIC_API_KEY$/i,
-  /^OPENAI_API_KEY$/i,
-  /^GEMINI_API_KEY$/i,
-  /^OPENROUTER_API_KEY$/i,
-  /^MINIMAX_API_KEY$/i,
-  /^ELEVENLABS_API_KEY$/i,
-  /^SYNTHETIC_API_KEY$/i,
-  /^TELEGRAM_BOT_TOKEN$/i,
-  /^DISCORD_BOT_TOKEN$/i,
-  /^SLACK_(BOT|APP)_TOKEN$/i,
-  /^LINE_CHANNEL_SECRET$/i,
-  /^LINE_CHANNEL_ACCESS_TOKEN$/i,
-  /^OPENCLAW_GATEWAY_(TOKEN|PASSWORD)$/i,
   /^AWS_(SECRET_ACCESS_KEY|SECRET_KEY|SESSION_TOKEN)$/i,
-  /^(GH|GITHUB)_TOKEN$/i,
-  /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
   /_ADMIN_KEY$/i,
   SECRET_ENV_NAME_RE,
 ];
@@ -57,29 +43,13 @@ type EnvSanitizationOptions = {
 
 const MAX_ENV_VAR_VALUE_BYTES = 32768;
 
-function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
-  const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  const rightEntries = Object.entries(right).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  return leftEntries.every(([key, value], index) => {
-    const rightEntry = rightEntries[index];
-    return rightEntry?.[0] === key && rightEntry[1] === value;
-  });
-}
-
 export function resolveDockerEnvPolicyEpoch(
   env: Record<string, string | undefined> | undefined,
 ): string | undefined {
   const explicitEnv = env ?? {};
   const previousAllowed = sanitizeEnvVars(explicitEnv).allowed;
   const currentAllowed = sanitizeExplicitSandboxEnvVars(explicitEnv).allowed;
-  return envRecordsEqual(previousAllowed, currentAllowed)
+  return isDeepStrictEqual(previousAllowed, currentAllowed)
     ? undefined
     : SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH;
 }
@@ -107,10 +77,6 @@ export function sanitizeEnvVars(
   envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
-  const allowed: Record<string, string> = {};
-  const blocked: string[] = [];
-  const warnings: string[] = [];
-
   const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
   const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
   // Credential metadata belongs to the host; the candidate container environment
@@ -133,40 +99,25 @@ export function sanitizeEnvVars(
     ),
   );
 
-  for (const [rawKey, value] of Object.entries(envVars)) {
-    const key = rawKey.trim();
-    if (!key || value === undefined) {
-      continue;
-    }
-
-    if (knownSecretNames.has(key.toUpperCase()) || matchesAnyPattern(key, blockedPatterns)) {
-      blocked.push(key);
-      continue;
-    }
-
-    if (options.strictMode && !matchesAnyPattern(key, allowedPatterns)) {
-      blocked.push(key);
-      continue;
-    }
-
-    const warning = validateEnvVarValue(value);
-    if (warning) {
-      if (warning === "Contains null bytes") {
-        blocked.push(key);
-        continue;
-      }
-      warnings.push(`${key}: ${warning}`);
-    }
-
-    allowed[key] = value;
-  }
-
-  return { allowed, blocked, warnings };
+  return sanitizeSandboxEnvValues(
+    envVars,
+    (key) =>
+      knownSecretNames.has(key.toUpperCase()) ||
+      matchesAnyPattern(key, blockedPatterns) ||
+      (Boolean(options.strictMode) && !matchesAnyPattern(key, allowedPatterns)),
+  );
 }
 
 /** Sanitizes env vars explicitly requested by config, preserving names but still validating values. */
 export function sanitizeExplicitSandboxEnvVars(
   envVars: Record<string, string | undefined>,
+): EnvVarSanitizationResult {
+  return sanitizeSandboxEnvValues(envVars);
+}
+
+function sanitizeSandboxEnvValues(
+  envVars: Record<string, string | undefined>,
+  isBlockedName?: (key: string) => boolean,
 ): EnvVarSanitizationResult {
   const allowed: Record<string, string> = {};
   const blocked: string[] = [];
@@ -175,6 +126,11 @@ export function sanitizeExplicitSandboxEnvVars(
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
     if (!key || value === undefined) {
+      continue;
+    }
+
+    if (isBlockedName?.(key)) {
+      blocked.push(key);
       continue;
     }
 

@@ -1844,7 +1844,7 @@ src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	1
-src/agents/tools/ask-user-tool.ts	8
+src/agents/tools/ask-user-tool.ts	3
 src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
 src/agents/tools/common.ts	2
@@ -1855,7 +1855,7 @@ src/agents/tools/conversation-tools.ts	3
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	10
+src/agents/tools/cron-tool.ts	6
 src/agents/tools/dashboard-tool.ts	2
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5
@@ -1866,15 +1866,14 @@ src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
-src/agents/tools/message-tool-discovery.ts	3
+src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
-src/agents/tools/message-tool-visible-content.ts	6
-src/agents/tools/mobile-ui-tool.ts	3
+src/agents/tools/mobile-ui-tool.ts	2
 src/agents/tools/music-generate-tool.ts	2
-src/agents/tools/nodes-tool.ts	2
+src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
-src/agents/tools/pdf-tool.ts	2
+src/agents/tools/pdf-tool.ts	1
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
@@ -1896,7 +1895,7 @@ src/agents/tools/web-fetch.ts	2
 src/agents/tools/web-guarded-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
-src/agents/tools/web-search-provider-config.ts	4
+src/agents/tools/web-search-provider-config.ts	1
 src/agents/tools/web-shared.ts	4
 src/agents/tools/web-tool-runtime-context.ts	1
 src/agents/transcript-policy.ts	2

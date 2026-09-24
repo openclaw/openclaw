@@ -23,13 +23,13 @@ import {
   type VideoGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
+  buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
   resolveMediaGenerationResultGeometry,
   type MediaGenerateToolExecutionResult,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
-  buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
   loadMediaToolReferences,
   resolveMediaToolSandboxConfig,
@@ -329,74 +329,61 @@ export async function executeVideoGenerationJob(params: {
   ].filter((entry): entry is string => Boolean(entry));
 
   return {
-    provider: result.provider,
-    model: result.model,
+    ...buildMediaGenerateToolExecutionResult({
+      result,
+      attachments,
+      mediaUrls: allMediaUrls,
+      lines,
+      taskHandle: params.taskHandle,
+      warning,
+      details: {
+        ...buildMediaReferenceDetails({
+          entries: params.loadedReferenceImages,
+          singleKey: "image",
+          pluralKey: "images",
+          getResolvedInput: (entry) => entry.resolvedInput,
+        }),
+        ...buildMediaReferenceDetails({
+          entries: params.loadedReferenceVideos,
+          singleKey: "video",
+          pluralKey: "videos",
+          getResolvedInput: (entry) => entry.resolvedInput,
+          singleRewriteKey: "videoRewrittenFrom",
+        }),
+        ...(normalizedSize ||
+        (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
+          ? { size: normalizedSize ?? params.size }
+          : {}),
+        ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
+          ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
+          : {}),
+        ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
+          ? { resolution: normalizedResolution ?? params.resolution }
+          : {}),
+        ...(typeof normalizedDurationSeconds === "number"
+          ? { durationSeconds: normalizedDurationSeconds }
+          : {}),
+        ...(typeof requestedDurationSeconds === "number" &&
+        typeof normalizedDurationSeconds === "number" &&
+        requestedDurationSeconds !== normalizedDurationSeconds
+          ? { requestedDurationSeconds }
+          : {}),
+        ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
+          ? { supportedDurationSeconds }
+          : {}),
+        ...(!ignoredOverrideKeys.has("audio") && typeof params.audio === "boolean"
+          ? { audio: params.audio }
+          : {}),
+        ...(!ignoredOverrideKeys.has("watermark") && typeof params.watermark === "boolean"
+          ? { watermark: params.watermark }
+          : {}),
+        ...(params.filename ? { filename: params.filename } : {}),
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+      },
+    }),
     urlOnlyUrls: deliveredVideos.flatMap((video) =>
       video.kind === "url" ? [video.media.url] : [],
     ),
-    count: deliveredVideos.length,
     mediaUrls: allMediaUrls,
-    attachments,
-    contentText: lines.join("\n"),
-    wakeResult: lines.join("\n"),
-    details: {
-      provider: result.provider,
-      model: result.model,
-      count: deliveredVideos.length,
-      media: {
-        mediaUrls: allMediaUrls,
-        attachments,
-      },
-      attachments,
-      paths: allMediaUrls,
-      ...buildTaskRunDetails(params.taskHandle),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceVideos,
-        singleKey: "video",
-        pluralKey: "videos",
-        getResolvedInput: (entry) => entry.resolvedInput,
-        singleRewriteKey: "videoRewrittenFrom",
-      }),
-      ...(normalizedSize ||
-      (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
-        ? { size: normalizedSize ?? params.size }
-        : {}),
-      ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
-        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
-        : {}),
-      ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
-        ? { resolution: normalizedResolution ?? params.resolution }
-        : {}),
-      ...(typeof normalizedDurationSeconds === "number"
-        ? { durationSeconds: normalizedDurationSeconds }
-        : {}),
-      ...(typeof requestedDurationSeconds === "number" &&
-      typeof normalizedDurationSeconds === "number" &&
-      requestedDurationSeconds !== normalizedDurationSeconds
-        ? { requestedDurationSeconds }
-        : {}),
-      ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
-        ? { supportedDurationSeconds }
-        : {}),
-      ...(!ignoredOverrideKeys.has("audio") && typeof params.audio === "boolean"
-        ? { audio: params.audio }
-        : {}),
-      ...(!ignoredOverrideKeys.has("watermark") && typeof params.watermark === "boolean"
-        ? { watermark: params.watermark }
-        : {}),
-      ...(params.filename ? { filename: params.filename } : {}),
-      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-      attempts: result.attempts,
-      ...(result.normalization ? { normalization: result.normalization } : {}),
-      metadata: result.metadata,
-      ...(warning ? { warning } : {}),
-      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
-    },
   };
 }

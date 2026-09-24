@@ -31,22 +31,12 @@ export function projectScheduledMessageActionPartialResult(params: {
     readToolStringParam(params.actionParams, "target") ??
     "unknown";
 
-  if (params.action === "send") {
+  if (params.action === "send" || params.action === "poll") {
     return {
-      kind: "send",
+      ...(params.action === "send"
+        ? { kind: "send" as const, action: "send" as const }
+        : { kind: "poll" as const, action: "poll" as const }),
       channel,
-      action: "send",
-      to: target,
-      handledBy: "plugin",
-      payload: partialDelivery,
-      dryRun: false,
-    };
-  }
-  if (params.action === "poll") {
-    return {
-      kind: "poll",
-      channel,
-      action: "poll",
       to: target,
       handledBy: "plugin",
       payload: partialDelivery,
