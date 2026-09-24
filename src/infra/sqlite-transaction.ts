@@ -305,21 +305,8 @@ function logSlowTransactionStep(params: {
     pid: process.pid,
     step: params.step,
     threadId,
-    ...beginAdmissionLogFields(params.beginAdmission),
+    ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
   });
-}
-
-function beginAdmissionLogFields(diagnostics: SqliteBeginAdmissionDiagnostics | undefined) {
-  return diagnostics
-    ? {
-        beginAdmission: {
-          nativeAttempts: diagnostics.nativeAttempts,
-          nativeMs: diagnostics.nativeMs,
-          serviceCalls: diagnostics.serviceCalls,
-          serviceMs: diagnostics.serviceMs,
-        },
-      }
-    : {};
 }
 
 function execTimedTransactionStep(params: {
@@ -368,7 +355,7 @@ function execTimedTransactionStep(params: {
         ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
         step: params.step,
         threadId,
-        ...beginAdmissionLogFields(beginAdmission),
+        ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
       });
     }
     throw error;

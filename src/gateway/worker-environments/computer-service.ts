@@ -137,9 +137,12 @@ export function createWorkerComputerService(
         };
         return {
           ...computer,
-          bind(run: OperationalRunInstanceRef) {
+          bind(
+            run: OperationalRunInstanceRef,
+            workerSource?: Parameters<PreparedWorkerComputer["bind"]>[1],
+          ) {
             assertOwner();
-            const transport = computer.bind(run);
+            const transport = computer.bind(run, workerSource);
             const bound: WorkerComputerTransport = {
               computerUse: transport.computerUse,
               async resolveNode(query, signal) {

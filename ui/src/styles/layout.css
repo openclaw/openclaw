@@ -2116,6 +2116,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-pagination__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;

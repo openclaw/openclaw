@@ -76,9 +76,9 @@ config, profiles, or session rows. Native-compatible requests retain the same
 publication fence in addition to their synchronous SDK guard.
 
 Bundled in-process agent callers still compose opaque guards from their run,
-profile, and receipt authority owners. Those callers, and delegated worker-claim
-liveness checks that still read placement state synchronously, require a separate
-owner migration before the complete approval flow is free of parent-thread SQL.
+profile, and receipt authority owners. Those native-compatible carriers and custom
+guards that synchronously read placement, tool, or environment state require a
+separate owner migration before the complete approval flow is free of parent-thread SQL.
 That migration must prepare authority through those owners and retain live commit
 checks; it must not treat internal agent identity as WebSocket authority or drop
 the external SDK guard contract.
@@ -92,6 +92,27 @@ committed facts are installed. Diagnostic writes preserve keyed reads only when
 the worker proves that every environment and credential field except the error
 text and update timestamp is unchanged. Transfer capabilities keep their separate
 authority and lifetime checks. List and keyed inventory reads use the projection.
+
+Bound worker execution identities and delegated approval checks prepare selected placement
+facts asynchronously through the existing placement reader. Retained checks
+consume the placement owner's live claim incarnation without issuing SQLite
+queries. Authority-changing placement kernels publish their existing postimages
+at the outer commit before observers; nested rollback discards those changes.
+Release and readmission cannot revive an earlier capability, even with identical
+claim fields. Compatible draining and retained local claims keep their authority,
+while database replacement, restart clearing, or an uncertain transaction owner
+revokes it. ACK, workspace metadata, and bundle updates do not independently
+revoke claims. Other placement reads, mutations, and their exact in-database checks retain
+their existing transaction boundary; moving those mutations and internal opaque
+approval carriers to workers remains separate work. External opaque SDK guards,
+stored rows, schemas, permissions, and update behavior are unchanged.
+
+Worker binding captures the complete original session target before preparing its
+claim authority. The bound identity and transcript capability retain that same
+store, lifecycle revision, and writer identity. Source validation still uses the
+session accessor's synchronous row check; moving that separate owner to prepared
+async custody remains follow-up work. The retained placement claim checks do not
+repeat the placement row read inside that source guard.
 
 Placement activation and prepared-environment consumption retain their existing
 synchronous atomic parent transactions. Node pairing uses its existing write

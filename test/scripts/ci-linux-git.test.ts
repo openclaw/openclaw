@@ -373,6 +373,19 @@ posixIt(
     );
     expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
     expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
+    const sparseCheckout = expectDefined(
+      harnessCommands.find(({ args }) => args[0] === "sparse-checkout"),
+      "harness sparse checkout",
+    );
+    for (const file of [
+      "scripts/ci-npm-lock-admission.mjs",
+      "scripts/generate-npm-package-lock.mjs",
+      "scripts/generate-npm-package-lock.mts",
+      "scripts/changed-lanes.mts",
+      "scripts/lib/merge-head-diff-base.mjs",
+    ]) {
+      expect(sparseCheckout.args).toContain(`/${file}`);
+    }
     // The selected checkout still needs real file contents, so it must stay unfiltered.
     const workspaceFetch = expectDefined(
       report.fetches.find(({ cwd }) => cwd === report.workspace),

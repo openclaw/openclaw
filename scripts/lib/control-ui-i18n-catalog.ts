@@ -43,6 +43,7 @@ import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
+import { registerToolDiagnosticsEnglish } from "../../ui/src/i18n/locales/en-tool-diagnostics.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
 import { registerUsageEnglish } from "../../ui/src/i18n/locales/en-usage.ts";
@@ -103,6 +104,7 @@ const sourceFiles = [
   "en-skills-browser.ts",
   "en-systems.ts",
   "en-update-actions.ts",
+  "en-tool-diagnostics.ts",
   "en-transcripts.ts",
   "en-usage.ts",
 ];
@@ -152,7 +154,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
       },
-      agentTools: { ...registerGitHubEnglish.catalog.agentTools, ...en.agentTools },
+      agentTools: {
+        ...registerGitHubEnglish.catalog.agentTools,
+        ...en.agentTools,
+        ...registerToolDiagnosticsEnglish.catalog.agentTools,
+      },
       board: { ...en.board, widget: boardWidget },
       newSession,
       sessionsView,

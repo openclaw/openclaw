@@ -1074,12 +1074,6 @@ export const ToolsGitHubAuthorizeCancelResultSchema = closedObject({
   cancelled: Type.Boolean(),
 });
 
-/** Reads the effective tool set for one session. */
-export const ToolsEffectiveParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKey: NonEmptyString,
-});
-
 /** Invokes one tool through the gateway tool dispatcher. */
 export const ToolsInvokeParamsSchema = closedObject({
   name: NonEmptyString,
@@ -1093,63 +1087,6 @@ export const ToolsInvokeParamsSchema = closedObject({
    * Missing values remain delegated, and agent runtime identity wins server-side.
    */
   conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
-});
-
-/** Effective tool entry after session/profile/channel/plugin filtering. */
-export const ToolsEffectiveEntrySchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  description: Type.String(),
-  rawDescription: Type.String(),
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  pluginId: Type.Optional(NonEmptyString),
-  channelId: Type.Optional(NonEmptyString),
-  mcpServer: Type.Optional(NonEmptyString),
-  mcpToolName: Type.Optional(NonEmptyString),
-  deniedBySession: Type.Optional(Type.Literal(true)),
-  risk: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
-  tags: Type.Optional(Type.Array(NonEmptyString)),
-});
-
-/** Effective tool group shown to runtime/session callers. */
-export const ToolsEffectiveGroupSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  label: NonEmptyString,
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
-  tools: Type.Array(ToolsEffectiveEntrySchema),
-});
-
-/** Notice explaining runtime filtering such as quarantined tool schemas. */
-export const ToolsEffectiveNoticeSchema = closedObject({
-  id: NonEmptyString,
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
-  message: Type.String(),
-  servers: Type.Optional(Type.Array(NonEmptyString)),
-});
-
-/** Effective tool set for a session, including profile and filtering notices. */
-export const ToolsEffectiveResultSchema = closedObject({
-  agentId: NonEmptyString,
-  profile: NonEmptyString,
-  groups: Type.Array(ToolsEffectiveGroupSchema),
-  notices: Type.Optional(Type.Array(ToolsEffectiveNoticeSchema)),
 });
 
 /** Normalized error shape for tool invocation failures. */
@@ -1223,11 +1160,6 @@ export type ToolsGitHubAuthorizeCancelParams = Static<
 export type ToolsGitHubAuthorizeCancelResult = Static<
   typeof ToolsGitHubAuthorizeCancelResultSchema
 >;
-export type ToolsEffectiveParams = Static<typeof ToolsEffectiveParamsSchema>;
-export type ToolsEffectiveEntry = Static<typeof ToolsEffectiveEntrySchema>;
-export type ToolsEffectiveGroup = Static<typeof ToolsEffectiveGroupSchema>;
-export type ToolsEffectiveNotice = Static<typeof ToolsEffectiveNoticeSchema>;
-export type ToolsEffectiveResult = Static<typeof ToolsEffectiveResultSchema>;
 export type ToolsInvokeParams = Static<typeof ToolsInvokeParamsSchema>;
 export type ToolsInvokeResult = Static<typeof ToolsInvokeResultSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;

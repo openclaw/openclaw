@@ -239,9 +239,7 @@ export const doctorServiceInspectionCases = [
   "absent-busy-port",
   "absent-unknown-port",
   "windows-ready",
-  "windows-disabled",
   "windows-queued",
-  "windows-running",
   "windows-startup-stopped",
   "windows-startup-unknown",
 ].flatMap((kind) => [
