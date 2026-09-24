@@ -2,6 +2,7 @@ import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runAuthorizedTelegramRequest } from "./account-throttler.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isTelegramSkippableChunkSendError,
@@ -147,7 +148,9 @@ export function createTelegramPreparedSender(config: {
         config.request(
           () => {
             config.assertPlatformSendAuthorized?.();
-            return send(effective);
+            return runAuthorizedTelegramRequest(config.assertPlatformSendAuthorized, () =>
+              send(effective),
+            );
           },
           operation,
           {

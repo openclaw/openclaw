@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import { isTelegramRateLimitError, readTelegramRetryAfterMs } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 type ApiThrottlerTransformer = ReturnType<typeof apiThrottler>;
@@ -31,11 +32,40 @@ const FLOOD_BACKOFF_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 const floodLog = createSubsystemLogger("telegram/flood");
-const replaceableRequests = new AsyncLocalStorage<true>();
+type TelegramRequestScope = { replaceable?: true; assertCurrent?: () => void };
+const requestScopes = new AsyncLocalStorage<TelegramRequestScope>();
 
 /** Runs Telegram calls whose content the next update supersedes, such as stream previews. */
 export function runReplaceableTelegramRequest<T>(run: () => Promise<T>): Promise<T> {
-  return replaceableRequests.run(true, run);
+  return requestScopes.run({ ...requestScopes.getStore(), replaceable: true }, run);
+}
+
+/**
+ * Runs Telegram calls whose caller checked send authority before entering the
+ * API. A flood wait happens inside that call, so the limiter re-runs the check
+ * after every wait and before the next attempt reaches Telegram.
+ */
+export function runAuthorizedTelegramRequest<T>(
+  assertCurrent: (() => void) | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!assertCurrent) {
+    return run();
+  }
+  const outer = requestScopes.getStore();
+  const outerAssert = outer?.assertCurrent;
+  return requestScopes.run(
+    {
+      ...outer,
+      assertCurrent: outerAssert
+        ? () => {
+            outerAssert();
+            assertCurrent();
+          }
+        : assertCurrent,
+    },
+    run,
+  );
 }
 
 function skippedFloodResponse(waitMs: number, reason: string): ApiError {
@@ -89,9 +119,10 @@ async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Pro
 
 function callThroughFloodGate(
   gate: TelegramFloodGate,
-  replaceable: boolean,
+  scope: TelegramRequestScope | undefined,
   prev: TelegramApiCall,
 ): TelegramApiCall {
+  const replaceable = scope?.replaceable === true;
   return async (method, payload, signal) => {
     // The ingress worker owns getUpdates flood waits (and long polls must not stall here).
     if (method === "getUpdates") {
@@ -110,9 +141,29 @@ function callThroughFloodGate(
         }
         await sleepForFloodGate(waitMs, signal);
         waitedMs += waitMs;
+        // The caller's authority check ran before this call entered the API.
+        scope?.assertCurrent?.();
         continue;
       }
-      const result = await prev(method, payload, signal);
+      const closeGate = (retryAfterSeconds: number | undefined) => {
+        const closedMs = gate.close(retryAfterSeconds);
+        floodLog.warn(
+          `Telegram flood control on ${method}: all calls for this bot wait ${Math.ceil(closedMs / 1000)}s` +
+            (replaceable ? "; replaceable update skipped" : ""),
+        );
+      };
+      let result: Awaited<ReturnType<TelegramApiCall>>;
+      try {
+        result = await prev(method, payload, signal);
+      } catch (error) {
+        // The chat-action handler throws Bot API failures after its own backoff
+        // bookkeeping; a thrown 429 still penalizes the whole token.
+        if (isTelegramRateLimitError(error)) {
+          const retryAfterMs = readTelegramRetryAfterMs(error);
+          closeGate(retryAfterMs === undefined ? undefined : retryAfterMs / 1000);
+        }
+        throw error;
+      }
       if (result.ok) {
         gate.open();
         return result;
@@ -121,11 +172,7 @@ function callThroughFloodGate(
         return result;
       }
       flooded = result;
-      const closedMs = gate.close(result.parameters?.retry_after);
-      floodLog.warn(
-        `Telegram flood control on ${method}: all calls for this bot wait ${Math.ceil(closedMs / 1000)}s` +
-          (replaceable ? "; replaceable update skipped" : ""),
-      );
+      closeGate(result.parameters?.retry_after);
       if (replaceable) {
         return result;
       }
@@ -375,10 +422,11 @@ function createTelegramAccountThrottler(
 
   const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
     // Classify at the call site: queued work later runs in the drain's async context.
-    const replaceable = method === "sendChatAction" || replaceableRequests.getStore() === true;
+    const callerScope = requestScopes.getStore();
+    const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const send = callThroughFloodGate(
       floodGate,
-      replaceable,
+      replaceable ? { ...callerScope, replaceable: true } : callerScope,
       (queuedMethod, queuedPayload, queuedSignal) =>
         scheduleRequest(replaceable)(prev, queuedMethod, queuedPayload, queuedSignal),
     );

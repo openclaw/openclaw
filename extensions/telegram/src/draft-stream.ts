@@ -7,7 +7,10 @@ import {
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { runReplaceableTelegramRequest } from "./account-throttler.js";
+import {
+  runAuthorizedTelegramRequest,
+  runReplaceableTelegramRequest,
+} from "./account-throttler.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidate } from "./bot/native-quote.js";
 import {
@@ -228,8 +231,15 @@ export function createTelegramDraftStream(params: {
   // Unfinished previews are superseded by the next update: under flood pressure the
   // account limiter skips them so final replies keep Telegram's budget. Only the
   // Bot API calls are marked; cleanup and observation keep normal priority.
-  const previewRequest = <T>(run: () => Promise<T>): Promise<T> =>
-    streamState.final ? run() : runReplaceableTelegramRequest(run);
+  // Final sends can wait out a flood inside the API call, so they carry the
+  // send-authority check for the limiter to re-run before each attempt.
+  const previewRequest = <T>(
+    assertCurrent: (() => void) | undefined,
+    run: () => Promise<T>,
+  ): Promise<T> =>
+    streamState.final
+      ? runAuthorizedTelegramRequest(assertCurrent, run)
+      : runReplaceableTelegramRequest(run);
   const scheduleProviderMessageObservation = (message: Message | undefined) => {
     if (!message) {
       return;
@@ -284,7 +294,7 @@ export function createTelegramDraftStream(params: {
         });
       }
       if (richMessage || page.sourceTextMode === "html") {
-        acceptedSnapshot = await previewRequest(() =>
+        acceptedSnapshot = await previewRequest(assertPlatformSendAuthorized, () =>
           withTelegramPlainFallback<TelegramDraftMessageSnapshot>({
             kind: richMessage ? "rich" : "html",
             context: "stream preview edit",
@@ -315,7 +325,9 @@ export function createTelegramDraftStream(params: {
           }),
         );
       } else {
-        await previewRequest(() => editMessageTextWithPreview(targetMessageId, page.sourceText));
+        await previewRequest(assertPlatformSendAuthorized, () =>
+          editMessageTextWithPreview(targetMessageId, page.sourceText),
+        );
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;
@@ -326,7 +338,7 @@ export function createTelegramDraftStream(params: {
     const sendMessageParams = reserveReplyTargetForSend(sendGeneration);
     let sent: Awaited<ReturnType<typeof sendTelegramDraftMessage>>;
     try {
-      sent = await previewRequest(() =>
+      sent = await previewRequest(assertPlatformSendAuthorized, () =>
         sendTelegramDraftMessage({
           api: params.api,
           chatId,

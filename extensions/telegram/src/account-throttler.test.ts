@@ -413,6 +413,57 @@ describe("getOrCreateAccountThrottler", () => {
     }
   });
 
+  it("lets a typing flood wait hold replies in another chat on the same token", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const sent: Array<{ method: string; at: number }> = [];
+    const api = new Api("123:typing-flood", {
+      buildUrl: (root, _token, method) => `${root}/${method}`,
+      fetch: asTelegramClientFetch(async (input: unknown, init?: { body?: unknown }) => {
+        assert(typeof input === "string");
+        const method = input.slice(input.lastIndexOf("/") + 1);
+        const body = JSON.parse(String(init?.body)) as { chat_id: number; text?: string };
+        sent.push({ method, at: Date.now() - startedAt });
+        return new Response(
+          JSON.stringify(
+            method === "sendChatAction"
+              ? {
+                  ok: false,
+                  error_code: 429,
+                  description: "Too Many Requests: retry after 6",
+                  parameters: { retry_after: 6 },
+                }
+              : {
+                  ok: true,
+                  result: {
+                    message_id: sent.length,
+                    date: 0,
+                    chat: { id: body.chat_id, type: "supergroup", title: "Topics" },
+                    text: body.text,
+                  },
+                },
+          ),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("typing-flood").transformer);
+    try {
+      await expect(api.sendChatAction(-100111, "typing")).rejects.toMatchObject({
+        error_code: 429,
+      });
+      const reply = api.sendMessage(-100222, "final answer");
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(sent.map(({ method }) => method)).toEqual(["sendChatAction"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(reply).resolves.toMatchObject({ text: "final answer" });
+      expect(sent[1]).toMatchObject({ method: "sendMessage" });
+      expect(sent[1]!.at).toBeGreaterThanOrEqual(6_000);
+    } finally {
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+    }
+  });
+
   it("backs off without retry_after and yields previews to a pending group reply", async () => {
     vi.useFakeTimers();
     const sent: string[] = [];
