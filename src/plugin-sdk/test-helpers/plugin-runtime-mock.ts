@@ -1,6 +1,9 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
+import {
+  resolveInboundDebounceMs,
+  type InboundDebounceCreateParams,
+} from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.shared.js";
 import {
@@ -840,6 +843,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
             await Promise.race([flush.admission, completion]);
           };
           return {
+            shouldBuffer: vi.fn(() => false),
             enqueue: async (item: unknown) => {
               await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
             },
@@ -850,46 +854,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
             },
           };
         }),
-        resolveInboundDebounceMs: vi.fn<
-          PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]
-        >((params: unknown) => {
-          // Match the production contract so channel plugins that delegate to
-          // `core.channel.debounce.resolveInboundDebounceMs({ cfg, channel })`
-          // see the same per-channel/global/default precedence in tests as
-          // they would at runtime. Prior to this, the mock returned 0
-          // unconditionally, which meant any channel that delegated (vs.
-          // reading config directly) effectively disabled its debounce
-          // window in tests — a footgun that silently hid coverage for
-          // per-channel overrides.
-          const p = params as
-            | {
-                cfg?: {
-                  messages?: {
-                    inbound?: {
-                      debounceMs?: unknown;
-                      byChannel?: Record<string, unknown>;
-                    };
-                  };
-                };
-                channel?: string;
-                overrideMs?: unknown;
-              }
-            | undefined;
-          const override = typeof p?.overrideMs === "number" ? p.overrideMs : undefined;
-          if (typeof override === "number") {
-            return override;
-          }
-          const inbound = p?.cfg?.messages?.inbound;
-          const perChannel =
-            p?.channel && inbound?.byChannel ? inbound.byChannel[p.channel] : undefined;
-          if (typeof perChannel === "number") {
-            return perChannel;
-          }
-          if (typeof inbound?.debounceMs === "number") {
-            return inbound.debounceMs;
-          }
-          return 0;
-        }),
+        resolveInboundDebounceMs:
+          vi.fn<PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]>(
+            resolveInboundDebounceMs,
+          ),
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers: vi.fn<

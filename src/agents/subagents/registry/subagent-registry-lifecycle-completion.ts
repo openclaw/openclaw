@@ -501,6 +501,10 @@ export async function completeSubagentRunAttempt(
       completionOutcome.status === "ok" &&
       !terminalReply
     ) {
+      // An unproven success cannot replace the cancellation already owned by this run.
+      if (provisionalKillSnapshot) {
+        return;
+      }
       completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
       completionReason = SUBAGENT_ENDED_REASON_ERROR;
     }
@@ -669,7 +673,7 @@ export async function completeSubagentRunAttempt(
     // A steer abort ends one agent run but continues the same detached task.
     // The successor must remain able to publish its eventual terminal state.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = finalizeSubagentTaskRun(params, {
+      const finalizedTasks = await finalizeSubagentTaskRun(params, {
         entry,
         outcome: executionOutcome,
         taskResolution: postCaptureTaskResolution,
@@ -732,7 +736,7 @@ export async function completeSubagentRunAttempt(
         throw error;
       }
       if (!suppressTaskFinalization) {
-        finalizeSubagentTaskRun(params, {
+        await finalizeSubagentTaskRun(params, {
           entry,
           outcome: executionOutcome,
         });

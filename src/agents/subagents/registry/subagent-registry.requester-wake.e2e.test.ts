@@ -907,7 +907,18 @@ describe("requester settle wake product flow", () => {
             await yieldTurn(initialRequesterTurnRunId, [alpha]);
             attachment?.releaseProvisional();
             emitCompleted(alpha.runId, alpha.childSessionKey, "alpha findings");
-            await vi.waitFor(() => expect(firstWakeReturned).toBe(true));
+            await vi.waitFor(() => {
+              expect(firstWakeReturned).toBe(true);
+              if (!acceptNextChild) {
+                expect(
+                  registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake,
+                ).toMatchObject({
+                  status: "pending",
+                  attemptCount: 1,
+                  nextAttemptAt: expect.any(Number),
+                });
+              }
+            });
             await vi.advanceTimersByTimeAsync(0);
             expect(getRequesterWakeCalls()).toHaveLength(1);
             expect(visibleFinals).toBe(0);

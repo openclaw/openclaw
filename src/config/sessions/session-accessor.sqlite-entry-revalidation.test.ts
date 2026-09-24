@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { onSessionIdentityMutation } from "./session-accessor.js";
+import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
   readUnchangedLifecycleTargetSnapshot,
   writeSessionEntry,
@@ -23,6 +24,7 @@ import {
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { createSessionTranscriptOwnerPredicate } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 
 const tempDirs = createTempDirTracker();
@@ -88,6 +90,125 @@ describe("SQLite session entry patch commit revalidation", () => {
         );
   }
 
+  function setUnrelatedParent(db: DatabaseSync, parentSessionKey: string | null): void {
+    db.prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?").run(
+      parentSessionKey,
+      "agent:main:main",
+    );
+  }
+
+  describe("prepared session mutation guard", () => {
+    function ownerPredicate() {
+      return createSessionTranscriptOwnerPredicate(database, {
+        sessionKey,
+        sessionId: "session-1",
+        lifecycleRevision: undefined,
+        activeWriterRunId: undefined,
+      });
+    }
+
+    it.each(
+      ["sessionId", "lifecycleRevision", "activeWriterRunId"].flatMap((field) =>
+        ["foreign", "same-connection"].map((writer) => ({ field, writer })),
+      ),
+    )("rejects a changed $field from a $writer writer", ({ field, writer }) => {
+      const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
+      guard();
+      if (writer === "foreign") {
+        mutateRowOutOfBand({ [field]: "replacement" });
+        expect(guard).toThrowError(
+          expect.objectContaining({
+            code: "invalid_state",
+            message: "Prepared session entry facts are no longer current",
+          }),
+        );
+      } else {
+        database.db.exec("BEGIN");
+        try {
+          database.db
+            .prepare(
+              "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+            )
+            .run(`$.${field}`, "replacement", sessionKey);
+          expect(guard).toThrow("Prepared session entry facts are no longer current");
+        } finally {
+          database.db.exec("ROLLBACK");
+        }
+      }
+    });
+
+    it("does not adopt a foreign revision that commits during the owner predicate", () => {
+      const matches = ownerPredicate();
+      let mutateDuringPredicate = false;
+      const guard = createSessionEntryRevisionGuard(
+        database.db,
+        () => {},
+        () => {
+          const matched = matches();
+          if (mutateDuringPredicate) {
+            mutateRowOutOfBand({ activeWriterRunId: "replacement" });
+          }
+          return matched;
+        },
+      );
+      guard();
+      mutateRowOutOfBand({ label: "harmless metadata" });
+      mutateDuringPredicate = true;
+      expect(guard).toThrow("Session entry facts changed during their mutation check");
+      mutateDuringPredicate = false;
+      expect(guard).toThrow("Prepared session entry facts are no longer current");
+    });
+
+    it.each(["sessionId", "lifecycleRevision", "activeWriterRunId"] as const)(
+      "rejects a duplicate protected %s key instead of selecting its stale first value",
+      async (field) => {
+        const expected = {
+          sessionKey,
+          sessionId: "session-1",
+          lifecycleRevision: "original-lifecycle",
+          activeWriterRunId: "original-writer",
+        };
+        await upsertSessionEntryCore(scope, {
+          lifecycleRevision: expected.lifecycleRevision,
+          activeWriterRunId: expected.activeWriterRunId,
+        });
+        const guard = createSessionEntryRevisionGuard(
+          database.db,
+          () => {},
+          createSessionTranscriptOwnerPredicate(database, expected),
+        );
+        guard();
+        const other = new DatabaseSync(database.path);
+        try {
+          other
+            .prepare(
+              "UPDATE session_nodes SET entry_json = substr(entry_json, 1, length(entry_json) - 1) || ? WHERE session_key = ?",
+            )
+            .run(`,${JSON.stringify(field)}:"replacement"}`, sessionKey);
+        } finally {
+          other.close();
+        }
+        expect(guard).toThrow("Prepared session entry facts are no longer current");
+      },
+    );
+
+    it("rejects JSON5 that the stored entry decoder would not accept", () => {
+      const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
+      guard();
+      const other = new DatabaseSync(database.path);
+      try {
+        other
+          .prepare(
+            "UPDATE session_nodes SET entry_json = replace(entry_json, ?, ?) WHERE session_key = ?",
+          )
+          .run('"sessionId"', "'sessionId'", sessionKey);
+      } finally {
+        other.close();
+      }
+      expect(guard).toThrow("Prepared session entry facts are no longer current");
+    });
+  });
+
   it.each([false, true])(
     "commits an unchanged persisted row after preparation (reopen: %s)",
     async (reopen) => {
@@ -140,7 +261,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     "canonical validation for $route patches (replacement: $replaceEntry)",
     ({ route, replaceEntry }) => {
       it.each([false, true])(
-        "rejects invalidated main keys even when the target row is unchanged (no-op: %s)",
+        "revalidates unrelated lineage after a main-key change even when the target row is unchanged (no-op: %s)",
         async (noop) => {
           await upsertSessionEntryCore(
             { ...scope, sessionKey: "agent:main:main" },
@@ -155,6 +276,7 @@ describe("SQLite session entry patch commit revalidation", () => {
               route,
               (entry) => {
                 setCanonicalSqliteSessionMainKey(database, "work");
+                setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
                 expect(
                   database.db
                     .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
@@ -166,7 +288,7 @@ describe("SQLite session entry patch commit revalidation", () => {
             ),
           ).rejects.toThrow("openclaw doctor --fix");
 
-          setCanonicalSqliteSessionMainKey(database, "main");
+          setUnrelatedParent(database.db, null);
           expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
         },
       );
@@ -174,7 +296,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   it.each([false, true])(
-    "keeps the exact-replacement reader exception after main-key invalidation (no-op: %s)",
+    "keeps the exact-replacement reader exception after unrelated lineage invalidation (no-op: %s)",
     async (noop) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
@@ -184,12 +306,13 @@ describe("SQLite session entry patch commit revalidation", () => {
         "ordinary",
         (entry) => {
           setCanonicalSqliteSessionMainKey(database, "work");
+          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
           return noop ? null : { ...entry, label: "exact replacement" };
         },
         true,
       );
       expect(result?.label).toBe(noop ? "original" : "exact replacement");
-      setCanonicalSqliteSessionMainKey(database, "main");
+      setUnrelatedParent(database.db, null);
       expect(loadExactSessionEntry(scope)?.entry.label).toBe(
         noop ? "original" : "exact replacement",
       );
@@ -197,7 +320,7 @@ describe("SQLite session entry patch commit revalidation", () => {
   );
 
   it.each(["ordinary", "lifecycle"] as const)(
-    "rejects a no-op %s patch after reopening with an invalid main key",
+    "rejects a no-op %s patch after reopening with invalidated unrelated lineage",
     async (route) => {
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:main" },
@@ -206,6 +329,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       await expect(
         patchEntry(route, () => {
           setCanonicalSqliteSessionMainKey(database, "work");
+          setUnrelatedParent(database.db, "agent:main:unrecorded-parent");
           expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
           return null;
         }),
@@ -214,7 +338,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       closeOpenClawAgentDatabaseByPath(database.path);
       const cleanup = new DatabaseSync(database.path);
       try {
-        setCanonicalSqliteSessionMainKey({ db: cleanup }, "main");
+        setUnrelatedParent(cleanup, null);
       } finally {
         cleanup.close();
       }

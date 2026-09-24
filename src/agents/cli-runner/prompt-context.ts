@@ -1,3 +1,4 @@
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -5,6 +6,7 @@ import {
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
+import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 
 /** Current-turn facts stay outside native prompts that are retained across CLI turns. */
 export async function buildCliTurnAppendContext(
@@ -13,6 +15,7 @@ export async function buildCliTurnAppendContext(
     isNewSession: boolean;
     systemPrompt: string;
     context: readonly (string | undefined)[];
+    thinkLevel?: ThinkLevel;
   },
 ): Promise<string> {
   const { resolveSystemPromptUsage } = await import("./helpers.js");
@@ -24,6 +27,10 @@ export async function buildCliTurnAppendContext(
   await prepareActiveNodeContext();
   return [
     ...params.context,
+    buildProactiveSubagentOrchestrationSection({
+      enabled: params.thinkLevel === "ultra",
+      hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+    }).join("\n"),
     buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
     resolveSystemPromptUsage(params) ? undefined : buildActiveNodeContextText(),

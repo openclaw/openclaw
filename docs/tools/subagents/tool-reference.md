@@ -24,7 +24,8 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Starts a sub-agent run on the global `subagent` lane. Ordinary one-shot runs
+Starts a sub-agent run on the spawning session's sub-agent queue, with
+[per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
 use `deliver: false` and return through an announce step; collectors, quiet
 runs, and direct thread replies use the
 [completion paths](/tools/subagents/slash-command#spawn-behavior).
@@ -189,7 +190,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   With `visible: true`, omit `mode` or use the default `"run"`; the visible session remains persistent. `mode: "session"` is unavailable on this path.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
-  `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
+  `"delete"` archives the session immediately after announce. The Control UI's **Tasks** inspector can preview the retained transcript under the [post-cleanup access rules](/tools/subagents/announce#announce).
 </ParamField>
 <ParamField path="expectsCompletionMessage" type="boolean" default="true">
   Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.

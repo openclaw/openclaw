@@ -293,8 +293,14 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
   });
 
   it.each([
-    { source: "source declaration export", diagnostics: ["MISSING_EXPORT", "SourceOnly"] },
-    { source: "transitive declaration export", diagnostics: ["MISSING_EXPORT", "TransitiveAlias"] },
+    {
+      source: "source declaration export",
+      diagnostics: ["TS1110", "src/contract.d.ts", "Type expected"],
+    },
+    {
+      source: "transitive declaration export",
+      diagnostics: ["TS1109", "contracts/before.ts", "Expression expected"],
+    },
     { source: "missing entry", diagnostics: ["core.ts"] },
     { source: "invalid config", diagnostics: ["missing-config.json"] },
     { source: "missing declaration", diagnostics: ["contract"] },

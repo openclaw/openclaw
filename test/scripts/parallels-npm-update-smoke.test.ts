@@ -23,6 +23,11 @@ import {
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import { createDeferred } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -102,18 +107,25 @@ function runPrerequisiteCli(args: string[], env: NodeJS.ProcessEnv = {}) {
   for (const name of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "OPENAI_API_KEY"]) {
     delete childEnv[name];
   }
-  return spawnSync(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: {
-      ...childEnv,
-      ...env,
-      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
-      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
-      OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+  return spawnSync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptProcessEntrypoints.npmUpdateSmoke)),
+      ...args,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...childEnv,
+        ...env,
+        OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
+        OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
+        OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+      },
+      timeout: 10_000,
     },
-    timeout: 10_000,
-  });
+  );
 }
 
 function runFrozenPrerequisiteHelper(env: NodeJS.ProcessEnv = {}) {

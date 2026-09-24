@@ -152,6 +152,37 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
+  it("updates a retained table without measuring neighboring tables or its own controls", async () => {
+    restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+    const { owner, shell, viewport } = interactiveOwner(`${markdown}\n\n${markdown}`);
+    const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
+    const otherWidth = vi.fn(() => 300);
+    const changedWidth = vi.fn(() => 100);
+    Object.defineProperty(otherViewport, "scrollWidth", {
+      configurable: true,
+      get: otherWidth,
+    });
+    Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
+
+    try {
+      shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+      expect(changedWidth).toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+
+      changedWidth.mockClear();
+      shell.querySelector(".markdown-table__copy")!.replaceChildren(document.createElement("span"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(changedWidth).not.toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+    } finally {
+      releaseMarkdownTables(owner);
+    }
+  });
+
   it.each([true, false])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {

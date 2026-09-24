@@ -113,7 +113,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       behavior,
     );
   }
-  // Share only this admission's fresh value; a later read must check again.
+  // The handle's admission owner refreshes these facts after DDL or a foreign commit.
   const userVersion = assertSupportedAgentSchemaVersion(reusable.db, pathname);
   assertCanonicalAgentPersistenceVersion(reusable.db, pathname, userVersion);
   return readOpenClawAgentDatabase(reusable, operation);

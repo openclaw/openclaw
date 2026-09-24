@@ -283,8 +283,7 @@ export function createSignalCliPathTextInput(
   return createCliPathTextInput({
     inputKey: "cliPath",
     message: "signal-cli path",
-    resolvePath: ({ cfg, accountId, credentialValues }) =>
-      resolveSignalCliPath({ cfg, accountId, credentialValues }),
+    resolvePath: resolveSignalCliPath,
     shouldPrompt,
   });
 }

@@ -1,13 +1,25 @@
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
 import {
   inspectCurrentConversationBindingRecordAsync,
+  readCurrentConversationBindingSelectionAsync,
+  readGenericCurrentConversationBindingSelectionAsync,
   resolveCurrentConversationBindingRecordAsync,
   touchCurrentConversationBindingRecordAsync,
   updateCurrentConversationBindingRecord,
@@ -33,6 +45,135 @@ function record(conversationId: string, accountId = "default"): SessionBindingRe
     metadata: { opaque: { data: [1, "persisted"] }, lastActivityAt: 1 },
   };
 }
+
+it.each(["missing", "unsupported", "disabled"] as const)(
+  "fences %s generic support when the registry changes during an ordered selection",
+  async (mode) => {
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      await withOpenClawTestState({ label: `binding-selection-${mode}` }, async () => {
+        const conversation = {
+          channel: "selection-fixture",
+          accountId: "default",
+          conversationId: "higher-priority-child",
+        };
+        const registry = (supported: boolean) =>
+          createTestRegistry([
+            {
+              pluginId: conversation.channel,
+              source: "test",
+              plugin: {
+                id: conversation.channel,
+                meta: { aliases: [] },
+                conversationBindings: { supportsCurrentConversationBinding: supported },
+              },
+            },
+          ]);
+        const service = getSessionBindingService();
+        setActivePluginRegistry(registry(true));
+        const bound = await service.bind({
+          conversation,
+          targetSessionKey: "agent:main:child",
+          targetKind: "session",
+        });
+        expect(await readGenericCurrentConversationBindingSelectionAsync([conversation])).toEqual([
+          bound,
+        ]);
+        let eligibilityCalls = 0;
+        setActivePluginRegistry(
+          mode === "missing"
+            ? createTestRegistry([])
+            : mode === "unsupported"
+              ? registry(false)
+              : createTestRegistry([
+                  {
+                    pluginId: conversation.channel,
+                    source: "test",
+                    plugin: {
+                      id: conversation.channel,
+                      meta: { aliases: [] },
+                      conversationBindings: {
+                        supportsCurrentConversationBinding: true,
+                        isCurrentConversationBindingSupported: () => {
+                          eligibilityCalls += 1;
+                          return false;
+                        },
+                      },
+                    },
+                  },
+                ]),
+        );
+        expect(await readGenericCurrentConversationBindingSelectionAsync([conversation])).toEqual([
+          null,
+        ]);
+        eligibilityCalls = 0;
+        const pending = readGenericCurrentConversationBindingSelectionAsync([conversation]);
+        setActivePluginRegistry(registry(true));
+        await expect(pending).rejects.toThrow(
+          "Generic conversation binding owner is no longer available",
+        );
+        expect(eligibilityCalls).toBe(mode === "disabled" ? 1 : 0);
+        expect(await service.resolveByConversationAsync(conversation)).toEqual(bound);
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  },
+);
+
+it("reads an ordered, captured selection without creating or repairing stored bindings", async () => {
+  await withOpenClawTestState({ label: "binding-selection-worker" }, async () => {
+    const child = record("child");
+    const base = record("base");
+    const expired = { ...record("expired"), expiresAt: 1 };
+    const requestedBase = { ...base.conversation };
+    const refs = [child.conversation, expired.conversation, requestedBase];
+    expect(await readCurrentConversationBindingSelectionAsync(refs)).toEqual([null, null, null]);
+    await expect(fs.stat(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const value of [base, expired]) {
+      updateCurrentConversationBindingRecord(value.conversation, () => value);
+    }
+    const { db } = openOpenClawStateDatabase();
+    const before = db
+      .prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key")
+      .all();
+    const pending = readCurrentConversationBindingSelectionAsync(refs);
+    requestedBase.conversationId = "different";
+    refs.reverse();
+    expect(await pending).toEqual([null, null, base]);
+    expect(
+      db.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all(),
+    ).toEqual(before);
+  });
+});
+
+it("selects live binding facts even inside an older retained discovery snapshot", async () => {
+  await withOpenClawTestState({ label: "binding-selection-live" }, async () => {
+    const child = record("child");
+    const base = record("base");
+    updateCurrentConversationBindingRecord(base.conversation, () => base);
+    await withOpenClawStateDatabaseReadSnapshot(async () => {
+      updateCurrentConversationBindingRecord(child.conversation, () => child);
+      expect(await inspectCurrentConversationBindingRecordAsync(child.conversation)).toBeNull();
+      expect(
+        await readCurrentConversationBindingSelectionAsync([child.conversation, base.conversation]),
+      ).toEqual([child, base]);
+    });
+  });
+});
+
+it("refuses pending selection publication when its database lifecycle retires", async () => {
+  await withOpenClawTestState({ label: "binding-selection-retirement" }, async () => {
+    const current = record("retired");
+    updateCurrentConversationBindingRecord(current.conversation, () => current);
+    const pending = readCurrentConversationBindingSelectionAsync([current.conversation]);
+    const refused = expect(pending).rejects.toThrow();
+    await closeOpenClawStateDatabaseAsync();
+    await refused;
+  });
+});
 
 it("keeps inspection noncreating and performs durable read, expiry, and scoped touch without host data SQL", async () => {
   await withOpenClawTestState({ label: "binding-worker" }, async () => {

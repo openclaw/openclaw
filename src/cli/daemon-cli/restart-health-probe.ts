@@ -2,15 +2,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadStoredOperatorDeviceAuthToken } from "../../gateway/call-device-auth.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
@@ -20,7 +16,6 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -32,7 +27,7 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+export const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
 
 export async function readGatewayStartupPhase(params: {
   configuredProbe: ConfiguredGatewayLocalProbe;
@@ -105,32 +100,17 @@ export async function waitForGatewayHttpReadiness(params: {
     if (remainingMs <= 0) {
       return latest;
     }
-    const [healthz, readyz] = await Promise.all([
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/healthz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/readyz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-    ]);
+    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
+      const result = await probe.requestHttp({
+        host: "127.0.0.1",
+        pathname,
+        port: params.port,
+        timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      return result?.statusCode ?? null;
+    };
+    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
     if (healthz === 200 && readyz === 200) {
@@ -294,36 +274,19 @@ export async function confirmGatewayReachable(params: {
     if (!target) {
       return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
-    const authNone = context.config.gateway?.auth?.mode === "none";
-    const identity =
-      authNone || auth?.token || auth?.password
-        ? null
-        : loadDeviceIdentityIfPresent({ env: params.env });
-    const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
-      identity,
-      undefined,
-      "read-only",
-      params.env,
-    );
-    // Readiness is first-party local control. CLI shared auth preserves read scopes;
-    // auth-none uses the loopback backend contract. Other modes may reuse an
-    // existing paired identity; the read-only client never creates or changes it.
+    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+      auth,
+      authNone: context.config.gateway?.auth?.mode === "none",
+      env: params.env,
+    });
     params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
       localPortOverride: params.port,
-      token: auth?.token,
-      password: auth?.password,
-      skipImplicitAuth: true,
+      ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
       scopes: [READ_SCOPE],
-      clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
-      mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-      requireLocalBackendSharedAuth: authNone,
-      deviceIdentity: preparedDeviceAuth ? identity : null,
-      preparedDeviceAuth: preparedDeviceAuth ?? undefined,
-      sharedStateMode: "read-only",
       timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {

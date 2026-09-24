@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,
+  readSessionBindingSelectionCurrent,
   registerSessionBindingAdapter,
   testing,
   unregisterSessionBindingAdapter,
@@ -21,6 +23,30 @@ const record: SessionBindingRecord = {
 };
 
 describe("awaited binding read ownership", () => {
+  it.each([false, true])(
+    "keeps admission inspection free of resolver mutations (async inspector=%s)",
+    async (asyncInspector) => {
+      let resolutionEffects = 0;
+      registerSessionBindingAdapter({
+        channel: "external",
+        accountId: "default",
+        listBySession: () => [],
+        inspectByConversation: () => record,
+        ...(asyncInspector ? { inspectByConversationAsync: async () => record } : {}),
+        resolveByConversation: () => {
+          resolutionEffects += 1;
+          return record;
+        },
+        resolveByConversationAsync: async () => {
+          resolutionEffects += 1;
+          return record;
+        },
+      });
+      expect(await readSessionBindingSelectionCurrent([record.conversation])).toEqual([record]);
+      expect(resolutionEffects).toBe(0);
+    },
+  );
+
   it.each([
     { inspect: true, change: "keep" },
     { inspect: true, change: "remove" },
@@ -72,7 +98,8 @@ describe("awaited binding read ownership", () => {
       if (rejection) {
         await rejection;
       } else {
-        expect(await pending).toEqual(
+        const result = await pending;
+        expect(result && inspect ? Object.fromEntries(Object.entries(result)) : result).toEqual(
           inspect
             ? change === "keep"
               ? { status: "available", binding: record }
@@ -94,7 +121,10 @@ describe("awaited binding read ownership", () => {
       resolveByConversation: resolve,
     });
     const service = getSessionBindingService();
-    expect(await service.inspectByConversationAsync(record.conversation)).toEqual({
+    const inspection = await service.inspectByConversationAsync(record.conversation);
+    expect(readSessionBindingInspectionConversation(inspection)).toEqual(record.conversation);
+    expect(Object.isFrozen(readSessionBindingInspectionConversation(inspection))).toBe(true);
+    expect(Object.fromEntries(Object.entries(inspection))).toEqual({
       status: "available",
       binding: record,
     });

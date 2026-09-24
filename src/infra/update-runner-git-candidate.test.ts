@@ -11,6 +11,7 @@ import { hasErrnoCode } from "./errno.js";
 import {
   expectRuntime,
   registerGitActivationDoctorOutcomeTests,
+  registerGitRuntimeStagingTests,
   runFixtureGit as git,
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
@@ -252,6 +253,57 @@ describe("Git candidate activation", () => {
       expect(stopped).toBe(false);
       expect(events).toEqual([]);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    },
+  );
+
+  it.each([
+    { channel: "dev", recorded: true },
+    { channel: "stable", recorded: true },
+    { channel: "dev", recorded: false },
+    { channel: "stable", recorded: false },
+  ] as const)(
+    "rebuilds a source-current $channel checkout before activating its stale runtime (recorded=$recorded)",
+    async ({ channel, recorded }) => {
+      const builtSha = beforeSha;
+      const target = await advanceRemote();
+      await git(remote, "tag", "v2026.9.1");
+      await git(root, "pull", "--ff-only");
+      beforeSha = target;
+      const buildInfoPath = path.join(root, "dist", "build-info.json");
+      if (!recorded) {
+        await fs.writeFile(buildInfoPath, JSON.stringify({ buildId: builtSha }));
+      }
+      await expectRuntime(root, builtSha);
+
+      const result = await update({
+        channel,
+        beforeGitMutation: async () => {
+          expect(stopped).toBe(false);
+          await expectRuntime(root, builtSha);
+          stopped = true;
+          events.push("stop");
+        },
+      });
+
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(result.before).toMatchObject({ sha: target, buildId: builtSha });
+      expect(result.after).toMatchObject({ sha: target, buildId: target });
+      expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+      await expectRuntime(root, target);
+      expect(JSON.parse(await fs.readFile(buildInfoPath, "utf8"))).toMatchObject({
+        commit: target,
+      });
+
+      stopped = false;
+      events.length = 0;
+      expect(await update({ channel })).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        before: { sha: target, buildId: target },
+      });
+      expect(stopped).toBe(false);
+      expect(events).toEqual([]);
+      await expectNoRuntimeStagingPaths();
     },
   );
 
@@ -729,61 +781,15 @@ describe("Git candidate activation", () => {
     await expectRuntime(root, beforeSha);
   });
 
-  it("omits generated tool caches while preserving runtime files during promotion", async () => {
-    const target = await advanceRemote();
-    const omitted = [
-      "node_modules/.cache/jiti",
-      "node_modules/.vite",
-      "node_modules/.vite-temp",
-      "ui/node_modules/.cache/jiti",
-    ];
-    const retained = [
-      "node_modules/.cache/other-tool",
-      "node_modules/package/.cache/jiti",
-      "node_modules/package/.vite",
-      "packages/runtime/node_modules/.cache/jiti",
-      "dist/.cache/jiti",
-      "dist-runtime/.vite",
-    ];
-    const result = await update({
-      validateCandidate: async (candidateRoot) => {
-        for (const relative of [...omitted, ...retained]) {
-          await fs.mkdir(path.join(candidateRoot, relative), { recursive: true });
-          await fs.writeFile(path.join(candidateRoot, relative, "content"), "keep or regenerate");
-        }
-        await expectRuntime(candidateRoot, target);
-      },
-    });
-    expect(result.status, JSON.stringify(result)).toBe("ok");
-    for (const relative of omitted) {
-      await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    for (const relative of retained) {
-      expect(await fs.readFile(path.join(root, relative, "content"), "utf8")).toBe(
-        "keep or regenerate",
-      );
-    }
-    await expectRuntime(root, target);
-    await expectNoRuntimeStagingPaths();
-  });
-
-  it("leaves the old runtime serving when candidate validation fails", async () => {
-    await advanceRemote();
-    const failure = new Error("candidate canary failed");
-    await expect(
-      update({
-        validateCandidate: async () => {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(stopped).toBe(false);
-    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-    expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(
-      beforeSha,
-    );
-    await expectNoRuntimeStagingPaths();
-  });
+  registerGitRuntimeStagingTests(() => ({
+    root,
+    beforeSha,
+    isStopped: () => stopped,
+    advanceRemote,
+    git,
+    update,
+    expectNoRuntimeStagingPaths,
+  }));
 
   it.each(["working", "staged", "committed"] as const)(
     "refuses activation when validation repairs %s source outside the selected commit",

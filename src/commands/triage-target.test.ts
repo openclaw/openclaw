@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +28,8 @@ import {
   resolveInstallationTarget,
   withInstallationTarget,
 } from "../infra/installation-target-context.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { triageTestRuntimeEntrypoints } from "../infra/triage-runtime.test-support.js";
 import { runUpdateRepairLoop } from "../infra/update-repair-agent.js";
 import * as repairRuntime from "../infra/update-repair-agent.runtime.js";
 import { runUpdateRepairTurn } from "../infra/update-repair-agent.runtime.js";
@@ -59,9 +60,9 @@ vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
 }));
 
 const execFileAsync = promisify(execFile);
-const pathsModuleUrl = pathToFileURL(path.resolve(import.meta.dirname, "../config/paths.ts")).href;
-const workspaceModuleUrl = pathToFileURL(
-  path.resolve(import.meta.dirname, "../agents/workspace-default.ts"),
+const pathsModuleUrl = resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.paths).href;
+const workspaceModuleUrl = resolveRuntimeWorkerUrl(
+  triageTestRuntimeEntrypoints.workspaceDefault,
 ).href;
 const tsxApiUrl = import.meta.resolve("tsx/esm/api");
 const tsconfigPath = path.resolve(import.meta.dirname, "../../tsconfig.json");
@@ -82,8 +83,9 @@ async function inspectChildTarget(env: NodeJS.ProcessEnv, cwd: string): Promise<
   const source = `
     import { existsSync, readFileSync } from "node:fs";
     import path from "node:path";
-    const { register } = await import(${JSON.stringify(tsxApiUrl)});
-    const unregister = register({ tsconfig: ${JSON.stringify(tsconfigPath)} });
+    const unregister = ${JSON.stringify(pathsModuleUrl.endsWith(".ts"))}
+      ? (await import(${JSON.stringify(tsxApiUrl)})).register({ tsconfig: ${JSON.stringify(tsconfigPath)} })
+      : undefined;
     const { resolveStateDir, resolveConfigPath } = await import(${JSON.stringify(pathsModuleUrl)});
     const { resolveDefaultAgentWorkspaceDir } = await import(${JSON.stringify(workspaceModuleUrl)});
     const stateDir = resolveStateDir();
@@ -91,7 +93,7 @@ async function inspectChildTarget(env: NodeJS.ProcessEnv, cwd: string): Promise<
     const defaultWorkspaceDir = resolveDefaultAgentWorkspaceDir();
     const workspaceMarkerPath = path.join(defaultWorkspaceDir, "workspace-probe.txt");
     process.stdout.write(JSON.stringify({ stateDir, configPath, configExists: existsSync(configPath), marker: existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")).meta?.lastTouchedVersion : undefined, defaultWorkspaceDir, workspaceMarker: existsSync(workspaceMarkerPath) ? readFileSync(workspaceMarkerPath, "utf8") : undefined }));
-    await unregister();
+    await unregister?.();
   `;
   const { stdout } = await execFileAsync(
     process.execPath,

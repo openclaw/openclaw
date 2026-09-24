@@ -171,7 +171,8 @@ vi.mock("./health-format.js", () => ({
   formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure,
 }));
 
-vi.mock("./configure.gateway.js", () => ({
+vi.mock("./configure.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./configure.gateway.js")>()),
   promptGatewayConfig: wizardTestMocks.promptGatewayConfig,
 }));
 

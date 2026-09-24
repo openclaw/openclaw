@@ -1079,7 +1079,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       controller.stdout!.on("data", (chunk) => (output += chunk));
       controller.stderr!.on("data", (chunk) => (output += chunk));
       try {
-        await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        try {
+          await once(controller, "close", { signal: AbortSignal.timeout(20_000) });
+        } catch (error) {
+          console.error("PR controller output before close failure:\n", output);
+          throw error;
+        }
         if (
           command === "review-init" &&
           !existing &&
@@ -2531,26 +2536,98 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(operationPgidFile, operationPgid);
     }
   });
-  it("fails and retains the lock when a clean wrapper leaves same-group work", async () => {
+  it.each([
+    {
+      title: "fails and retains the lock when a clean wrapper leaves same-group work",
+      report: "native",
+    },
+    {
+      title: "reports a current zombie snapshot after draining same-group work",
+      report: "current",
+    },
+    {
+      title: "reports the exit snapshot when drained same-group work is absent",
+      report: "historical",
+    },
+  ])("$title", async ({ report }) => {
     const repoDir = createRepo();
     const operationPgidFile = join(repoDir, "clean-background-operation-pgid");
+    const backgroundPidFile = join(repoDir, "clean-background-pid");
+    const ownerFile = join(repoDir, "clean-background-owner");
+    const reportCallsFile = join(repoDir, "report-calls");
+    let options: SupervisedFixtureOptions | undefined;
+    if (report !== "native") {
+      const binDir = tempDirs.make("openclaw-pr-report-snapshot-");
+      const realPs = execFileSync("which", ["ps"], { encoding: "utf8" }).trim();
+      // Only diagnostic snapshots are controlled. Identity and all-thread
+      // liveness checks still use the real ps and real process group.
+      const ps = writeFixtureFile(binDir, "ps", [
+        "#!/bin/sh",
+        "set -eu",
+        'if [ "$#" -eq 3 ] && [ "$1" = ax ] && [ "$2" = -o ] && [ "$3" = pid=,pgid=,command= ]; then',
+        "  calls=0",
+        `  if [ -f ${shellQuote(reportCallsFile)} ]; then read -r calls < ${shellQuote(reportCallsFile)}; fi`,
+        "  calls=$((calls + 1))",
+        `  printf '%s\\n' "$calls" > ${shellQuote(reportCallsFile)}`,
+        `  read -r pid < ${shellQuote(backgroundPidFile)}`,
+        `  read -r pgid < ${shellQuote(operationPgidFile)}`,
+        '  case "$calls" in',
+        '    1) printf "%s %s /fixture/bin/sleep 30\\n" "$pid" "$pgid" ;;',
+        report === "current"
+          ? '    2) printf "%s %s [sleep] <defunct>\\n" "$pid" "$pgid" ;;'
+          : "    2) : ;;",
+        "    *) exit 99 ;;",
+        "  esac",
+        "  exit 0",
+        "fi",
+        `exec ${shellQuote(realPs)} "$@"`,
+      ]);
+      chmodSync(ps, 0o755);
+      options = { env: { PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` } };
+    }
     let operationPgid: number | undefined;
     try {
-      const result = await runSupervisedOperation(repoDir, "clean-background-operation.sh", [
-        `printf '%s\\n' "$$" >'${operationPgidFile}'`,
-        "acquire_pr_operation_lock 42",
-        "sleep 30 &",
-        "exit 0",
-      ]);
+      const result = await runSupervisedOperation(
+        repoDir,
+        "clean-background-operation.sh",
+        [
+          `printf '%s\\n' "$$" >'${operationPgidFile}'`,
+          "acquire_pr_operation_lock 42",
+          `printf '%s\\n' "$PR_OPERATION_LOCK_OWNER_OID" >'${ownerFile}'`,
+          "sleep 30 &",
+          `printf '%s\\n' "$!" >'${backgroundPidFile}'`,
+          "exit 0",
+        ],
+        options,
+      );
       operationPgid = await waitForProcessId(operationPgidFile);
-      const ownerOid = refOid(repoDir);
+      const backgroundPid = await waitForProcessId(backgroundPidFile);
+      const ownerOid = readFileSync(ownerFile, "utf8").trim();
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       assertFixtureProcessGroupStopped(operationPgid);
       goneProcessGroups.add(operationPgid);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
-      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
-      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
-      expect(result.stderr).toContain("process group appears empty at report time");
+      expect(result.stderr).toMatch(
+        new RegExp(`^\\s+${backgroundPid} ${operationPgid} \\S+$`, "mu"),
+      );
+      const currentHeader = `surviving processes in group ${operationPgid}:`;
+      const historicalHeader = `surviving processes in group ${operationPgid} when wrapper exited:`;
+      const headers = result.stderr
+        .split("\n")
+        .filter((line) => line === currentHeader || line === historicalHeader);
+      expect(headers).toHaveLength(1);
+      // Drain completion does not promise that the OS has reaped its zombie row.
+      expect(result.stderr.includes("process group appears empty at report time")).toBe(
+        headers[0] === historicalHeader,
+      );
+      if (report !== "native") {
+        expect(readFileSync(reportCallsFile, "utf8")).toBe("2\n");
+        expect(headers).toEqual([report === "current" ? currentHeader : historicalHeader]);
+        expect(result.stderr).toContain(
+          `  ${backgroundPid} ${operationPgid} ${report === "current" ? "[sleep]" : "sleep"}\n`,
+        );
+      }
+      expect(refOid(repoDir)).toBe(ownerOid);
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );

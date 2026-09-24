@@ -1,45 +1,17 @@
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 
-const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
-const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
+export const loadRouteReplyRuntime = createLazyPromise(() => import("./route-reply.runtime.js"));
+export const loadGetReplyFromConfigRuntime = createLazyPromise(
   () => import("./get-reply-from-config.runtime.js"),
 );
-const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
-const fastApproveRuntimeLoader = createLazyImportLoader(() => import("./fast-approve.runtime.js"));
-const replyMediaPathsRuntimeLoader = createLazyImportLoader(
+export const loadAbortRuntime = createLazyPromise(() => import("./abort.runtime.js"));
+export const loadFastApproveRuntime = createLazyPromise(() => import("./fast-approve.runtime.js"));
+export const loadReplyMediaPathsRuntime = createLazyPromise(
   () => import("./reply-media-paths.runtime.js"),
 );
-const runtimePluginsLoader = createLazyImportLoader(
+export const loadRuntimePlugins = createLazyPromise(
   () => import("../../agents/runtime-plugins.js"),
 );
-const preparedModelRuntimeLoader = createLazyImportLoader(
+export const loadPreparedModelRuntime = createLazyPromise(
   () => import("../../agents/prepared-model-runtime.js"),
 );
-
-export function loadRouteReplyRuntime() {
-  return routeReplyRuntimeLoader.load();
-}
-
-export function loadGetReplyFromConfigRuntime() {
-  return getReplyFromConfigRuntimeLoader.load();
-}
-
-export function loadAbortRuntime() {
-  return abortRuntimeLoader.load();
-}
-
-export function loadFastApproveRuntime() {
-  return fastApproveRuntimeLoader.load();
-}
-
-export function loadReplyMediaPathsRuntime() {
-  return replyMediaPathsRuntimeLoader.load();
-}
-
-export function loadRuntimePlugins() {
-  return runtimePluginsLoader.load();
-}
-
-export function loadPreparedModelRuntime() {
-  return preparedModelRuntimeLoader.load();
-}

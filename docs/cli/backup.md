@@ -42,7 +42,7 @@ Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify
 
 ## Notes
 
-- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported.
+- The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the canonical SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no canonical databases were captured (for example, a config-only export), not a full database recovery point.
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and unsafe symbolic links, confirms every manifest-declared payload exists, and validates the root SQLite snapshot and agent snapshots listed in its durable registry. It rejects sidecars for those snapshots and checks their integrity and database roles. Other files, including plugin snapshots already validated during creation, remain opaque during verification and restore. `openclaw backup create --verify` runs that validation immediately after writing the archive.
@@ -454,10 +454,14 @@ If final-directory durability confirmation fails after publication, the command 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
 
 Archive creation holds a SQLite lifetime transaction for its temporary
-`openclaw-backup-*` scratch directory. The next backup run removes abandoned
+`openclaw-backup-owned-*` scratch directory. The next backup run removes abandoned
 scratch only after acquiring exclusive custody; a running backup keeps its
 scratch even when it is old. Cleanup failures preserve the published archive
 and appear as warnings with the scratch path in both text and JSON output.
+The owned prefix also lets cleanup coordinate with a new creator before its
+token exists, without mistaking that allocation for legacy scratch.
+If cleanup wins before the creator claims its directory, creation retries with
+a fresh directory. A changed directory identity is still rejected.
 Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
 

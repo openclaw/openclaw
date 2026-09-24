@@ -409,12 +409,8 @@ export type ChannelTurnResolved<
 > =
   | ChannelTurnPlan<TDelivery>
   | PreparedChannelTurnPlan<TDispatchResult>
-  | (AssembledChannelTurn & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    })
-  | (InboundPreparedChannelTurn<TDispatchResult> & {
-      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-    });
+  | AssembledChannelTurn
+  | InboundPreparedChannelTurn<TDispatchResult>;
 
 /** Ordered lifecycle stage names emitted to channel turn log hooks. */
 type ChannelTurnStage =
@@ -466,24 +462,17 @@ type ChannelTurnAdapter<
   TDispatchResult = DispatchFromConfigResult,
   TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
 > = {
-  ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
-  classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
+  ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
+  classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
   preflight?: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
-  ) =>
-    | Promise<PreflightFacts | ChannelTurnAdmission | null | undefined>
-    | PreflightFacts
-    | ChannelTurnAdmission
-    | null
-    | undefined;
+  ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
   resolveTurn: (
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) =>
-    | Promise<ChannelTurnResolved<TDispatchResult, TDelivery>>
-    | ChannelTurnResolved<TDispatchResult, TDelivery>;
+  ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
   onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 

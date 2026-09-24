@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Browser agent action hook routes.
  *
@@ -5,7 +6,6 @@
  * OpenClaw profiles and Chrome MCP existing-session profiles.
  */
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";

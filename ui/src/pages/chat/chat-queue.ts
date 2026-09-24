@@ -8,11 +8,11 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   type ChatQueueAdmissionResult,
   listStoredChatOutboxes,
   storedChatOutboxScopeKey,
-  type StoredChatQueueReplacement,
   type ChatComposerScope,
   type StoredChatOutbox,
   type StoredChatOutboxScope,
@@ -69,9 +69,9 @@ export function keepVolatileQueuedMessage(
   item: ChatQueueItem,
   agentId?: string,
   options: { retryable?: boolean } = {},
-): void {
+): ChatQueueItem {
   const scope = resolveUiConversationIdentity(host, sessionKey, agentId ?? item.agentId);
-  chatOutboxOwner(host).keep(host, scope, item, options.retryable);
+  return chatOutboxOwner(host).keep(host, scope, item, options.retryable);
 }
 
 export function syncVisibleChatQueueProjection(
@@ -110,8 +110,7 @@ export function enqueueChatMessage(
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
   };
-  keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
-  return item;
+  return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
 export function enqueuePendingRunMessage(

@@ -40,6 +40,7 @@ type FollowupQueueState = {
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
   evictedSummaryCount: number;
+  // Collected transcript recorders retain this source after admission removes queue items.
   lastRun?: FollowupRun["run"];
 };
 
@@ -54,6 +55,16 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
 
 export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
+
+export function* followupQueueSources(
+  queue: Pick<FollowupQueueState, "items" | "summarySources" | "summaryElisions">,
+): Generator<FollowupRun> {
+  yield* queue.items;
+  yield* queue.summarySources;
+  for (const entry of queue.summaryElisions) {
+    yield* entry.sources;
+  }
+}
 
 export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
   const cleaned = key.trim();
@@ -138,15 +149,9 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     inFlight: new Set(),
     lastEnqueuedAt: 0,
     mode: settings.mode,
-    debounceMs:
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : DEFAULT_QUEUE_DEBOUNCE_MS,
-    cap:
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : DEFAULT_QUEUE_CAP,
-    dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
+    debounceMs: DEFAULT_QUEUE_DEBOUNCE_MS,
+    cap: DEFAULT_QUEUE_CAP,
+    dropPolicy: DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
     summarySources: [],
@@ -171,16 +176,8 @@ export function clearFollowupQueue(key: string): number {
   }
   queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
-  for (const item of queue.items) {
+  for (const item of followupQueueSources(queue)) {
     completeFollowupRunLifecycle(item);
-  }
-  for (const item of queue.summarySources) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      completeFollowupRunLifecycle(source);
-    }
   }
   queue.items.length = 0;
   queue.inFlight.clear();
@@ -212,11 +209,7 @@ export function refreshQueuedFollowupSession(params: {
     agentRuntime?: string | null;
   };
 }): void {
-  const cleaned = params.key.trim();
-  if (!cleaned) {
-    return;
-  }
-  const queue = getExistingFollowupQueue(cleaned);
+  const queue = getExistingFollowupQueue(params.key);
   if (!queue) {
     return;
   }
@@ -237,10 +230,7 @@ export function refreshQueuedFollowupSession(params: {
     return;
   }
 
-  const rewriteRun = (run?: FollowupRun["run"]) => {
-    if (!run) {
-      return;
-    }
+  const rewriteRun = (run: FollowupRun["run"]) => {
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
       const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
@@ -291,16 +281,10 @@ export function refreshQueuedFollowupSession(params: {
     }
   };
 
-  rewriteRun(queue.lastRun);
-  for (const item of queue.items) {
-    rewriteRun(item.run);
+  if (queue.lastRun) {
+    rewriteRun(queue.lastRun);
   }
-  for (const item of queue.summarySources) {
+  for (const item of followupQueueSources(queue)) {
     rewriteRun(item.run);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      rewriteRun(source.run);
-    }
   }
 }

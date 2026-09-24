@@ -82,6 +82,57 @@ struct AppStateIsolationTests {
     }
 
     @Test
+    func `named profile startup failure without a listener keeps its own reason`() async throws {
+        try #require(AppProfile.current.isActive)
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let inspectionError = "launchctl inspection failed"
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: [connectionModeKey: "local"])
+        {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            let manager = GatewayProcessManager()
+            let connection = GatewayConnection(testEndpointProvider: { throw CancellationError() })
+            manager.setTestingConnection(connection)
+            manager.setTestingSkipControlChannelRefresh(true)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":false,"error":"\#(inspectionError)"}"#)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            let port = GatewayEnvironment.gatewayPort()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.setTestingDesiredActive(false)
+                state.connectionMode = previousMode
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            // An inconclusive inspection defers installation, so readiness fails with nothing
+            // listening. No other process owns the port; the operator must see the real cause.
+            manager.setActive(true)
+            await manager.waitForStartupAttempt()
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("expected a terminal startup failure")
+                return
+            }
+            #expect(reason.contains(inspectionError))
+            #expect(!reason.contains("already owned by another process"))
+            #expect(manager.lastFailureReason == reason)
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
+
+            manager.setTestingDesiredActive(false)
+            await connection.shutdown()
+            await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
+        }
+    }
+
+    @Test
     func `named profile hosting repair requires restart before activation`() async throws {
         try #require(AppProfile.current.isActive)
         let configPath = TestIsolation.tempConfigPath()

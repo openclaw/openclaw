@@ -132,6 +132,9 @@ describe("entry compile cache", () => {
     expect(enableCompileCache).toHaveBeenCalledOnce();
     enableOpenClawCompileCache({ env: { NODE_DISABLE_COMPILE_CACHE: "1" }, installRoot: root });
     expect(enableCompileCache).toHaveBeenCalledOnce();
+    setTestEnvValue("NODE_DISABLE_COMPILE_CACHE", "1");
+    enableOpenClawCompileCache({ installRoot: root });
+    expect(enableCompileCache).toHaveBeenCalledOnce();
   });
 
   it("scopes packaged compile cache by package install metadata", async () => {

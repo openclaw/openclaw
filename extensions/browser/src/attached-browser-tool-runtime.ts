@@ -7,12 +7,12 @@
 import { randomBytes } from "node:crypto";
 import { chmod, copyFile } from "node:fs/promises";
 import path from "node:path";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { createBrowserTool } from "./browser-tool.js";
 import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { closePlaywrightBrowserConnection } from "./browser/pw-session.js";
-import { writeExternalFileWithinRoot } from "./sdk-security-runtime.js";
 
 const ATTACHED_PROFILE_NAME = "worker";
 

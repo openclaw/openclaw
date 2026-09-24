@@ -522,13 +522,6 @@ async function runDoctorConfigPreflightOperation(
           }),
         );
       }
-      const { autoMigrateLegacyTaskStateSidecars } = stateDirMigrations;
-      const migrateTaskStateSidecars = async () =>
-        noteStartupStateMigrationResult(
-          await measurePreflightStep("task-sidecar-migrations", () =>
-            autoMigrateLegacyTaskStateSidecars({ env: process.env, log: migrationLog }),
-          ),
-        );
       if (stateMigrationInput) {
         // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
         // before config repair removes the only custom-partition evidence.
@@ -609,10 +602,7 @@ async function runDoctorConfigPreflightOperation(
             report: noteStartupStateMigrationResult,
           });
           await pluginMigrations.migrate(pluginDoctorConfig);
-          await migrateTaskStateSidecars();
         }
-      } else {
-        await migrateTaskStateSidecars();
       }
     }
     if (

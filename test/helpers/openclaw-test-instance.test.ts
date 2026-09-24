@@ -29,7 +29,9 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createOpenClawTestInstance,
   formatGatewayReadinessDiagnostic,
+  GatewayStartupRefusedError,
   type GatewayReadinessDiagnostic,
+  type OpenClawTestInstance,
   testing,
 } from "./openclaw-test-instance.js";
 import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
@@ -40,6 +42,14 @@ const MIGRATION_CONVERGENCE_REFUSAL =
   "OpenClaw plugin migration inputs changed during startup convergence;";
 const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
+const LEGACY_STORE_PATH = "/fixture/sessions/sessions.json";
+const LEGACY_MIGRATION_REFUSAL = `Legacy session store requires migration: ${LEGACY_STORE_PATH}. Run "openclaw doctor --fix" against the same state/config before starting OpenClaw.`;
+const LEGACY_STARTUP_FAILURE = [
+  "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+  `- Legacy sessions store unreadable; left in place at ${LEGACY_STORE_PATH}`,
+  '- Migration step "agent-dir" was not run because prior step "sessions" refused execution.',
+  'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+].join("\n");
 const CONTROL_REQUEST_SOURCE = `
 import { get as getControl } from "node:http";
 function waitForControl(url) {
@@ -316,6 +326,18 @@ if (kind === "cli" || kind === "cli-drain") {
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
+const legacyRefusal = kind.startsWith("startup-") ? ${JSON.stringify(LEGACY_STARTUP_FAILURE)} : ${JSON.stringify(LEGACY_MIGRATION_REFUSAL)};
+if (kind === "legacy-refuse" || kind === "startup-legacy-refuse") { process.stderr.write(legacyRefusal + "\\n"); process.exit(78); }
+if (kind === "late-legacy-refuse" || kind === "startup-late-legacy-refuse") {
+  spawnInheritedWriter("stderr", legacyRefusal + "\\n");
+  process.exit(78);
+}
+if (kind === "legacy-stdout") { process.stdout.write(legacyRefusal + "\\n"); process.exit(78); }
+if (kind === "legacy-status1") { process.stderr.write(legacyRefusal + "\\n"); process.exit(1); }
+if (kind === "legacy-no-advice") { process.stderr.write("Legacy session store requires migration: " + ${JSON.stringify(LEGACY_STORE_PATH)} + "\\n"); process.exit(78); }
+if (kind === "startup-no-advice") { process.stderr.write(legacyRefusal.split("\\n").slice(0, -1).join("\\n") + "\\n"); process.exit(78); }
+if (kind === "startup-warning") { process.stderr.write(legacyRefusal.split("\\n").slice(1).join("\\n") + "\\n"); process.exit(78); }
+if (kind === "config-refuse") { process.stderr.write("unrelated configuration failure\\n"); process.exit(78); }
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
   spawnInheritedWriter("stderr", refusal + " delayed fixture\\n");
@@ -382,7 +404,13 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
     // Join inherited writers after releasing their HTTP gate, including failed commands/startup.
     writerPidPath: sequence
       .split(",")
-      .some((kind) => kind === "late-refuse" || kind === "cli-drain")
+      .some(
+        (kind) =>
+          kind === "late-refuse" ||
+          kind === "late-legacy-refuse" ||
+          kind === "startup-late-legacy-refuse" ||
+          kind === "cli-drain",
+      )
       ? `${tracePath}.writer-pid`
       : undefined,
   });
@@ -427,6 +455,24 @@ async function isPortReserved(port: number): Promise<boolean> {
         competitor.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  }
+}
+
+async function startGatewayForPortLifecycle(
+  instance: OpenClawTestInstance,
+  signal: AbortSignal,
+): Promise<void> {
+  // Port custody is ordered by real child exit/readiness, not native bootstrap speed.
+  // Freeze only startup policy time; HTTP, child events, and teardown stay real.
+  signal.throwIfAborted();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+  const restoreClock = () => clock.mockRestore();
+  signal.addEventListener("abort", restoreClock, { once: true });
+  try {
+    await trackOperation(instance.startGateway());
+  } finally {
+    restoreClock();
+    signal.removeEventListener("abort", restoreClock);
   }
 }
 
@@ -478,21 +524,34 @@ function createStalledReadinessFetch(phase: "headers" | "body") {
 }
 
 describe("openclaw test instance", () => {
-  it("reserves its idle port through refusal, CLI work, and stopped restarts", async () => {
+  it("reserves its idle port through refusal, CLI work, and stopped restarts", async ({
+    signal,
+  }) => {
     const { instance, readAttempts } = await createFakeGateway("unrelated,cli,ready,ready");
     const reserved = {
       created: await isPortReserved(instance.port),
       refused: false,
       stopped: false,
     };
-    await expect(instance.startGateway()).rejects.toThrow("unrelated startup failure");
+    await expect(startGatewayForPortLifecycle(instance, signal)).rejects.toThrow(
+      "unrelated startup failure",
+    );
+    expect(instance.readiness).toMatchObject([
+      { outcome: "child-exit", child: { exitCode: 1, signalCode: null } },
+    ]);
     expect(instance.child).toBeUndefined();
     reserved.refused = await isPortReserved(instance.port);
     await expect(instance.cli(["0"])).resolves.toMatchObject({ code: 0, signal: null });
-    await instance.startGateway();
+    await startGatewayForPortLifecycle(instance, signal);
+    expect(instance.readiness).toMatchObject([
+      { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+    ]);
     await instance.stopGateway();
     reserved.stopped = await isPortReserved(instance.port);
-    await instance.startGateway();
+    await startGatewayForPortLifecycle(instance, signal);
+    expect(instance.readiness).toMatchObject([
+      { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+    ]);
     const attempts = await readAttempts();
     expect(attempts).toHaveLength(4);
     expect(
@@ -521,13 +580,18 @@ describe("openclaw test instance", () => {
     expect(reserved).toEqual({ created: true, refused: true, stopped: true });
   });
 
-  it("releases reservation probe connections before startup and terminal cleanup", async () => {
+  it("releases reservation probe connections before startup and terminal cleanup", async ({
+    signal,
+  }) => {
     const { instance } = await createFakeGateway("ready");
     const serverSpy = vi.spyOn(net, "createServer");
     const probe = net.connect(instance.port, "127.0.0.1");
     try {
       await withTestTimeout(once(probe, "close"), 1_000, "reservation retained a probe connection");
-      await instance.startGateway();
+      await startGatewayForPortLifecycle(instance, signal);
+      expect(instance.readiness).toMatchObject([
+        { outcome: "ready", lastProbe: { phase: "complete", status: 200, ready: true } },
+      ]);
       await instance.stopGateway();
       const reservation = serverSpy.mock.results.find(
         (result) => result.type === "return" && result.value.listening,
@@ -1218,6 +1282,70 @@ describe("openclaw test instance", () => {
     ]) {
       expect(classify(...(candidate as [number, NodeJS.Signals | null, string]))).toBe(false);
     }
+  });
+
+  it.for([
+    "legacy-refuse",
+    "late-legacy-refuse",
+    "startup-legacy-refuse",
+    "startup-late-legacy-refuse",
+  ])("reports a typed %s only after the child's stderr closes", async (action) => {
+    const message = action.startsWith("startup-")
+      ? LEGACY_STARTUP_FAILURE
+      : LEGACY_MIGRATION_REFUSAL;
+    const control = action.includes("late-") ? await createGatewayControl() : undefined;
+    const { instance, readAttempts } = await createFakeGateway(
+      `${action},config-refuse`,
+      10_000,
+      1_500,
+      control,
+    );
+    const exited = createDeferred();
+    if (control) {
+      control.observers.onLaunch = () => {
+        instance.child?.once("exit", () => exited.resolve());
+      };
+    }
+    const startup = trackOperation(instance.startGateway());
+    const outcome = startup.catch((error: unknown) => error);
+    if (control) {
+      await Promise.race([exited.promise, outcome]);
+      await Promise.race([control.reached, outcome]);
+      expect(instance.child?.stderr.closed).toBe(false);
+      expect(instance.logs()).not.toContain(message);
+      await control.release();
+    }
+    const error = await outcome;
+    expect(error).toMatchObject({
+      reason: "legacy-migration-required",
+      exitCode: 78,
+      signalCode: null,
+      legacyStorePath: LEGACY_STORE_PATH,
+      stderr: `${message}\n`,
+      cause: expect.any(Error),
+    });
+    expect(error).toBeInstanceOf(GatewayStartupRefusedError);
+    expect(instance.child).toBeUndefined();
+    expect(await readAttempts()).toHaveLength(1);
+    // Historical stderr must not classify the next child's unrelated EX_CONFIG.
+    const nextError = await instance.startGateway().catch((failure: unknown) => failure);
+    expect(nextError).toBeInstanceOf(Error);
+    expect(nextError).not.toBeInstanceOf(GatewayStartupRefusedError);
+    expect(await readAttempts()).toHaveLength(2);
+  });
+
+  it.for([
+    "legacy-stdout",
+    "legacy-status1",
+    "legacy-no-advice",
+    "startup-no-advice",
+    "startup-warning",
+  ])("does not classify %s as an explained legacy migration refusal", async (action) => {
+    const { instance, readAttempts } = await createFakeGateway(action);
+    const error = await instance.startGateway().catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(GatewayStartupRefusedError);
+    expect(await readAttempts()).toHaveLength(1);
   });
 
   it("does not retry a drained migration refusal after owner cancellation", async () => {

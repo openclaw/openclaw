@@ -272,14 +272,15 @@ describe("persistent session roster", () => {
       persistSessionRoster(record());
       await flushSessionRosters();
       if (method === "get") {
-        const aborted = vi
-          .spyOn(IDBObjectStore.prototype, "get")
-          .mockImplementationOnce(function (this: IDBObjectStore, key) {
-            aborted.mockRestore();
-            const request = this.get(key);
-            this.transaction.abort();
-            return request;
-          });
+        const aborted = vi.spyOn(IDBObjectStore.prototype, "get").mockImplementationOnce(function (
+          this: IDBObjectStore,
+          key,
+        ) {
+          aborted.mockRestore();
+          const request = this.get(key);
+          this.transaction.abort();
+          return request;
+        });
         expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
         aborted.mockRestore();
       } else {

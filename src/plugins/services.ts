@@ -28,8 +28,10 @@ import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js"
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
+import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
@@ -503,11 +505,13 @@ async function startPreparedPluginServices({
     });
     const { health, revoke } = createPluginServiceHealthReporter(entry);
     lease.retain(revoke);
+    const runtime = getPluginRegistryRuntime(registry);
     const getCron = getCronService
       ? createPluginServiceCronGetter({
           getCron: getCronService,
           lease,
           isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
+          resolveGatewayContext: runtime ? getGatewayContextResolver(runtime) : undefined,
         })
       : undefined;
     const nodeInvoker = record
