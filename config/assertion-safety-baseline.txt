@@ -1970,7 +1970,6 @@ src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
 src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
-src/auto-reply/reply/commands-setunset-standard.ts	3
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	1

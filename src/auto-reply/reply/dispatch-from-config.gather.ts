@@ -43,7 +43,6 @@ import {
 import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import {
   loadPreparedModelRuntime,
   loadRuntimePlugins,
@@ -542,7 +541,7 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     ctx,
     cfg,
     dispatcher,

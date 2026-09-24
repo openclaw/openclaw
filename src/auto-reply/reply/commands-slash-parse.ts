@@ -26,23 +26,21 @@ export function parseSendPolicyCommandBody(normalized: string): {
   return { hasCommand: true, mode };
 }
 
-/** Internal parse state for slash command action extraction. */
-type SlashCommandParseResult =
-  | { kind: "no-match" }
-  | { kind: "empty" }
-  | { kind: "invalid" }
-  | { kind: "parsed"; action: string; args: string };
-
 /** Public slash-command parse result returned to command handlers. */
 type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+/** Parses a slash command or returns null when the prefix does not match. */
+export function parseSlashCommandOrNull(
+  raw: string,
+  slash: string,
+  opts: { invalidMessage: string; defaultAction?: string },
+): ParsedSlashCommand | null {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
-    return { kind: "no-match" };
+    return null;
   }
   // Fix #84572: enforce a boundary after the prefix so `/config-check` does
   // not match the `/config` handler. The character immediately after the
@@ -52,36 +50,17 @@ function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandPa
   // handler — or the skill router — gets a chance to claim it.
   const charAfter = trimmed.charAt(slash.length);
   if (charAfter && !/[\s:]/.test(charAfter)) {
-    return { kind: "no-match" };
+    return null;
   }
   const rest = trimmed.slice(slash.length).trim();
   if (!rest) {
-    return { kind: "empty" };
+    return { ok: true, action: opts.defaultAction ?? "show", args: "" };
   }
   const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
   if (!match) {
-    return { kind: "invalid" };
+    return { ok: false, message: opts.invalidMessage };
   }
   const action = normalizeLowercaseStringOrEmpty(match[1]);
   const args = (match[2] ?? "").trim();
-  return { kind: "parsed", action, args };
-}
-
-/** Parses a slash command or returns null when the prefix does not match. */
-export function parseSlashCommandOrNull(
-  raw: string,
-  slash: string,
-  opts: { invalidMessage: string; defaultAction?: string },
-): ParsedSlashCommand | null {
-  const parsed = parseSlashCommandActionArgs(raw, slash);
-  if (parsed.kind === "no-match") {
-    return null;
-  }
-  if (parsed.kind === "invalid") {
-    return { ok: false, message: opts.invalidMessage };
-  }
-  if (parsed.kind === "empty") {
-    return { ok: true, action: opts.defaultAction ?? "show", args: "" };
-  }
-  return { ok: true, action: parsed.action, args: parsed.args };
+  return { ok: true, action, args };
 }

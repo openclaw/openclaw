@@ -30,7 +30,6 @@ import {
   resolveTurnModelOverride,
   resolveVisibleRepliesPolicy,
 } from "./dispatch-from-config.harness-defaults.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
@@ -152,13 +151,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         return lastOwner;
       }
     }
-    if (!lastOwner) {
-      recorder.markBlocked();
-      return blockedOwner();
-    }
     recorder.markBlocked();
-    logVerbose(`plugin-bound user-turn persistence skipped after the target session changed`);
-    return blockedOwner(lastOwner.expectedSessionId);
+    if (lastOwner) {
+      logVerbose(`plugin-bound user-turn persistence skipped after the target session changed`);
+    }
+    return blockedOwner(lastOwner?.expectedSessionId);
   };
 
   // Resolve automatic source-delivery suppression early so every outbound path
@@ -528,7 +525,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       }),
     };
   }
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     sendBindingNotice,
     pluginOwnedBinding,
     pluginBindingSessionKey,
