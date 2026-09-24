@@ -78,6 +78,8 @@ import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry
 import { registerDetachedCleanupAuthorityTest } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
   mockBlockedCompletionDeliveryOwner,
+  buildExpectedAnnounceIdempotencyKey,
+  resolveLifecycleTask,
   registerPrivateCompletionSettlementTests,
   registerTaskFinalizationAuthorityTests,
 } from "./subagent-registry-lifecycle-completion.test-support.js";
@@ -464,15 +466,6 @@ function hasDeliveredTaskStatusUpdate(runId: string): boolean {
   });
 }
 
-function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
-  return buildAnnounceIdempotencyKey(
-    buildAnnounceIdFromChildRun({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-    }),
-  );
-}
-
 function createLifecycleController({
   entry,
   runs = new Map([[entry.runId, entry]]),
@@ -493,7 +486,7 @@ function createLifecycleController({
     getLatestRunForChildSession: (key, matches) =>
       getLatestSubagentRunByChildSessionKeyFromRuns(runs, key, matches) ?? null,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: () => ({ lookup: "available" }),
+    resolveSubagentTask: resolveLifecycleTask,
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),
@@ -4473,7 +4466,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
     expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
       subagent: entry,
-      taskId: "",
+      taskId: `task-${entry.runId}`,
       reason: "gateway request timeout for agent",
       suspendedReason: "expiry",
     });
@@ -4616,7 +4609,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
       subagent: entry,
-      taskId: "",
+      taskId: `task-${entry.runId}`,
       reason:
         "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
       suspendedReason: "expiry",
@@ -4897,7 +4890,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(hasDeliveredTaskStatusUpdate(staleEntry.runId)).toBe(false);
     expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
       subagent: staleEntry,
-      taskId: "",
+      taskId: `task-${entry.runId}`,
       reason: "completion agent did not produce a visible reply",
       suspendedReason: "expiry",
     });
@@ -5900,7 +5893,7 @@ describe("requester settle wake trigger", () => {
     });
     expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
       subagent: entry,
-      taskId: "",
+      taskId: `task-${entry.runId}`,
       reason: "requester settle wake attempts exhausted",
       disposition: undefined,
     });

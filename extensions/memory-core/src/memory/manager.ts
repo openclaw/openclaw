@@ -111,6 +111,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected indexIdentityDirty = false;
   protected sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private syncingMemoryWatchGeneration = 0;
   private queuedArchiveFiles = new Set<string>();
   private queuedSessions = new Map<string, MemorySessionSyncTarget>();
   private queuedForce = false;
@@ -194,6 +195,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                         create,
                         source?.publishedDatabase.db,
                       );
+                // Filesystem discovery is asynchronous and must not hold the
+                // agent database's write admission while attaching watchers.
+                await manager.awaitMemoryWatcherReady();
                 if (params.inspectSources) {
                   await manager.inspectDiagnosticSourceState();
                 }
@@ -399,7 +403,19 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         return this.enqueueTargetedSessionSync(params);
       }
       try {
-        return await this.syncing;
+        await this.syncing;
+        // Watch events accepted after source planning belong to the next pass.
+        // Joining the old promise alone would strand them until another search.
+        if (
+          params?.reason === "watch" &&
+          this.dirty &&
+          !this.closing &&
+          !this.closed &&
+          this.memoryWatchGeneration > this.syncingMemoryWatchGeneration
+        ) {
+          return await this.syncAdmitted(params, options);
+        }
+        return;
       } catch (err) {
         if (
           options?.allowEmbeddingBootstrapFallback &&
@@ -414,6 +430,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw err;
       }
     }
+    // An intentional no-progress pass may remain dirty. Only newly accepted
+    // watch facts can admit another pass; joined callers cannot spin on dirty.
+    this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
     const run = async () => {
       const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
       let forceFtsOnly =
@@ -694,19 +713,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
-    if (this.sessionWatchTimer) {
-      clearTimeout(this.sessionWatchTimer);
-      this.sessionWatchTimer = null;
-    }
-    if (this.intervalTimer) {
-      clearInterval(this.intervalTimer);
-      this.intervalTimer = null;
-    }
-    await this.closeMemoryWatcher();
-    if (this.sessionUnsubscribe) {
-      this.sessionUnsubscribe();
-      this.sessionUnsubscribe = null;
-    }
+    await this.closeWatchResources();
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
     };

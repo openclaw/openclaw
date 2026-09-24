@@ -228,7 +228,7 @@ export function createWebSocketTransport(
   };
 }
 
-/** Opens the owner-scoped Codex control socket used by the WebSocket upgrade. */
+/** Named local-only socket boundary for the egress classifier. */
 function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }

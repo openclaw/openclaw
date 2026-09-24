@@ -4,9 +4,12 @@
  * Runs bounded ping-pong delivery, waits for target replies, and suppresses control-token messages.
  */
 import crypto from "node:crypto";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -59,6 +62,7 @@ async function deliverAnnounceReply(params: {
   message: string;
   runContextId: string;
   targetAgentId: string;
+  sessionGeneration?: SessionDeliveryGeneration;
 }) {
   // Gateway sends need the selected owner for text routing and media roots;
   // carry the admitted target instead of relying on an implicit default.
@@ -69,17 +73,22 @@ async function deliverAnnounceReply(params: {
   try {
     await params.callGateway({
       method: "send",
-      params: {
-        to: params.announceTarget.to,
-        message,
-        ...(mediaUrls?.length ? { mediaUrls } : {}),
-        agentId: params.targetAgentId,
-        ...(audioAsVoice ? { asVoice: true } : {}),
-        channel: params.announceTarget.channel,
-        accountId: params.announceTarget.accountId,
-        threadId: params.announceTarget.threadId,
-        idempotencyKey: crypto.randomUUID(),
-      },
+      params: bindInProcessSessionDeliveryGeneration(
+        {
+          to: params.announceTarget.to,
+          message,
+          ...(mediaUrls?.length ? { mediaUrls } : {}),
+          agentId: params.targetAgentId,
+          ...(audioAsVoice ? { asVoice: true } : {}),
+          channel: params.announceTarget.channel,
+          accountId: params.announceTarget.accountId,
+          threadId: params.announceTarget.threadId,
+          idempotencyKey: params.sessionGeneration
+            ? `sessions-send:${params.runContextId}`
+            : crypto.randomUUID(),
+        },
+        params.sessionGeneration,
+      ),
       timeoutMs: 10_000,
     });
   } catch (err) {
@@ -104,14 +113,16 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
+  requesterDeliveryGeneration?: SessionDeliveryGeneration;
   requesterOrigin?: DeliveryContext;
   requesterChannel?: string;
   sourceReplyDelivered?: true;
   roundOneReply?: string;
   waitRunId?: string;
+  replyRunId?: string;
   notifyRequesterOnWaitFailure?: boolean;
 }) {
-  const runContextId = params.waitRunId ?? "unknown";
+  const runContextId = params.replyRunId ?? params.waitRunId ?? crypto.randomUUID();
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   try {
     let primaryReply = params.roundOneReply;
@@ -223,12 +234,25 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    const announceTarget = await resolveAnnounceTarget({
+    const sourceOrigin = sameSessionSourceReply ? params.requesterOrigin : undefined;
+    const sourceTarget =
+      sourceOrigin?.channel && sourceOrigin.to && !isInternalMessageChannel(sourceOrigin.channel)
+        ? {
+            channel: sourceOrigin.channel,
+            to: sourceOrigin.to,
+            accountId: sourceOrigin.accountId,
+            threadId: stringifyRouteThreadId(sourceOrigin.threadId),
+          }
+        : undefined;
+    const resolvedTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
       callGateway: gatewayCall,
       agentId: params.targetAgentId,
     });
+    // Captured routes survive metadata changes; the delivery owner checks the
+    // original session generation immediately before dispatch.
+    const announceTarget = sourceTarget ?? resolvedTarget;
     const targetChannel = announceTarget?.channel ?? "unknown";
     if (
       oneWayInternalRequesterSessionKey &&
@@ -238,14 +262,26 @@ export async function runSessionsSendA2AFlow(params: {
     }
     const canDirectDeliverSameSessionReply =
       announceTarget &&
-      (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
+      (sourceTarget ||
+        !params.requesterChannel ||
+        params.requesterChannel === announceTarget.channel);
     if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
+      if (!params.requesterDeliveryGeneration) {
+        log.warn(
+          "sessions_send reply skipped because its original session generation is unavailable",
+          {
+            runId: runContextId,
+          },
+        );
+        return;
+      }
       await deliverAnnounceReply({
         announceTarget,
         callGateway: gatewayCall,
         message: latestReply,
         runContextId,
         targetAgentId: params.targetAgentId,
+        sessionGeneration: params.requesterDeliveryGeneration,
       });
       return;
     }

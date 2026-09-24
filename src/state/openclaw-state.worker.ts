@@ -51,6 +51,7 @@ export function createSqliteWorkerBackend(
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: stateDatabaseInitializationEnvironment(),
+    initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
   });
   return createSharedStateWorkerBackend(context, database);
 }
@@ -74,6 +75,7 @@ function createSharedStateWorkerBackend(
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
         env: stateDatabaseInitializationEnvironment(),
+        initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
       });
       borrow = retainOpenClawStateDatabase(opened);
       nativeDatabase = opened;

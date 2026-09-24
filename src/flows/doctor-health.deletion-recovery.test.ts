@@ -48,7 +48,7 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     ).toEqual([mainPath]);
 
     const after: OpenClawConfig = {
-      agents: { entries: { main: {}, late: { agentDir: lateDir } } },
+      agents: { ownership: "explicit", entries: { main: {}, late: { agentDir: lateDir } } },
     };
     await state.writeConfig(after);
     const bytes = [mainPath, latePath].map((file) => fs.readFileSync(file));

@@ -593,7 +593,6 @@
     "native.android.56ba8fc553a399af": "Att tillämpa, avvisa och sätta i karantän kräver behörigheten operator.admin. Återanslut med delad Gateway-autentisering eller godkänn en uppgradering av enhetens behörighet till operator.admin för att aktivera livscykelåtgärder.",
     "native.android.56d46eccb37487c3": "Schema",
     "native.android.56d7703155f09152": "Anslut till en Gateway för att granska ändringar.",
-    "native.android.56da9a315483abe4": "Röstsamtalet har stoppats",
     "native.android.56de778dd64c4cba": "Nästa Cykel",
     "native.android.56eac13e3394c87f": "Logga ut",
     "native.android.5731193296f6ca25": "tillämpa",

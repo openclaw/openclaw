@@ -11,6 +11,10 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+## Collaborator drafts
+
+In a shared session, another person’s in-progress message stays visible when they pause typing. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+
 ## Session rail and side chat
 
 While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
