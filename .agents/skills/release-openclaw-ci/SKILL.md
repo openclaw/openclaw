@@ -513,12 +513,6 @@ preflight artifact readback` pins `workflow.runAttempt`, so attempt 2 fails
   `Preflight manifest workflow mismatch`. Only a fresh child works; since
   #156760 the parent re-dispatches one (at most twice) when only pack/preflight
   jobs failed.
-- Validation evidence sealed under the removed operator lane-waiver policy:
-  run fresh Full Release Validation for the same candidate with current tooling
-  and all required lanes passing. Use the new run's evidence for publication;
-  changing only the tooling tag or adding a waiver acknowledgement cannot make
-  the old sealed evidence valid. The old `pass lane_waiver=<reason>` recovery
-  instructions no longer apply.
 
 ### Extended-stable validation
 

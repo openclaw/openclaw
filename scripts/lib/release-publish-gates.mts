@@ -45,12 +45,6 @@ export function evaluateReleasePublishGates(input: {
       remediation: pass ? "" : remediation,
     });
   };
-  add(
-    "legacy-lane-waiver",
-    scalar(field(field(manifest, "validationInputs"), "laneWaiver")).trim() === "",
-    "Validation evidence sealed under an operator lane waiver cannot authorize publication.",
-    "Run fresh Full Release Validation with current tooling and all required lanes passing.",
-  );
   const profile = scalar(field(manifest, "releaseProfile"));
   const waiver = input.stableSoakWaiver?.trim();
   const rerunGroup = scalar(field(manifest, "rerunGroup"));

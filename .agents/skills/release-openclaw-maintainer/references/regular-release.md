@@ -98,10 +98,7 @@ Tooling SHA (see `docs/reference/RELEASING.md`). The push may print a
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`
 and, only if missing, create it with
 `gh api -X POST repos/openclaw/openclaw/git/refs -f ref=refs/tags/<tag> -f sha=<tooling-sha>`.
-Validation evidence sealed under the removed lane-waiver policy requires a fresh
-Full Release Validation run with current tooling and all required lanes passing.
-A newer tooling tag alone cannot authorize that old evidence. Consume valid
-validation evidence against the untagged Release SHA:
+Consume validation evidence against the untagged Release SHA:
 
 ```bash
 pnpm release:candidate -- \

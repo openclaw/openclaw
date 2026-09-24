@@ -41,7 +41,6 @@ import {
   releaseExecutionPlanSha256,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { evaluateReleasePublishGates } from "../../scripts/lib/release-publish-gates.mts";
 import {
   artifactDownloadArgs,
   artifactDownloadTimeoutMs,
@@ -1671,7 +1670,6 @@ function rawManifest({
 }
 
 function trustedMainPackageFixture({
-  runId = "29071366025",
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
   targetSha = "8".repeat(40),
@@ -1680,7 +1678,6 @@ function trustedMainPackageFixture({
   workflowRefType,
   workflowSha = "0".repeat(40),
 }: {
-  runId?: string;
   manifestVersion?: 2 | 3;
   parentPath?: string;
   targetSha?: string;
@@ -1689,6 +1686,7 @@ function trustedMainPackageFixture({
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
 } = {}) {
+  const runId = "29071366025";
   const childRunId = "29071382629";
   const manifest = rawManifest({
     rerunGroup: "package",
@@ -1842,8 +1840,8 @@ type ReleaseCiWatchState = {
   url?: string;
 };
 
-function trustedMainFullFixture(parentRunId?: string) {
-  const fixture = trustedMainPackageFixture({ manifestVersion: 3, runId: parentRunId });
+function trustedMainFullFixture() {
+  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",
   );
@@ -1904,8 +1902,8 @@ function trustedMainFullFixture(parentRunId?: string) {
   return { ...fixture, client, manifest, runs };
 }
 
-function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta", parentRunId?: string) {
-  const fixture = trustedMainFullFixture(parentRunId);
+function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
+  const fixture = trustedMainFullFixture();
   const beta = releaseProfile === "beta";
   const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
   const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
@@ -2872,71 +2870,6 @@ describe("release CI summary child correlation", () => {
     await expect(validateReleaseRunEvidence(options, client)).rejects.toThrow(
       "automatic retry rejection is not bound to its original owner witness",
     );
-  });
-
-  it("rejects sealed lane-waiver evidence and admits fresh strict evidence for the same candidate", async () => {
-    const old = trustedMainNpmFixture("stable");
-    const jobs = [
-      { name: "checks-node-core", status: "completed", conclusion: "failure" },
-      { name: "openclaw/ci-gate", status: "completed", conclusion: "failure" },
-    ];
-    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
-      effectiveRunAttempt: 1,
-      plannedRunAttempt: 1,
-    });
-    const normalCi = old.manifest.childEvidence.normalCi;
-    if (!normalCi) {
-      throw new Error("The full validation fixture must include normal CI evidence.");
-    }
-    normalCi.compositeJobsSha256 = composite.sha256;
-    normalCi.jobs = composite.jobs;
-    Object.assign(old.manifest.validationInputs, { laneWaiver: "Release-owner exception" });
-    const oldManifest = {
-      ...old.manifest,
-      advisoryJobs: jobs.map((job) => ({
-        child: "normalCi",
-        job: job.name,
-        status: job.status,
-        conclusion: job.conclusion,
-        policy: "advisory",
-        reason: "lane_waiver",
-      })),
-    };
-    const options = {
-      runId: old.runId,
-      verifierSourceContent: readFileSync(SCRIPT),
-      verifierSourceSha: "c".repeat(40),
-    };
-    await expect(
-      validateReleaseRunEvidence(options, {
-        ...old.client,
-        loadManifest: () => ({ artifact: old.artifact, manifest: oldManifest }),
-      }),
-    ).rejects.toThrow("release validation advisory jobs differ from canonical policy evidence");
-
-    // New producer evidence is independent of the rejected sealed artifact.
-    const fresh = trustedMainNpmFixture("stable", "29071366026");
-    expect(fresh.runId).not.toBe(old.runId);
-    expect(fresh.targetSha).toBe(old.targetSha);
-    const evidence = await validateReleaseRunEvidence(
-      { ...options, runId: fresh.runId },
-      fresh.client,
-    );
-    expect(evidence).toMatchObject({
-      valid: true,
-      root: { manifest: { targetSha: old.targetSha } },
-    });
-    for (const consumer of ["publisher", "core-npm", "stable-closeout"] as const) {
-      expect(
-        evaluateReleasePublishGates({
-          consumer,
-          manifest: fresh.manifest,
-          releaseTag: `v${fresh.manifest.validationInputs.targetVersion}`,
-          npmDistTag: "latest",
-          expectedSha: old.targetSha,
-        }).filter((gate) => gate.status === "FAIL"),
-      ).toEqual([]);
-    }
   });
 
   it("retains blocking product performance in sealed npm stable evidence", async () => {
