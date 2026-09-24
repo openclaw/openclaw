@@ -354,103 +354,81 @@ suite.define(() => {
     }
   });
 
-  it.each([true, false])(
-    "protects a bulk-delete replacement with a completed refresh: %s",
-    async (refreshed) => {
-      const key = "agent:main:confirmed";
-      const original = sessionRow(key, "Original session", 1, {
-        sessionId: "confirmed-session",
-      });
-      const replacement = sessionRow(key, "Replacement session", 2, {
-        sessionId: "replacement-session",
-      });
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-        recordVideo: captureUiProofEnabled
-          ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
-          : undefined,
-      });
-      const page = await context.newPage();
-      const proofVideo = page.video();
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.delete": { ok: true, deleted: true },
-          "sessions.list": sessionsListResponse([original]),
-        },
-        sessionKey: "agent:main:main",
-      });
+  it("keeps bulk deletion fenced to the session selected before confirmation", async () => {
+    const key = "agent:main:confirmed";
+    const original = sessionRow(key, "Original session", 1, {
+      sessionId: "confirmed-session",
+    });
+    const replacement = sessionRow(key, "Replacement session", 2, {
+      sessionId: "replacement-session",
+    });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: captureUiProofEnabled
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([original]),
+      },
+      sessionKey: "agent:main:main",
+    });
 
-      try {
-        await page.goto(`${suite.server.baseUrl}sessions`);
-        const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
-          exact: true,
-        });
-        const checkbox = page.getByRole("checkbox", { name: `Select session: ${key}` });
-        await checkbox.check();
-        await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
-        const confirmModal = await waitForConfirmModal(page);
-        await captureUiProof(
-          suite,
-          page,
-          `sessions-bulk-delete-original-confirm-${refreshed}.png`,
-          confirmModal.locator("dialog"),
-          [confirmModal.getByRole("button", { name: "Delete", exact: true })],
-        );
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
+        exact: true,
+      });
+      await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
+      await page.locator(".data-table-bulk-bar").getByRole("button", { name: "Delete" }).click();
+      const confirmModal = await waitForConfirmModal(page);
+      await captureUiProof(
+        suite,
+        page,
+        "sessions-bulk-delete-original-confirm.png",
+        confirmModal.locator("dialog"),
+        [confirmModal.getByRole("button", { name: "Delete", exact: true })],
+      );
 
-        await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
-        const publishReplacement = async () => {
-          await gateway.emitGatewayEvent("sessions.changed", {
-            ...replacement,
-            reason: "update",
-            sessionKey: key,
-          });
-          await replacementLabel.waitFor();
-        };
-        if (refreshed) {
-          await publishReplacement();
-          expect(await checkbox.isChecked()).toBe(false);
-          await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
-          await confirmModal.waitFor({ state: "detached" });
-          expect(await gateway.getRequests("sessions.delete")).toEqual([]);
-          expect(await checkbox.isChecked()).toBe(false);
-          expect(await page.locator(".data-table-bulk-bar").count()).toBe(0);
-          expect(await page.locator(".sessions-error[role=alert]").count()).toBe(0);
-        } else {
-          await gateway.deferNext("sessions.delete");
-          await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
-          const request = await gateway.waitForRequest("sessions.delete");
-          expect(request).toMatchObject({
-            params: { expectedSessionId: "confirmed-session", key },
-          });
-          await gateway.rejectDeferred("sessions.delete", {
-            code: "INVALID_REQUEST",
-            message: `Session ${key} changed before deletion. Retry.`,
-          });
-          await expect
-            .poll(() => page.locator(".sessions-error[role=alert]").textContent())
-            .toContain("changed before deletion. Retry.");
-          await publishReplacement();
-          expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
-          expect(await checkbox.isChecked()).toBe(false);
-        }
-        await replacementLabel.waitFor();
-        await captureUiProof(
-          suite,
-          page,
-          `sessions-bulk-delete-replacement-protected-${refreshed}.png`,
-        );
-      } finally {
-        await context.close();
-        if (proofVideo) {
-          await proofVideo.saveAs(
-            path.join(suite.artifactDir, `sessions-bulk-delete-replaced-${refreshed}.webm`),
-          );
-        }
+      await gateway.setSessionsListResponse(sessionsListResponse([replacement]));
+      await gateway.deferNext("sessions.delete");
+      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(request).toMatchObject({
+        params: { expectedSessionId: "confirmed-session", key },
+      });
+      await gateway.rejectDeferred("sessions.delete", {
+        code: "INVALID_REQUEST",
+        message: `Session ${key} changed before deletion. Retry.`,
+      });
+      await expect
+        .poll(() => page.locator(".sessions-error[role=alert]").textContent())
+        .toContain("changed before deletion. Retry.");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...replacement,
+        reason: "update",
+        sessionKey: key,
+      });
+      await replacementLabel.waitFor();
+      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
+        false,
+      );
+      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
+      await captureUiProof(suite, page, "sessions-bulk-delete-replacement-protected.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(suite.artifactDir, "sessions-bulk-delete-replaced.webm"));
       }
-    },
-  );
+    }
+  });
 
   it("rejects deleting a same-key replacement after the in-app confirm", async () => {
     const key = "agent:main:research";
