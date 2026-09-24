@@ -3661,7 +3661,6 @@ export const en: TranslationMap & {
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
-      description: "Earlier messages were summarized to make room in the context window.",
     },
     sessionReset: {
       label: "Session reset",

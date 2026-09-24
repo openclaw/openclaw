@@ -3140,6 +3140,7 @@ jobs:
         with:
           name: control-ui-test-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
           path: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
@@ -6327,6 +6328,7 @@ jobs:
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/SnapshotTestResults/*.log
           if-no-files-found: warn
           retention-days: 14
 

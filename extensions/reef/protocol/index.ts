@@ -3,7 +3,6 @@ export * from "./canonical.js";
 export * from "./checks.js";
 export * from "./encoding.js";
 export * from "./envelope.js";
-export * from "./friendcode.js";
 export * from "./guard.js";
 export * from "./guard-adapters.js";
 export * from "./identity.js";
