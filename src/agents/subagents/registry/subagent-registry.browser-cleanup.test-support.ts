@@ -2,19 +2,20 @@ import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
-import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../../../shared/async-work-scope.test-support.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
-  const observations = [
+  const admissions = [
     vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission"),
     vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkContinuation"),
-    // Detached completion resolves its result before this scope drains and releases its root.
-    vi.spyOn(AsyncWorkScope.prototype, "run"),
   ];
-  const positions = observations.map(() => 0);
+  // Detached completion resolves its result before this scope drains and releases its root.
+  const scopeRuns = observeAsyncWorkScopeRuns();
+  const observations = [...admissions, scopeRuns];
+  const positions = observations.map((observation) => observation.mock.results.length);
   return async (keepObserving = false) => {
     const failures: unknown[] = [];
     try {
@@ -41,9 +42,10 @@ export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
       }
     } finally {
       if (!keepObserving) {
-        for (const observation of observations) {
-          observation.mockRestore();
+        for (const admission of admissions) {
+          admission.mockRestore();
         }
+        scopeRuns[Symbol.dispose]();
       }
     }
     if (failures.length > 0) {

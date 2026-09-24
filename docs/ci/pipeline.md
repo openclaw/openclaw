@@ -127,6 +127,9 @@ Bun. Those Node files still execute; they are not excluded from CI.
 TypeScript compiler analysis suites also stay on Node because the synchronous
 native compiler API requires Node child-process pipe handles. This includes
 compiler assertions in mixed runtime suites; their cases remain enabled.
+The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
+requires diagnostics-channel delivery to preserve sibling subscribers when a
+callback unsubscribes during publication. Bun can skip the next subscriber.
 The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
 files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.

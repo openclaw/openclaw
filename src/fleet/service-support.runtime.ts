@@ -123,6 +123,10 @@ export async function prepareCellConfig(
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
   const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
+  const inheritsPublicOrigin =
+    controlUi.allowedOrigins === undefined &&
+    typeof gateway.publicOrigin === "string" &&
+    gateway.publicOrigin.trim().length > 0;
   origins.add(`http://localhost:${record.hostPort}`);
   origins.add(`http://127.0.0.1:${record.hostPort}`);
 
@@ -135,7 +139,7 @@ export async function prepareCellConfig(
       auth: nextAuth,
       controlUi: {
         ...controlUi,
-        allowedOrigins: [...origins],
+        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
       },
     },
   };
