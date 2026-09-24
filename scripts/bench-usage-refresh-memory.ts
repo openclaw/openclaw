@@ -1,5 +1,5 @@
 // Opt-in, synthetic real-worker regression. Run on a Testbox with Node 24+:
-// node --import tsx scripts/bench-usage-refresh-memory.ts [--expect-oom]
+// pnpm bench:usage-refresh-memory [--expect-oom]
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
