@@ -124,7 +124,7 @@ export function releaseJobAdvisoryReason(input: {
   workflowRef: string;
   laneWaiver?: string;
   jobs?: ReleaseRecord[];
-}): "" | "policy" | "lane_waiver";
+}): "" | "lane_waiver";
 export function releaseWaivedJobs(
   children: ReleaseRecord[],
   policy: { releaseProfile: string; workflowRef: string; laneWaiver?: string },
@@ -138,6 +138,7 @@ export function validateReleaseStateArtifact(
   expected?: Record<string, unknown>,
   expectedMode?: string,
 ): ReleaseStateArtifact;
+export function validateRetiredReleaseRetryFields(value: ReleaseRecord): void;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,

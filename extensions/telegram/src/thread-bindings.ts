@@ -12,6 +12,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -23,7 +24,6 @@ import {
   sanitizeStoredBinding,
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-  type TelegramBindingTargetKind,
   type TelegramThreadBindingManager,
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
@@ -47,17 +47,13 @@ const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBi
 let threadBindingsState: TelegramThreadBindingsState | undefined;
 
 function getThreadBindingsState(): TelegramThreadBindingsState {
-  if (!threadBindingsState) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    threadBindingsState = (globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] as
-      | TelegramThreadBindingsState
-      | undefined) ?? {
+  return (threadBindingsState ??= resolveGlobalSingleton(
+    TELEGRAM_THREAD_BINDINGS_STATE_KEY,
+    () => ({
       managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
       bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
-    };
-    globalStore[TELEGRAM_THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
-  }
-  return threadBindingsState;
+    }),
+  ));
 }
 
 function normalizeDurationMs(raw: unknown, fallback: number): number {
@@ -78,14 +74,6 @@ function openThreadBindingStore(): TelegramThreadBindingStore {
   });
 }
 
-function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toTelegramTargetKind(raw: BindingTargetKind): TelegramBindingTargetKind {
-  return raw === "subagent" ? "subagent" : "acp";
-}
-
 function toSessionBindingRecord(
   record: TelegramThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
@@ -96,7 +84,7 @@ function toSessionBindingRecord(
       conversationId: record.conversationId,
     }),
     targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
       channel: "telegram",
       accountId: record.accountId,
@@ -144,7 +132,7 @@ function fromSessionBindingInput(params: {
       conversationId: params.input.conversationId,
     }),
   );
-  const targetKind = toTelegramTargetKind(params.input.targetKind);
+  const targetKind = params.input.targetKind === "subagent" ? "subagent" : "acp";
   // Runtime metadata follows the target; conversation lifecycle settings still carry forward below.
   const previous =
     existing?.targetSessionKey === params.input.targetSessionKey &&
@@ -589,18 +577,13 @@ export function createTelegramThreadBindingManager(params: {
         maxAgeMs,
       });
     },
-    listBySession: (targetSessionKeyRaw) => {
-      const targetSessionKey = targetSessionKeyRaw.trim();
-      if (!targetSessionKey) {
-        return [];
-      }
-      return manager.listBySessionKey(targetSessionKey).map((entry) =>
+    listBySession: (targetSessionKey) =>
+      manager.listBySessionKey(targetSessionKey).map((entry) =>
         toSessionBindingRecord(entry, {
           idleTimeoutMs,
           maxAgeMs,
         }),
-      );
-    },
+      ),
     resolveByConversation: (ref) => {
       if (ref.channel !== "telegram") {
         return null;

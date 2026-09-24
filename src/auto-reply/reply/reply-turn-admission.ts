@@ -86,6 +86,7 @@ type ReplyTurnAdmission =
     };
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
+class ReplyOperationChangedDuringAdmissionError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 
@@ -312,6 +313,7 @@ export async function admitReplyTurn(
         rotations.recordBarrierSources(successorAdmission.sources);
         continue;
       }
+      const rotationObservation = params.storePath ? rotations.observeAdmission() : undefined;
       try {
         const storePath = params.storePath;
         let operation: ReplyOperation | undefined;
@@ -396,6 +398,7 @@ export async function admitReplyTurn(
                     transientSessionChange: true,
                   });
                 }
+                rotationObservation?.recordCompletions();
                 const activeOperationRotatedExpectedSession = rotations.hasExpectedSessionRotation({
                   expectedSessionId,
                   sessionId: currentEntry?.sessionId,
@@ -546,6 +549,11 @@ export async function admitReplyTurn(
             });
           }
           assertDatabaseOwnerCurrent();
+          if (rotationObservation?.changed()) {
+            // A predecessor can rotate after the final row read but before this handoff.
+            // Reacquire the full admission; its session ID alone grants no authority.
+            throw new ReplyOperationChangedDuringAdmissionError();
+          }
           if (params.adoptOperation) {
             // The dispatch closures own this object's abort/delivery lifecycle,
             // so the reservation must move rather than be recreated. Throws
@@ -650,6 +658,9 @@ export async function admitReplyTurn(
         if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
           return { status: "skipped", reason: "lifecycle-invalidated" };
         }
+        if (error instanceof ReplyOperationChangedDuringAdmissionError) {
+          continue;
+        }
         if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
           if (params.kind === "heartbeat") {
             return { status: "skipped", reason: "active-run" };
@@ -719,6 +730,8 @@ export async function admitReplyTurn(
         if (activeOperation) {
           rotations.recordCompletedOperation(activeOperation, activeDatabaseIdentity);
         }
+      } finally {
+        rotationObservation?.dispose();
       }
     }
   } finally {

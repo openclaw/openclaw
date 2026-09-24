@@ -39,13 +39,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Linux (`ubuntu`) cross-OS lanes gate publication for beta, stable, and full.
-  Windows/macOS cross-OS lanes, the CI child's `checks-windows-node-test-*`
-  shards, and its `macos-swift (...)` app lanes run in parallel as advisory
-  coverage. Record their actual pass/fail conclusions (`advisoryJobs` in the
-  manifest, `::warning::` naming the lane in Release Decision); failures do not
-  block Release Decision, npm publication, the publish preflight, or
-  `pnpm release:candidate`. Fix them in parallel; never hold npm for them.
+- Every selected test lane gates validation across Linux, Windows, and macOS,
+  including native apps, UI, QA, Telegram, live providers, and performance.
+  Profiles never automatically downgrade failures to advisory success. Only an
+  explicit operator lane waiver may accept eligible failures, preserving their
+  actual conclusions and waiver reasons. Omitted coverage stays not run.
 - Release priority: release runs always beat PR-side hosted-runner work. The
   repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
   `pnpm ci:full-release` records the pause window, sets it on dispatch, and
@@ -210,25 +208,9 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
-- For diagnosed intermittent jobs, declare exact `child:job name` selectors
-  before dispatch with `-f known_flaky_jobs_json='["normalCi:checks-node-agentic-control-plane-agent-chat"]'`.
-  The default is `[]`; the immutable plan binds the allowance. Each selected
-  child gets at most one automatic wave from attempt 1 to attempt 2: exactly
-  one declared failure uses the targeted job API; multiple declared failures
-  use the failed-jobs API only when every failed job is declared. Multiple
-  declared failures mixed with an undeclared failure record no automatic
-  attempt; required failures remain blockers. Any earlier child rerun consumes this budget,
-  even if it did not execute the listed job. GitHub also reruns dependent jobs
-  and offers no atomic arbitrary-subset operation. Explicit manual job retries
-  remain separate. Decision and Drain wait for retry owners and preserve their records
-  in the manifest. The owner uploads and witnesses an immutable intent, saves
-  its exact cache key, then sends its mutation once. Parent reruns authenticate
-  the restored intent and reconcile read-only; they never renew or replay it.
-  A dedicated original rejection witness preserves confirmed no-effect outcomes
-  through artifact loss and later manual attempts. `observed` authenticates a
-  matching replacement; it does not claim the automatic POST caused that attempt.
-  Preserve original logs and intent cache through verified validation. An
-  uncertain or exhausted allowance requires explicit operator recovery.
+- Never automatically rerun a failed or timed out test job. New dispatches reject
+  `known_flaky_jobs_json`; diagnose the original failure and fix its owner before
+  explicit operator recovery.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
 "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
@@ -265,7 +247,7 @@ until their dependent enforcement changes land.
 - Filtered retries fail closed unless the filter belongs to the selected group.
   All-group runs also accept `cross_os_suite_filter`: for example,
   `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1` and
-  `npm-beta-v1` still qualify when advisory OS lanes are omitted, provided all
+  `npm-beta-v1` still qualify when explicitly filtered OS lanes are omitted, provided all
   Linux suites remain selected and the other policy requirements hold.
   Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
@@ -374,7 +356,7 @@ gh workflow run openclaw-performance.yml \
   infrastructure noise.
 - Full Release Validation requires blocking performance evidence for stable
   and full profiles. `npm-beta-v1` defers the child; explicit `performance`
-  and soak-enabled beta runs retain advisory performance coverage. Every
+  and soak-enabled beta runs retain blocking performance coverage. Every
   selected performance child must finish and prove artifact-only publication.
 
 Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
@@ -675,10 +657,10 @@ Interpret state precisely:
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read **advisory** entries separately from Release Decision. Windows/macOS
-cross-OS lanes retain their actual conclusions in the manifest and summary;
-`passed` does not mean those advisory lanes passed. Selected lanes still need
-terminal evidence, and filtered-out lanes are not run, never passed.
+Read explicitly waived **advisory** entries separately from Release Decision.
+They retain their failed conclusions and waiver reasons; a passing decision does
+not mean waived lanes passed. Selected lanes still need terminal evidence, and
+filtered-out lanes are not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -758,7 +740,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
-- Windows/macOS cross-OS advisory lane classifications and actual conclusions
+- Selected cross-OS lane conclusions and any explicit operator waiver reasons
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

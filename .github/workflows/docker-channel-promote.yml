@@ -148,6 +148,7 @@ jobs:
               echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts."
               exit 1
             fi
+            echo "::warning::BuildKit image acquisition failed; retrying Docker registry transport (${attempt}/4)."
             sleep "$((attempt * 5))"
           done
 

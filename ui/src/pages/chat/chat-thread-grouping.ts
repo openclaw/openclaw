@@ -103,6 +103,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
+      item.startsTurn === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
     const splitsAssistantKind =
       role === "assistant" &&

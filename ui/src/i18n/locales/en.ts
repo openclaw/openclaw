@@ -4035,6 +4035,7 @@ export const en: TranslationMap & {
       },
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
+      askImageQuestion: "What does this image show?",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
@@ -4327,6 +4328,7 @@ export const en: TranslationMap & {
       htmlPreviewUnavailable:
         "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
       readFailed: "Could not attach: {names}{more}",
+      imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",
       pastedText: "Pasted text",
