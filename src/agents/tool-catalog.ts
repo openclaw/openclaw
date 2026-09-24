@@ -49,6 +49,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  includeInSectionGroup?: boolean;
   includeInOpenClawGroup?: boolean;
 };
 
@@ -491,7 +492,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Inspect and manage meeting transcript captures",
     sectionId: "media",
     profiles: [],
-    includeInOpenClawGroup: true,
+    // Catalog visibility must not change existing media group policies.
+    includeInSectionGroup: false,
   },
   {
     id: "tts",
@@ -544,6 +546,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.includeInSectionGroup === false) {
+      continue;
+    }
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);

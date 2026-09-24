@@ -8,7 +8,11 @@ import {
   resolveCoreToolProfilePolicy,
   resolveCoreToolProfiles,
 } from "./tool-catalog.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  filterToolsByPolicy,
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -88,6 +92,23 @@ describe("tool-catalog", () => {
     );
     expect(resolveCoreToolProfiles("transcripts")).toEqual([]);
   });
+
+  it.each(["group:media", "group:openclaw"])(
+    "preserves saved %s grants and denies when listing transcripts",
+    (group) => {
+      const tools = [{ name: "transcripts" }, { name: "pdf" }];
+      expect(filterToolsByPolicy(tools, { allow: [group] })).toEqual([{ name: "pdf" }]);
+      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: [group] })).toEqual([
+        { name: "transcripts" },
+      ]);
+      expect(filterToolsByPolicy(tools, { allow: ["transcripts"], deny: [group] })).toEqual([
+        { name: "transcripts" },
+      ]);
+      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: ["transcripts"] })).toEqual([
+        { name: "pdf" },
+      ]);
+    },
+  );
 
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
