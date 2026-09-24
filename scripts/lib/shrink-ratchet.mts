@@ -63,10 +63,14 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
 
   // Branches own their grandfathered debt from the fork. Comparing against a
   // moving base tip turns unrelated cleanup there into a local expansion.
+  // A supplied base can also be unreachable in a fork (for example when the
+  // workflow reports an upstream commit that is not in the fork's history).
+  // Never compare ratchet debt across unrelated histories: that turns existing
+  // assertions into false "new" violations.
   try {
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
-    return resolved;
+    return null;
   }
 }
 
