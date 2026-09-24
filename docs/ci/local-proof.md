@@ -91,6 +91,77 @@ pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/moc
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
 
+### Opt-in compiler evidence
+
+Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
+`pnpm tsgo:profile <graph> --deep` for deliberate multi-pass graph/pprof analysis.
+For evidence from the compiler invocation you are already running, set
+`OPENCLAW_TSGO_METRICS_DIR=.artifacts/tsgo-metrics`. Each `run-tsgo` invocation
+writes a separate JSON artifact on ordinary local developer machines; neither
+metrics nor `OPENCLAW_TSGO_PPROF_DIR` requires `OPENCLAW_LOCAL_CHECK_MODE=throttled`,
+CI, or a server-specific setup. Unset or blank metrics means no metrics imports, probes,
+files, or additional output on the normal path. This also works for test shards
+and compiler stages reached through the timed check wrappers. It does not add a
+compiler invocation or change the compiler arguments, limits, deadline, signals,
+or cleanup policy. Metrics write failures warn without replacing compiler results.
+
+Artifacts record the effective command and exit/error/signal, managed wall time
+(including cleanup, excluding evidence I/O and artifact-ownership admission),
+revision, tracked-dirty status, installed native compiler/Node versions, lockfile
+digest, OS, and effective Go limits. Unknown provenance is `null`; tracked-dirty
+status does not account for untracked inputs. Commands and paths can contain
+private local information: inspect and scrub artifacts before sharing them.
+
+On Linux, opt-in sampling reads the compiler process's `/proc` CPU counters
+(all threads) and RSS high-water mark every 100 ms. CPU and peak RSS are explicitly
+**sampled lower bounds**, not exact end-of-process totals or process-tree memory.
+They can miss the final interval; very short runs or restricted procfs can have no
+usable samples. Missing statistics are `null` with a reason, never zero-filled.
+macOS and Windows report unsupported resource sampling; wall time and provenance
+remain available. No wrapper process changes signal ownership.
+
+An explicit `--tsBuildInfoFile` supplies before/after SHA-256 evidence. Its presence
+is not a cache hit: `hit` stays `unknown`, and the OS page cache is `uncontrolled`.
+Changed, readable JSON build metadata supplies total, root, and non-root/transitive
+file counts, including library/declaration inputs. Unchanged, absent, oversized
+(over 32 MiB), or unsupported metadata leaves counts unavailable rather than
+attributing a stale graph to this run. Implicit cache paths and solution-build
+caches are not inferred. No `--listFiles`, `--showConfig`, or diagnostics pass is
+launched to fill a missing field. Use the existing `tsgo:profile` tool when you
+intentionally need those additional passes.
+
+For a bounded comparison, use the same frozen install, source revision, resource
+limits, machine, and project for three absent-build-info/reuse pairs:
+
+```bash
+mkdir -p .artifacts
+benchmark_dir=$(mktemp -d .artifacts/tsgo-benchmark.XXXXXX)
+for repeat in 1 2 3; do
+  pair="$benchmark_dir/$repeat"
+  mkdir -p "$pair"
+  OPENCLAW_TSGO_METRICS_DIR="$pair/cold" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+  OPENCLAW_TSGO_METRICS_DIR="$pair/warm" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+done
+```
+
+Honor the host's existing build lock and resource policy around this command tree;
+do not run the pairs concurrently. Stop and investigate any nonzero compiler exit
+before interpreting timing. “Cold” here means only that this pair's build-info file
+was absent; it does not mean cold OS/dependency caches. “Warm” means reuse was
+attempted with identical inputs, not a proven cache hit. Compare medians and the
+range, report all exits and missing fields, and keep before/after revisions and
+lockfile/toolchain digests beside the results. Do not delete shared caches, drop OS
+caches, or relax resource caps to manufacture a favorable comparison. The recipe
+creates only a new benchmark directory and leaves normal caches untouched.
+
+For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
+per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
+overhead: enable it for both comparison sides or keep it outside timing pairs.
+The evidence records the effective `--pprofDir`; it does not manage or delete those
+profiles. These measurements are developer evidence, not a CI pass/fail threshold.
+
 The Gateway watch regression check starts its idle CPU window only after readiness
 and the settle period. Startup and early-exit failures still fail the check. Missing
 CPU samples from an otherwise valid window fail measurement; whole-run CPU is

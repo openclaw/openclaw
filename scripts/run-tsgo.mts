@@ -103,10 +103,17 @@ async function main(): Promise<void> {
       }
       // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
       // joins the compiler group and output before reporting a timeout.
-      process.exitCode = await runManagedCommand({
+      const managedCommand = {
         ...command,
         requireProcessTreeExit: process.platform !== "win32",
-      });
+      };
+      const metricsDir = command.env.OPENCLAW_TSGO_METRICS_DIR?.trim();
+      // The default path does not load metrics code or perform evidence I/O.
+      process.exitCode = metricsDir
+        ? await (
+            await import("./lib/tsgo-performance.mts")
+          ).runMeasuredTsgoCommand(managedCommand, metricsDir)
+        : await runManagedCommand(managedCommand);
     });
   } catch (error) {
     if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {

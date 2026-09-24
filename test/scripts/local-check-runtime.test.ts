@@ -207,6 +207,25 @@ describe("local-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
+  it("enables opt-in profiling on ordinary local machines without a throttled mode", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      ["-p", "tsconfig.ui.json"],
+      { OPENCLAW_TSGO_PPROF_DIR: ".artifacts/profiles" },
+      ROOMY_HOST,
+    );
+    expect(args).toEqual([
+      "-p",
+      "tsconfig.ui.json",
+      "--declaration",
+      "false",
+      "--pprofDir",
+      ".artifacts/profiles",
+    ]);
+    expect(env.OPENCLAW_LOCAL_CHECK_MODE).toBeUndefined();
+    expect(env.GOMAXPROCS).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
   it("keeps explicit tsgo declaration flags intact", () => {
     const env = makeEnv({ OPENCLAW_LOCAL_CHECK_MODE: "full" });
     const longFlag = applyLocalTsgoPolicy(["--declaration"], env, ROOMY_HOST);

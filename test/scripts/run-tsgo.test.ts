@@ -35,6 +35,42 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
   expect(result.stdout.trim()).toBe(`Version ${nativePackage.version}`);
 }, 30_000);
 
+it("keeps compiler output unchanged with opt-in metrics and emits no metrics by default", () => {
+  const cwd = createTempDir("run-tsgo-metrics-");
+  const {
+    OPENCLAW_TSGO_METRICS_DIR: _unset,
+    OPENCLAW_LOCAL_CHECK_MODE: _mode,
+    ...baseEnv
+  } = process.env;
+  for (const enabled of [false, true]) {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
+      {
+        encoding: "utf8",
+        timeout: 25_000,
+        env: { ...baseEnv, ...(enabled ? { OPENCLAW_TSGO_METRICS_DIR: cwd } : {}) },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^Version /u);
+    expect(result.stderr).toBe("");
+    expect(fs.readdirSync(cwd)).toHaveLength(enabled ? 1 : 0);
+    if (enabled) {
+      const [artifact] = fs.readdirSync(cwd);
+      if (!artifact) {
+        throw new Error("Missing compiler metrics artifact");
+      }
+      const evidence = JSON.parse(fs.readFileSync(path.join(cwd, artifact), "utf8"));
+      expect(evidence.outcome.exitCode).toBe(0);
+      expect(evidence.command.args).toContain("--version");
+      expect(evidence.cache.hit).toBe("unknown");
+      expect(evidence.resources.policy.OPENCLAW_LOCAL_CHECK_MODE).toBeNull();
+    }
+  }
+}, 30_000);
+
 it.each([false, true])(
   "refuses a shared install without creating dependency links (linked=%s)",
   (linked) => {
