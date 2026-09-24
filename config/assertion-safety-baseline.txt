@@ -9,7 +9,6 @@ extensions/acpx/src/runtime.ts	2
 extensions/acpx/src/service.ts	1
 extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	2
-extensions/active-memory/doctor-contract-api.ts	3
 extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
 extensions/active-memory/transcript-result.ts	2
@@ -523,7 +522,6 @@ extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
 extensions/imessage/src/setup-core.ts	1
 extensions/imessage/src/shared.ts	1
-extensions/imessage/src/state-migrations.ts	6
 extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
@@ -745,7 +743,7 @@ extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
 extensions/moonshot/src/kimi-web-search-provider.runtime.ts	3
-extensions/msteams/doctor-contract-api.ts	7
+extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
@@ -775,7 +773,6 @@ extensions/msteams/src/sdk-proactive.ts	7
 extensions/msteams/src/sdk.ts	10
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
-extensions/msteams/src/sso-token-store.ts	2
 extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
@@ -792,7 +789,6 @@ extensions/nextcloud-talk/src/policy.ts	2
 extensions/nextcloud-talk/src/send.ts	1
 extensions/nextcloud-talk/src/setup-core.ts	10
 extensions/nextcloud-talk/src/setup-surface.ts	11
-extensions/nostr/doctor-contract-api.ts	2
 extensions/nostr/index.ts	4
 extensions/nostr/src/channel.setup.ts	2
 extensions/nostr/src/gateway.ts	2
@@ -1116,7 +1112,7 @@ extensions/telegram/src/bot-handlers.inbound-buffer.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-handlers.message-context.ts	1
-extensions/telegram/src/bot-info-cache.ts	2
+extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
 extensions/telegram/src/bot-message-context.session.ts	2
@@ -1167,10 +1163,7 @@ extensions/telegram/src/send-edit.ts	1
 extensions/telegram/src/send-location.ts	2
 extensions/telegram/src/send-outbound.ts	1
 extensions/telegram/src/sendchataction-401-backoff.ts	2
-extensions/telegram/src/sent-message-cache.legacy-state.ts	2
-extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
-extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
 extensions/telegram/src/target-writeback.test-shared.ts	12
 extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
@@ -1179,7 +1172,7 @@ extensions/telegram/src/telegram-ingress-supersede-auth.ts	10
 extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	4
 extensions/telegram/src/telegram-ingress-worker.ts	2
-extensions/telegram/src/thread-bindings-store.ts	3
+extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1

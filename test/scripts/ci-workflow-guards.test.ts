@@ -2762,9 +2762,15 @@ AFTER_CD
     const prepare = job.steps.find(
       (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
     ) as WorkflowStep;
-    expect(prepare.if).toBe(
-      "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main')",
-    );
+    for (const eventName of ["push", "pull_request"] as const) {
+      expect(
+        evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+      ).toBe(eventName === "push");
+    }
     expect(prepare.run).toContain("pnpm build:ci-artifacts");
     expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepare.run).not.toContain("--skip-check");

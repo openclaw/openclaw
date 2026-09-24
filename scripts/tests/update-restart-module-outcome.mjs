@@ -3,34 +3,22 @@
 // Node >=24: node --experimental-vm-modules --test this-file.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
+import { z } from "zod";
+import { collectNestedErrorCandidates } from "../../packages/normalization-core/src/error-coercion.ts";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+} from "../../packages/normalization-core/src/utf16-slice.ts";
 import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
-const sourceRoot = path.resolve(
-  process.env.RESTART_SOURCE_ROOT ??
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
-);
-// Load canonical source helpers without requiring a compiled workspace package.
-const normalizationRoot = process.env.RESTART_DEPENDENCY_ROOT ?? sourceRoot;
-const { z } = createRequire(path.join(normalizationRoot, "package.json"))("zod");
-const { normalizeOptionalString } = await import(
-  pathToFileURL(path.join(normalizationRoot, "packages/normalization-core/src/string-coerce.ts"))
-    .href
-);
-const { collectNestedErrorCandidates } = await import(
-  pathToFileURL(path.join(normalizationRoot, "packages/normalization-core/src/error-coercion.ts"))
-    .href
-);
-const { sliceUtf16Safe, truncateUtf16Safe } = await import(
-  pathToFileURL(path.join(normalizationRoot, "packages/normalization-core/src/utf16-slice.ts")).href
-);
-const main = process.env.RESTART_VARIANT !== "pr";
+const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const root = "/fixture/openclaw"; // Identifier only; never accessed.
 const result = () => ({
   status: "ok",
@@ -175,11 +163,10 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
-    async runUpdatedInstallGatewayCommand(activation, command, preserve) {
+    async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
       assert.equal(command, "restart");
-      assert.equal(preserve, main ? undefined : true);
       activation.assertCurrent?.();
       if (commandFailure) {
         throw commandFailure;
@@ -256,25 +243,21 @@ async function fixture({
     "update-command-post-update",
     "update-command-result",
     "../../infra/update-run-step",
-    ...(main
-      ? [
-          "update-command-verification",
-          "update-command-terminal",
-          "update-command-terminal-publication",
-          "update-command-post-update-maintenance",
-          // Recovery and reporting stay real; only their I/O uses finite fixture facts.
-          "update-command-failure-recovery",
-          "update-command-plugins-internals",
-          "../../process/exec-result",
-          "../../shared/update-outcome",
-          "../../infra/update-run-report",
-          "../../infra/update-run-record",
-          "../../infra/update-run-limits",
-          "../../infra/update-doctor-config",
-          "../../infra/update-failure-facts-format",
-          "../../../packages/gateway-protocol/src/update-run-vocabulary",
-        ]
-      : ["update-restart-module-error"]),
+    "update-command-verification",
+    "update-command-terminal",
+    "update-command-terminal-publication",
+    "update-command-post-update-maintenance",
+    // Recovery and reporting stay real; only their I/O uses finite fixture facts.
+    "update-command-failure-recovery",
+    "update-command-plugins-internals",
+    "../../process/exec-result",
+    "../../shared/update-outcome",
+    "../../infra/update-run-report",
+    "../../infra/update-run-record",
+    "../../infra/update-run-limits",
+    "../../infra/update-doctor-config",
+    "../../infra/update-failure-facts-format",
+    "../../../packages/gateway-protocol/src/update-run-vocabulary",
   ];
   const modules = new Map(),
     requests = new Map();
@@ -301,7 +284,6 @@ async function fixture({
         .filter(Boolean);
       imports.set(match[2], [...new Set([...(imports.get(match[2]) ?? []), ...names])]);
     }
-    // The historical classifier uses builtin path/url imports only.
     for (const match of code.matchAll(/import\s+(\w+)\s+from\s*["']([^"']+)["']/g)) {
       imports.set(match[2], ["default"]);
     }
@@ -352,16 +334,12 @@ async function fixture({
     path.basename(specifier) === "update-command-verification.js"
       ? stubs.get(specifier)
       : (modules.get(path.basename(specifier)) ?? stubs.get(specifier));
-  if (main) {
-    // The recorder moved out of the restart owner; keep its real ledger writes
-    // while injecting only the Gateway verification seam.
-    const verificationOwner = modules.get("update-command-verification.js");
-    await verificationOwner.link(link);
-    await verificationOwner.evaluate();
-    values.recordFailedUpdateGatewayState =
-      verificationOwner.namespace.recordFailedUpdateGatewayState;
-    values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
-  }
+  const verificationOwner = modules.get("update-command-verification.js");
+  await verificationOwner.link(link);
+  await verificationOwner.evaluate();
+  values.recordFailedUpdateGatewayState =
+    verificationOwner.namespace.recordFailedUpdateGatewayState;
+  values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();
@@ -447,14 +425,12 @@ for (const [name, makeError] of thrownCases) {
       assert.equal(error.result.reason, "restart-unhealthy");
       return true;
     });
-    assert.equal(f.counts().verifyCalls, main ? 2 : 1);
+    assert.equal(f.counts().verifyCalls, 2);
     assert.equal(f.counts().commandCalls, 1);
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
     assert.ok(f.events.includes("rollback-unverified"));
-    if (main) {
-      assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
-    }
+    assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
     assert.deepEqual(f.unexpected, []);
   });
 }
@@ -481,49 +457,45 @@ void test("accepted restart without healthy successor cannot authorize retiremen
     (error) => error instanceof f.failureClass && error.result.reason === "successor-not-healthy",
   );
   assert.deepEqual(f.completion, [false]);
-  assert.equal(f.counts().verifyCalls, main ? 2 : 1);
+  assert.equal(f.counts().verifyCalls, 2);
   assert.deepEqual(f.unexpected, []);
 });
-if (main) {
-  for (const mutateExecutor of ["verification", "native-state"]) {
-    void test(`current-main cannot publish after executor replacement during ${mutateExecutor}`, async () => {
-      const f = await fixture({ error: thrownCases[0][1](), mutateExecutor });
-      await assert.rejects(f.direct(), /lost its original update executor/);
-      assert.equal(f.counts().verifyCalls, 1);
-      assert.deepEqual(f.records, []);
-      assert.deepEqual(f.unexpected, []);
-    });
-  }
-  void test("current-main readiness pending remains distinct from verified success", async () => {
-    const f = await fixture({
-      verification: { ok: false, stopReason: "gateway-readiness-pending" },
-    });
-    assert.equal(await f.direct(), "readiness-pending");
-    assert.equal(f.counts().verifiedCalls, 0);
-    assert.deepEqual(f.unexpected, []);
-  });
-  void test("current-main health error observes successor without a second restart", async () => {
-    const f = await fixture({
-      commandError: new GatewayRestartHealthError("not ready at child exit"),
-    });
-    assert.equal(await f.direct(), "ok");
-    assert.equal(f.counts().commandCalls, 1);
+for (const mutateExecutor of ["verification", "native-state"]) {
+  void test(`current-main cannot publish after executor replacement during ${mutateExecutor}`, async () => {
+    const f = await fixture({ error: thrownCases[0][1](), mutateExecutor });
+    await assert.rejects(f.direct(), /lost its original update executor/);
     assert.equal(f.counts().verifyCalls, 1);
-    assert.equal(f.counts().verifiedCalls, 1);
+    assert.deepEqual(f.records, []);
     assert.deepEqual(f.unexpected, []);
   });
 }
+void test("current-main readiness pending remains distinct from verified success", async () => {
+  const f = await fixture({
+    verification: { ok: false, stopReason: "gateway-readiness-pending" },
+  });
+  assert.equal(await f.direct(), "readiness-pending");
+  assert.equal(f.counts().verifiedCalls, 0);
+  assert.deepEqual(f.unexpected, []);
+});
+void test("current-main health error observes successor without a second restart", async () => {
+  const f = await fixture({
+    commandError: new GatewayRestartHealthError("not ready at child exit"),
+  });
+  assert.equal(await f.direct(), "ok");
+  assert.equal(f.counts().commandCalls, 1);
+  assert.equal(f.counts().verifyCalls, 1);
+  assert.equal(f.counts().verifiedCalls, 1);
+  assert.deepEqual(f.unexpected, []);
+});
 
-if (main) {
-  void test("current-main still-starting keeps the restart unverified and records the reason", async () => {
-    const f = await fixture({ verification: { ok: false, stopReason: "still-starting" } });
-    const update = result();
-    assert.equal(await f.direct({ result: update }), "readiness-pending");
-    assert.equal(update.reason, "still-starting");
-    assert.equal(f.counts().verifiedCalls, 0);
-    assert.deepEqual(f.unexpected, []);
-  });
-}
+void test("current-main still-starting keeps the restart unverified and records the reason", async () => {
+  const f = await fixture({ verification: { ok: false, stopReason: "still-starting" } });
+  const update = result();
+  assert.equal(await f.direct({ result: update }), "readiness-pending");
+  assert.equal(update.reason, "still-starting");
+  assert.equal(f.counts().verifiedCalls, 0);
+  assert.deepEqual(f.unexpected, []);
+});
 
 // Synthetic tiny package bytes, real production transaction/filesystem owners.
 // This is not authenticated Gateway health or published-driver artifact proof.
@@ -531,21 +503,11 @@ for (const failure of ["ERR_MODULE_NOT_FOUND", "ENOENT", "verified-result-contro
   void test(`filesystem swap: ${failure} cannot retire an unverified backup`, async (t) => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "restart-142102-"));
     t.after(() => fs.rm(base, { recursive: true, force: true }));
-    const disk = await createDiskSwap(
-      process.env.RESTART_TRANSACTION_SOURCE_ROOT ?? sourceRoot,
-      base,
-    );
+    const disk = await createDiskSwap(sourceRoot, base);
     let observed;
     const f = await fixture({
       installRoot: disk.root,
-      // Historical callers predate the explicit executor callback. Adapt only
-      // that signature; the real transaction still owns retirement decisions.
-      packageTransaction: main
-        ? disk.transaction
-        : {
-            ...disk.transaction,
-            complete: (options) => disk.transaction.complete(options, () => {}),
-          },
+      packageTransaction: disk.transaction,
       verifyOnDisk: async () => {
         if (failure === "ERR_MODULE_NOT_FOUND") {
           try {

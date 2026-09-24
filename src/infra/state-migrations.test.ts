@@ -4513,24 +4513,6 @@ describe("state migrations", () => {
     await expectMissingPath(sourcePath);
   });
 
-  it("previews retired subagent JSON as discard-only transient state", async () => {
-    const { root, stateDir, env } = createMigrationContext(await createTempDir());
-    const sourcePath = path.join(stateDir, "subagents", "runs.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, JSON.stringify({ version: 2, runs: {} }), "utf8");
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: createConfig(),
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
-
-    expect(detected.preview).toContain(
-      "- Subagent runs: discard retired transient subagents/runs.json state",
-    );
-  });
-
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
     const cfg = createConfig();

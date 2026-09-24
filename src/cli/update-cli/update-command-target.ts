@@ -52,6 +52,7 @@ import {
   resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
+  usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -229,7 +230,10 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      const readChannelConfig = () => readUpdateChannelConfig(Boolean(opts.channel));
+      const readChannelConfig = () =>
+        readUpdateChannelConfig(Boolean(opts.channel), {
+          tolerateReadFailure: usesCandidateUpdateAdmission(opts, installKind),
+        });
       let channelConfig: Awaited<ReturnType<typeof readUpdateChannelConfig>>;
       let inspectionWarning: string | undefined;
       try {
@@ -249,9 +253,14 @@ export async function resolveUpdateCommandTarget(
         });
         defaultRuntime.error(`Warning: ${inspectionWarning}`);
       }
-      const { configSnapshot, legacyConfigPlan, storedChannel } = channelConfig;
+      const { configSnapshot, configReadFailure, legacyConfigPlan, storedChannel } = channelConfig;
 
-      if (opts.channel && !configSnapshot.valid && !legacyConfigPlan) {
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        !usesCandidateUpdateAdmission(opts, installKind)
+      ) {
         const issues = formatConfigIssueLines(configSnapshot.issues, "-");
         await refuseUpdate(
           "invalid-config",
@@ -284,6 +293,25 @@ export async function resolveUpdateCommandTarget(
       const switchToPackage =
         requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
       updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+      if (updateInstallKind !== "package" && configReadFailure) {
+        throw configReadFailure;
+      }
+      if (
+        opts.channel &&
+        !configSnapshot.valid &&
+        !legacyConfigPlan &&
+        updateInstallKind !== "package" &&
+        usesCandidateUpdateAdmission(opts, installKind)
+      ) {
+        await refuseUpdate(
+          "invalid-config",
+          [
+            "Config is invalid; cannot set update channel.",
+            ...formatConfigIssueLines(configSnapshot.issues, "-"),
+          ].join("\n"),
+        );
+        return undefined;
+      }
       if (channel === "dev" && requestedChannel !== "dev" && !opts.sourceUpdate) {
         try {
           devTarget = readDevUpdateTarget();
@@ -570,7 +598,13 @@ export async function resolveUpdateCommandTarget(
         },
       });
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
-      if (updateInstallKind === "package" && !packageAlreadyCurrent && !opts.dryRun) {
+      if (
+        updateInstallKind === "package" &&
+        !packageAlreadyCurrent &&
+        !opts.dryRun &&
+        (!usesCandidateUpdateAdmission(opts, installKind) ||
+          (configSnapshot.valid && !configReadFailure))
+      ) {
         const env = opts.run?.env ?? process.env;
         const source = await readUpdateCandidateSource(env, legacyConfigPlan);
         const snapshot = await assessInitialUpdateSnapshotCapacity({
@@ -602,6 +636,7 @@ export async function resolveUpdateCommandTarget(
         updateInstallKind,
         refuseUpdate,
         configSnapshot,
+        configReadFailure,
         legacyConfigPlan,
         storedChannel,
         requestedChannel,
