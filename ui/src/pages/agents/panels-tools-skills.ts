@@ -19,6 +19,7 @@ import {
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
   type AgentToolEntry,
@@ -29,6 +30,8 @@ import {
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
+
+registerSettingsEnglish();
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
