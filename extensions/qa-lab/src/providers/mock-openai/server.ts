@@ -649,7 +649,7 @@ async function buildResponsesPayload(
   const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
     ? extractWhatsAppContactMarkerDirective(allInputText)
     : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(input)
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
   const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;

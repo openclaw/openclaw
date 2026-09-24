@@ -1,5 +1,5 @@
 /** Full-text search over visible session transcripts. */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -103,15 +103,7 @@ type GatewaySearchHit = {
   score?: unknown;
 };
 
-type SanitizedSearchHit = {
-  sessionKey: string;
-  timestamp: number;
-  role: "assistant" | "user";
-  snippet: string;
-  score: number;
-  sessionId?: string;
-  messageId?: string;
-};
+type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 
 type SearchSessionCandidate = {
   key: string;
@@ -434,10 +426,9 @@ export function createSessionsSearchTool(opts?: {
         };
       }
 
-      const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,

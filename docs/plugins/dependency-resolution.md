@@ -235,8 +235,6 @@ plugins; every owner must declare the dependency in its bundled or installed
 `@openclaw/<id>` package manifest. Root imports, including root references to
 otherwise plugin-owned chunks, still require root dependency declarations.
 Missing metadata or changed chunk bytes cannot grant a plugin exemption.
-Rebuilt releases, including `2026.7.33`, use this same generated artifact;
-package versions and generated source-region comments do not grant ownership.
 This verification does not change Node's runtime dependency resolution.
 
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw

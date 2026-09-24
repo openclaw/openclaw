@@ -23,8 +23,10 @@ const mocks = vi.hoisted(() => ({
   shouldAutoGenerateBrowserAuth: vi.fn(() => true),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   const browserConfig = {
     enabled: true,
   };

@@ -221,6 +221,10 @@ binary untouched. Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
+Its outer GitHub job defaults to 240 minutes, matching the native full-test
+gate's four-hour Testbox lease envelope. Manual dispatches can override
+`timeout_minutes`; the lease TTL and individual test deadlines remain separate
+limits.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.

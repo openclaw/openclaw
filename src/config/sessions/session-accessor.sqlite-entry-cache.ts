@@ -7,6 +7,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import {
   sessionChanges,
   type SessionRowChange,
@@ -310,6 +311,7 @@ function readCachedExactSessionEntries(
       : undefined;
   } catch {
     // Cohort conversion/validation failures retain the exact reader's per-key errors.
+    sessionEntryCaches.delete(database.db);
     return undefined;
   }
 }
@@ -366,15 +368,16 @@ export function trackSessionEntryCacheWrite(
   database: OpenClawAgentDatabase,
   write: () => void,
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
-  const before = sessionEntryCaches.has(database.db)
-    ? readSessionNodesGeneration(database.db)
-    : undefined;
+  const before =
+    sessionEntryCaches.has(database.db) && getAdmittedSqliteSchemaFacts(database.db)
+      ? readSessionNodesGeneration(database.db)
+      : undefined;
   write();
-  if (before === undefined) {
+  if (before === undefined || !getAdmittedSqliteSchemaFacts(database.db)) {
+    sessionEntryCaches.delete(database.db);
     return undefined;
   }
-  const generation = { before, after: readSessionNodesGeneration(database.db) };
-  return generation;
+  return { before, after: readSessionNodesGeneration(database.db) };
 }
 
 export function readSessionEntryCache(
@@ -403,7 +406,8 @@ export function readSessionEntryCache(
     options.retainFullEntry ||
     options.latest ||
     projection === "full" ||
-    database.db.isTransaction
+    database.db.isTransaction ||
+    !getAdmittedSqliteSchemaFacts(database.db)
   ) {
     return loadSessionEntrySnapshot(
       database,
@@ -414,7 +418,7 @@ export function readSessionEntryCache(
       options.deferParticipants,
     );
   }
-  const validityToken = readSessionEntryCacheValidityToken(database.db);
+  const validityToken = readSessionEntryCacheValidityToken(database.db, "cached");
   const cached = sessionEntryCaches.get(database.db);
   if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;

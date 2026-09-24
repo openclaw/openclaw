@@ -7,6 +7,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { saveCronStore } from "../cron/store.js";
@@ -8556,30 +8557,19 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
   it("reads ownership once inside each cached-owner transaction", () => {
     const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
-    const database = openOpenClawStateDatabase(options);
-    const { constants } = requireNodeSqlite();
-    let ownershipSelects = 0;
-    let schemaReads = 0;
-    database.db.setAuthorizer((actionCode, tableName) => {
-      if (actionCode === constants.SQLITE_SELECT) {
-        ownershipSelects += 1;
-      }
-      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
-        schemaReads += 1;
-      }
-      return constants.SQLITE_OK;
-    });
-
+    openOpenClawStateDatabase(options);
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
       for (let index = 0; index < 12; index += 1) {
         runOpenClawStateWriteTransaction(() => undefined, options);
       }
+      expect(observer.queries.filter((sql) => /^\s*SELECT\b/i.test(sql))).toHaveLength(12);
+      expect(observer.queries.filter((sql) => /\bsqlite_(?:master|schema)\b/i.test(sql))).toEqual(
+        [],
+      );
     } finally {
-      database.db.setAuthorizer(null);
+      observer.restore();
     }
-
-    expect(ownershipSelects).toBe(12);
-    expect(schemaReads).toBe(0);
   });
 
   it("rejects Promise-returning write transactions", () => {

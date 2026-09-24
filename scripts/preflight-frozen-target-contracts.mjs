@@ -15,6 +15,8 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
   "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
@@ -449,6 +451,7 @@ async function planWorkflowAdmission(input) {
     RELEASE_PACKAGE_ACCEPTANCE_LANES,
   } = await import("./plan-release-workflow-matrix.mjs");
   const { releasePathChunkLanes } = await import("./lib/docker-e2e-scenarios.mts");
+  const { isUpdateFirstHopCompatLane } = await import("./lib/update-first-hop-lanes.mjs");
   const { createPluginPrereleaseTestPlan } = await import("./lib/plugin-prerelease-test-plan.mts");
   const { parseUpgradeSurvivorScenarios } = await import("./lib/upgrade-survivor-policy.mjs");
   const baselineOptions = options.baselinesResolved
@@ -615,13 +618,12 @@ async function planWorkflowAdmission(input) {
     sourcePaths.add("package.json");
     sourcePaths.add("src/infra/fs-safe-defaults.ts");
   }
-  for (const [lane, path] of [
-    ["update-first-hop-compat", "scripts/runtime-postbuild.mts"],
-    ["update-corrupt-plugin", "src/cli/update-cli/update-command-plugin-preflight.ts"],
-  ]) {
-    if (possibleLanes.includes(lane)) {
-      sourcePaths.add(path);
-    }
+  // The recorded inventory stays optional: targets predating it keep the postbuild check.
+  if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/runtime-postbuild.mts");
+  }
+  if (possibleLanes.includes("update-corrupt-plugin")) {
+    sourcePaths.add("src/cli/update-cli/update-command-plugin-preflight.ts");
   }
   if (mobilePairingSelected) {
     sourcePaths.add("src/gateway/node-command-policy.ts");

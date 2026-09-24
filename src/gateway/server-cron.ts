@@ -773,8 +773,8 @@ export function buildGatewayCronService(params: {
         return listConfiguredSessionStoreAgentIds(cfg);
       }
     },
-    isAgentAvailable: (agentId) =>
-      !isAgentDeletionBlocked(agentId) &&
+    isAgentAvailable: (agentId, database) =>
+      !isAgentDeletionBlocked(agentId, { env }, database) &&
       !readAgentDatabaseAdmissionRefusal(agentId, { env }) &&
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,

@@ -20,11 +20,6 @@ import {
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
 import { danger, defaultRuntime, parseBooleanValue } from "./core-api.js";
 
-function parseOnOff(raw: string): boolean | null {
-  const parsed = parseBooleanValue(raw);
-  return parsed === undefined ? null : parsed;
-}
-
 function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -59,17 +54,12 @@ export function registerBrowserStateCommands(
       if (width === undefined || height === undefined) {
         return;
       }
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        await runBrowserResizeWithOutput({
-          parent,
-          profile,
-          width,
-          height,
-          targetId: opts.targetId,
-          successMessage: `viewport set: ${width}x${height}`,
-        });
+      await runBrowserResizeWithOutput({
+        parent: parentOpts(cmd),
+        width,
+        height,
+        targetId: opts.targetId,
+        successMessage: `viewport set: ${width}x${height}`,
       });
     });
 
@@ -80,8 +70,8 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const offline = parseOnOff(value);
-      if (offline === null) {
+      const offline = parseBooleanValue(value);
+      if (offline === undefined) {
         defaultRuntime.error(danger("Expected on|off"));
         defaultRuntime.exit(1);
         return;

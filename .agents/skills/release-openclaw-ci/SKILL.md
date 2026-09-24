@@ -40,9 +40,26 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
 - Linux (`ubuntu`) cross-OS lanes gate publication for beta, stable, and full.
-  Windows/macOS cross-OS lanes run in parallel as advisory coverage. Record
-  their actual pass/fail conclusions; failures do not block Release Decision,
-  npm publication, or `pnpm release:candidate`. Keep normal CI, npm
+  Windows/macOS cross-OS lanes, the CI child's `checks-windows-node-test-*`
+  shards, and its `macos-swift (...)` app lanes run in parallel as advisory
+  coverage. Record their actual pass/fail conclusions (`advisoryJobs` in the
+  manifest, `::warning::` naming the lane in Release Decision); failures do not
+  block Release Decision, npm publication, the publish preflight, or
+  `pnpm release:candidate`. Fix them in parallel; never hold npm for them.
+- Release priority: release runs always beat PR-side hosted-runner work. The
+  repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
+  `pnpm ci:full-release` records the pause window, sets it on dispatch, and
+  clears it when the operation ends; `pnpm frv continue --failed` and
+  `pnpm frv verify` clear it on seal. While set, `CI`, Auto response, PR
+  context and evidence, Labeler, CodeQL, Periphery, Workflow Sanity,
+  ClawSweeper Dispatch, and Maintainer Command Reactions skip at the job level
+  unless dispatched or on a `release*/` branch (Security Review never pauses);
+  deferred CI fails its gate with `Deferred for release <run>`. When release
+  children starve behind queued PR runs, `pnpm frv prioritize --run <parent>`
+  records and cancels the still-queued non-release runs of those workflows;
+  after the seal, `pnpm frv prioritize --restore <record>` clears the variable
+  first and reruns the cancelled and deferred runs, newest per workflow and
+  branch. Never leave the variable set after a release. Keep normal CI, npm
   qualification, Docker, Package Acceptance, performance, and soak gates intact.
 - macOS app signing/notarization/appcast and Windows Hub asset promotion run
   in parallel with or after npm publication and never delay npm or GitHub
@@ -468,6 +485,46 @@ non-proof lane failures advisory; install-smoke, upgrade-survivor, pack/qualify-
 `resolve_target`, and artifact gates stay blocking, and publishing that manifest
 needs the same `lane_waiver` acknowledgement on the publish workflow.
 
+### Publish children
+
+- npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) need their
+  own `npm-release` approval; the parent's approval does not always propagate,
+  and an unapproved core child sits `waiting` silently. Watch every child and
+  approve npm children only (environment id `13010111854`):
+  ```bash
+  gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
+  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
+    -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
+  ```
+- Never approve ClawHub children (`plugin-clawhub-release.yml`,
+  `plugin-clawhub-new.yml`) by hand: `Revalidate trusted tooling identity`
+  downloads `openclaw-clawhub-recovery-approval-<run>-1`, which only the
+  parent's approval path uploads, so every publish job fails
+  `Artifact not found`. If the parent died before approving them, cancel them
+  and re-dispatch the parent.
+- Before re-dispatching a failed publish parent, sweep its stale children;
+  otherwise the next parent fails at `Dispatch publish workflows` with
+  `ClawHub dispatch blocked by waiting run`. The parent's own cleanup misses
+  children that reach `waiting` after it dies. List `workflow_dispatch` runs by
+  `github-actions[bot]` created for this release, reject their gate, cancel:
+  ```bash
+  for s in waiting queued; do gh api "repos/openclaw/openclaw/actions/runs?status=$s&per_page=100" \
+    --jq '.workflow_runs[] | select(.event=="workflow_dispatch" and .actor.login=="github-actions[bot]") | select(.name | test("plugin-clawhub|Plugin NPM Release|openclaw-npm-release")) | [.id,.name,.created_at] | @tsv'; done
+  env_id=$(gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments --jq '.[0].environment.id')
+  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
+    -f state=rejected -f comment="Reject stale release gate" -F "environment_ids[]=$env_id"
+  gh run cancel <child> --repo openclaw/openclaw
+  ```
+- `gh run rerun --failed` on a plugin npm child never passes: `Validate npm
+preflight artifact readback` pins `workflow.runAttempt`, so attempt 2 fails
+  `Preflight manifest workflow mismatch`. Only a fresh child works; since
+  #156760 the parent re-dispatches one (at most twice) when only pack/preflight
+  jobs failed.
+- Core child `Verify full release validation target` failing with
+  `pass lane_waiver=<reason> to acknowledge it`: the tooling tag predates
+  #156816 (waiver forwarded to children). Cut a new tooling tag from a `main`
+  that includes it; the candidate and validation evidence stay valid.
+
 ### Extended-stable validation
 
 Use one remote-only procedure for `.33+` extended-stable validation. Keep these
@@ -659,6 +716,16 @@ run-ID-cached bytes first.
      evidence, and repeat Release SHA proof
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
+   - parent failed after core npm published (for example a stale `beta`
+     dist-tag failing the completion verify): flip the GitHub release public
+     immediately with
+     `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`;
+     never leave it drafted waiting for Docker, ClawHub, apps, or the resume.
+     Then run the beta-to-stable dist-tag sync, sweep stale children, and
+     dispatch a new parent with the same inputs: it recognizes published bytes
+     and only runs ClawHub, GitHub release evidence, and Docker
+   - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing
+     `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
 7. If a required PR CI run is capacity-stalled with queued jobs and no active

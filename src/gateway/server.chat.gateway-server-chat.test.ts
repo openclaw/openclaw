@@ -2265,12 +2265,7 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
-      const waitRes = await rpcReq(ws, "agent.wait", {
-        runId: "idem-chat-thinking-no-persist",
-        timeoutMs: 1_000,
-      });
-      expect(waitRes.ok).toBe(true);
-      expect(waitRes.payload?.status).toBe("ok");
+      await waitForAgentRunDrained("idem-chat-thinking-no-persist");
 
       const sessionStorePath = testState.sessionStorePath;
       if (!sessionStorePath) {
@@ -2389,11 +2384,11 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
+  test("agent.wait reads completed chat.send runs without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     });
   });
 
@@ -2419,7 +2414,7 @@ describe("gateway server chat", () => {
       });
 
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
 
       const agentRes = await rpcReq(ws, "agent", {
         sessionKey: "main",
@@ -2436,8 +2431,7 @@ describe("gateway server chat", () => {
       expectAgentWaitTimeout(waitWhileAgentInFlight);
 
       resolveAgentRun?.();
-      await waitForAgentRunOk(runId);
-      await requestExecution.waitForCompletion(runId);
+      await waitForAgentRunDrained(runId);
     } finally {
       resolveAgentRun?.();
       await settleGatewayFixture();
