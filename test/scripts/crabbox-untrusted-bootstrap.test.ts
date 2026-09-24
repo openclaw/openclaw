@@ -70,6 +70,7 @@ case "$1" in
     ;;
   install)
     [[ "$2" == "--frozen-lockfile" ]]
+    printf '%s' "$HOME" > ${JSON.stringify(join(root, "install-home"))}
     read -r prepared_pin < ${JSON.stringify(join(root, "prepared-pin"))}
     candidate_pin="$(${JSON.stringify(process.execPath)} -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).packageManager')"
     [[ "$prepared_pin" == "$candidate_pin" ]]
@@ -193,12 +194,10 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     "streams the full bootstrap with child exit %i and removes its isolated home",
     (exitCode) => {
       const f = fixture();
-      const result = f.runGate(
-        `set -euo pipefail; printf '%s' "$HOME" > ${JSON.stringify(join(f.root, "gate-home"))}; /bin/bash -c 'exit ${exitCode}'`,
-      );
+      const result = f.runGate(`set -euo pipefail; /bin/bash -c 'exit ${exitCode}'`);
       expect(result.status, result.stderr).toBe(exitCode);
       expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\n");
-      expect(existsSync(readFileSync(join(f.root, "gate-home"), "utf8"))).toBe(false);
+      expect(existsSync(readFileSync(join(f.root, "install-home"), "utf8"))).toBe(false);
     },
   );
 

@@ -158,7 +158,7 @@ describe("Crabbox stdin lifecycle", () => {
       const result = executeCrabbox({
         args: [
           "-e",
-          "const fs=require('node:fs'); fs.closeSync(0); setTimeout(()=>{fs.writeFileSync(process.argv[1],'finished'); process.exit(Number(process.argv[2]));}, 50);",
+          "const fs=require('node:fs'); fs.closeSync(0); fs.writeFile(process.argv[1],'finished',error=>{if(error)throw error; process.exit(Number(process.argv[2]));});",
           finished,
           String(exitCode),
         ],
