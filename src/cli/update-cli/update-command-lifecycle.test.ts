@@ -966,6 +966,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     const warnings: string[] = [];
     const warning = "Gateway was already stopped before repair; run openclaw gateway start.";
     mocks.maintenance.mockResolvedValue({
+      signal: new AbortController().signal,
       run: <T>(operation: () => T): T => operation(),
       release: async () => {},
       releaseState: async () => {},
