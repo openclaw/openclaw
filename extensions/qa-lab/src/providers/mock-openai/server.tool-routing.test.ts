@@ -314,8 +314,8 @@ describe("mock scenario tool routing", () => {
       expectOpenAiNonStreamingResponsesJson(server, {
         tools: catalogTools,
         input,
-        instructions:
-          "Runtime: embedded | agent=qa | session=agent:qa:main | sessionId=qa-terminal-parent",
+        instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
+        client_metadata: { session_id: "qa-terminal-parent" },
       });
     const call = outputItem(await request());
     input.push(

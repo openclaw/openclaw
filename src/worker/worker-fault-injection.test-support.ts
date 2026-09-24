@@ -224,7 +224,8 @@ export class ComposedGatewayHarness {
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
   ) {
-    this.socketPath = path.join(root, "gateway.sock");
+    // Leave room for Vitest temp nesting within Darwin's Unix socket pathname limit.
+    this.socketPath = path.join(root, "s");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
       session: {

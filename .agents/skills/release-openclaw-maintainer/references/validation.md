@@ -61,10 +61,9 @@ uses `--video-providers fal`. Full transform modes require intentional
 credentialed tests. Local live model/Parallels rosters require both OpenAI and
 Anthropic keys; missing either blocks those lanes, never print their values.
 
-## Beta-publish and default stable-publish
+## Beta-publish
 
-Use `release_profile=beta`, `run_release_soak=false` for beta and, with the
-stable soak waiver, for the default stable path. A qualifying `all` run for
+Use `release_profile=beta`, `run_release_soak=false` for beta. A qualifying `all` run for
 an actual beta on its canonical branch/tag records `npm-beta-v1`. Native app
 CI, performance, and published-package Telegram move to confidence. Required
 Node, Control UI, plugin, package, install/update, Linux/Windows/macOS cross-OS, QA parity,
@@ -112,21 +111,16 @@ admit a confirmed product fix only to a new operator-approved candidate.
 
 ## Stable-publish and bounded execution
 
-The default stable publishes from beta-profile evidence with the recorded soak
-waiver (precedent 2026.9.5 and 2026.9.6); soak, live/E2E, Telegram, QA-live
-and Parallels run as postpublish confidence. Opt-in `release_profile=stable` or
-`full` requires its stable roster, soak, blocking performance and accepted
-confidence evidence. Matching beta confidence may support the light promotion
-roster in [regular release](regular-release.md), not waive a required gate.
+Stable publication requires `release_profile=stable` or `full`, its required
+roster, soak, and successful blocking performance evidence. Beta-profile
+validation cannot authorize stable publication. Matching beta confidence may
+support the promotion roster in [regular release](regular-release.md), but does
+not waive a required gate.
 
-One validation parent per release. Rerun failed jobs per child at most twice,
-automatically; a lane failing twice on a test the candidate did not touch,
-with no product cause in the candidate delta, is flaky, recorded and fixed on
-`main` in parallel. Re-cut only for a confirmed product defect that a required
-lane blocks on (update/install path, publish bytes, or another required gate
-proven by diagnosis), never for a flake or an advisory lane. When the
-6-hour budget is exceeded, report the blocking lane and the decision taken
-instead of starting another full run.
+Retain each child's first failure. Diagnose and fix the owning defect before
+focused validation; automatic retries and passing replays do not establish a
+fix. Preserve the candidate unless a confirmed product defect requires a new
+Code SHA, and record changes and proof in the release handoff.
 
 Native publication retains separate signing/notarization/promotion gates under
 [platform publication](platform-publication.md). Platform publisher failures

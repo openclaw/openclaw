@@ -568,19 +568,6 @@ export function createWorkerSessionPlacementStore(
       return outcome.record;
     },
 
-    validateWorkerOwner(input: {
-      sessionId: string;
-      environmentId: string;
-      ownerEpoch: number;
-    }): boolean {
-      const current = find(read(), required(input.sessionId, "session id"));
-      return (
-        current?.state === "active" &&
-        current.environmentId === required(input.environmentId, "environment id") &&
-        current.activeOwnerEpoch === normalizeEpoch(input.ownerEpoch, "active owner epoch")
-      );
-    },
-
     fail(input: {
       sessionId: string;
       recoveryError: string;

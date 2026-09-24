@@ -1817,6 +1817,20 @@ Process identity caches retain their existing database-path and identity-key
 scope; warm cached values need no database operation. Schemas and update behavior
 are unchanged; no migration or operator action is required.
 
+Skill Workshop proposal reads, publication, evaluation, rollback metadata, and
+status transitions execute in the existing shared-state worker. Record and event
+writes remain one synchronous transaction, including revision comparisons and
+pending-proposal limits. The host retains filesystem work and the collection and
+target leases through settlement; worker transactions verify every held lease
+before effects and commit. A failed reply is reconciled before discarding a
+staged generation or restoring live files.
+
+Collection history reads and experience-review outcomes use the same worker.
+Doctor awaits legacy proposal imports before deleting their source sidecars.
+Transaction-bound relocation kernels and read-only migration readers retain their
+supplied connections. Proposal generations, schemas, limits, retention, and
+rollback ordering are unchanged.
+
 Task, flow, and Cron receipt execution identity bindings run in the shared-state
 worker. Their synchronous transactions reread the exact live owner rows and
 recheck the caller's current execution authority before mutation and commit.

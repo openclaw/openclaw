@@ -1364,6 +1364,7 @@ jobs:
           OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_NODE_TEST_DATA_ONLY: ${{ steps.changed_scope.outputs.node_test_data_only || 'false' }}
           # Ordinary manual/release validation stays full. A release_gate is a
           # hosted substitute for PR CI, so it must retain the exact Apple scope.
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
@@ -1379,6 +1380,7 @@ jobs:
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
+          OPENCLAW_CI_CHANGED_BASE: ${{ steps.diff_base.outputs.sha }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_CORRECTION_BASE_SHA: ${{ steps.release_correction_base.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
@@ -1580,17 +1582,22 @@ jobs:
           }
           const toolingOwnerChange =
             eventName === "pull_request" && isCanonicalRepository && changedPaths !== null &&
+            !docsOnly &&
             typeof nodeTestPlan.isToolingTestOwnerPath === "function" &&
             changedPaths.some(nodeTestPlan.isToolingTestOwnerPath);
+          const nodeDataOnly = eventName === "pull_request" && parseBoolean(process.env.OPENCLAW_CI_NODE_TEST_DATA_ONLY);
           const runNode =
-            (parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange;
+            !nodeDataOnly && ((parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
           const runNodeFastOnly =
             runNode && !toolingOwnerChange && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
+          const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
+            changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
+          ));
           // Plain PR leaves share the local consumer selector. Empty means the
           // existing full owners stay scheduled, including unsupported targets.
           let changedCoreTestPaths;
-          if (eventName === "pull_request" && runNodeFull && !frozenTarget && changedPaths &&
+          if (eventName === "pull_request" && runCheck && !frozenTarget && changedPaths &&
             existsSync("scripts/changed-lanes.mts") &&
             [
               ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
@@ -1643,7 +1650,7 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
+          const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly && !nodeDataOnly;
           // Only ordinary current PR unit entries may omit browser integration;
           // main, dispatches, frozen targets and unknown selectors retain their owners.
           const runUiE2e = runUiTests && (
@@ -1798,6 +1805,10 @@ jobs:
               }
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
+              // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
+              dedicatedCoreTypeChecks: runNodeFull,
+              dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
               includeReleaseOnlyToolingShards: false,
               includeReleaseOnlyRuntimeTests,
               runnerBackend: nodeRunnerBackend,
@@ -2120,7 +2131,7 @@ jobs:
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: runNodeCoreDist,
-            run_check: runNodeFull,
+            run_check: runCheck,
             startup_corpus_node_revision: startupCorpusNodeRevision,
             startup_corpus_test_files_json: startupCorpusTestFiles ? JSON.stringify(startupCorpusTestFiles) : "",
             changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",

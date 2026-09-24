@@ -135,7 +135,8 @@ describe("command CI ownership and parallel timing", () => {
       listTrackedTestFiles: (root: string) =>
         root === "src/commands" ? [...files, memoryFile] : [],
     }));
-    vi.doMock("../vitest/vitest.test-shards.mjs", () => ({
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
       fullSuiteVitestShards: [{ name: "agentic", config: "fixture.config.ts", projects: [config] }],
     }));
     vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => ({

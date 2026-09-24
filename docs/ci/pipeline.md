@@ -381,7 +381,14 @@ If the PR head changes before or during evaluation, the obsolete run stops
 successfully without publishing approval for the replacement commit. The new
 head's automatic event owns its evaluation. Changes to approval-relevant metadata
 on the same head and real evaluation errors still fail; supersession does not hide
-an earlier guard error.
+an earlier guard error. During long read sequences, the review checks the live
+PR again before admitting another read after 30 seconds. Non-quota recovery waits
+check every 30 seconds too, so superseded work stops without finishing pagination
+or waiting out diff recovery. In-flight requests retain their 30-second deadline;
+writes and autoscrub cleanup are not interrupted. Server-directed rate-limit
+waits must finish before another API request is allowed. Checkout and runtime
+setup are outside these checkpoints. Per-head non-canceling publication
+serialization and all final approval checks remain unchanged.
 
 When GitHub returns a rate-limit response, the resolver and review scripts stop
 API requests, honor `Retry-After` and exhausted-quota reset times, and restart
@@ -403,7 +410,7 @@ use one-, two-, and four-second delays, sharing the three-restart limit and job
 deadline with rate-limit recovery. GitHub may have accepted the failed write, so
 the review rereads current PR, approval, role, and CI data instead of replaying an
 old decision. This recovery applies only to commit-status publication; other
-uncertain writes, cancellation, and request timeouts remain errors.
+uncertain writes, cancellation, and write request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before a
@@ -411,6 +418,13 @@ response arrives. They share one retry budget of one, two, and four seconds,
 within the original 30-second request timeout. These retries exclude writes,
 caller cancellation, certificate errors, and unrecognized errors. HTTP and
 connection errors identify the request method and endpoint.
+
+If a read-only request reaches its 30-second deadline, including while reading
+its response body, the script restarts the complete evaluation with fresh PR,
+approval, role, and CI data. These restarts use one-, two-, and four-second delays
+and share the existing three-restart limit and job deadline. A persistent read
+timeout fails the job. Write timeouts do not trigger this recovery because GitHub
+may already have accepted the mutation.
 
 If GitHub's changed-file count and file list disagree, or the count changes after
 validation, the script restarts the complete evaluation after one, two, and four
