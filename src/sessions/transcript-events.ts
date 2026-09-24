@@ -1,9 +1,9 @@
-// Transcript event helpers serialize and trim session transcript events.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners } from "../shared/listeners.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -60,11 +60,9 @@ export function attachSessionTranscriptRunId<T>(message: T, runId: string | null
 
 /** Reads the run identity persisted on a transcript row, when one was attached. */
 export function readSessionTranscriptRunId(message: unknown): string | undefined {
-  if (!isRecord(message)) {
-    return undefined;
-  }
-  const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : {};
-  return normalizeOptionalString(metadata["runId"]);
+  return isRecord(message)
+    ? normalizeOptionalString((asOptionalRecord(message["__openclaw"]) ?? {}).runId)
+    : undefined;
 }
 
 /** Failure receipts precede assistant rows and carry their run identity in report details. */
@@ -154,9 +152,9 @@ export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpd
   SESSION_TRANSCRIPT_UPDATE_STATE.version += 1;
   const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
   if (publicUpdate) {
-    emitPublicSessionTranscriptUpdate(publicUpdate);
+    notifyListeners(SESSION_TRANSCRIPT_LISTENERS, publicUpdate);
   }
-  emitInternalTranscriptUpdate(nextUpdate);
+  notifyListeners(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, nextUpdate);
 }
 
 function normalizeSessionTranscriptUpdate(
@@ -186,26 +184,6 @@ function normalizeSessionTranscriptUpdate(
     ...(messageSeq !== undefined ? { messageSeq } : {}),
     ...(runId ? { runId } : {}),
   };
-}
-
-function emitPublicSessionTranscriptUpdate(nextUpdate: SessionTranscriptUpdate): void {
-  for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
-    try {
-      listener(nextUpdate);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-function emitInternalTranscriptUpdate(nextUpdate: InternalSessionTranscriptUpdate): void {
-  for (const listener of INTERNAL_SESSION_TRANSCRIPT_LISTENERS) {
-    try {
-      listener(nextUpdate);
-    } catch {
-      /* ignore */
-    }
-  }
 }
 
 function projectPublicSessionTranscriptUpdate(

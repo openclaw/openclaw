@@ -1,4 +1,3 @@
-// Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
 
