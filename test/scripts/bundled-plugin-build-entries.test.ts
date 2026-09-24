@@ -479,6 +479,25 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/synthetic/");
   });
 
+  it("keeps the reserved extension dependency directory out of excluded plugin ids", () => {
+    const cwd = tempDirs.make("openclaw-root-package-excludes-");
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        files: [
+          "!dist/extensions/node_modules/**",
+          "!dist/extensions/*/node_modules/**",
+          "!dist/extensions/codex/**",
+        ],
+      }),
+    );
+
+    const excluded = collectRootPackageExcludedExtensionDirs({ cwd });
+
+    expect([...excluded]).toEqual(["codex"]);
+  });
+
   it("excludes the externalized DuckDuckGo plugin from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
