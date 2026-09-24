@@ -12,6 +12,7 @@ import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
+  peekModelCatalog,
   readAgentModelCatalog,
   subscribeModelCatalogCache,
 } from "../lib/model-catalog-store.ts";
@@ -162,6 +163,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.subscriptions.watch(
       () => this.context?.gateway.snapshot.client,
       subscribeModelCatalogCache,
+      () => {
+        // Another view's accepted publication supersedes this palette's failed read.
+        const load = this.modelLoad;
+        if (load?.failed && peekModelCatalog(load.client, { agentId: load.agentId })) {
+          this.modelLoad = { ...load, failed: false };
+        }
+      },
     );
     this.subscriptions.effect(
       () => this.context?.gateway,

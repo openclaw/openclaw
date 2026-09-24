@@ -5,6 +5,7 @@ import type { SessionsSearchResult } from "../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
@@ -136,6 +137,32 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
+  });
+
+  it("clears a failed model search when another view publishes the catalog", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog unavailable"))
+      .mockResolvedValueOnce({ models: [{ provider: "fixture", id: "needle", name: "Needle" }] });
+    const { gateway } = createGateway(true, {
+      methods: ["models.list"],
+      request: (method, params) =>
+        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
+    });
+    const { palette } = await mountPalette(createContext(gateway, async () => null));
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(200);
+    await vi.waitFor(() =>
+      expect(palette.querySelector(".cmd-palette__source-error")?.textContent).toContain(
+        "Model search unavailable",
+      ),
+    );
+
+    await loadModelCatalog(gateway.snapshot.client!, { agentId: "main" });
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle")).toBeDefined();
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it.each([
