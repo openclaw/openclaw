@@ -28,6 +28,7 @@ export function repairDoctorSqliteIndexCorruption(
   let indexes: string[];
   try {
     indexes = repairSqliteIndexCorruption(database, pathname, {
+      assertCurrent: options.assertCurrent,
       backup: () => {
         options.assertCurrent();
         // Snapshot in the existing child owner: closing a source descriptor here
