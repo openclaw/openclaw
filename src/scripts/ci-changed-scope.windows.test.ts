@@ -324,7 +324,6 @@ describe("detectChangedScope Windows routing", () => {
         "src/gateway/auth-token-resolution.ts",
         "src/gateway/resolve-configured-secret-input-string.ts",
         "src/infra/fs-safe.ts",
-        "src/infra/fs-safe-defaults.test.ts",
         "src/infra/boundary-file-read.ts",
         "src/secrets/resolve-errors.ts",
         "src/secrets/resolve.ts",
@@ -367,6 +366,7 @@ describe("detectChangedScope Windows routing", () => {
   it("does not route SecretRef tests owned by non-Windows lanes", () => {
     for (const testPath of [
       "src/gateway/resolve-configured-secret-input-string.test.ts",
+      "src/infra/fs-safe-defaults.test.ts",
       "src/secrets/resolve.test.ts",
       "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
     ]) {
