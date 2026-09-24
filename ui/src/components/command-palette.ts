@@ -176,7 +176,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       (gateway) =>
         gateway.subscribeEvents((event) => {
           const invalidation = modelCatalogEventInvalidation(event);
-          if (this.context?.gateway === gateway && (event.event === "cron" || invalidation)) {
+          // Palette search includes skills even when the model cache remains current.
+          if (
+            this.context?.gateway === gateway &&
+            (event.event === "cron" || event.event === "chat.metadata.changed" || invalidation)
+          ) {
             if (invalidation === "clear") {
               this.clearCatalogSearch();
             }

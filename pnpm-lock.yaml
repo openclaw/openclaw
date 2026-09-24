@@ -212,7 +212,7 @@ overrides:
 packageExtensionsChecksum: sha256-rGJZONZErUhTY23oR+CnhpPu27YaHbMrdhgyPkmF6pM=
 
 patchedDependencies:
-  '@awesome.me/webawesome@3.12.0': 700cdc196f4d9b00e61a0e7f3b14436da63a0191d1be0f05a7ead4a9f9010a14
+  '@awesome.me/webawesome@3.12.0': 937b57e1b779324b9e216d4e093cd5e3a74ff1628150eff1a6d9d1ca4e6d374a
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
   baileys@7.0.0-rc14: 03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb
   chrome-devtools-mcp@1.9.0: 832ce1d2ff002b44edb93bae88858d6edd8bc833acc87dd0fe82454d8834e340
@@ -2781,7 +2781,7 @@ importers:
     dependencies:
       '@awesome.me/webawesome':
         specifier: 3.12.0
-        version: 3.12.0(patch_hash=700cdc196f4d9b00e61a0e7f3b14436da63a0191d1be0f05a7ead4a9f9010a14)(@floating-ui/utils@0.2.12)(@types/node@24.13.5)(@types/react@19.3.0)
+        version: 3.12.0(patch_hash=937b57e1b779324b9e216d4e093cd5e3a74ff1628150eff1a6d9d1ca4e6d374a)(@floating-ui/utils@0.2.12)(@types/node@24.13.5)(@types/react@19.3.0)
       '@codemirror/commands':
         specifier: 6.11.1
         version: 6.11.1
@@ -10382,7 +10382,7 @@ snapshots:
       '@audio/decode-wma': 1.3.1
       audio-type: 2.7.0
 
-  '@awesome.me/webawesome@3.12.0(patch_hash=700cdc196f4d9b00e61a0e7f3b14436da63a0191d1be0f05a7ead4a9f9010a14)(@floating-ui/utils@0.2.12)(@types/node@24.13.5)(@types/react@19.3.0)':
+  '@awesome.me/webawesome@3.12.0(patch_hash=937b57e1b779324b9e216d4e093cd5e3a74ff1628150eff1a6d9d1ca4e6d374a)(@floating-ui/utils@0.2.12)(@types/node@24.13.5)(@types/react@19.3.0)':
     dependencies:
       '@ctrl/tinycolor': 4.1.0
       '@floating-ui/dom': 1.8.0
