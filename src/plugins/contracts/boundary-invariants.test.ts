@@ -3,13 +3,16 @@ import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { beforeAll, describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const sourceCache = new Map<string, string>();
 const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
@@ -230,30 +233,24 @@ function isAllowedBundledExtensionImport(specifier: string): boolean {
 }
 
 function collectBundledExtensionImports(source: string): string[] {
-  const sourceFile = ts.createSourceFile(
-    "boundary-invariants-input.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const sourceFile = parser.parseSourceFile("boundary-invariants-input.ts", source);
   const specifiers: string[] = [];
 
   function visit(node: ts.Node): void {
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       specifiers.push(node.moduleSpecifier.text);
     }
     if (ts.isCallExpression(node) && isBundledExtensionImportHelperCall(node.expression)) {
       const firstArgument = node.arguments[0];
-      if (firstArgument && ts.isStringLiteralLike(firstArgument)) {
+      if (firstArgument && ts.isStringLiteralLikeNode(firstArgument)) {
         specifiers.push(firstArgument.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);

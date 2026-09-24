@@ -204,6 +204,14 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      // Both suites read this inventory by filename, not through the import graph.
+      testFile,
+      ownerGlobs: ["apps/.i18n/native-source.json"],
+      watchGlobs: ["apps/.i18n/native-source.json"],
+    }),
+  ),
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
@@ -288,12 +296,18 @@ const policyTestWatches = [
   },
 ] satisfies readonly PolicyTestWatch[];
 
-/** Resolve policy tests whose scanned source surface intersects this diff. */
-export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
+/** Resolve watched tests, optionally restricting to complete owners of the changed input. */
+export function resolvePolicyTestTargets(
+  changedPaths: readonly string[],
+  options: { completeOwnersOnly?: boolean } = {},
+): string[] {
   return policyTestWatches
-    .filter(({ watchGlobs }) =>
-      changedPaths.some((changedPath) =>
-        watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
+    .filter(({ watchGlobs, ownerGlobs }) =>
+      changedPaths.some(
+        (changedPath) =>
+          watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)) &&
+          (!options.completeOwnersOnly ||
+            ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob))),
       ),
     )
     .map(({ testFile }) => testFile);
@@ -3265,7 +3279,113 @@ export function createNodeTestShardBundles(
     }
   }
 
-  return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
+  const full = [...unbundled, ...bundled];
+  return (
+    options.runnerBackend === "github" ? full.flatMap(splitHostedReleaseShard) : full
+  ).toSorted(compareFullNodeTestAdmissionOrder);
+}
+
+// Full release jobs include setup and can execute both runtimes. Keep their
+// measured walls separate from compact test-group spans and reserve eight minutes
+// of the 20-minute objective for changes in setup and cold-run overhead.
+function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
+  const budget = 720;
+  const parentShardName = `release-full-${shard.shardName}`;
+  const timings = readCompactGroupTimings("github");
+  const files = canSplitWholeConfigGroup(shard.shardName)
+    ? (shard.includePatterns ?? listWholeConfigSplitFiles(shard.shardName))
+    : undefined;
+  if (!isRuntimePlacementIncludePatterns(files)) {
+    const seconds = timings[parentShardName];
+    if (seconds !== undefined && seconds > budget) {
+      throw new Error(
+        `Release shard ${shard.shardName} cannot fit the hosted budget; split its test owner before release`,
+      );
+    }
+    return [
+      {
+        ...shard,
+        timing_key: parentShardName,
+        ...(seconds === undefined ? {} : { predictedSeconds: seconds }),
+      },
+    ];
+  }
+  const generation = (stripes: string[][]) =>
+    createCompactSplitTimingGeneration({
+      configs: shard.configs,
+      env: shard.env,
+      parentShardName,
+      stripes,
+    });
+  const original = generation([files]);
+  const singletonCosts = new Map<string, number>();
+  for (const [key, cost] of Object.entries(timings)) {
+    const singleton = key.match(/#include-1-[a-f0-9]{12}$/u)?.[0];
+    if (singleton && key.startsWith(`${original.selectorKey}#generation-`)) {
+      singletonCosts.set(singleton, Math.max(singletonCosts.get(singleton) ?? 0, cost));
+    }
+  }
+  if ([...singletonCosts.values()].some((cost) => cost > budget)) {
+    throw new Error(
+      `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
+    );
+  }
+  const seconds = Math.max(
+    timings[parentShardName] ?? 0,
+    timings[original.timingKeys[0]!] ?? 0,
+    readCompleteSplitGenerationSeconds(timings, original.selectorKey) ?? 0,
+  );
+  if (seconds <= budget) {
+    return [
+      {
+        ...shard,
+        timing_key: original.timingKeys[0]!,
+        ...(seconds === 0 ? {} : { predictedSeconds: seconds }),
+      },
+    ];
+  }
+  const weight = (entries: readonly string[]) =>
+    entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
+  const totalWeight = weight(files);
+  let count = Math.min(
+    files.length,
+    Math.max(
+      2,
+      Math.ceil(seconds / budget),
+      Math.ceil(files.length / MAX_BUNDLED_NODE_TEST_PATTERNS),
+    ),
+  );
+  for (;;) {
+    const stripes = createStripedBatches(files, count, stripeFileWeight);
+    const keys = generation(stripes).timingKeys;
+    const predicted = stripes.map((stripe, index) =>
+      Math.ceil(timings[keys[index]!] ?? (seconds * weight(stripe)) / totalWeight),
+    );
+    if (
+      predicted.every((cost) => cost <= budget) &&
+      stripes.every((stripe) => stripe.length <= MAX_BUNDLED_NODE_TEST_PATTERNS)
+    ) {
+      const result: NodeTestShard[] = [];
+      for (const [index, includePatterns] of stripes.entries()) {
+        const shardName = `${shard.shardName}-hosted-${index + 1}`;
+        result.push({
+          ...shard,
+          shardName,
+          checkName: formatNodeTestShardCheckName(shardName),
+          timing_key: keys[index]!,
+          includePatterns,
+          predictedSeconds: predicted[index]!,
+        });
+      }
+      return result;
+    }
+    if (count === files.length) {
+      throw new Error(
+        `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
+      );
+    }
+    count += 1;
+  }
 }
 
 type HostedToolingTailDonation = {

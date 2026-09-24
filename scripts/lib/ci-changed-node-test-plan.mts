@@ -462,10 +462,10 @@ function resolvePreciseChangedTargets(
 }
 
 function createChangedTargetShards(
-  targets: string[],
+  targets: NonNullable<ReturnType<typeof resolvePreciseChangedTargets>>,
   names: { checkName: string; shardName: string },
 ) {
-  const targetChunks: string[][] = [];
+  const targetChunks: (typeof targets)[] = [];
   for (let offset = 0; offset < targets.length; offset += CHANGED_NODE_TEST_TARGETS_PER_JOB) {
     targetChunks.push(targets.slice(offset, offset + CHANGED_NODE_TEST_TARGETS_PER_JOB));
   }
@@ -477,13 +477,17 @@ function createChangedTargetShards(
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `${names.shardName}${suffix}`,
-      targets: chunk,
+      targets: chunk.map(({ target }) => target),
     };
-    const pretestBuildMode = resolveVitestPretestBuildMode([{ includePatterns: chunk }]);
+    const pretestBuildMode = chunk.some(({ plans }) =>
+      plans.some((plan) => plan.config === E2E_VITEST_CONFIG),
+    )
+      ? "private-qa"
+      : resolveVitestPretestBuildMode([{ includePatterns: shard.targets }]);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
-    if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+    if (chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
     return shard;
@@ -894,6 +898,12 @@ export function createChangedNodeTestShards(
           policyTargets.length > 0,
       ),
   );
+  const policyTargets = [...new Set([...policyTargetsByPath.values()].flat())];
+  const completeOwnerTargets = new Set(
+    [...policyTargetsByPath.keys()].flatMap((changedPath) =>
+      resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true }),
+    ),
+  );
   const regularPaths = resolutionPaths.filter(
     (changedPath) =>
       !documentationPaths.has(changedPath) &&
@@ -1073,7 +1083,7 @@ export function createChangedNodeTestShards(
     cwd,
     documentationPaths,
     [
-      ...[...policyTargetsByPath.values()].flat(),
+      ...policyTargets,
       ...dependencyConsumers.tests,
       ...resolveAffectedTestsFromImportGraph([...pluginMetadataPaths], cwd, {
         tooling: true,
@@ -1111,6 +1121,7 @@ export function createChangedNodeTestShards(
         changedPaths.includes(target) ||
         options.includeReleaseOnlyToolingShards !== false ||
         changedPaths.some(isToolingTestOwnerPath) ||
+        completeOwnerTargets.has(target) ||
         (!isReleaseOnlyToolingTestFile(target) &&
           !plans.every((plan) => RELEASE_ONLY_TOOLING_CONFIGS.has(plan.config)))) &&
       !plans.every(({ config }) =>
@@ -1250,8 +1261,7 @@ export function createChangedNodeTestShards(
                 )))
           );
         }),
-    )
-    .map(({ target }) => target);
+    );
 
   const shards = [
     ...uiShards,
@@ -1287,7 +1297,7 @@ export function createChangedNodeTestShards(
     ),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
-      targets.filter((target) => !isUiBrowserTestFile(target)),
+      targets.filter(({ target }) => !isUiBrowserTestFile(target)),
       {
         checkName: "checks-node-changed",
         shardName: "changed",

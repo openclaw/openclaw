@@ -1,4 +1,4 @@
-// Legacy gateway runtime config migrations for bind modes, WebChat, and Control UI origins.
+// Legacy gateway runtime config migrations for bind modes and Control UI origins.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildDefaultControlUiAllowedOrigins,
@@ -27,11 +27,6 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
     'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
   match: (value) => isLegacyGatewayBindHostAlias(value),
   requireSourceLiteral: true,
-};
-
-const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
-  path: ["gateway", "webchat"],
-  message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
 const GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE: LegacyConfigRule = {
@@ -155,22 +150,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       }
       delete controlUi.dangerouslyDisableDeviceAuth;
       changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "gateway.webchat-remove",
-    describe: "Remove retired WebChat gateway config",
-    legacyRules: [GATEWAY_WEBCHAT_RULE],
-    apply: (raw, changes) => {
-      const gateway = getRecord(raw.gateway);
-      if (!gateway || !Object.hasOwn(gateway, "webchat")) {
-        return;
-      }
-      delete gateway.webchat;
-      if (Object.keys(gateway).length === 0) {
-        delete raw.gateway;
-      }
-      changes.push("Removed retired gateway.webchat config.");
     },
   }),
   defineLegacyConfigMigration({

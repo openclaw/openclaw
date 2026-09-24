@@ -226,12 +226,55 @@ export function resolveSessionMutationAuthorization(params: {
   const resolveAuthorizedTarget = (
     targetRef: SessionMutationTarget,
     targetCount: number,
-  ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
+  ):
+    | {
+        target: SessionSharingTarget | null;
+        preparedReadSource?: SessionSharingTarget["readSource"];
+      }
+    | { error: ErrorShape } => {
     const input = resolveRequestedSessionAgentInput(targetRef.sessionKey, targetRef.agentId);
     if (!input.ok) {
       return { error: input.error };
     }
     try {
+      if (
+        params.sessionRowRead &&
+        resolveDirectSessionTargets(params.method, params.requestParams).some(
+          (direct) =>
+            direct.sessionKey === targetRef.sessionKey && direct.agentId === targetRef.agentId,
+        )
+      ) {
+        const agent = resolveRequestedSessionAgentId(
+          params.sessionRowRead.state.cfg,
+          targetRef.sessionKey,
+          targetRef.agentId,
+        );
+        if (!agent.ok) {
+          return { error: agent.error };
+        }
+        const row = params.sessionRowRead.describe({
+          key: targetRef.sessionKey,
+          agentId: agent.agentId,
+        });
+        if (!row && params.sessionScope === "operator.sessions.read") {
+          return { error: hiddenSessionNotFound(targetRef.sessionKey) };
+        }
+        const readSource = row && params.sessionRowRead.readSource(row);
+        return {
+          preparedReadSource: readSource,
+          target: row?.storedEntry
+            ? {
+                agentId: row.agentId,
+                canonicalKey: row.key,
+                storeKey: row.key,
+                storeKeys: [row.key],
+                storePath: row.storeTarget.storePath,
+                readSource,
+                entry: row.storedEntry,
+              }
+            : null,
+        };
+      }
       return {
         target: resolveSessionSharingTarget({
           cfg: getCfg(),
@@ -421,6 +464,7 @@ export function resolveSessionMutationAuthorization(params: {
             canonicalKey: target.canonicalKey,
             storeKey: target.storeKey,
             storePath: target.storePath,
+            readSource: resolved.preparedReadSource,
           }
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
@@ -508,7 +552,10 @@ export function resolveSessionMutationAuthorization(params: {
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
           ...currentLookupCaches,
-          exactRead: !currentLookupCaches || authorizedTargets.length === 1,
+          exactRead:
+            Boolean(expected?.resolved?.readSource) ||
+            !currentLookupCaches ||
+            authorizedTargets.length === 1,
         });
         // The guarded ensure may mint this row/id. Its result permits only that
         // materialization, never a replacement of an already admitted session.
@@ -525,6 +572,7 @@ export function resolveSessionMutationAuthorization(params: {
               }
             : undefined;
         const expectedResolved = expected?.resolved ?? ensuredTarget;
+        const expectedReadSource = expected?.resolved?.readSource;
         const expectedSessionId = expected?.sessionId ?? (ensuredTarget ? ensuredSessionId : null);
         const sameResolvedTarget =
           expected !== undefined &&
@@ -535,7 +583,11 @@ export function resolveSessionMutationAuthorization(params: {
               current.agentId === expectedResolved.agentId &&
               current.canonicalKey === expectedResolved.canonicalKey &&
               current.storeKey === expectedResolved.storeKey &&
-              current.storePath === expectedResolved.storePath &&
+              (expectedReadSource
+                ? current.readSource?.databaseIdentity === expectedReadSource.databaseIdentity &&
+                  current.readSource.databaseBirthtime === expectedReadSource.databaseBirthtime &&
+                  current.readSource.agentId === expectedReadSource.agentId
+                : current.storePath === expectedResolved.storePath) &&
               (current.entry.sessionId?.trim() || null) === expectedSessionId &&
               (!(bindsProgressLifecycle || bindsOwnProfile || expected.created) ||
                 current.entry.lifecycleRevision === expected.lifecycleRevision));

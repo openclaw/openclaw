@@ -35,24 +35,28 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    ((input.command.type === "acpSessions.metadata" &&
-      Array.isArray(input.command.entries) &&
-      input.command.entries.length <= 64 &&
-      input.command.entries.every(
-        (entry) =>
-          isRecord(entry) &&
-          Array.isArray(entry.keys) &&
-          entry.keys.length <= 3 &&
-          entry.keys.every((key) => typeof key === "string") &&
-          (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
-          (entry.entry === undefined ||
-            (isRecord(entry.entry) &&
-              (entry.entry.lifecycleRevision === undefined ||
-                typeof entry.entry.lifecycleRevision === "string") &&
-              (entry.entry.sessionId === undefined || typeof entry.entry.sessionId === "string") &&
-              (entry.entry.sessionStartedAt === undefined ||
-                typeof entry.entry.sessionStartedAt === "number"))),
-      )) ||
+    ((input.command.type === "deliveryQueue.outbound" &&
+      (input.command.id === undefined || typeof input.command.id === "string") &&
+      (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "acpSessions.metadata" &&
+        Array.isArray(input.command.entries) &&
+        input.command.entries.length <= 64 &&
+        input.command.entries.every(
+          (entry) =>
+            isRecord(entry) &&
+            Array.isArray(entry.keys) &&
+            entry.keys.length <= 3 &&
+            entry.keys.every((key) => typeof key === "string") &&
+            (entry.legacyKey === undefined || typeof entry.legacyKey === "string") &&
+            (entry.entry === undefined ||
+              (isRecord(entry.entry) &&
+                (entry.entry.lifecycleRevision === undefined ||
+                  typeof entry.entry.lifecycleRevision === "string") &&
+                (entry.entry.sessionId === undefined ||
+                  typeof entry.entry.sessionId === "string") &&
+                (entry.entry.sessionStartedAt === undefined ||
+                  typeof entry.entry.sessionStartedAt === "number"))),
+        )) ||
       (input.command.type === "mcpOAuth.statuses" &&
         Array.isArray(input.command.input) &&
         input.command.input.every((key) => typeof key === "string")) ||
@@ -133,6 +137,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      input.command.type === "config.snapshot.read" ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&
@@ -197,7 +202,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.scopeKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       input.command.type === "worktrees.cleanupState" ||
-      input.command.type === "workerPlacements.changeSnapshot" ||
+      (input.command.type === "workerPlacements.changeSnapshot" &&
+        (input.command.profileIds === undefined ||
+          (Array.isArray(input.command.profileIds) &&
+            input.command.profileIds.every((id) => typeof id === "string")))) ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&
         input.command.sessionIds.every((id) => typeof id === "string") &&

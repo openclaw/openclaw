@@ -343,7 +343,7 @@ describe("sessions page lifecycle", () => {
       "writer",
     );
     mutableGateway.emit({ sessionKey: key });
-    page.selectedKeys = new Set([key]);
+    page.selectedSessions = new Map([[key, { key, sessionId }]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
@@ -353,7 +353,7 @@ describe("sessions page lifecycle", () => {
     ]);
     expect(mutableGateway.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
     expect(page.result?.sessions).toEqual([]);
-    expect(page.selectedKeys).toEqual(new Set());
+    expect(page.selectedSessions.size).toBe(0);
   });
 
   it.each([
@@ -388,7 +388,9 @@ describe("sessions page lifecycle", () => {
         count: 1,
         sessions: [{ key, sessionId: "confirmed-session", archived: originalArchived }],
       } as SessionsListResult;
-      page.selectedKeys = new Set([key]);
+      page.selectedSessions = new Map([
+        [key, { key, sessionId: "confirmed-session", archived: originalArchived }],
+      ]);
 
       const deleting = page.deleteSelected();
       expect(showConfirmDialog).toHaveBeenCalledOnce();
@@ -426,7 +428,7 @@ describe("sessions page lifecycle", () => {
     const { page, sessions, deleteRequest, query, setRows } = await createDeletionPage([row]);
     const deleted = createDeferred<SessionDeleteOutcome>();
     deleteRequest.mockReturnValueOnce(deleted.promise);
-    page.selectedKeys = new Set([row.key]);
+    page.selectedSessions = new Map([[row.key, row]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const deleting = page.deleteSelected();
@@ -442,7 +444,7 @@ describe("sessions page lifecycle", () => {
     deleted.resolve({ deleted: true });
     await deleting;
     expect(page.result?.sessions).toEqual([arrived]);
-    expect(page.selectedKeys).toEqual(new Set());
+    expect(page.selectedSessions.size).toBe(0);
     expect(page.sessionMutationPending).toBe(false);
   });
 
@@ -456,7 +458,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:old" }],
     } as SessionsListResult;
-    page.selectedKeys = new Set(["agent:main:old"]);
+    page.selectedSessions = new Map([["agent:main:old", { key: "agent:main:old" }]]);
 
     const deleting = page.deleteSelected();
     await Promise.resolve();
@@ -512,10 +514,9 @@ describe("sessions page lifecycle", () => {
     expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
   });
 
-  it("derives archive gates per selected row and keeps unknown rows admin-only", async () => {
+  it("derives archive gates per selected row and retains failed selections", async () => {
     const activeKey = "agent:main:active";
     const archivedKey = "agent:main:archived";
-    const unknownKey = "agent:main:unknown";
     const retryError = `Session ${activeKey} changed before deletion. Retry.`;
     const active: GatewaySessionRow = {
       key: activeKey,
@@ -533,7 +534,10 @@ describe("sessions page lifecycle", () => {
     };
     const { page, sessions, deleteRequest } = await createDeletionPage([active, archived]);
     deleteRequest.mockRejectedValueOnce(new Error(retryError));
-    page.selectedKeys = new Set([activeKey, archivedKey, unknownKey]);
+    page.selectedSessions = new Map([
+      [activeKey, active],
+      [archivedKey, archived],
+    ]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
@@ -546,13 +550,12 @@ describe("sessions page lifecycle", () => {
         archivedOnly: true,
         expectedSessionId: archived.sessionId,
       },
-      { key: unknownKey, agentId: undefined },
     ]);
     expect(page.result).toMatchObject({
       count: 1,
       sessions: [{ key: activeKey, archived: false }],
     });
-    expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
+    expect([...page.selectedSessions.keys()]).toEqual([activeKey]);
     expect(page.error).toBe(retryError);
     expect(page.error).not.toContain("GatewayRequestError");
   });
@@ -709,7 +712,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "main", sessionId: "session-main" }],
     } as SessionsListResult;
-    page.selectedKeys = new Set(["main"]);
+    page.selectedSessions = new Map([["main", { key: "main", sessionId: "session-main" }]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const requests = [
@@ -732,7 +735,7 @@ describe("sessions page lifecycle", () => {
     await Promise.all(requests);
 
     expect(page.result?.sessions.map((row) => row.key)).toEqual(["main"]);
-    expect(page.selectedKeys).toEqual(new Set(["main"]));
+    expect([...page.selectedSessions.keys()]).toEqual(["main"]);
     expect(page.error).toBeNull();
     expect(page.sessionMutationPending).toBe(false);
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();

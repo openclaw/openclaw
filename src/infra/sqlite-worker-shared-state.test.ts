@@ -34,7 +34,7 @@ import {
 } from "../tasks/task-flow-registry.store.kernel.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -59,25 +59,35 @@ function context() {
 }
 
 describe("canonical shared-state worker admission", () => {
-  it.each(["key", "value"])("bounds captured environment %s bytes before opening", async (part) => {
-    const padding = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES);
-    const env = {
-      OPENCLAW_STATE_DIR: dirs.make("worker-environment-budget-"),
-      [part === "key" ? padding : "PADDING"]: part === "value" ? padding : "x",
-    };
-    const captured = captureOpenClawStateWorkerContext({ env });
-    await expect(
-      executeOpenClawStateWorker(captured, {
-        type: "flows.list",
-        input: { ownerKey: "agent:main:environment-budget" },
-      }),
-    ).rejects.toMatchObject({ code: "overloaded" });
-    expect(existsSync(captured.admission.databasePath)).toBe(false);
-  });
+  it.each(["key", "value", "agent-path"])(
+    "bounds captured initialization %s bytes before opening",
+    async (part) => {
+      const padding = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+      const env = {
+        OPENCLAW_STATE_DIR: dirs.make("worker-environment-budget-"),
+        [part === "key" ? padding : "PADDING"]: part === "value" ? padding : "x",
+      };
+      const captured = captureOpenClawStateWorkerContext({
+        env,
+        ...(part === "agent-path" ? { initializationAgentPaths: [padding] } : {}),
+      });
+      await expect(
+        executeOpenClawStateWorker(captured, {
+          type: "flows.list",
+          input: { ownerKey: "agent:main:environment-budget" },
+        }),
+      ).rejects.toMatchObject({ code: "overloaded" });
+      expect(existsSync(captured.admission.databasePath)).toBe(false);
+    },
+  );
 
-  it.each([false, true])(
-    "retains selected storage environment before worker initialization (retained: %s)",
-    async (retained) => {
+  it.each(
+    [false, true].flatMap((retained) =>
+      (["config", "paths"] as const).map((source) => ({ retained, source })),
+    ),
+  )(
+    "retains selected storage facts before worker initialization (retained: $retained, source: $source)",
+    async ({ retained, source }) => {
       const root = dirs.make("worker-selected-storage-");
       const env = {
         HOME: path.join(root, "home"),
@@ -98,11 +108,18 @@ describe("canonical shared-state worker admission", () => {
       const bytes = retained ? readFileSync(agentPath) : undefined;
       writeFileSync(
         env.OPENCLAW_CONFIG_PATH,
-        JSON.stringify({ agents: { entries: { main: { agentDir: "${STORE_ROOT}" } } } }),
+        source === "config"
+          ? JSON.stringify({ agents: { entries: { main: { agentDir: "${STORE_ROOT}" } } } })
+          : "{}",
       );
-      const captured = captureOpenClawStateWorkerContext({ env });
+      const knownPaths = [agentPath];
+      const captured = captureOpenClawStateWorkerContext({
+        env,
+        ...(source === "paths" ? { initializationAgentPaths: knownPaths } : {}),
+      });
       env.OPENCLAW_CONFIG_PATH = path.join(root, "later.json");
       env.STORE_ROOT = path.join(root, "later");
+      knownPaths[0] = path.join(root, "later", "openclaw-agent.sqlite");
 
       await executeOpenClawStateWorker(captured, {
         type: "flows.list",

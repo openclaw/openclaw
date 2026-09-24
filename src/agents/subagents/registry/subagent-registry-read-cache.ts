@@ -17,7 +17,10 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -240,7 +243,7 @@ export function getPersistedSubagentRunsSnapshot<T extends SubagentRunReadRecord
 ): Map<string, T> | null {
   let admission: OpenClawStateDatabaseReadAdmission | undefined;
   if (!cache.load) {
-    const context = captureOpenClawStateWorkerContext();
+    const context = captureOpenClawStateReadContext();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
     admission = context.admission;
@@ -291,7 +294,7 @@ export function assertSubagentReadContext(context: OpenClawStateWorkerContext): 
   getAsyncWorkSignal()?.throwIfAborted();
   context.maintenanceScope?.assertAdmission();
   context.admission.assertCurrent();
-  const current = captureOpenClawStateWorkerContext();
+  const current = captureOpenClawStateReadContext();
   if (current.admission.identity.key !== context.admission.identity.key) {
     throw new Error("Subagent registry database changed during preparation");
   }

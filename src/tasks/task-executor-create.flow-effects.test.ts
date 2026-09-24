@@ -104,7 +104,7 @@ it("preserves task identity when terminal timestamps precede its normalized life
     endedAt: startedAt - 1_000,
     terminalSummary: "Completed the selected task",
     childSessionKey: "agent:other:unselected",
-    detail: { unexpected: "terminal input" },
+    detail: { exitCode: 0 },
   } satisfies DetachedTaskTerminalState;
   await created.finalizeActive(terminal, () => true);
   const completed = f.store.loadSnapshot().tasks.get(created.task.taskId);
@@ -120,7 +120,7 @@ it("preserves task identity when terminal timestamps precede its normalized life
     scopeKind: created.task.scopeKind,
   });
   expect(completed?.childSessionKey).toBe(created.task.childSessionKey);
-  expect(completed?.detail).toEqual(created.task.detail);
+  expect(completed?.detail).toEqual(terminal.detail);
 });
 
 it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as const)(

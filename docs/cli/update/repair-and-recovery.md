@@ -100,6 +100,13 @@ This finishes Doctor and post-core convergence through a fresh owner. Check the
 repair result before restarting an already stopped Gateway through its service
 owner. Updating the candidate cannot change the older updater already in memory.
 
+When a managed Gateway was already stopped before standalone repair, repair leaves
+it offline and warns that you must run `openclaw gateway start` to bring it online.
+If its service definition points to a different installation, repair instead reports
+the installation repair command. These maintenance warnings also appear in
+`postUpdate.doctor.warnings`; otherwise successful finalization reports
+`status: "warning"` and exits successfully.
+
 | Flag                                             | Description                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm and trusted official ClawHub plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |

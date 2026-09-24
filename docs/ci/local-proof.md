@@ -14,6 +14,16 @@ without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
 
+The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
+defaults to `pnpm check:architecture`, preserving caller overrides. Both import
+cycle checks and the remaining architecture checks inherit these settings.
+The memory target is soft: a four-CPU, 15.42-GiB Testbox comparison on Node
+24.21.0 measured peak checker/compiler process-group RSS of 14.24 GiB without
+the defaults and 11.31 GiB with them; peak swap use fell from 4.74 GiB to zero.
+Two hosted runners shut down during the native Madge check, but their logs did
+not establish a kernel OOM. These measurements support reducing memory pressure,
+not a hard 3-GiB RSS cap or a confirmed cause for those shutdowns.
+
 On serial hosts with less than 24 GiB of memory, full lint runs core targets in
 five disjoint batches and plugins in smaller chunks. These runs retain the same
 type-aware rules and TypeScript configuration while bounding checker caches.
@@ -37,9 +47,12 @@ timestamp predates restored build information. Frozen targets keep their
 original stripe invocations. Per-graph elapsed times appear in the job log.
 
 The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
-Cache keys separate compiler/dependency/configuration versions and CI rows;
-the compiler still validates every selected graph after a hit. Pull requests
-only restore state, while the existing trusted cache writer policy controls
+Exact cache keys separate compiler/dependency/configuration versions and CI rows.
+When those inputs change, each row can restore its previous incremental state;
+the compiler validates the current roots, options, source and dependency contents
+and discards incompatible compiler state. The central changed-graph queue also
+restores the five core stripe caches that full runs publish. Every selected graph
+still runs after a hit. Pull requests only restore state, while the existing trusted cache writer policy controls
 publication after successful checks. Cache-off and frozen-target runs retain
 their original behavior. Lint programs do not share these compiler caches.
 
@@ -71,7 +84,7 @@ pnpm test:ui                                  # Control UI unit/browser suite
 pnpm ui:i18n:check                            # generated Control UI locale parity (release gate)
 pnpm native:i18n:baseline                     # update source-owned native extraction inventory
 pnpm native:i18n:verify                       # source inventory + Android/Apple localization safety
-pnpm native:i18n:check                        # strict translated/platform-generated parity (release gate)
+pnpm native:i18n:check                        # strict local translated/platform-generated parity
 pnpm test:channels
 pnpm test:contracts:channels
 pnpm check:docs                               # docs format + lint + broken links
@@ -90,6 +103,14 @@ pnpm test:startup:memory
 pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/mock-provider/extension-memory.json
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
+
+Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
+check warns about obsolete translation IDs and Android generated rows awaiting
+the serialized locale refresh. Android warnings require canonical, unreferenced,
+noninterpolated obsolete rows whose removal leaves every other byte unchanged.
+Missing active translations or resources, invalid placeholders or artifact
+syntax, and other generated-output differences remain blocking. Generator sync
+and the standalone Android and Apple checks retain their strict behavior.
 
 The Gateway watch regression check starts its idle CPU window only after readiness
 and the settle period. Startup and early-exit failures still fail the check. Missing
@@ -288,14 +309,16 @@ concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
 The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
-are bound into the broker command. The AWS lease uses a 90-minute idle timeout
+are bound into the canonical command. The publisher streams a launcher through
+Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
+bootstrap, canonical command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
 and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates its newly created authenticated broker
-run under the same service token, ordered complete events, canonical command
-and bootstrap upload hash, and
+run under the same service token, ordered complete events, independently rebuilt
+canonical command and launcher upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its immutable protected-main workflow SHA and adds that workflow SHA to

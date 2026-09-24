@@ -141,7 +141,7 @@ describe("hourly main CI admission", () => {
     }
   });
 
-  it("dispatches full CI without freezing an obsolete scheduler SHA", async () => {
+  it("dispatches the complete main tier without freezing an obsolete scheduler SHA", async () => {
     const dispatch = vi.fn().mockResolvedValue(undefined);
     const summary = {
       addHeading: vi.fn().mockReturnThis(),
@@ -163,6 +163,7 @@ describe("hourly main CI admission", () => {
       ref: "main",
       inputs: {
         include_android: "true",
+        validation_tier: "main",
         release_gate: "false",
         release_scope: "full",
         dispatch_id: "hourly-main-123-1",
@@ -173,6 +174,7 @@ describe("hourly main CI admission", () => {
       ...base,
       eventName: "workflow_dispatch",
       includeAndroid: true,
+      validationTier: "main",
       sha: childSha,
       workflowSha: childSha,
     } as const;
@@ -195,6 +197,7 @@ describe("hourly main CI admission", () => {
     }
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_ONLY, context)).toBe("false");
     expect(evaluate(manifest.env.OPENCLAW_CI_DOCS_CHANGED, context)).toBe("true");
+    expect(evaluate(manifest.env.OPENCLAW_CI_VALIDATION_TIER, context)).toBe("main");
     for (const id of ["docs_scope", "changed_scope"]) {
       expect(
         evaluate(

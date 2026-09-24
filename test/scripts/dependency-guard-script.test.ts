@@ -522,14 +522,18 @@ describe("dependency guard script", () => {
     expect(autoscrub.status, autoscrub.stderr).toBe(0);
     expect(autoscrub.calls.some((call) => call.path === "/graphql")).toBe(false);
     expect(autoscrub.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
-    expect(autoscrub.stdout).toContain("unavailable");
-    expect(autoscrub.stdout).toContain("approval");
-    expect(autoscrub.stdout).toContain("manually");
+    const notice = autoscrub.calls.find(
+      (call) => call.path === `${issuePath}/comments` && call.method === "POST",
+    );
+    expect(notice?.body?.body).toContain("Automatic lockfile cleanup is best effort.");
+    expect(notice?.body?.body).toContain("/allow-dependencies-change");
+    expect(notice?.body?.body).toContain("git restore");
 
     const enforcement = runDependencyGuard(routes, "enforce", null);
     expect(enforcement.status, enforcement.stderr).toBe(0);
     expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
     expect(enforcement.stdout).toContain("/allow-dependencies-change");
+    expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });
 
   it.each(["detect", "autoscrub", "enforce"])(
@@ -841,7 +845,7 @@ describe("dependency guard script", () => {
       headSha,
       lockfileChanges: ["pnpm-lock.yaml"],
       dependencyManifestChanges: [],
-      autoscrubStatus: { kind: "not-attempted" },
+      autoscrubStatus: { kind: "unavailable" },
     });
     const unsafeBody = renderBlockedDependencyComment({
       baseRepository: "openclaw/openclaw",
@@ -866,10 +870,8 @@ describe("dependency guard script", () => {
       },
     });
 
-    expect(forkBody).toContain("Auto-scrub was not attempted");
-    expect(forkBody).toContain(
-      "only push deterministic cleanup commits to PR branches that maintainers can modify",
-    );
+    expect(forkBody).toContain("Automatic lockfile cleanup is best effort.");
+    expect(forkBody).toContain("These lockfile changes remain in this PR.");
     expect(unsafeBody).toContain("changes package manifest dependency graph fields");
     expect(unsafeBody).toContain("- `package.json`\n");
     expect(unsafeBody).toContain("Dependency graph changes require maintainer review");

@@ -43,6 +43,7 @@ async function holdStateCoordinator(databasePath: string, releaseAfterMs = 0) {
       "--eval",
       `
     import { DatabaseSync } from "node:sqlite";
+    process.title = "openclaw-lock-fixture";
     const db = new DatabaseSync(${JSON.stringify(coordinatorPath)});
     db.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
     process.send({ ready: true });
@@ -64,7 +65,7 @@ async function holdStateCoordinator(databasePath: string, releaseAfterMs = 0) {
     await stopChildProcess(child, 5_000);
     throw error;
   }
-  return async () => {
+  const release = async () => {
     try {
       const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
       child.send({ release: true });
@@ -73,6 +74,7 @@ async function holdStateCoordinator(databasePath: string, releaseAfterMs = 0) {
       await stopChildProcess(child, 5_000);
     }
   };
+  return Object.assign(release, { pid: child.pid });
 }
 
 function sqliteBytes(databasePath: string) {
@@ -251,6 +253,19 @@ describe("shared-state transaction lifecycle participation", () => {
     ).toEqual([{ event_key: "preserved" }]);
   });
 
+  it("completes a WAL checkpoint in the same cycle after a 200 ms foreign hold", async () => {
+    const root = tempDirs.make("openclaw-state-wal-wait-");
+    const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
+    const release = await holdStateCoordinator(database.path, 200);
+    const released = release();
+    try {
+      expect(database.walMaintenance.checkpoint()).toBe(true);
+      expect(database.walMaintenance.health).toMatchObject({ state: "complete" });
+    } finally {
+      await released;
+    }
+  });
+
   it.each(["explicit", "periodic"] as const)(
     "defers %s WAL maintenance while lifecycle exclusion is held and retries afterward",
     async (mode) => {
@@ -290,6 +305,19 @@ describe("shared-state transaction lifecycle participation", () => {
         } else {
           expect(periodic).toBeTypeOf("function");
           periodic?.();
+        }
+        if (process.platform === "linux") {
+          expect(database.walMaintenance.health).toMatchObject({
+            state: "blocked",
+            blockingOwner: {
+              pid: release.pid,
+              startTime: expect.any(Number),
+              command: "openclaw-lock-fixture",
+              family: "state-lifecycle",
+            },
+          });
+          expect(database.walMaintenance.health?.error).toContain(String(release.pid));
+          expect(database.walMaintenance.health?.error).toContain("openclaw-lock-fixture");
         }
         expect(sqliteBytes(database.path)).toEqual(before);
       } finally {
