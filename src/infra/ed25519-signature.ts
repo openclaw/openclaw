@@ -153,10 +153,21 @@ export function publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem: string): strin
   return base64UrlEncode(deriveEd25519PublicKeyRaw(publicKeyPem));
 }
 
+// Pre-auth callers accept Node-compatible PEM, including whitespace padding.
+// Compact whitespace before bounding the actual value sent to the crypto parser.
+// Keep the trusted/canonical key parsers and permissive raw decoder unchanged.
+function boundedPublicKeyPem(publicKey: string): string {
+  const normalized = publicKey.trim().replace(/[ \t\r]+/g, " ");
+  if (normalized.length > MAX_BASE64URL_DECODE_INPUT_LENGTH) {
+    throw new Error("public key PEM exceeds the maximum allowed length");
+  }
+  return normalized;
+}
+
 export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | null {
   try {
     const raw = publicKey.includes("BEGIN")
-      ? deriveEd25519PublicKeyRaw(publicKey)
+      ? deriveEd25519PublicKeyRaw(boundedPublicKeyPem(publicKey))
       : base64UrlDecode(publicKey);
     if (raw.length === 0) {
       return null;
@@ -175,10 +186,14 @@ export function signEd25519Payload(privateKeyPem: string, payload: string): stri
 
 function createEd25519PublicKey(publicKey: string): crypto.KeyObject {
   if (publicKey.includes("BEGIN")) {
-    return crypto.createPublicKey(publicKey);
+    return crypto.createPublicKey(boundedPublicKeyPem(publicKey));
+  }
+  const raw = base64UrlDecode(publicKey);
+  if (raw.length < ED25519_RAW_KEY_LENGTH) {
+    throw new Error("Ed25519 public key is too short");
   }
   return crypto.createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(publicKey)]),
+    key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
     type: "spki",
     format: "der",
   });
@@ -202,8 +217,11 @@ export function verifyEd25519SignatureBytes(params: {
   signatureBase64Url: string;
 }): boolean {
   try {
-    const key = createEd25519PublicKey(params.publicKey);
     const signature = base64UrlDecode(params.signatureBase64Url);
+    if (signature.length === 0) {
+      return false;
+    }
+    const key = createEd25519PublicKey(params.publicKey);
     return crypto.verify(null, params.payload, key, signature);
   } catch {
     return false;
