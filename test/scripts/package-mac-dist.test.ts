@@ -646,8 +646,8 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
           .trim()
           .split("\n")
           .map((line) => line.split(" ").slice(0, 3).join(" "))
-          .sort(),
-      ).toEqual(fixture.expectedUUIDs.sort());
+          .toSorted(),
+      ).toEqual(fixture.expectedUUIDs.toSorted());
       expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
     },
   );
