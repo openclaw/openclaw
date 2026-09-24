@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   inheritSpawnSessionOwner,
+  inheritSessionGitContributorProfileIds,
   sessionPersonalProfileId,
   type SessionCreatedActor,
 } from "./session-entry-provenance.js";
@@ -143,5 +144,48 @@ describe("inheritSpawnSessionOwner", () => {
         "discord-user",
       ),
     ).toMatchObject({ actor: spawningAgent });
+  });
+});
+
+describe("delegated task contributor selection", () => {
+  const parent = {
+    inheritedGitContributorProfileIds: ["original-task-human"],
+    participants: [{ identity: { type: "profile" as const, id: "collaborator" } }],
+  };
+  it.each([
+    { agentId: "main", sessionKey: "agent:main:main" },
+    { agentId: "custom", sessionKey: "agent:custom:inbox", mainKey: "inbox" },
+    { agentId: "main", sessionKey: "global", sessionScope: "global" as const },
+  ])("takes only the trusted requester from inbox $sessionKey", (source) => {
+    expect(
+      inheritSessionGitContributorProfileIds(parent, {
+        ...source,
+        requesterProfileId: "current-requester",
+      }),
+    ).toEqual(["current-requester"]);
+    expect(inheritSessionGitContributorProfileIds(parent, source)).toBeUndefined();
+  });
+  it("keeps real task collaborators and nested lineage independently of the current requester", () => {
+    expect(
+      inheritSessionGitContributorProfileIds(parent, {
+        agentId: "main",
+        sessionKey: "agent:main:task",
+        requesterProfileId: "different-requester",
+      }),
+    ).toEqual(["original-task-human", "collaborator"]);
+  });
+  it("never snapshots incognito provenance, including a trusted requester", () => {
+    expect(
+      inheritSessionGitContributorProfileIds(
+        { ...parent, incognito: true },
+        { agentId: "main", sessionKey: "agent:main:main", requesterProfileId: "current-requester" },
+      ),
+    ).toBeUndefined();
+    expect(
+      inheritSessionGitContributorProfileIds(
+        { ...parent, incognito: true },
+        { agentId: "main", sessionKey: "agent:main:task" },
+      ),
+    ).toBeUndefined();
   });
 });

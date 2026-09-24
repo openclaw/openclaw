@@ -1,5 +1,5 @@
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import type { SessionScope } from "./types.js";
+import type { SessionScope } from "../types.base.js";
 
 /** Resolves the configured main session identity for one agent and session scope. */
 export function resolveCanonicalMainSessionKey(params: {

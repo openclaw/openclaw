@@ -9,14 +9,23 @@ import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
+import { inheritSessionGitContributorProfileIds } from "../../../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -242,4 +251,49 @@ export function validateAcpResumeSessionOwnership(params: {
     error:
       "sessions_spawn resumeSessionId is only allowed for ACP sessions previously recorded for this requester. Omit resumeSessionId to start a fresh ACP session.",
   };
+}
+
+/** Snapshot accepted requester provenance before the ACP runtime is initialized. */
+export async function prepareAcpSpawnGitContributorProfileIds(params: {
+  cfg: OpenClawConfig;
+  requesterInternalKey: string;
+  requesterAgentId: string;
+  assertActive?: () => void;
+}): Promise<string[] | undefined> {
+  const { cfg, requesterInternalKey, requesterAgentId, assertActive } = params;
+  const parentTarget = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: requesterInternalKey,
+    agentId: requesterAgentId,
+  });
+  await waitForSessionParticipantRecording({
+    agentId: requesterAgentId,
+    sessionKey: parentTarget.canonicalKey,
+    storePath: parentTarget.storePath,
+  });
+  assertActive?.();
+  const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+    ? undefined
+    : await withSessionEntryReadOnlyInWorker(
+        {
+          agentId: requesterAgentId,
+          sessionKey: parentTarget.canonicalKey,
+          storePath: parentTarget.storePath,
+        },
+        () => assertActive?.(),
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return inheritSessionGitContributorProfileIds(read.value, {
+            sessionKey: parentTarget.canonicalKey,
+            agentId: requesterAgentId,
+            mainKey: cfg.session?.mainKey,
+            sessionScope: cfg.session?.scope,
+            requesterProfileId: getGatewayToolCallerIdentity()?.operatorAuthority?.profileId,
+          });
+        },
+      );
+
+  return inheritedGitContributorProfileIds;
 }

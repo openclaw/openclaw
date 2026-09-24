@@ -58,10 +58,11 @@ async function createHostedChildFixture(
   humanParent = !system,
   sandboxRequired = false,
   mergedParentCreator = false,
+  sharedMain = false,
 ) {
   const storePath = path.join(temporaryDirs.make("openclaw-child-custody-"), "sessions.json");
   testState.sessionStorePath = storePath;
-  const parentKey = "agent:main:parent";
+  const parentKey = sharedMain ? "agent:main:main" : "agent:main:parent";
   const childKey = "agent:main:dashboard:accepted-child";
   const childKeys = [childKey];
   const existingOwnerId = "existing-child-owner";
@@ -369,65 +370,93 @@ function userMessages(
 }
 
 describe("hosted creation transfers accepted child input", () => {
-  it("retains delegated human Git credit without inventing child participation", async () => {
-    const fixture = await createHostedChildFixture();
-    try {
-      syncGitHubIdentity({
-        identity: { accountId: 20, login: "ada" },
-        authenticationAlias: { kind: "email", email: "child-owner@example.test" },
-      });
-      await recordSessionParticipant(fixture.parentScope, {
-        identity: { type: "profile", id: fixture.profileId },
-        promptedAt: 1,
-      });
+  it.each([false, true])(
+    "scopes delegated Git credit without child participation (sharedMain=%s)",
+    async (sharedMain) => {
+      const fixture = await createHostedChildFixture(
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        sharedMain,
+      );
+      try {
+        syncGitHubIdentity({
+          identity: { accountId: 20, login: "ada" },
+          authenticationAlias: { kind: "email", email: "child-owner@example.test" },
+        });
+        await recordSessionParticipant(fixture.parentScope, {
+          identity: { type: "profile", id: fixture.profileId },
+          promptedAt: 1,
+        });
 
-      const accepted = await fixture.send();
-      expect(accepted.runStarted).toBe(true);
-      expect(accepted.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
-      expect(fixture.provider).not.toHaveBeenCalled();
-      const scope = fixture.scope();
-      const readCredit = () =>
-        resolveGitCoauthorAttribution({ ...scope, config: getRuntimeConfig() });
-      const expectedCredit = {
-        logins: ["ada"],
-        trailers: ["Co-authored-by: ada <20+ada@users.noreply.github.com>"],
-      };
-      await expect(readCredit()).resolves.toEqual(expectedCredit);
-
-      const later = ensureProfileForEmail("later-contributor@example.test");
-      syncGitHubIdentity({
-        identity: { accountId: 21, login: "grace" },
-        authenticationAlias: { kind: "email", email: "later-contributor@example.test" },
-      });
-      await recordSessionParticipant(fixture.parentScope, {
-        identity: { type: "profile", id: later.id },
-        promptedAt: 2,
-      });
-      await expect(readCredit()).resolves.toEqual(expectedCredit);
-      await fixture.finish();
-      expect(fixture.provider).toHaveBeenCalledOnce();
-      const nested = await fixture.sendNested();
-      expect(nested.runStarted).toBe(true);
-      expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
-      await expect(
-        resolveGitCoauthorAttribution({
-          ...fixture.scope(nested.key),
-          config: getRuntimeConfig(),
-        }),
-      ).resolves.toEqual(expectedCredit);
-      await fixture.finish();
-      expect(fixture.provider).toHaveBeenCalledTimes(2);
-      for (const childScope of [scope, fixture.scope(nested.key)]) {
-        expect(
-          (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
-            ({ identity }) => identity.type === "profile",
+        const collaborator = ensureProfileForEmail("collaborator@example.test");
+        syncGitHubIdentity({
+          identity: { accountId: 22, login: "collaborator" },
+          authenticationAlias: { kind: "email", email: "collaborator@example.test" },
+        });
+        await recordSessionParticipant(fixture.parentScope, {
+          identity: { type: "profile", id: collaborator.id },
+          promptedAt: 1,
+        });
+        const accepted = await fixture.send();
+        expect(accepted.runStarted).toBe(true);
+        expect(accepted.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
+        expect(fixture.provider).not.toHaveBeenCalled();
+        const scope = fixture.scope();
+        const readCredit = () =>
+          resolveGitCoauthorAttribution({ ...scope, config: getRuntimeConfig() });
+        const candidates = [
+          { id: fixture.profileId, login: "ada", accountId: 20 },
+          ...(!sharedMain ? [{ id: collaborator.id, login: "collaborator", accountId: 22 }] : []),
+        ].toSorted((a, b) => a.id.localeCompare(b.id));
+        const expectedCredit = {
+          logins: candidates.map(({ login }) => login),
+          trailers: candidates.map(
+            ({ login, accountId }) =>
+              `Co-authored-by: ${login} <${accountId}+${login}@users.noreply.github.com>`,
           ),
-        ).toEqual([]);
+        };
+        await expect(readCredit()).resolves.toEqual(expectedCredit);
+
+        const later = ensureProfileForEmail("later-contributor@example.test");
+        syncGitHubIdentity({
+          identity: { accountId: 21, login: "grace" },
+          authenticationAlias: { kind: "email", email: "later-contributor@example.test" },
+        });
+        await recordSessionParticipant(fixture.parentScope, {
+          identity: { type: "profile", id: later.id },
+          promptedAt: 2,
+        });
+        await expect(readCredit()).resolves.toEqual(expectedCredit);
+        await fixture.finish();
+        expect(fixture.provider).toHaveBeenCalledOnce();
+        const nested = await fixture.sendNested();
+        expect(nested.runStarted).toBe(true);
+        expect(nested.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
+        await expect(
+          resolveGitCoauthorAttribution({
+            ...fixture.scope(nested.key),
+            config: getRuntimeConfig(),
+          }),
+        ).resolves.toEqual(expectedCredit);
+        await fixture.finish();
+        expect(fixture.provider).toHaveBeenCalledTimes(2);
+        for (const childScope of [scope, fixture.scope(nested.key)]) {
+          expect(
+            (listSessionParticipantsReadOnly(childScope).get(childScope.sessionKey) ?? []).filter(
+              ({ identity }) => identity.type === "profile",
+            ),
+          ).toEqual([]);
+        }
+      } finally {
+        await fixture.cleanup();
       }
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+    },
+  );
 
   it("assigns the verified requester as the visible child owner", async () => {
     const fixture = await createHostedChildFixture();

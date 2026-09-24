@@ -112,6 +112,8 @@ export async function createInitialSubagentSession(params: {
   label?: string;
   incognito: boolean;
   requesterInternalKey: string;
+  /** Captured from the admitted caller, never model-authored spawn arguments. */
+  requesterProfileId?: string;
   assertActive?: () => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
@@ -206,8 +208,16 @@ export async function createInitialSubagentSession(params: {
           ...params.creationPolicy,
           ...(!params.incognito
             ? {
-                inheritedGitContributorProfileIds:
-                  inheritSessionGitContributorProfileIds(parentEntry),
+                inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(
+                  parentEntry,
+                  {
+                    sessionKey: parentTarget.canonicalKey,
+                    agentId: parentTarget.agentId,
+                    mainKey: params.cfg.session?.mainKey,
+                    sessionScope: params.cfg.session?.scope,
+                    requesterProfileId: params.requesterProfileId,
+                  },
+                ),
               }
             : {}),
         }),

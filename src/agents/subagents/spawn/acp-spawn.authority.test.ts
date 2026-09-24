@@ -313,7 +313,8 @@ describe("pending ACP spawn authority", () => {
         async ensureSession(input) {
           if (proveDelegatedCredit) {
             const entry = loadSessionEntry({ sessionKey: input.sessionKey, agentId: "fixture" });
-            expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+            // The shared inbox roster is not evidence for this system-spawned task.
+            expect(entry?.inheritedGitContributorProfileIds).toBeUndefined();
             expect(entry?.participants ?? []).toEqual([]);
           }
           ensuredSessions.push(input.sessionKey);

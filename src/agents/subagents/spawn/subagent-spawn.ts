@@ -176,6 +176,7 @@ export async function spawnSubagentDirect(
       label: label || undefined,
       incognito,
       requesterInternalKey,
+      requesterProfileId: operatorAuthority?.profileId,
       creationPolicy,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,

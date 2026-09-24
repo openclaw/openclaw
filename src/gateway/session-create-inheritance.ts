@@ -76,27 +76,40 @@ function resolveResidentProfileId(profileId: string): string | undefined {
 
 /** Derives trusted child policy and ownership from the locked spawn parent. */
 export function resolveSessionCreateInheritance(params: {
-  creation: SessionCreation | undefined;
-  parent: SessionEntry | undefined;
+  request: Pick<CreateGatewaySessionParams, "cfg" | "creation">;
+  parent: {
+    entry: SessionEntry | undefined;
+    target: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
+  };
 }): {
   creation: SessionCreation | undefined;
   ownerAssignment?: SessionOwnerAssignment;
 } {
-  if (params.creation?.via !== "spawn") {
-    return { creation: params.creation };
+  const { creation, cfg } = params.request;
+  const { entry: parent, target } = params.parent;
+  if (creation?.via !== "spawn") {
+    return { creation };
   }
   const ownerAssignment = inheritSpawnSessionOwner(
-    params.parent,
-    params.creation.actor,
-    params.creation.requesterProfileId,
+    parent,
+    creation.actor,
+    creation.requesterProfileId,
     Date.now(),
     resolveResidentProfileId,
   );
   return {
     creation: {
-      ...params.creation,
-      ...inheritSessionCreationPolicy(params.parent, params.creation.actor),
-      inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parent),
+      ...creation,
+      ...inheritSessionCreationPolicy(parent, creation.actor),
+      inheritedGitContributorProfileIds: target
+        ? inheritSessionGitContributorProfileIds(parent, {
+            sessionKey: target.canonicalKey,
+            agentId: target.agentId,
+            mainKey: cfg.session?.mainKey,
+            sessionScope: cfg.session?.scope,
+            requesterProfileId: creation.requesterProfileId,
+          })
+        : undefined,
     },
     ...(ownerAssignment ? { ownerAssignment } : {}),
   };

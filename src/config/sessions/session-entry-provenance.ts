@@ -4,6 +4,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
+import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
 export type SessionActor = {
@@ -34,9 +35,19 @@ export function inheritSessionGitContributorProfileIds(
         participants?: SessionParticipant[];
       }
     | undefined,
+  source: Parameters<typeof resolveCanonicalMainSessionKey>[0] & {
+    sessionKey: string | undefined;
+    requesterProfileId?: string;
+  },
 ): string[] | undefined {
   if (!parent || parent.incognito) {
     return undefined;
+  }
+  // Main is a shared inbox, not a task lineage. Neither its roster nor old
+  // delegated credit establishes who asked for this task. The trusted creation
+  // boundary can supply the current requester; model arguments cannot.
+  if (source.sessionKey === resolveCanonicalMainSessionKey(source)) {
+    return source.requesterProfileId ? [source.requesterProfileId] : undefined;
   }
   const directProfileIds = (parent.participants ?? [])
     .flatMap(({ identity }) => (identity.type === "profile" ? [identity.id] : []))
