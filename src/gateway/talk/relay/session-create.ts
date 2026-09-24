@@ -373,11 +373,10 @@ export function createTalkRealtimeRelaySession(
       }
       const responseId = outcome.responseId ?? outputOwnership.responseId;
       const disposition = outputOwnership.finish(responseId);
-      if (disposition === "ignore") {
-        return;
-      }
       if (disposition === "cancelled") {
         currentOutputItemId = undefined;
+      }
+      if (disposition === "ignore" || disposition === "cancelled") {
         return;
       }
       const terminalTalkEvent = harness.talk.recentEvents.at(-1);
