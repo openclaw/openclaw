@@ -150,7 +150,8 @@ export async function startTelegramTestApiProxy({
       const method = telegramApiMethod(incoming.pathname);
       const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
       // Timing facts only (no bodies or ids): proves when calls reached the proxy.
-      if (method && method !== "getUpdates") requestLog.push({ method, at: Date.now() });
+      const logged = method && method !== "getUpdates" ? { method, at: Date.now() } : undefined;
+      if (logged) requestLog.push(logged);
       methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       let body = hasBody ? request : undefined;
@@ -182,6 +183,7 @@ export async function startTelegramTestApiProxy({
             ...(flood ? { retryAfter: rejection.retryAfter } : {}),
           });
           request.resume();
+          if (logged) logged.status = errorCode;
           response.writeHead(errorCode, { "content-type": "application/json" });
           response.end(
             JSON.stringify(
@@ -213,6 +215,7 @@ export async function startTelegramTestApiProxy({
         ...(hasBody ? { body, duplex: "half" } : {}),
         signal: upstreamController.signal,
       });
+      if (logged) logged.status = result.status;
       assertLeaseHealthy();
       const hold = method ? claimResponseHold(method, ordinal) : undefined;
       if (hold) {
