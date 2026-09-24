@@ -22,6 +22,13 @@ export const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 // Bound sandbox-controlled output before it can exhaust the host heap.
 export const SANDBOX_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 
+// The streaming upload pipeline cannot use maxBuffer: it pipes a tar archive
+// between two raw children and drains their diagnostics by hand. Retain only a
+// bounded tail of those diagnostics, since they exist solely to explain a
+// failed transfer in an error message. The bound is owner-controlled rather
+// than remote-controlled, so a noisy but valid endpoint cannot grow the heap.
+export const SANDBOX_UPLOAD_DIAGNOSTIC_TAIL_BYTES = 128 * 1024;
+
 export const DEFAULT_TOOL_ALLOW = [
   "exec",
   "process",

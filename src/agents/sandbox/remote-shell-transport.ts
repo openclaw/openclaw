@@ -7,9 +7,17 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeEnvVarKey } from "../../infra/host-env-security.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+} from "../../process/exec-output.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
-import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
+import {
+  SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+  SANDBOX_UPLOAD_DIAGNOSTIC_TAIL_BYTES,
+} from "./constants.js";
 import {
   buildRemoteCommand,
   shellEscape,
@@ -215,10 +223,15 @@ async function uploadDirectoryToRemoteCommand(
       cwd: command.cwd,
       signal: params.signal,
     });
+    // Diagnostics are retained only to explain a failed transfer, so keep a
+    // bounded tail instead of every chunk. `remoteStdout` carries the mirrored
+    // tar archive on its way to the remote `tar -xf`; nothing reads it, so
+    // count it without retaining a second copy in the parent heap.
     const children: Array<{
       name: string;
       process: ChildProcess;
-      stderr: Buffer[];
+      stderrCapture: ReturnType<typeof createCapturedOutputBuffers>;
+      stdoutCapture: ReturnType<typeof createCapturedOutputBuffers> | undefined;
       closed: boolean;
       code: number | null;
       signal: NodeJS.Signals | null;
@@ -227,7 +240,10 @@ async function uploadDirectoryToRemoteCommand(
       { name: "remote", process: remote },
     ].map((child) =>
       Object.assign(child, {
-        stderr: [],
+        stderrCapture: createCapturedOutputBuffers(),
+        // The remote's stdout mirrors the archive to the remote `tar -xf`;
+        // nothing reads it, so count it without retaining a copy.
+        stdoutCapture: child === remote ? createCapturedOutputBuffers() : undefined,
         closed: false,
         code: 0,
         signal: null,
@@ -261,11 +277,25 @@ async function uploadDirectoryToRemoteCommand(
         maybeResolve();
       });
       // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
-      child.process.stderr?.on("data", (chunk) => child.stderr.push(Buffer.from(chunk)));
+      child.process.stderr?.on("data", (chunk) =>
+        appendCapturedOutput(
+          child.stderrCapture,
+          Buffer.from(chunk),
+          SANDBOX_UPLOAD_DIAGNOSTIC_TAIL_BYTES,
+          "tail",
+        ),
+      );
       child.process.stderr?.on("error", fail);
+      // The remote's stdout mirrors the archive to the remote `tar -xf`; nothing
+      // reads it, so discard it instead of retaining a second copy in the heap.
+      child.process.stdout?.on("data", (chunk) => {
+        const capture = child.stdoutCapture;
+        if (capture) {
+          appendCapturedOutput(capture, Buffer.from(chunk), 0, "discard");
+        }
+      });
       child.process.stdout?.on("error", fail);
     }
-    remote.stdout?.resume();
     remote.stdin?.on("error", fail);
 
     function maybeResolve() {
@@ -277,6 +307,8 @@ async function uploadDirectoryToRemoteCommand(
         reject(failure);
         return;
       }
+      // Render the retained tail once, and name the truncation so a clipped
+      // diagnostic is not mistaken for the remote side's complete complaint.
       // A null code means the process died from a signal (OOM kill, dropped
       // connection, supervisor teardown) without reporting a status. An
       // unknown outcome is not evidence of a completed transfer.
@@ -288,8 +320,11 @@ async function uploadDirectoryToRemoteCommand(
         if (child.code !== 0) {
           reject(
             new Error(
-              Buffer.concat(child.stderr).toString("utf8").trim() ||
+              renderUploadDiagnostic(
+                child.stderrCapture,
+                "tail",
                 `${child.name} exited with code ${child.code}`,
+              ),
             ),
           );
           return;
@@ -307,6 +342,26 @@ async function uploadDirectoryToRemoteCommand(
       fail(error);
     }
   });
+}
+
+/**
+ * Render a bounded upload diagnostic for an error message.
+ *
+ * The retained tail is not the whole story once the bound is reached, so say so
+ * explicitly rather than letting a clipped tail read as the complete failure.
+ */
+function renderUploadDiagnostic(
+  capture: ReturnType<typeof createCapturedOutputBuffers>,
+  mode: "head" | "tail" | "discard",
+  fallback: string,
+): string {
+  const text = finalizeCapturedOutput(capture, mode).toString("utf8").trim();
+  if (!text) {
+    return fallback;
+  }
+  return capture.truncatedBytes > 0
+    ? `${text}\n(truncated; dropped ${capture.truncatedBytes} earlier bytes of remote diagnostics)`
+    : text;
 }
 
 async function assertSafeUploadSymlinks(localDir: string, signal?: AbortSignal): Promise<void> {
