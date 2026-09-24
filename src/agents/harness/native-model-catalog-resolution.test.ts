@@ -132,6 +132,21 @@ describe("first-turn native model catalog resolution", () => {
     });
   });
 
+  it("rejects a matching row from a nonauthoritative native refresh", async () => {
+    const loadNative = vi.fn(async () => ({ ...catalog([luna]), authoritative: false }));
+    const { harness, snapshot } = fixture({ loadNative });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      }),
+    ).resolves.toBeUndefined();
+    expect(loadNative).toHaveBeenCalledOnce();
+  });
+
   it("waits past the default catalog window for a cold native row", async () => {
     vi.useFakeTimers();
     try {

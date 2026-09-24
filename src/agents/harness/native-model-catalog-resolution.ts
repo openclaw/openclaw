@@ -61,12 +61,15 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
         waitMs: 12_000,
         fallback: () => snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog,
       });
-      // Prefer the refresh result when it contains the requested row. Some snapshots
-      // publish inventory through an accessor that still points at the previous view.
-      const refreshedEntry = findOwnedEntry(loaded, provider, modelId, harness.id);
+      // Prefer an authoritative refresh result when it contains the requested row. Some
+      // snapshots publish inventory through an accessor that still points at the previous view.
+      const refreshedEntry =
+        loaded.authoritative === false
+          ? undefined
+          : findOwnedEntry(loaded, provider, modelId, harness.id);
       if (refreshedEntry) {
-        // This exact-runtime acquisition can be a partial full-catalog publication. Its
-        // selected owner's row is still usable after the readiness checks below.
+        // This exact-runtime acquisition can publish partial full-catalog inventory; the
+        // selected owner's row is usable only when this snapshot remains authoritative.
         catalog = loaded;
         entry = refreshedEntry;
       } else {
