@@ -40,14 +40,6 @@
   justify-content: start;
 }
 
-/* A leading attribution starts the turn. The preceding footer already uses
-   its reserved row, so keep the turn gap before Replying to and From alike. */
-.chat-group:has(
-  > .chat-group-messages > :is(.chat-reply-attribution, .chat-message--reply):first-child
-) {
-  margin-block-start: var(--chat-turn-gap);
-}
-
 .chat-group.user.chat-group--with-footer {
   --chat-group-avatar-column: 2;
   --chat-group-content-column: 1;
