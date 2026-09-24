@@ -856,7 +856,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it.each(["beta", "stable", "full"])(
-    "rejects %s Telegram failures rejected by the canonical verifier",
+    "reuses %s Telegram failures only when the strict verifier accepted their policy",
     (releaseProfile) => {
       const { clone, priorSha } = getSharedRepo();
       const validationInputs = {
@@ -869,7 +869,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
           ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
         ) {
           child.conclusion = "failure";
-          child.policyPassed = false;
           record.conclusions.children[child.role] = "failure";
         }
       }
@@ -886,7 +885,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+      expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
     },
   );
 

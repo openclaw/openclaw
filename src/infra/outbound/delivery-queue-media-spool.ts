@@ -75,6 +75,7 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
+    artifactFormat?: "session-generation-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
@@ -84,12 +85,18 @@ export async function stageQueuePayloadMedia(
   }
 
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  // Older queue readers skip these artifacts instead of collecting media whose
+  // generation-bound queue namespace they cannot inventory.
+  const artifactPrefix = params.artifactFormat === "session-generation-v1" ? "g1-" : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
       artifactsBySource.set(
         source,
-        path.join(spoolRoot, `${generateSecureUuid()}${resolveArtifactExtension(source)}`),
+        path.join(
+          spoolRoot,
+          `${artifactPrefix}${generateSecureUuid()}${resolveArtifactExtension(source)}`,
+        ),
       );
     }
   }

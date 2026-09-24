@@ -6,7 +6,6 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -21,6 +20,7 @@ import {
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
 } from "./history-merge.ts";
+import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
 type PendingInputRequest = {
   before?: number;
@@ -52,9 +52,6 @@ export function buildPendingInputItems(
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
-  if (!inputs.length) {
-    return items;
-  }
   for (const input of inputs) {
     if (
       searchQuery?.trim() &&
@@ -62,47 +59,45 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
+    let pendingStatus: PendingInputStatus | undefined;
+    if (input.state === "queued") {
+      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
+        pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
+      }
+    } else {
+      pendingStatus =
+        input.state === "interrupted" &&
+        input.runId &&
+        browserInputs.some(
+          (item) =>
+            item.sendRunId === input.runId &&
+            item.sendState !== "failed" &&
+            item.sendState !== "held",
+        )
+          ? "resuming"
+          : input.state === "cancelled"
+            ? "cancelled"
+            : "interrupted";
+    }
     // Custody keeps submission correlation outside the message; use it for
     // presentation without inventing transcript or execution identity.
     items.push(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ).flatMap((item) => projectChatSystemNotice({ ...item, startsTurn: true }) ?? []),
-    );
-    if (input.state === "queued") {
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
-        items.push({
-          kind: "notice",
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          text: t(
-            workerSetupPending
-              ? "chat.pendingInputs.waitingForWorkerSetup"
-              : "chat.pendingInputs.waitingForWorkspaceSync",
-          ),
-        });
-      }
-      continue;
-    }
-    items.push({
-      kind: "notice",
-      key: `pending-input:${input.id}:state`,
-      timestamp: input.acceptedAt,
-      text: t(
-        input.state === "interrupted" &&
-          input.runId &&
-          browserInputs.some(
-            (item) =>
-              item.sendRunId === input.runId &&
-              item.sendState !== "failed" &&
-              item.sendState !== "held",
-          )
-          ? "chat.pendingInputs.resuming"
-          : input.state === "cancelled"
-            ? "chat.pendingInputs.cancelled"
-            : "chat.pendingInputs.interrupted",
+      ).flatMap((item) =>
+        projectChatSystemNotice(
+          { ...item, startsTurn: true },
+          undefined,
+          pendingStatus
+            ? {
+                status: pendingStatus,
+                key: `pending-input:${input.id}:state`,
+                timestamp: input.acceptedAt,
+              }
+            : undefined,
+        ),
       ),
-    });
+    );
   }
   return items;
 }

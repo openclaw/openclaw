@@ -15,7 +15,7 @@ import { writeConfigFile } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as nodePairing from "../infra/device-pairing-node-state.js";
-import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import * as nodePairingWrites from "../infra/device-pairing-node.js";
 import {
   NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
@@ -122,6 +122,13 @@ it("carries authenticated session previews through the node and retires access b
   const destinationPort = (destination.address() as AddressInfo).port;
   const runtimeFactory = vi.spyOn(workerStartup, "createGatewayWorkerEnvironmentRuntime");
   const serviceFactory = vi.spyOn(workerService, "createWorkerEnvironmentService");
+  const recordConnection = nodePairingWrites.recordPairedNodeConnection;
+  const nodeConnectionRecorded = createDeferred<Awaited<ReturnType<typeof recordConnection>>>();
+  vi.spyOn(nodePairingWrites, "recordPairedNodeConnection").mockImplementation((...args) => {
+    const recording = recordConnection(...args);
+    nodeConnectionRecorded.resolve(recording);
+    return recording;
+  });
   const resolvePairing = nodePairing.resolveCurrentPairedDeviceNodeBinding;
   let pairingGate: (() => Promise<void>) | undefined;
   vi.spyOn(nodePairing, "resolveCurrentPairedDeviceNodeBinding").mockImplementation(
@@ -220,13 +227,13 @@ it("carries authenticated session previews through the node and retires access b
             });
             deviceIdentityPath = paired.identityPath;
             // Device identity approval and machine capability consent are separate grants.
-            const pairing = await requestNodePairing({
+            const pairing = await nodePairingWrites.requestNodePairing({
               nodeId: paired.identity.deviceId,
               platform: NODE_CLIENT.platform,
               caps: [],
               commands: [],
             });
-            const approved = await approveNodePairing(pairing.request.requestId, {
+            const approved = await nodePairingWrites.approveNodePairing(pairing.request.requestId, {
               callerScopes: ["operator.pairing", "operator.write"],
             });
             assert(approved && "node" in approved, "Node capability approval must succeed");
@@ -303,6 +310,8 @@ it("carries authenticated session previews through the node and retires access b
             running.add(invocation);
             void invocation.finally(() => running.delete(invocation)).catch(() => {});
           });
+          // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
+          await nodeConnectionRecorded.promise;
           const inventory = await rpcReq(node.socket, "node.runnerInventory.update", {
             protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
             workerHost: {

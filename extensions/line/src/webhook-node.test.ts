@@ -94,8 +94,7 @@ function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
   const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
   const runtime = createRuntimeSpies();
   const handler = createLineNodeWebhookHandler({
-    channelSecret: secret,
-    bot,
+    getTargets: () => [{ channelSecret: secret, bot }],
     runtime,
     readBody: async () => rawBody,
   });
@@ -188,8 +187,7 @@ async function invokeNodePostContract(params: {
   });
   const runtime = createRuntimeSpies();
   const handler = createLineNodeWebhookHandler({
-    channelSecret: SECRET,
-    bot: { handleWebhook: dispatched },
+    getTargets: () => [{ channelSecret: SECRET, bot: { handleWebhook: dispatched } }],
     runtime,
     readBody: async () => params.rawBody,
   });
@@ -359,8 +357,7 @@ describe("createLineNodeWebhookHandler", () => {
     const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeSpies();
     const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
+      getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody: async () => "",
     });
@@ -376,8 +373,7 @@ describe("createLineNodeWebhookHandler", () => {
     const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeSpies();
     const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
+      getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody: async () => "",
     });
@@ -405,8 +401,7 @@ describe("createLineNodeWebhookHandler", () => {
     const runtime = createRuntimeSpies();
     const readBody = vi.fn(async () => JSON.stringify({ events: [{ type: "message" }] }));
     const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
+      getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody,
     });
@@ -429,8 +424,7 @@ describe("createLineNodeWebhookHandler", () => {
       return rawBody;
     });
     const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
+      getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody,
       maxBodyBytes: 1024 * 1024,
@@ -474,38 +468,28 @@ describe("createLineNodeWebhookHandler", () => {
 
   it("waits for durable admission before acknowledging signed event requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated: (() => void) | undefined;
+    const admitted = Promise.withResolvers<void>();
+    const delivery = Promise.withResolvers<"durable">();
     const bot = {
-      handleWebhook: vi.fn(
-        async () =>
-          await new Promise<"durable">((resolve) => {
-            releaseAuthenticated = () => resolve("durable");
-          }),
-      ),
+      handleWebhook: vi.fn(async () => {
+        admitted.resolve();
+        return delivery.promise;
+      }),
     };
-    const onRequestAuthenticated = vi.fn();
     const runtime = createRuntimeSpies();
     const handler = createLineNodeWebhookHandler({
-      channelSecret: SECRET,
-      bot,
+      getTargets: () => [{ channelSecret: SECRET, bot }],
       runtime,
       readBody: async () => rawBody,
-      onRequestAuthenticated,
     });
 
     const { res } = createRes();
     const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
 
-    await vi.waitFor(() => {
-      expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
-      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    });
-
+    await admitted.promise;
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     expect(res.headersSent).toBe(false);
-    if (!releaseAuthenticated) {
-      throw new Error("Expected LINE authenticated request release callback to be initialized");
-    }
-    releaseAuthenticated();
+    delivery.resolve("durable");
     await request;
     expect(res.statusCode).toBe(200);
     expect(res.headersSent).toBe(true);
