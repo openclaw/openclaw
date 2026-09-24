@@ -23,6 +23,44 @@ import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/ty
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
 
+/** Failure categories used to explain exec process exits. */
+type ExecProcessFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "signal"
+  | "aborted"
+  | "runtime-error";
+
+export type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
+/** Normalized result of a spawned exec process. */
+export type ExecProcessOutcome =
+  | {
+      status: "completed";
+      exitCode: number;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
+      noOutputTimedOut?: boolean;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: boolean;
+      noOutputTimedOut?: boolean;
+      failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
+      reason: string;
+    };
+
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
   hasCronTool?: boolean;

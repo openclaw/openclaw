@@ -32,7 +32,8 @@ vi.mock("../../process/exec.js", () => ({
     throw new Error(`Unexpected command in read-only resolver: ${argv.join(" ")}`);
   },
 }));
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   DEFAULT_PACKAGE_NAME: "openclaw",
   normalizeTag: () => null,
   readPackageName: async () => "openclaw",

@@ -108,6 +108,22 @@ afterEach(() => {
 });
 
 describe("Mermaid Markdown presentation", () => {
+  it("mounts a newly inserted diagram without replacing an existing sibling", async () => {
+    const { container, elements } = await mount(source("Existing diagram"));
+    const nextSource = source("Inserted diagram");
+    container.insertAdjacentHTML(
+      "beforeend",
+      toSanitizedMarkdownHtml(`\`\`\`mermaid\n${nextSource}\`\`\``),
+    );
+    const block = container.lastElementChild!;
+
+    expect(mountMermaidBlocks(block)).toBe(true);
+    expect(container.querySelectorAll("openclaw-mermaid")[0]).toBe(elements[0]);
+    const diagram = block.querySelector("openclaw-mermaid")!;
+    expect(diagram.source).toBe(nextSource);
+    await diagram.updateComplete;
+  });
+
   it.each([true, false])("preserves source and reports copy success=%s", async (copied) => {
     copySource.mockResolvedValueOnce(copied);
     const original = source("x < y & z <script>alert(1)</script>");

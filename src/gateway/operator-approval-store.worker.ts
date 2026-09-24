@@ -1,11 +1,14 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import * as store from "./operator-approval-store.kernel.js";
-import * as transitions from "./operator-approval-store.transitions.js";
+import { executeOperatorApprovalOperation } from "./operator-approval-store.operations.js";
+import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
 export function isOperatorApprovalCommand(command: {
@@ -32,47 +35,17 @@ export function executeOperatorApprovalCommand(
   return runOpenClawStateWriteTransaction((database) => {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     const options = { ...databaseOptions, database };
-    const execute = () => {
-      switch (command.type) {
-        case "operatorApprovals.insert":
-          return store.insertOperatorApprovalInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.get":
-          return store.getOperatorApprovalDetailedInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.pending":
-          return store.listPendingOperatorApprovalsInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.resolve":
-          return transitions.resolveOperatorApprovalInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.deny":
-          return transitions.forceDenyOperatorApprovalInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.expire":
-          return transitions.expireDueOperatorApprovalsInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-        case "operatorApprovals.consume":
-          return transitions.consumeOperatorApprovalAllowOnceInDatabase({
-            ...command.input,
-            databaseOptions: options,
-          });
-      }
-      return command satisfies never;
-    };
-    const result = execute();
+    const result = executeOperatorApprovalOperation(command.type, command.input, options);
+    if (
+      command.type === "operatorApprovals.resolve" &&
+      "outcome" in result &&
+      result.outcome === "resolved"
+    ) {
+      deferSqliteWorkerCommitReceipt(database.db, {
+        type: command.type,
+        resolutionKey: getOperatorApprovalResolutionKey(result.record),
+      });
+    }
     requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
     return result;
   }, databaseOptions);

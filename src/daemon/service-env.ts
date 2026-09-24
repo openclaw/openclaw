@@ -27,16 +27,6 @@ type MinimalServicePathOptions = {
   includeMissingUserBinDefaults?: boolean;
 };
 
-type SharedServiceEnvironmentFields = {
-  stateDir: string | undefined;
-  configPath: string | undefined;
-  tmpDir: string;
-  minimalPath: string | undefined;
-  proxyEnv: Record<string, string | undefined>;
-  nodeCaCerts: string | undefined;
-  nodeUseSystemCa: string | undefined;
-};
-
 export const SERVICE_PROXY_ENV_KEYS = [
   "OPENCLAW_PROXY_URL",
   "HTTP_PROXY",
@@ -363,7 +353,7 @@ export function buildServiceEnvironment(params: {
 }): Record<string, string | undefined> {
   const { env, port, launchdLabel, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(
+  const commonEnvironment = buildCommonServiceEnvironment(
     env,
     platform,
     extraPathDirs,
@@ -375,7 +365,7 @@ export function buildServiceEnvironment(params: {
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...commonEnvironment,
     ...readServiceSqliteEnvironment(env, platform, params.runtime),
     // An empty assignment clears supervisor ambient options; omission would
     // allow preloads/debug flags to bypass the heap-only service boundary.
@@ -407,7 +397,7 @@ export function buildNodeServiceEnvironment(params: {
 }): Record<string, string | undefined> {
   const { env, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(
+  const commonEnvironment = buildCommonServiceEnvironment(
     env,
     platform,
     extraPathDirs,
@@ -419,7 +409,7 @@ export function buildNodeServiceEnvironment(params: {
   const cloudflareAccessClientSecret = normalizeOptionalString(env.CF_ACCESS_CLIENT_SECRET);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...commonEnvironment,
     ...readServiceSqliteEnvironment(env, platform, params.runtime),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
@@ -431,25 +421,6 @@ export function buildNodeServiceEnvironment(params: {
     NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
     ...resolveNodeServiceIdentityEnvironment(),
   };
-}
-
-function buildCommonServiceEnvironment(
-  env: Record<string, string | undefined>,
-  sharedEnv: SharedServiceEnvironmentFields,
-): Record<string, string | undefined> {
-  const serviceEnv: Record<string, string | undefined> = {
-    HOME: env.HOME,
-    TMPDIR: sharedEnv.tmpDir,
-    NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
-    NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
-    OPENCLAW_STATE_DIR: sharedEnv.stateDir,
-    OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
-    ...sharedEnv.proxyEnv,
-  };
-  if (sharedEnv.minimalPath) {
-    serviceEnv.PATH = sharedEnv.minimalPath;
-  }
-  return serviceEnv;
 }
 
 function resolveServiceTmpDir(
@@ -466,12 +437,12 @@ function resolveServiceTmpDir(
   return env.TMPDIR?.trim() || os.tmpdir();
 }
 
-function resolveSharedServiceEnvironmentFields(
+function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
   extraPathDirs: string[] | undefined,
   execPath?: string,
-): SharedServiceEnvironmentFields {
+): Record<string, string | undefined> {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = resolveServiceTmpDir(env, platform);
@@ -484,18 +455,19 @@ function resolveSharedServiceEnvironmentFields(
     platform,
     execPath,
   });
+  // Windows tasks inherit PATH rather than freezing an install-time snapshot.
+  const minimalPath =
+    platform === "win32"
+      ? undefined
+      : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs });
   return {
-    stateDir,
-    configPath,
-    tmpDir,
-    // On Windows, Scheduled Tasks should inherit the current task PATH instead of
-    // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
-    minimalPath:
-      platform === "win32"
-        ? undefined
-        : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
-    proxyEnv: readServiceProxyEnvironment(env),
-    nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
-    nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
+    HOME: env.HOME,
+    TMPDIR: tmpDir,
+    NODE_EXTRA_CA_CERTS: startupTlsEnv.NODE_EXTRA_CA_CERTS,
+    NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    ...readServiceProxyEnvironment(env),
+    ...(minimalPath ? { PATH: minimalPath } : {}),
   };
 }

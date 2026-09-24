@@ -5,7 +5,7 @@ import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generati
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
-import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
   createGoogleImageGenerationProviderMetadata,
   createGoogleMediaUnderstandingProviderMetadata,
@@ -13,14 +13,10 @@ import {
   createGoogleVideoGenerationProviderMetadata,
 } from "./generation-provider-metadata.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { registerGoogleProvider } from "./provider-registration.js";
+import { buildGoogleProvider } from "./provider-registration.js";
 import { createLazyGoogleRealtimeVoiceProvider } from "./realtime-voice-lazy.js";
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
-
-type GoogleMediaUnderstandingProvider = Required<
-  Pick<MediaUnderstandingProvider, "transcribeAudio" | "describeVideo">
->;
 
 const loadGoogleImageGenerationProvider = createLazyRuntimeSurface(
   () => import("./image-generation-provider.js"),
@@ -42,14 +38,6 @@ const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
   (mod) => mod.buildGoogleVideoGenerationProvider(),
 );
 
-async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMediaUnderstandingProvider> {
-  const provider = await loadGoogleMediaUnderstandingProvider();
-  if (!provider.transcribeAudio || !provider.describeVideo) {
-    throw new Error("google media understanding provider missing required handlers");
-  }
-  return provider as GoogleMediaUnderstandingProvider;
-}
-
 function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
   return {
     ...createGoogleImageGenerationProviderMetadata(),
@@ -61,9 +49,9 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
   return {
     ...createGoogleMediaUnderstandingProviderMetadata(),
     transcribeAudio: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).transcribeAudio(...args),
+      await (await loadGoogleMediaUnderstandingProvider()).transcribeAudio(...args),
     describeVideo: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).describeVideo(...args),
+      await (await loadGoogleMediaUnderstandingProvider()).describeVideo(...args),
   };
 }
 
@@ -89,8 +77,8 @@ export default definePluginEntry({
   description: "Bundled Google plugin",
   register(api) {
     api.registerCliBackend(buildGoogleGeminiCliBackend());
-    registerGoogleGeminiCliProvider(api);
-    registerGoogleProvider(api);
+    api.registerProvider(buildGoogleGeminiCliProvider());
+    api.registerProvider(buildGoogleProvider());
     api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());

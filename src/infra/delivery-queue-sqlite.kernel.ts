@@ -303,6 +303,9 @@ export function reserveDeliveryQueueEntryAttemptInDatabase(
     expectedPlatformSendAttemptId?: string;
   },
 ): ReserveDeliveryQueueAttemptResult {
+  if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
+    throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
+  }
   const current = loadDeliveryQueueEntryInDatabase(
     database,
     params.queueName,

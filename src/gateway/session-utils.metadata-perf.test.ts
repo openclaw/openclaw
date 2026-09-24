@@ -110,7 +110,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
     const fixture = createRowThinkingFixture();
     expect(fixture.read(undefined, fixture.modelCatalog)).toMatchObject({
       thinkingDefault: "off",
-      thinkingOptions: ["Off", "Deep", "Light"],
+      thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       effectiveThinkingLevel: "off",
     });
     const warmCalls = fixture.policyCalls();
@@ -125,7 +125,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
         thinkingLevel: expected,
         effectiveThinkingLevel: expected,
         thinkingDefault: "off",
-        thinkingOptions: ["Off", "Deep", "Light"],
+        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       });
     }
     const metadata = resolveGatewayModelThinkingProfile({
@@ -143,6 +143,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
         { id: "off", label: "Off" },
         { id: "high", label: "Deep" },
         { id: "low", label: "Light" },
+        { id: "ultra", label: "ultra" },
       ],
       thinkingDefault: "off",
     });
@@ -175,7 +176,7 @@ test.each(["missing", "identity-only"] as const)(
         thinkingLevel: "medium",
         effectiveThinkingLevel: "medium",
         thinkingDefault: "off",
-        thinkingOptions: ["Off", "Deep", "Light"],
+        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       });
       expect(fixture.policyCalls()).toBe(warmCalls);
     });
@@ -273,7 +274,8 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
         thinkingLevel: expected,
         effectiveThinkingLevel: expected,
         thinkingDefault: expected,
-        thinkingOptions: expected === "high" ? ["Off", "High", "Low"] : ["Off", "Low", "High"],
+        thinkingOptions:
+          expected === "high" ? ["Off", "High", "Low", "ultra"] : ["Off", "Low", "High", "ultra"],
       });
     }
   });
@@ -340,7 +342,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       expect(read()).toMatchObject({
         thinkingLevel: "off",
         thinkingDefault: "off",
-        thinkingOptions: ["off"],
+        thinkingOptions: ["off", "ultra"],
       });
       expect(fixture.policyCalls()).toBeGreaterThan(configuredCalls);
     } finally {

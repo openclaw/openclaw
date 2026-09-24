@@ -14,7 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -68,7 +68,7 @@ describe("skill curator usage tracking", () => {
       "---\nname: daily-brief\ndescription: Synthetic usage proof.\n---\n# Daily brief\n",
     );
     openOpenClawStateDatabase({ env: testState.env });
-    recordSkillExperienceReviewOutcome(
+    await recordSkillExperienceReviewOutcome(
       "main",
       skillDir,
       { attemptedAtMs: 1200, outcome: "nothing" },

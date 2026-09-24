@@ -20,7 +20,7 @@ getrandom = "0.4.3"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 mdns-sd = { version = "0.21.3", default-features = false }
 openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
-rustls = { version = "0.23.44", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

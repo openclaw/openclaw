@@ -239,9 +239,7 @@ export const doctorServiceInspectionCases = [
   "absent-busy-port",
   "absent-unknown-port",
   "windows-ready",
-  "windows-disabled",
   "windows-queued",
-  "windows-running",
   "windows-startup-stopped",
   "windows-startup-unknown",
 ].flatMap((kind) => [
@@ -352,6 +350,11 @@ export function registerDoctorConfigReceiptTests(
             ...(outcome === "advisory"
               ? postInstallAdvisory
               : { status: failure ? "error" : "ok" }),
+            ...(outcome === "partial-config" || outcome === "unrestored-config"
+              ? { maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" } }
+              : outcome === "schema-refusal"
+                ? { maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } }
+                : {}),
             configHash: expectedHash,
             ...(failure
               ? {

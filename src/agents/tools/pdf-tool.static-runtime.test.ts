@@ -3,21 +3,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../config/config.js";
+import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { createPdfToolInfraStub, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return { ...actual, complete: completeMock };
+  return { ...actual, completeSimple: completeMock };
 });
 
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: vi.fn(),
-}));
+const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
 describe("PDF tool static prepared runtime", () => {
   afterEach(() => {
@@ -143,6 +147,7 @@ describe("PDF tool static prepared runtime", () => {
               expect.objectContaining({ provider, id: "middle", api: "openai-completions" }),
               expect.any(Object),
               expect.any(Object),
+              expect.any(Function),
             );
             expect(result.details).toMatchObject({
               model: `${provider}/middle`,
@@ -255,6 +260,7 @@ describe("PDF tool static prepared runtime", () => {
             expect.objectContaining({ provider: "openai", id: modelId }),
             expect.any(Object),
             expect.any(Object),
+            expect.any(Function),
           );
           expect(result.details).toMatchObject({ model: modelRef, native: false });
         } finally {
@@ -263,4 +269,81 @@ describe("PDF tool static prepared runtime", () => {
       },
     );
   }, 180_000);
+  it("uses the prepared provider stream for extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-completions",
+        input: ["text"],
+        pluginRegistry,
+      });
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Managed model content",
+        images: [],
+      });
+      const order: string[] = [];
+      const providerStreamFn = vi.fn(() => {
+        order.push("request");
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "managed summary" }],
+          api: "openai-completions",
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          usage: {
+            input: 0,
+            output: 0,
+            totalTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          timestamp: 0,
+        };
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+        return stream;
+      });
+      pluginRegistry.providers.push({
+        pluginId: "pdf-stream-fixture",
+        source: "fixture",
+        provider: {
+          id: "openai",
+          label: "PDF stream fixture",
+          auth: [],
+          createStreamFn() {
+            order.push("prepare");
+            expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
+            return providerStreamFn;
+          },
+        },
+      });
+      completeMock.mockImplementationOnce(async (model, context, options) => {
+        const provider = getModelLlmRuntime(model)?.registry.getApiProvider(model.api);
+        if (!provider) {
+          throw new Error("unprepared completion dispatched");
+        }
+        return await provider.streamSimple(model, context, options).result();
+      });
+
+      const config = { agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } } };
+      const { createPdfTool } = await import("./pdf-tool.js");
+      const tool = createPdfTool({ config, agentDir });
+      if (!tool) {
+        throw new Error("expected PDF tool");
+      }
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(order).toEqual(["prepare", "request"]);
+      expect(providerStreamFn).toHaveBeenCalledOnce();
+      expect(completeMock).toHaveBeenCalledOnce();
+      expect(result.content).toEqual([{ type: "text", text: "managed summary" }]);
+    });
+  });
 });

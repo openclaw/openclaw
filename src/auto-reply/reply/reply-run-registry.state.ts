@@ -35,6 +35,11 @@ export type ReplyRunAdmissionSource = {
   databaseIdentity?: OpenClawAgentDatabaseIdentity;
 };
 
+type ReplyRunCompletionObservation = {
+  changed: boolean;
+  sources: Map<OpenClawAgentDatabaseIdentity | undefined, ReplyRunAdmissionSource>;
+};
+
 export type ReplyRunAdmissionBarrier = {
   settled: Promise<void>;
   source: ReplyRunAdmissionSource;
@@ -55,6 +60,7 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   sourceTurnByKey: Map<string, string>;
+  completionObservationsByKey?: Map<string, Set<ReplyRunCompletionObservation>>;
   evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   executionStartedOperations?: WeakSet<ReplyOperation>;
@@ -72,6 +78,7 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   sourceTurnByKey: new Map<string, string>(),
+  completionObservationsByKey: new Map<string, Set<ReplyRunCompletionObservation>>(),
   evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
   executionStartedOperations: new WeakSet<ReplyOperation>(),
   lifecycleAdmissionByOperation: new WeakMap<ReplyOperation, ReplyOperationAdmission>(),
@@ -82,6 +89,26 @@ export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionBy
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
 replyRunState.successorAdmissionBarriersByKey ??= new Map();
 replyRunState.sourceTurnByKey ??= new Map();
+const replyRunCompletionObservations = (replyRunState.completionObservationsByKey ??= new Map());
+
+/** Observe owner departures only for the lifetime of one awaited admission attempt. */
+export function observeReplyRunCompletions(sessionKey: string) {
+  const observations = replyRunCompletionObservations;
+  const observation: ReplyRunCompletionObservation = { changed: false, sources: new Map() };
+  const pending = observations.get(sessionKey) ?? new Set<ReplyRunCompletionObservation>();
+  pending.add(observation);
+  observations.set(sessionKey, pending);
+  return {
+    read: () => (observation.changed ? [...observation.sources.values()] : undefined),
+    dispose: () => {
+      pending.delete(observation);
+      observation.sources.clear();
+      if (pending.size === 0 && observations.get(sessionKey) === pending) {
+        observations.delete(sessionKey);
+      }
+    },
+  };
+}
 
 export function resolveReplyOperationAgentId(sessionKey: string, agentId?: string) {
   const owner = normalizeOptionalString(agentId) ?? parseAgentSessionKey(sessionKey)?.agentId;
@@ -141,6 +168,10 @@ function clearWaitSessionIds(sessionKey: string): void {
 }
 
 export function notifyReplyRunEnded(sessionKey: string): void {
+  // Rekey departures invalidate reads without granting destination-lane lineage.
+  for (const observation of replyRunCompletionObservations.get(sessionKey) ?? []) {
+    observation.changed = true;
+  }
   const waiters = replyRunState.waitersByKey.get(sessionKey);
   if (!waiters || waiters.size === 0) {
     return;
@@ -205,6 +236,7 @@ export function hasReplyOperationExecutionStarted(operation: ReplyOperation): bo
 }
 export const abortFrozenOperations = new WeakSet<ReplyOperation>();
 export const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
+export const producerCompletionByOperation = new WeakMap<ReplyOperation, Promise<void>>();
 export const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();
 type ReplyOperationAfterClear = {
   callbacks: Set<(sessionId: string) => void>;
@@ -287,9 +319,14 @@ export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
 }
 
 /** Resolve only the live operation admitted with this exact upstream signal. */
-export function resolveActiveReplyRunOwnerForSignal(
-  signal: AbortSignal,
-): { sessionId: string; sessionKey: string; abort: () => boolean } | undefined {
+export function resolveActiveReplyRunOwnerForSignal(signal: AbortSignal):
+  | {
+      sessionId: string;
+      sessionKey: string;
+      abort: () => boolean;
+      handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+    }
+  | undefined {
   const operation = operationsByUpstreamAbortSignal.get(signal);
   if (!operation) {
     return undefined;
@@ -309,6 +346,20 @@ export function resolveActiveReplyRunOwnerForSignal(
     sessionKey,
     // A retained selector must never cancel the operation that replaced this owner.
     abort: () => isCurrent() && operation.abortByUser(),
+    handoff: (settle) => {
+      const producerCompleted = producerCompletionByOperation.get(operation);
+      if (!isCurrent() || !producerCompleted) {
+        return false;
+      }
+      const settlement = settle(producerCompleted);
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId,
+        sessionKeys: [sessionKey],
+        start: () => settlement,
+      });
+      return true;
+    },
   };
 }
 
@@ -612,6 +663,22 @@ export function clearReplyRunState(params: {
       replyRunState.activeKeysBySessionId.delete(params.sessionId);
     }
     return;
+  }
+  for (const observation of replyRunState.completionObservationsByKey?.get(params.sessionKey) ??
+    []) {
+    if (
+      !params.operation.result ||
+      params.operation.key !== params.sessionKey ||
+      isReplyOperationAbortedForRestart(params.operation)
+    ) {
+      observation.sources.clear();
+      continue;
+    }
+    const source = resolveReplyRunAdmissionSource(params.operation, params.sessionId);
+    observation.sources.set(
+      source.databaseIdentity,
+      mergeReplyRunAdmissionSource(source, observation.sources.get(source.databaseIdentity)),
+    );
   }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   replyRunState.activeSessionIdsByKey.delete(params.sessionKey);

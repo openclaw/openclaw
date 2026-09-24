@@ -169,7 +169,7 @@ async function withInventory(
       expect(persisted()).toEqual(before);
     } finally {
       reads.mockRestore();
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 }

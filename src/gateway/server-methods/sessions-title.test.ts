@@ -33,6 +33,36 @@ const cfg: OpenClawConfig = {
   },
 };
 
+function operatorModelConfig(allow: string[]): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: {
+          "title-test/primary": {},
+          "title-test/utility": {},
+          "title-test/blocked": { alias: "hidden-title-model" },
+        },
+      },
+    },
+    gateway: {
+      roles: {
+        default: "limited",
+        definitions: {
+          limited: {
+            agents: "*",
+            scopes: ["operator.write"],
+            sessions: { others: "none" },
+            modelPolicy: { sourceAgent: "main", allow },
+          },
+        },
+      },
+    },
+  };
+}
+
 let testState: OpenClawTestState;
 let ownerId: string;
 let otherId: string;
@@ -209,6 +239,49 @@ describe("sessions.title.prepare", () => {
     ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
     expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
   });
+
+  it.each(["title-test/blocked", "hidden-title-model"])(
+    "rejects the operator's denied title model %s before inference",
+    async (model) => {
+      const config = operatorModelConfig(["title-test/primary", "title-test/utility"]);
+      expect(
+        await prepare(
+          { agentId: "main", message: "Draft", model },
+          config,
+          connectedClient(ownerId),
+        ),
+      ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+      expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "honors operator utility policy without primary speculation (utility allowed: %s)",
+    async (allowUtility) => {
+      const config = operatorModelConfig([
+        "title-test/primary",
+        ...(allowUtility ? ["title-test/utility"] : []),
+      ]);
+      const respond = await prepare(
+        { agentId: "main", message: "Draft", model: "title-test/primary" },
+        config,
+        connectedClient(ownerId),
+      );
+      expect(respond).toHaveBeenCalledWith(true, {
+        title: allowUtility ? "Draft session title" : null,
+      });
+      if (allowUtility) {
+        expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            model: "utility",
+            operatorAuthority: expect.objectContaining({ profileId: ownerId }),
+          }),
+        );
+      } else {
+        expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("skips a selected model denied by the creation agent's model policy", async () => {
     const config = {

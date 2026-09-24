@@ -111,6 +111,64 @@ Prepared facts contain file locations and failures, never a live reader. Do not
 rewrite assistant text or transcript messages to insert Gateway file paths.
 When the capability is absent, this remote attachment preparation is unavailable.
 
+## Shared attempt mechanics
+
+Official native harnesses use `buildCurrentInboundPrompt` from the private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` to combine the prepared
+`currentInboundContext` with the current prompt using the channel's joiner.
+Submit this context with each message, including resumed sessions. Steering
+receives its own `options.currentInboundContext`; do not reuse the initial
+turn's context. Keep context out of the original user transcript and pending
+question answer text. Conversation fields are model context, not tool authority.
+
+Official harnesses use the JavaScript-only private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
+and lifecycle/event publication; it is not a third-party Plugin SDK contract.
+`createAgentHarnessAttemptDeadlineController` takes the original `startedAtMs`,
+execution `timeoutMs`, backend `settlementTimeoutMs`, abort `signal`, and timeout
+callback. The first `beginSettlement(receivedAtMs)` starts an absolute settlement
+deadline; repeated calls do not extend it. Abort or `dispose()` closes it.
+`createAgentHarnessAttemptCancellation` retains explicit cancellation reasons
+and freezes admission at the terminal boundary. `emitAgentHarnessAttemptEvent`
+isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
+lifecycle events and deduplicates execution phases. Native interruption,
+completion decisions, output flushing, and cleanup remain backend-owned.
+
+The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
+execution promises and argument/start snapshots through
+`createAgentHarnessToolExecutionRegistry` and
+`createAgentHarnessToolExecutionBoundaryRegistry`. Consumed snapshots cannot be
+republished by late completion. Core tool guards and `observeToolTerminal`
+remain authoritative; native decoding and result encoding stay with the harness.
+
+## Shared host-tool result facts
+
+Official harnesses use the private JavaScript-only
+`openclaw/plugin-sdk/agent-harness-tool-runtime` to execute host tools and record portable tool facts.
+`runAgentHarnessToolInvocation` owns argument preparation, validation at the
+existing execution boundary, monotonic execution snapshots, middleware, and
+cleanup. Its result and failure callbacks carry those facts to native adapters
+without taking over their receipt or timeout owner.
+`recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
+cron, and heartbeat facts using the caller's prepared source-reply projection.
+The invocation preserves execution failures when presentation middleware
+rewrites a result. `recordAgentHarnessMessagingDelivery`
+records an already-confirmed messaging delivery, and
+`recordAgentHarnessToolResultMedia` collects and trust-filters presented media.
+Callers retain their native receipt, routing, cancellation, and result-encoding
+contracts; these helpers do not establish delivery or grant execution authority.
+
+For final argument validation, wrap the host-bound tool's execution in
+`runWithToolExecutionValidation(callId, validate, execute)` from the same private
+subpath. The validator runs at the existing execution boundary after policy and
+before-call hooks adjust the arguments. It uses one per-invocation context across
+host and SDK chunks and does not dispatch a second before-call hook.
+
+Accepted background task metadata is available through `isAsyncStartedToolResult`
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`.
+Retain accepted work independently of result presentation so recovery cannot
+replay it.
+
 ## Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use

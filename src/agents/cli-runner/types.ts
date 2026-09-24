@@ -162,6 +162,8 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
+  /** Internal completion caller's representation of operator authorization failures. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
@@ -267,6 +269,7 @@ export type PreparedCliRunContext = {
   promptForHooks?: string;
   modelId: string;
   normalizedModel: string;
+  providerThinkingLevel?: import("../../plugins/cli-backend.types.js").CliBackendThinkingLevel;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;

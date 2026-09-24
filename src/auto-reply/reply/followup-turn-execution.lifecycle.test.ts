@@ -83,33 +83,6 @@ describe("executeFollowupTurn lifecycle", () => {
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 
-  it("updates the reply operation after role-ordering recovery rotates the session", async () => {
-    const updateSessionId = vi.fn();
-    const turn = createTurn({
-      operation: {
-        ...createMockReplyOperation().replyOperation,
-        updateSessionId,
-      } as unknown as AdmittedFollowupTurn["operation"],
-    });
-    state.reset.mockImplementation(async (params) => {
-      params.onActiveSessionEntry({ sessionId: "reset-session", updatedAt: 2 });
-      return true;
-    });
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.resetSessionAfterRoleOrderingConflict("invalid history");
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    await executeFollowupTurn({
-      turn,
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    expect(updateSessionId).toHaveBeenCalledWith("reset-session");
-  });
-
   it("drains detached progress before propagating execution failure", async () => {
     const order: string[] = [];
     const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();

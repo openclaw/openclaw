@@ -104,7 +104,6 @@ export async function settleAgentFallbackCycle(params: {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: buildContextOverflowRecoveryText({
-          preserveSessionMapping: true,
           cfg: cycle.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,

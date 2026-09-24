@@ -425,12 +425,15 @@ vi.mock("../config/sessions.js", async () => ({
 }));
 
 vi.mock("../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(),
   createQueuedTaskRun: vi.fn(() => ({})),
   createRunningTaskRun: vi.fn(() => ({})),
-  failTaskRunByRunId: vi.fn(),
   findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
+}));
+
+vi.mock("../tasks/detached-task-runtime.async.js", () => ({
+  completeTaskRunByRunIdAsync: vi.fn(async () => []),
+  failTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 // Same module, different specifier (used by tools under src/agents/tools/*).

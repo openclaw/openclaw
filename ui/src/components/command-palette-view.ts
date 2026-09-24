@@ -1,6 +1,6 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
+import { pathForAgentPanel, pathForPluginSettings, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
@@ -57,6 +57,7 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;
@@ -107,6 +108,10 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     if (item.agentId) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else if (item.pluginId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
     } else if (item.search || item.hash) {
       props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
@@ -327,7 +332,6 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                 ? props.mentionMenu.activeId(props.mentionHost.paneId)
                 : null) ?? undefined)
             : activeOptionId,
-          expanded: mentionsOpen ? true : undefined,
           describedBy: mentionsOpen
             ? mentionAnnouncementId
             : hideSearch
@@ -413,6 +417,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                       class="cmd-palette__results"
                       ?hidden=${items.length === 0}
                       role="listbox"
+                      aria-label=${paletteLabel}
                       aria-busy=${props.searchDebouncing || props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
                     >
                       ${grouped.map(

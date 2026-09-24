@@ -169,6 +169,7 @@ class TasksPage extends OpenClawLightDomElement {
   @state() private cancellingTaskIds = new Set<string>();
 
   @state() private transcriptTaskId: string | null = null;
+  private transcriptTrigger: HTMLButtonElement | null = null;
   private readonly transcriptHost: TaskTranscriptHost = {
     client: null,
     connected: false,
@@ -354,7 +355,7 @@ class TasksPage extends OpenClawLightDomElement {
     return this.listTask.run([gateway, client, scopeId]);
   }
 
-  private async cancelTask(taskId: string) {
+  private async mutateTask(taskId: string, action: "cancel" | "retry" | "dismiss") {
     const scope = this.gateway.capture();
     const gateway = this.gateway.gateway;
     if (
@@ -367,74 +368,35 @@ class TasksPage extends OpenClawLightDomElement {
     }
     this.cancellingTaskIds = new Set([...this.cancellingTaskIds, taskId]);
     this.error = null;
+    const failureKey = action === "cancel" ? "tasksPage.cancelFailed" : "tasksPage.recoveryFailed";
     try {
-      const payload = await scope.client.request("tasks.cancel", { taskId });
+      const payload = await scope.client.request(
+        `tasks.${action}`,
+        action === "cancel" ? { taskId } : { taskIds: [taskId] },
+      );
       if (!this.gateway.isCurrent(scope)) {
         return;
       }
-      const result = normalizeTasksCancelResult(payload);
-      if (result?.task) {
+      const result =
+        action === "cancel"
+          ? normalizeTasksCancelResult(payload)
+          : normalizeTasksRecoveryResult(payload)?.results[0];
+      const succeeded = result && ("cancelled" in result ? result.cancelled : result.ok);
+      // A cancellation refusal can still carry an authoritative terminal snapshot;
+      // failed recovery replies do not update the task projection.
+      if (result?.task && (action === "cancel" || succeeded)) {
         const event = normalizeTaskEventPayload({ action: "upserted", task: result.task });
         // Mutation replies are authoritative even if the best-effort registry
         // event is dropped while the matching pages are in flight.
         this.bufferTaskRefreshEvent(event);
-        this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task: result.task }).tasks;
-      }
-      // Refusals (already terminal, stale id, no cancellation handle) are
-      // successful responses with cancelled=false; surface them like errors.
-      if (!result?.cancelled) {
-        this.error = formatUiExternalText(result?.reason, t("tasksPage.cancelFailed"));
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error, t("tasksPage.cancelFailed"));
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        const next = new Set(this.cancellingTaskIds);
-        next.delete(taskId);
-        this.cancellingTaskIds = next;
-      }
-    }
-  }
-
-  private async recoverTask(taskId: string, action: "retry" | "dismiss") {
-    const scope = this.gateway.capture();
-    const gateway = this.gateway.gateway;
-    if (
-      !scope ||
-      !gateway ||
-      this.context.gateway !== gateway ||
-      this.cancellingTaskIds.has(taskId)
-    ) {
-      return;
-    }
-    this.cancellingTaskIds = new Set([...this.cancellingTaskIds, taskId]);
-    this.error = null;
-    try {
-      const payload =
-        action === "retry"
-          ? await scope.client.request("tasks.retry", { taskIds: [taskId] })
-          : await scope.client.request("tasks.dismiss", { taskIds: [taskId] });
-      if (!this.gateway.isCurrent(scope)) {
-        return;
-      }
-      const result = normalizeTasksRecoveryResult(payload)?.results[0];
-      if (!result?.ok) {
-        this.error = formatUiExternalText(result?.reason, t("tasksPage.recoveryFailed"));
-        return;
-      }
-      if (result.task) {
-        const event = normalizeTaskEventPayload({
-          action: "upserted",
-          task: result.task,
-        });
-        this.bufferTaskRefreshEvent(event);
         this.tasks = applyTaskEvent(this.tasks, event).tasks;
       }
+      if (!succeeded) {
+        this.error = formatUiExternalText(result?.reason, t(failureKey));
+      }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error, t("tasksPage.recoveryFailed"));
+        this.error = formatUiError(error, t(failureKey));
       }
     } finally {
       if (this.gateway.isCurrent(scope)) {
@@ -476,8 +438,9 @@ class TasksPage extends OpenClawLightDomElement {
     }
   }
 
-  private async viewTranscript(taskId: string) {
+  private async viewTranscript(taskId: string, trigger: HTMLButtonElement) {
     this.transcriptTaskId = taskId;
+    this.transcriptTrigger = trigger;
     await this.updateComplete;
     if (!this.isConnected || this.transcriptTaskId !== taskId) {
       return;
@@ -487,9 +450,14 @@ class TasksPage extends OpenClawLightDomElement {
     transcript?.scrollIntoView({ block: "start", behavior: "instant" });
   }
 
-  private closeTranscript() {
+  private closeTranscript(restoreFocus = false) {
+    const trigger = this.transcriptTrigger;
+    this.transcriptTrigger = null;
     resetTaskDetail(this.transcriptHost);
     this.transcriptTaskId = null;
+    if (restoreFocus && trigger?.isConnected) {
+      trigger.focus();
+    }
   }
 
   private reconcileTranscriptSelection() {
@@ -515,7 +483,7 @@ class TasksPage extends OpenClawLightDomElement {
     >
       <div class="tasks-transcript__header">
         <h2>${taskTitle(task)}</h2>
-        <button class="btn btn--sm" type="button" @click=${() => this.closeTranscript()}>
+        <button class="btn btn--sm" type="button" @click=${() => this.closeTranscript(true)}>
           ${t("common.close")}
         </button>
       </div>
@@ -566,11 +534,11 @@ class TasksPage extends OpenClawLightDomElement {
           tasks: this.tasks,
           cancellingTaskIds: this.cancellingTaskIds,
           sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
-          onCancel: (taskId) => void this.cancelTask(taskId),
-          onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
-          onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
+          onCancel: (taskId) => void this.mutateTask(taskId, "cancel"),
+          onRetry: (taskId) => void this.mutateTask(taskId, "retry"),
+          onDismiss: (taskId) => void this.mutateTask(taskId, "dismiss"),
           onCopyResult: (taskId) => void this.copyTaskResult(taskId),
-          onViewTranscript: (taskId) => void this.viewTranscript(taskId),
+          onViewTranscript: (taskId, trigger) => void this.viewTranscript(taskId, trigger),
           onNavigateToChat: (sessionKey) => {
             const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
             this.context.navigate(

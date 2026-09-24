@@ -13,35 +13,9 @@ import {
   createDiscordComponentRoleSelectControl,
   createDiscordComponentStringSelectControl,
   createDiscordComponentUserSelectControl,
-  type DiscordComponentControlHandlers,
 } from "./agent-components.wildcard-controls.js";
 
 type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
-
-function bindDiscordComponentControl<T extends BaseMessageInteractiveComponent>(
-  createControl: (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) => T,
-) {
-  return (ctx: AgentComponentContext): T => createControl(ctx, discordComponentControlHandlers);
-}
-
-const createDiscordComponentButton = bindDiscordComponentControl(
-  createDiscordComponentButtonControl,
-);
-const createDiscordComponentStringSelect = bindDiscordComponentControl(
-  createDiscordComponentStringSelectControl,
-);
-const createDiscordComponentUserSelect = bindDiscordComponentControl(
-  createDiscordComponentUserSelectControl,
-);
-const createDiscordComponentRoleSelect = bindDiscordComponentControl(
-  createDiscordComponentRoleSelectControl,
-);
-const createDiscordComponentMentionableSelect = bindDiscordComponentControl(
-  createDiscordComponentMentionableSelectControl,
-);
-const createDiscordComponentChannelSelect = bindDiscordComponentControl(
-  createDiscordComponentChannelSelectControl,
-);
 
 export const createAgentComponentControls = [
   createAgentComponentButton,
@@ -49,13 +23,17 @@ export const createAgentComponentControls = [
 ] satisfies readonly ComponentFactory[];
 
 export const createDiscordComponentControls = [
-  createDiscordComponentButton,
-  createDiscordComponentStringSelect,
-  createDiscordComponentUserSelect,
-  createDiscordComponentRoleSelect,
-  createDiscordComponentMentionableSelect,
-  createDiscordComponentChannelSelect,
-] satisfies readonly ComponentFactory[];
+  createDiscordComponentButtonControl,
+  createDiscordComponentStringSelectControl,
+  createDiscordComponentUserSelectControl,
+  createDiscordComponentRoleSelectControl,
+  createDiscordComponentMentionableSelectControl,
+  createDiscordComponentChannelSelectControl,
+].map(
+  (createControl): ComponentFactory =>
+    (ctx) =>
+      createControl(ctx, discordComponentControlHandlers),
+);
 
 export function createDiscordComponentModal(ctx: AgentComponentContext): Modal {
   return new DiscordComponentModal(ctx);

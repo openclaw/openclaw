@@ -4,13 +4,10 @@ import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
-import {
-  BrowserRelayAuthV2Authority,
-  parseRelayAuthHello,
-  parseStrictJsonObject,
-} from "./auth-v2.js";
+import { BrowserRelayAuthV2Authority, parseRelayAuthHello } from "./auth-v2.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
 import { relayOwnerResource } from "./owner-protocol.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 
 const servers: WebSocketServer[] = [];
 afterEach(async () => {
