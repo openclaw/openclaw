@@ -922,15 +922,12 @@ class AgentsPage
   }
 
   private saveAgentConfig() {
-    if (!this.canCall("config.set", "operator.admin")) {
+    const client = this.client;
+    if (!client || !this.canCall("config.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
     void (async () => {
       if (!(await this.context.runtimeConfig.save())) {
         return;
@@ -939,6 +936,7 @@ class AgentsPage
       if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
         return;
       }
+      resetToolsEffectiveState(this);
       this.syncAgentState(agents);
       this.ensureAgentIdentities();
       this.loadActivePanelData();
