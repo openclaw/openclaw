@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { setUserPreferences } from "../state/user-preferences.js";
+import { ensureProfileForEmail, syncGitHubIdentity } from "../state/user-profiles.js";
 import {
   BRANCH,
   SESSION_KEY,
@@ -10,6 +14,7 @@ import {
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -99,7 +104,16 @@ async function historyFixture() {
     file: await fs.readFile(path.join(workspace.cwd, "artifact.txt"), "utf8"),
     remote: await remoteHead(),
   });
-  return { ...workspace, calls, publish, state, remote, remoteHead };
+  const publishMessage = async (message: string) => {
+    const parent = await workspace.git("rev-parse", "HEAD");
+    const tree = await workspace.git("rev-parse", "HEAD^{tree}");
+    const head = await workspace.git("commit-tree", tree, "-p", parent, "-m", message);
+    await workspace.git("update-ref", `refs/heads/${BRANCH}`, head, parent);
+    await workspace.git("push", remote, `${head}:refs/heads/${BRANCH}`);
+    pr!.headSha = head;
+    return head;
+  };
+  return { ...workspace, calls, publish, state, remote, remoteHead, publishMessage };
 }
 
 describe("GitHub publication branch history", () => {
@@ -134,6 +148,140 @@ describe("GitHub publication branch history", () => {
     ).toBe(false);
   });
 
+  it("repairs unrecognized published credit without rewriting history or importing body examples", async () => {
+    const f = await historyFixture();
+    expect(await f.publish("initial")).toMatchObject({ status: "published", url });
+    const human = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
+    const other = "Co-authored-by: example <99+example@users.noreply.github.com>";
+    const marker = "OpenClaw-Publication: previous-writer";
+    const layouts = [
+      `${human}\n\nWorked on by:\n- @alice\n\n${marker}`,
+      `${human}\n\n${other}\n${marker}`,
+      `${human}\n\n${marker}`,
+      ["Example:", "```text", human, other, "```", "", marker].join("\n"),
+    ];
+    const parsed = async () => {
+      const file = path.join(root, "commit-message.txt");
+      await fs.writeFile(file, await f.git("show", "-s", "--format=%B", "HEAD"));
+      return await f.git("interpret-trailers", "--no-divider", "--parse", file);
+    };
+    for (const [index, layout] of layouts.entries()) {
+      // Represent an already-published implementation commit from an older writer.
+      const message = `Implementation credit\n\n${layout}`;
+      const previous = await f.publishMessage(message);
+      expect(await parsed()).not.toContain(human);
+      const tree = await f.git("rev-parse", "HEAD^{tree}");
+      f.calls.length = 0;
+      const repaired = await f.publish(`repair-${index}`);
+      expect(repaired).toMatchObject({ status: "published", url });
+      expect(await parsed()).toBe(`${human}\nOpenClaw-Publication: ${repaired.requestId}`);
+      expect(await f.git("rev-parse", "HEAD^")).toBe(previous);
+      expect(await f.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      expect(await f.git("show", "-s", "--format=%B", previous)).toBe(message);
+      expect(f.calls.filter((args) => args.includes("commit-tree"))).toHaveLength(1);
+      expect(f.calls.some((args) => args.includes("POST"))).toBe(false);
+      const before = await f.state();
+      f.calls.length = 0;
+      expect(await f.publish(`repair-${index}`)).toEqual(repaired);
+      expect(await f.publish(`reuse-${index}`)).toMatchObject({
+        status: "published",
+        headCommit: before.head,
+      });
+      expect(await f.state()).toEqual(before);
+      expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
+        false,
+      );
+    }
+    // Commit-format trailer parsing must not treat a Markdown separator as a patch divider.
+    const valid = await f.publishMessage(`Implementation credit\n\n---\n\n${human}\n${marker}`);
+    expect(await parsed()).toBe(`${human}\n${marker}`);
+    const before = await f.state();
+    f.calls.length = 0;
+    expect(await f.publish("markdown-separator")).toMatchObject({
+      status: "published",
+      headCommit: valid,
+    });
+    expect(await f.state()).toEqual(before);
+    expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
+      false,
+    );
+    const fallback = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (args: string[], options) =>
+      args.some((arg) => arg.startsWith("--format=%(trailers:"))
+        ? commandResult("", 128)
+        : await fallback(args, options),
+    );
+    f.calls.length = 0;
+    expect(await f.publish("unavailable-trailer-read")).toMatchObject({
+      status: "failed",
+      code: "unavailable",
+    });
+    expect(await f.state()).toEqual(before);
+    expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
+      false,
+    );
+  });
+
+  it("honors a real profile opt-out during trailer parsing in the final repair commit and push", async () => {
+    const session = await persistPublicationTestSession();
+    const f = await historyFixture();
+    const profiles = [
+      { login: "alice", accountId: 7 },
+      { login: "bob", accountId: 8 },
+    ].map(({ login, accountId }) => {
+      const email = `${login}@example.test`;
+      const profile = ensureProfileForEmail(email);
+      syncGitHubIdentity({
+        identity: { accountId, login },
+        authenticationAlias: { kind: "email", email },
+      });
+      recordSessionParticipant(
+        { agentId: "main", sessionKey: SESSION_KEY, storePath: session.storePath },
+        {
+          identity: { type: "profile", id: profile.id },
+          promptedAt: accountId,
+          sessionAgentId: "main",
+        },
+      );
+      return profile;
+    });
+    const { resolveGitCoauthorAttribution } = await vi.importActual<
+      typeof import("../agents/git-coauthor-attribution.js")
+    >("../agents/git-coauthor-attribution.js");
+    mocks.attribution.mockImplementation(resolveGitCoauthorAttribution);
+    const alice = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
+    const bob = "Co-authored-by: bob <8+bob@users.noreply.github.com>";
+    const first = await f.publish("real-consent-initial");
+    expect(first).toMatchObject({ status: "published", url });
+    expect(
+      await f.git("show", "-s", "--format=%(trailers:only,unfold)", await f.remoteHead()),
+    ).toBe(`${alice}\n${bob}\nOpenClaw-Publication: ${first.requestId}`);
+    const previous = await f.publishMessage(
+      `Implementation credit\n\n${alice}\n${bob}\n\nOpenClaw-Publication: earlier-writer`,
+    );
+    const transport = mocks.runCommand.getMockImplementation()!;
+    let revoked = false;
+    mocks.runCommand.mockImplementation(async (args: string[], options) => {
+      const result = await transport(args, options);
+      if (args.some((arg) => arg.startsWith("--format=%(trailers:"))) {
+        expect(
+          setUserPreferences(profiles[0]!.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }),
+        ).toMatchObject({ ok: true });
+        revoked = true;
+      }
+      return result;
+    });
+    const repaired = await f.publish("real-consent-repair");
+    expect(revoked).toBe(true);
+    expect(repaired).toMatchObject({ status: "published", url });
+    const published = await f.remoteHead();
+    expect(await f.git("rev-parse", `${published}^`)).toBe(previous);
+    expect(await f.git("show", "-s", "--format=%(trailers:only,unfold)", published)).toBe(
+      `${bob}\nOpenClaw-Publication: ${repaired.requestId}`,
+    );
+    expect(await f.git("show", "-s", "--format=%B", published)).not.toContain("@alice");
+  });
+
   it("adds missing contributor credit instead of silently reusing an older attributed head", async () => {
     const f = await historyFixture();
     expect(await f.publish("initial")).toMatchObject({ status: "published" });
@@ -147,6 +295,24 @@ describe("GitHub publication branch history", () => {
     expect(await f.git("show", "-s", "--format=%B", "HEAD")).toContain(trailer);
     const head = await f.remoteHead();
     expect(await f.publish("same-credit")).toMatchObject({ status: "published", headCommit: head });
+
+    // Opt-out, bot-only, and no-human sessions all resolve to no current attribution.
+    // Existing public history stays intact; future generated commits must not copy it.
+    mocks.attribution.mockReturnValue(undefined);
+    expect(await f.publish("no-current-human")).toMatchObject({
+      status: "published",
+      headCommit: head,
+    });
+    await fs.writeFile(path.join(f.cwd, "artifact.txt"), "work without current human credit\n");
+    expect(await f.publish("new-work-no-human")).toMatchObject({ status: "published", url });
+    expect(await f.git("show", "-s", "--format=%(trailers:key=Co-authored-by,only)", "HEAD")).toBe(
+      "",
+    );
+    const uncredited = await f.remoteHead();
+    expect(await f.publish("reuse-no-human")).toMatchObject({
+      status: "published",
+      headCommit: uncredited,
+    });
   });
 
   it.each([

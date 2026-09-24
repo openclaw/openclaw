@@ -446,6 +446,35 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       headCommit,
     });
 
+    const messageLines = currentMessage.split(/\r?\n/u);
+    let publishedTrailers: string[] | undefined;
+    if (
+      existingPullRequest &&
+      remoteHead === headCommit &&
+      currentTree === workspaceTree &&
+      sourceIndexTree === workspaceTree &&
+      messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `))
+    ) {
+      // Text in prose or an earlier paragraph is not Git co-author credit.
+      // Finish this read before selecting contributors so an opt-out during it
+      // is reflected in the existing attribution owner's current decision.
+      publishedTrailers = (
+        await command(
+          [
+            "git",
+            "-c",
+            "trailer.separators=:",
+            "-c",
+            "trailer.co-authored-by.key=Co-authored-by",
+            "show",
+            "-s",
+            "--format=%(trailers:key=Co-authored-by,only,unfold)",
+            headCommit,
+          ],
+          { cwd: worktree.path },
+        )
+      ).split(/\r?\n/u);
+    }
     const config = currentGitHubPublicationConfig();
     const attribution = resolveGitCoauthorAttribution({
       agentId: row.agent_id,
@@ -455,14 +484,10 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       storePath: loaded.storePath,
     });
     const contributorCredit = attribution?.logins.map((login) => `- @${login}`).join("\n");
-    const messageLines = currentMessage.split(/\r?\n/u);
     if (
       existingPullRequest &&
-      remoteHead === headCommit &&
-      currentTree === workspaceTree &&
-      sourceIndexTree === workspaceTree &&
-      messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `)) &&
-      (attribution?.trailers ?? []).every((trailer) => messageLines.includes(trailer))
+      publishedTrailers &&
+      (attribution?.trailers ?? []).every((trailer) => publishedTrailers.includes(trailer))
     ) {
       // The owned open PR already exposes this exact attributed tree. A new request
       // needs a receipt, not a new commit marker or index transaction. First publication
