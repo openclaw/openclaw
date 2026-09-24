@@ -180,7 +180,7 @@ Hosts absent from the effective native allowlist are denied. The example's
 `approvalPolicy: "never"` prevents approval-based exceptions; native system
 requirements can still contribute allowed domains. These restrictions apply to
 Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
-for matching, policy inheritance, scope, and configuration errors.
+for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated

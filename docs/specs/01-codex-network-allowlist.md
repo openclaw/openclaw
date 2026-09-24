@@ -9,7 +9,7 @@ read_when:
 # Feature Spec: Codex network allowlist
 
 **Date:** 2026-09-24
-**Status:** Implementation verified locally; integration gaps remain
+**Status:** Implementation verified locally; broader integration gaps remain
 **Owner:** Codex plugin
 
 ## Problem and Decision
@@ -98,9 +98,11 @@ The reference deployment is summarized at capability level; private source evide
 
 ## Implementation
 
-The existing `networkProxy.domains` API, derived types, manifest, and native profile resolver remain unchanged. The only runtime change is a five-line guard in `readCodexPluginConfig`: when parsing fails and the raw configuration explicitly enables the network proxy, throw a redacted configuration error instead of returning `{}`. Absent or disabled proxy configurations retain their existing fallback behavior.
+The existing `networkProxy.domains` API, derived types, plugin manifest, and native profile resolver remain unchanged. A guard in `readCodexPluginConfig` rejects invalid configuration when the raw configuration explicitly enables the network proxy, instead of returning `{}`. The error identifies the rejected static field path without exposing configuration values or dynamic record keys and points to supported Doctor repair. Absent or disabled proxy configurations retain their existing fallback behavior.
 
-The reproduced admission gap is `networkProxy.profileName: ""`: normal manifest validation accepts the string, but the internal parser requires a nonempty value and previously discarded the entire enabled policy. Focused regressions cover that path, a malformed sibling configuration field, and preserved fallback behavior without an enabled proxy. Valid configurations require no migration.
+The reproduced admission gap is `networkProxy.profileName: ""`: the manifest accepts the string, but the internal parser requires a nonempty value and previously discarded the entire enabled policy. The existing plugin Doctor compatibility owner removes only blank optional `networkProxy.profileName` and `remoteWorkspaceRoot` values when networking is enabled, retaining the configured domain map. After a successful plugin update, affected saved configurations require an explicit `openclaw doctor --fix` before Codex execution. There is no new startup hook or core change, and no automatic repair promise. Other invalid values still fail closed. This restores the authored network intent; it does not preserve enforcement that the previous fallback had silently discarded.
+
+Parser regressions in `extensions/codex/src/app-server/config-network-proxy.test.ts` cover manifest-valid invalid configuration, safe field diagnostics, and unchanged behavior without an enabled proxy. Doctor repair coverage lives in `extensions/codex/doctor-contract-api.network-proxy.test.ts`. Candidate replacement and explicit Doctor repair were verified against a published core as described below. Valid configurations require no migration.
 
 No broader sandbox override guard was added. Source inspection found that the existing external sandbox environment advertises `networkProxyLaunch: false`; native Codex refuses the managed networking request before spawning a command. The backend also retains its own rejection of managed network restrictions. Existing lifecycle, version, and backend tests exercise the unchanged boundaries. [Environment capability](https://github.com/openclaw/openclaw/blob/0580bd904564bb771f623c4fd709eab299adf8fb/extensions/codex/src/app-server/sandbox-exec-server/session.ts#L118-L124), [backend guard](https://github.com/openclaw/openclaw/blob/0580bd904564bb771f623c4fd709eab299adf8fb/extensions/codex/src/app-server/sandbox-exec-server/processes.ts#L121-L131).
 
@@ -108,9 +110,13 @@ The [transport guide](/plugins/codex-harness-reference/app-server-transport) pro
 
 ## Verification
 
-Local implementation checks passed: 160 config tests and 30 focused lifecycle, version, and backend tests. The parser regression was reproduced before the guard and passed after the fix.
+The final focused checks passed all five parser regressions, five new Doctor repair cases, and eleven existing Doctor cases. The initial implementation also passed 160 config tests and 30 focused lifecycle, version, and backend tests; those earlier runs predate the final diagnostics and Doctor repair. The parser defect was reproduced before the guard and passed after the fix.
 
-An isolated probe used the actual OpenClaw runtime resolver and app-server client with Codex `0.155.1`, disposable state, and the generated native permission profile. Native `command/exec` performed successful HTTPS GETs in both full and limited modes. A host absent from the effective allowlist returned HTTP 403 with `blocked-by-allowlist`; an explicitly denied host returned HTTP 403 with `blocked-by-denylist`. Native system requirements remained active, and a separate successful request confirmed that managed allowed domains can survive omission from the OpenClaw map.
+Compatibility was exercised with published OpenClaw core `2026.9.6`, the original official Codex plugin of the same version, and saved blank optional fields. The real plugin updater activated the candidate through `plugins update @openclaw/codex@2026.9.6` after its normal explicit integrity confirmation. All 158 installed candidate files matched the candidate archive before and after repair. Candidate executable code came from the checkout unchanged; the existing `syncPluginVersions` staging helper aligned only package metadata with the host version. No package was published and no tracked version was changed. This is same-version candidate replacement compatibility proof, not a published release upgrade test.
+
+An explicit `openclaw doctor --fix` removed the two blank optional fields, retained `networkProxy.enabled` and the domain map, and produced valid configuration without warnings. The installed parser retained the requested policy. Doctor's expected `wizard.lastRunAt` update was the only change outside the plugin configuration, and a second Doctor run left the configuration byte-identical.
+
+An isolated probe of the initial implementation used the actual OpenClaw runtime resolver and app-server client with Codex `0.155.1`, disposable state, and the generated native permission profile. Native `command/exec` performed successful HTTPS GETs in both full and limited modes. A host absent from the effective allowlist returned HTTP 403 with `blocked-by-allowlist`; an explicitly denied host returned HTTP 403 with `blocked-by-denylist`. Native system requirements remained active, and a separate successful request confirmed that managed allowed domains can survive omission from the OpenClaw map.
 
 This proves the config-to-native-command boundary, not a model-driven OpenClaw turn or interactive approval routing: `command/exec` has no thread ID and starts the proxy without a policy decider. A direct request initially failed DNS resolution. A follow-up cleared proxy variables, disabled proxy use, and supplied a pre-resolved public IP with curl `--resolve`; it failed immediately with curl exit 7 while a proxied GET to the same host succeeded. This eliminates DNS as the cause of that failed direct TCP attempt, but does not prove enforcement across every egress route. POST behavior, controlled origin receipt counts, and a model-driven turn were not tested. Certificate validation remained enabled; certificate identity was not separately captured.
 
@@ -141,5 +147,6 @@ No API decision remains. The demonstrated parser fallback is fixed; existing ext
 
 ## Changelog
 
+- 2026-09-24: Verified field-specific errors, explicit plugin Doctor repair, and same-version candidate replacement against published core; broader integration gaps remain.
 - 2026-09-24: Implemented the enabled-proxy parsing guard, documented effective native policy inheritance, and recorded local test and command proof with remaining integration gaps.
 - 2026-09-24: Scoped to the existing Codex network allowlist configuration at OpenClaw `0580bd904564`; broader managed-policy parity excluded by request. Private authoring provenance is retained outside the public repository.

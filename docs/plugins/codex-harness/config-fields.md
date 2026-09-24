@@ -95,9 +95,15 @@ over overlapping allows and cannot be approved.
 Use `*.example.com` for subdomains or `**.example.com` for both the apex domain
 and subdomains. These restrictions apply to commands run through the Codex
 sandbox. They do not restrict Gateway traffic, model-provider requests, or
-unrelated MCP processes. An invalid plugin configuration with
-`networkProxy.enabled: true` fails instead of silently falling back to default
-networking. Fix the configuration before retrying.
+unrelated MCP processes.
+
+With `networkProxy.enabled: true`, invalid configuration fails with the rejected
+field path, without logging configuration values. After a plugin update, saved
+configuration with blank optional `networkProxy.profileName` or
+`remoteWorkspaceRoot` values needs an explicit `openclaw doctor --fix` before
+Codex can run. Doctor removes those blank values while keeping the domain policy.
+Fix other invalid fields manually before retrying. Valid configurations need no
+repair.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated

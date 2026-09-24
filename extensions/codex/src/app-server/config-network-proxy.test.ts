@@ -7,29 +7,32 @@ describe("Codex network proxy config admission", () => {
   it.each([
     {
       name: "invalid proxy profile",
+      field: "appServer.networkProxy.profileName",
       appServer: {
         networkProxy: { enabled: true, profileName: "", domains: { "example.com": "allow" } },
       },
     },
     {
       name: "invalid sibling field",
+      field: "appServer.remoteWorkspaceRoot",
       appServer: {
         remoteWorkspaceRoot: " ",
         networkProxy: { enabled: true, domains: { "example.com": "allow" } },
       },
     },
   ])(
-    "rejects a manifest-valid enabled allowlist with $name without exposing config",
-    ({ appServer }) => {
+    "rejects a manifest-valid enabled allowlist with $name and identifies supported repair",
+    ({ appServer, field }) => {
+      const pluginConfig = {
+        appServer: {
+          ...appServer,
+          authToken: "synthetic-secret-token",
+          headers: { Authorization: "Bearer synthetic-secret-header" },
+        },
+      };
       const validated = validateJsonSchemaValue({
         schema: manifest.configSchema,
-        value: {
-          appServer: {
-            ...appServer,
-            authToken: "synthetic-secret-token",
-            headers: { Authorization: "Bearer synthetic-secret-header" },
-          },
-        },
+        value: pluginConfig,
         applyDefaults: true,
       });
       expect(validated.ok).toBe(true);
@@ -38,21 +41,72 @@ describe("Codex network proxy config admission", () => {
       }
       expect(() => resolveRuntimeForTest({ pluginConfig: validated.value })).toThrow(
         new Error(
-          "Invalid plugins.entries.codex.config with appServer.networkProxy.enabled=true; fix the plugin configuration before starting Codex with network restrictions.",
+          `Invalid plugins.entries.codex.config.${field}; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.`,
         ),
       );
     },
   );
 
-  it("preserves invalid-config fallback when the network proxy is disabled", () => {
-    const runtime = resolveRuntimeForTest({
-      pluginConfig: {
+  it("rejects a manifest-valid malformed auth input without dropping the enabled allowlist", () => {
+    const validated = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      value: {
         appServer: {
-          networkProxy: { enabled: false, profileName: "", domains: { "example.com": "allow" } },
+          authToken: { unexpected: "synthetic-secret" },
+          networkProxy: { enabled: true, domains: { "example.com": "allow" } },
         },
       },
+      applyDefaults: true,
     });
-    expect(runtime.networkProxy).toBeUndefined();
-    expect(runtime.sandbox).toBe(resolveRuntimeForTest().sandbox);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error("Expected manifest-valid config");
+    }
+    expect(() => resolveRuntimeForTest({ pluginConfig: validated.value })).toThrow(
+      new Error(
+        'Invalid plugins.entries.codex.config.appServer.authToken; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
+      ),
+    );
+  });
+
+  it("identifies an invalid domains map without exposing its keys or values", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            networkProxy: {
+              enabled: true,
+              domains: { "synthetic-private-domain.example": "synthetic-invalid-permission" },
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      new Error(
+        'Invalid plugins.entries.codex.config.appServer.networkProxy.domains; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
+      ),
+    );
+  });
+
+  it("preserves blank-field admission and fallback without an enabled proxy", () => {
+    for (const appServer of [
+      {
+        remoteWorkspaceRoot: " ",
+        networkProxy: { enabled: false, profileName: "", domains: { "example.com": "allow" } },
+      },
+      { remoteWorkspaceRoot: " " },
+    ]) {
+      const pluginConfig = { appServer };
+      expect(
+        validateJsonSchemaValue({
+          schema: manifest.configSchema,
+          value: pluginConfig,
+          applyDefaults: true,
+        }).ok,
+      ).toBe(true);
+      const runtime = resolveRuntimeForTest({ pluginConfig });
+      expect(runtime.networkProxy).toBeUndefined();
+      expect(runtime.sandbox).toBe(resolveRuntimeForTest().sandbox);
+    }
   });
 });

@@ -214,8 +214,14 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
     if (asNullableRecord(appServer?.networkProxy)?.enabled === true) {
+      const issuePath = parsed.error.issues[0]?.path ?? [];
+      // Record keys (domains, headers, etc.) are values, not safe diagnostic field names.
+      const fieldDepth = issuePath[0] === "appServer" && issuePath[1] === "networkProxy" ? 3 : 2;
+      const fieldPath = ["plugins.entries.codex.config", ...issuePath.slice(0, fieldDepth)].join(
+        ".",
+      );
       throw new Error(
-        "Invalid plugins.entries.codex.config with appServer.networkProxy.enabled=true; fix the plugin configuration before starting Codex with network restrictions.",
+        `Invalid ${fieldPath}; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.`,
       );
     }
     return {};
