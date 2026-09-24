@@ -7,6 +7,7 @@ import {
 import {
   WORKSPACE,
   captureUiProof,
+  checkoutBaseRefInput,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
@@ -221,9 +222,7 @@ suite.define(() => {
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
       await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
       await checkout.click();
-      await expect
-        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
-        .toBe("release/local");
+      await expect.poll(() => checkoutBaseRefInput(page).inputValue()).toBe("release/local");
       await expect
         .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
         .toBe("browser-task");
@@ -232,6 +231,63 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+
+  it("keeps saved project submission gated after discovery fails until reconnect restores it", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+        featureMethods: ["users.prefs.get", "users.prefs.set", "sessions.create", "projects.list"],
+        deferredMethods: ["projects.list"],
+        methodResponses: {
+          "users.prefs.get": {
+            status: "ok",
+            entries: {
+              "new-session.migration.v1": true,
+              "new-session.v1:main": {
+                workspace: WORKSPACE,
+                folder: WORKSPACE,
+                projectId: REGISTERED_PROJECT.id,
+              },
+            },
+          },
+          "users.prefs.set": { status: "ok" },
+          "projects.list": { projects: [REGISTERED_PROJECT], recents: [] },
+          "worktrees.branches": GIT_BRANCHES,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      const message = page.locator(".new-session-page__message");
+      const start = page.getByRole("button", { name: "Start session", exact: true });
+      await message.fill("work in the saved project");
+      await start.click({ force: true });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await gateway.rejectDeferred("projects.list", {
+        code: "UNAVAILABLE",
+        message: "project lookup unavailable",
+      });
+      await captureUiProof(suite, page, "saved-project-rejected.png");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await start.click({ force: true });
+      await message.press("Enter");
+      await message.press("Control+Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await page.locator('#new-session-project-trigger[data-project-id="registered"]').waitFor();
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        projectId: "registered",
+        message: "work in the saved project",
+      });
+    });
   });
 
   it("restores identity-scoped Where, What, and Checkout defaults after discovery", async () => {
@@ -291,7 +347,7 @@ suite.define(() => {
       await checkout.click();
       const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect
-        .poll(() => checkoutPopover.getByLabel("From", { exact: true }).inputValue())
+        .poll(() => checkoutBaseRefInput(checkoutPopover).inputValue())
         .toBe("release/next");
       await expect
         .poll(() => checkoutPopover.getByLabel("Name", { exact: true }).inputValue())

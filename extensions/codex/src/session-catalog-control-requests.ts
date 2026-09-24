@@ -153,10 +153,12 @@ export function createCodexSessionCatalogControlFromRequests(params: {
       const query = readPageParams(pageParams);
       return await withCodexCatalogListRequest(async (request) => {
         const requests = params.createRequestSnapshot();
-        const deadline = request.deadline(requests.requestTimeoutMs);
+        // Release foreground admission while index-owned hydration continues.
+        const timeoutMs = Math.min(requests.requestTimeoutMs, 5_000);
+        const deadline = request.constrainDeadline(performance.now() + timeoutMs);
         const index = await withTimeout(
           requests.index(),
-          request.remaining(requests.requestTimeoutMs),
+          request.remaining(timeoutMs),
           "Codex session catalog is still loading",
           () => new CodexCatalogLoadingError(),
         );
@@ -165,16 +167,13 @@ export function createCodexSessionCatalogControlFromRequests(params: {
     },
     async listDescendantPage(listParams) {
       const requests = params.createRequestSnapshot();
-      const response = await requests.listThreads(listParams, requests.requestTimeoutMs);
-      return response;
+      return await requests.listThreads(listParams, requests.requestTimeoutMs);
     },
     async readThread(threadId, includeTurns = false) {
-      const thread = await params.createRequestSnapshot().readThread(threadId, includeTurns);
-      return thread;
+      return await params.createRequestSnapshot().readThread(threadId, includeTurns);
     },
     async listTurnPage(listParams) {
-      const response = await params.createRequestSnapshot().listThreadTurns(listParams);
-      return response;
+      return await params.createRequestSnapshot().listThreadTurns(listParams);
     },
     listItemPage: (listParams) => params.createRequestSnapshot().listThreadItems(listParams),
     async forkThread(forkParams, assertCurrent) {

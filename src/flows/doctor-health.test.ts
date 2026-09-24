@@ -64,6 +64,7 @@ function openHistoricalAgentDatabase(options: {
   env: NodeJS.ProcessEnv;
   path?: string;
 }) {
+  openOpenClawStateDatabase({ env: options.env });
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = openNodeSqliteDatabase(databasePath);

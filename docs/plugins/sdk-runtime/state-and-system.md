@@ -361,17 +361,45 @@ AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await thes
 operations before using the resulting model or thinking state. Other synchronous
 SessionManager operations still need an appropriate caller-owned write boundary.
 
+`SessionManager.appendMessageToTranscript` is a deprecated public SDK compatibility
+method, retained for plugins using the v2026.9.5 contract. It accepts ordinary,
+custom, and Bash execution messages and synchronously returns the persisted
+message ID. It delegates to the canonical append kernel and can perform SQLite
+work on the calling thread. Removal requires a versioned SDK replacement and a
+plugin migration window; the bundled failed-image path does not call it.
+
+Core failed-image settlement uses the internal `appendSessionTranscriptNote`
+operation, which accepts a custom message and returns a promise for its persisted `messageId`, canonical
+`message`, the append owner's `appended` result, and a `currentTail` fact from the same snapshot.
+The tail fact uses the transaction's visible leaf and generation: side metadata does not suppress a retry's publication, while a later visible entry does.
+File-backed notes use the same canonical agent worker and writer queue, reserving their turn
+before asynchronous target preparation. The embedded runner awaits its failed-image note before publishing that stored message in live context or the
+completed result when the owner appended it or confirms it is still the current tail after a lost reply. An idempotent historical result does not reintroduce a note omitted by compaction. Input and target capture precede awaited work; transaction and
+publication checks retain the original writer and session binding. A known
+commit followed by a publication failure retains its message ID and prevents
+model fallback from replaying the append. Incognito notes use the same canonical
+append snapshot under their existing process-held native write owner until its
+actor cutover; this path still performs caller-thread SQLite work. It leaves the
+manager's loaded view unchanged and applies the same fresh-append/current-tail
+publication rules. Detached notes continue through their in-memory manager owner.
+Canonical storage close revokes pending asynchronous notes and joins their target
+preparation, accepted work, and cleanup before releasing the store.
+Failed-image notes use the existing message idempotency key to survive redaction
+and same-run retries. Existing unkeyed notes retain their run-metadata matching.
+
 `SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
 as an absolute lexical locator before reading the transcript or invoking
 `onTruncated`. Relative locators resolve against the process working directory
 at entry; `getSessionTarget()` returns that captured locator. Later working
-directory changes leave the manager bound to its original store. Existing
-`sessions.json` and custom-store routing and symlink spelling are preserved.
+directory changes leave the manager bound to its original store. The binding also
+captures the resolved state directory and supervisor mode; environment changes
+cannot redirect later writes. Existing `sessions.json` and custom-store routing
+and symlink spelling are preserved.
 
 File-backed model and thinking transcript writes execute through the canonical
 agent database worker. Queued extension actions retain their original runtime
-and session authority through transaction and commit admission. Session opening,
-final model-context validation, and incognito transcript persistence still use
+and session authority through transaction and commit admission. Synchronous session
+opening, final model-context validation, and incognito transcript persistence still use
 their native owners; an asynchronous method does not imply that every storage
 operation in the enclosing session flow runs off-thread.
 

@@ -7,20 +7,18 @@ import {
   resolveSetupAccountId,
   createSetupTranslator,
   type OpenClawConfig,
-  parseMentionOrPrefixedId,
   promptResolvedAllowFrom,
   splitSetupEntries,
   type WizardPrompter,
   type ChannelSetupWizard,
-  type ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup-runtime";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectSlackAccount, type InspectedSlackAccount } from "./account-inspect.js";
 import { resolveDefaultSlackAccountId, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
+import { buildSlackAllowFromPrompt } from "./setup-shared.js";
 import { SLACK_CHANNEL as channel } from "./shared.js";
 
 const t = createSetupTranslator();
@@ -37,59 +35,28 @@ function resolveSlackSetupAuth(
   return credentialValues.botToken || account.botToken;
 }
 
-async function resolveSlackAllowFromEntries(params: {
-  token?: string;
-  entries: string[];
-}): Promise<ChannelSetupWizardAllowFromEntry[]> {
-  return await resolveBasicAllowFromEntries({
-    token: params.token,
-    entries: params.entries,
-    resolveEntries: async ({ token, entries }) =>
-      await resolveSlackUserAllowlist({ token, entries }),
-  });
-}
-
 async function promptSlackAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const parseId = (value: string) =>
-    parseMentionOrPrefixedId({
-      value,
-      mentionPattern: /^<@([A-Z0-9]+)>$/i,
-      prefixPattern: /^(slack:|user:)/i,
-      idPattern: /^[A-Z][A-Z0-9]+$/i,
-      normalizeId: (id) => id.toUpperCase(),
-    });
-
   const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
   });
   const account = inspectSlackAccount({ cfg: params.cfg, accountId });
-  const noteTitle = t("wizard.slack.allowlistTitle");
-  await params.prompter.note(
-    [
-      t("wizard.slack.allowlistIntro"),
-      t("wizard.slack.examples"),
-      "- U12345678",
-      "- @alice",
-      t("wizard.slack.multipleEntries"),
-      t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
-    ].join("\n"),
-    noteTitle,
-  );
+  const prompt = buildSlackAllowFromPrompt();
+  await params.prompter.note(prompt.helpLines.join("\n"), prompt.helpTitle);
   const allowFrom = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId }) ?? [],
     token: account.userToken ?? account.botToken ?? "",
-    message: t("wizard.slack.allowFromPrompt"),
-    placeholder: "@alice, U12345678",
-    label: noteTitle,
+    message: prompt.message,
+    placeholder: prompt.placeholder,
+    label: prompt.helpTitle,
     parseInputs: splitSetupEntries,
-    parseId,
-    invalidWithoutTokenNote: t("wizard.slack.allowFromInvalidWithoutToken"),
+    parseId: prompt.parseId,
+    invalidWithoutTokenNote: prompt.invalidWithoutCredentialNote,
     resolveEntries: async ({ token, entries }) =>
       (
         await resolveSlackUserAllowlist({
@@ -171,14 +138,11 @@ export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: promptSlackAllowFrom,
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
     const auth = resolveSlackSetupAuth(inspectSlackAccount({ cfg, accountId }), credentialValues);
-    return await resolveSlackAllowFromEntries({ token: auth, entries });
-  },
-  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) =>
-    await resolveSlackGroupAllowlist({
-      cfg,
-      accountId,
-      credentialValues,
+    return resolveBasicAllowFromEntries({
+      token: auth,
       entries,
-      prompter,
-    }),
+      resolveEntries: resolveSlackUserAllowlist,
+    });
+  },
+  resolveGroupAllowlist: resolveSlackGroupAllowlist,
 });

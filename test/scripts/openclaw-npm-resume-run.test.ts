@@ -411,7 +411,8 @@ it("prints an executable resume command that preserves all inputs without shell 
   const inputs = {
     tag: "v2026.9.5",
     publish_openclaw_npm: "true",
-    stable_soak_waiver: "Owner's reason: `false` and $(touch injected)\nsecond line",
+    plugin_sdk_api_acknowledgement:
+      "Owner's acknowledgement: `false` and $(touch injected)\nsecond line",
     prepared_plugins: JSON.stringify({ receipt: "approved" }),
     openclaw_npm_resume_run_id: "",
   };

@@ -70,10 +70,7 @@ import {
   migrateLegacyPluginBindingApprovals,
 } from "./state-migrations.runtime-state.js";
 import { createLegacyAcpSessionEntry } from "./state-migrations.session-store.test-support.js";
-import {
-  resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyTaskStateSidecarsForTest,
-} from "./state-migrations.state-dir.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -786,7 +783,6 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 afterEach(async () => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
-  resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetAutoMigrateLegacyStateDirForTest();
   await closeDatabaseTestCohorts(migrationDatabaseClosers);
   resetPluginRuntimeStateForTest();
@@ -1272,10 +1268,11 @@ describe("state migrations", () => {
 
   it("preserves retired config locators before an advisory transcript migration return", async () => {
     const { root, stateDir, env } = createMigrationContext(await createTempDir());
+    openOpenClawStateDatabase({ env });
     const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    try {
+    {
+      using database = new DatabaseSync(databasePath);
       ensureOpenClawAgentDatabaseSchema(database, {
         agentId: "main",
         env,
@@ -1287,8 +1284,6 @@ describe("state migrations", () => {
           "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
         )
         .run("historical-transcript-directives-v1", "agent", 1, "main", "invalid-json", 1, 1);
-    } finally {
-      database.close();
     }
     const store = path.join(root, "legacy-jobs.json");
     const cfg: OpenClawConfig & { cron: { store: string } } = {

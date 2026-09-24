@@ -18,21 +18,6 @@ import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
 
-const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
-
-vi.mock("./rich-blocks.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
-  return {
-    ...actual,
-    markdownToTelegramRichBlocks: (
-      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
-    ) => {
-      richMarkdownProjection.count += 1;
-      return actual.markdownToTelegramRichBlocks(...args);
-    },
-  };
-});
-
 type CapturedRequest = {
   body: Buffer;
   contentType: string;
@@ -141,7 +126,6 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
-    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
     setTelegramPluginStateRuntimeForTests();
@@ -250,7 +234,6 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
-    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {

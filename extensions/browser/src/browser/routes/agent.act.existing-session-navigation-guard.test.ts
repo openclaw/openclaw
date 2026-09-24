@@ -73,8 +73,9 @@ vi.mock("../local-dispatch.runtime.js", () => ({
   dispatchBrowserControlRequest: transportMocks.dispatch,
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   const syntheticConfig = {
     browser: {
       defaultProfile: "chrome-live",

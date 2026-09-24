@@ -9,6 +9,7 @@ import {
   readGuardReview,
 } from "./guard-review.mjs";
 import {
+  GitHubDiffDataError,
   GitHubRateLimitError,
   GitHubStatusPublicationError,
   publishGuardStatus,
@@ -123,12 +124,14 @@ async function ciState(review) {
     : "failure";
 }
 
+let diffRecoveryReview;
+
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
   if (!["detect", "autoscrub", "enforce"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
-  const review = await readGuardReview();
+  const review = await readGuardReview(diffRecoveryReview);
   if (!review) {
     return;
   }
@@ -154,6 +157,7 @@ async function main() {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubDiffDataError ||
               error instanceof SupersededReviewError) &&
               errors.length === 0)
           ) {
@@ -226,6 +230,9 @@ async function main() {
       "CI and applicable security review requirements passed",
     );
   } catch (error) {
+    if (error instanceof GitHubDiffDataError) {
+      diffRecoveryReview = review;
+    }
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
@@ -239,6 +246,14 @@ async function main() {
       "CI or security review failed; see workflow details",
     ).catch(
       /** @param {unknown} publicationError */ (publicationError) => {
+        if (
+          error instanceof GitHubDiffDataError &&
+          (publicationError instanceof GitHubRateLimitError ||
+            publicationError instanceof GitHubStatusPublicationError)
+        ) {
+          // Keep publication timing and the diff's original PR identity together.
+          throw publicationError;
+        }
         console.error(
           publicationError instanceof Error ? publicationError.message : String(publicationError),
         );

@@ -397,20 +397,29 @@ async function prepareSnapshotIndex(
   const missing = new Set<string>();
   let gitBytes = 0;
   let provisionedBytes = 0;
-  for (const [key, value] of unique) {
-    try {
-      const stat = await fs.lstat(checkoutPathFromGitBytes(input.checkoutPath, value));
-      if (provisioned.has(key)) {
-        provisionedBytes += stat.size;
+  const candidates = [...unique];
+  // Large deletion sets need bounded filesystem batches, as cleanup inspection does.
+  // Join every read before reporting the first error or releasing snapshot custody.
+  for (let offset = 0; offset < candidates.length; offset += 64) {
+    const batch = candidates.slice(offset, offset + 64);
+    const stats = await Promise.allSettled(
+      batch.map(([, value]) => fs.lstat(checkoutPathFromGitBytes(input.checkoutPath, value))),
+    );
+    for (const [index, result] of stats.entries()) {
+      const key = batch[index]![0];
+      if (result.status === "fulfilled") {
+        if (provisioned.has(key)) {
+          provisionedBytes += result.value.size;
+        } else {
+          gitBytes += result.value.size;
+        }
       } else {
-        gitBytes += stat.size;
-      }
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      if (tracked.has(key)) {
-        missing.add(key);
+        if (!isMissingPathError(result.reason)) {
+          throw result.reason;
+        }
+        if (tracked.has(key)) {
+          missing.add(key);
+        }
       }
     }
   }

@@ -8,6 +8,7 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
@@ -201,7 +202,7 @@ describe("runtime conversation binding route", () => {
     }
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
-    expect(result.route).toEqual({
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual({
       agentId: "review",
       accountId: "default",
       channel: "demo",
@@ -235,7 +236,10 @@ describe("runtime conversation binding route", () => {
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
     expect(result.bindingRecord).toBe(binding);
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("plugin");
   });
 
   it.each([
@@ -311,7 +315,10 @@ describe("runtime conversation binding route", () => {
     expect(touch).not.toHaveBeenCalled();
     expect(result.bindingRecord).toBeNull();
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("none");
   });
 });
 

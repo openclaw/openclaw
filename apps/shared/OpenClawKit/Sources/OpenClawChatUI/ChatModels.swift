@@ -173,7 +173,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         if normalizedMIME?.hasPrefix("image/") == true { return .image }
         if normalizedMIME?.hasPrefix("audio/") == true { return .audio }
         if normalizedMIME?.hasPrefix("video/") == true { return .video }
-        return nil
+        return self.isInlineAttachment ? .file : nil
     }
 
     public init(
@@ -228,7 +228,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.isError = isError
     }
 
+    private struct AttachmentEnvelope: Decodable {
+        let artifactId: String?
+        let label: String?
+        let mimeType: String?
+        let sizeBytes: Int?
+        let url: String?
+    }
+
     enum CodingKeys: String, CodingKey {
+        case attachment
         case type
         case text
         case textSignature
@@ -268,12 +277,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.textSignature = try container.decodeIfPresent(String.self, forKey: .textSignature)
         self.thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
         self.thinkingSignature = try container.decodeIfPresent(String.self, forKey: .thinkingSignature)
-        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
-        self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
-        let decodedURL = try container.decodeIfPresent(String.self, forKey: .url)
+        let attachment = self.type == "attachment"
+            ? try container.decodeIfPresent(AttachmentEnvelope.self, forKey: .attachment) : nil
+        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType) ?? attachment?.mimeType
+        self.fileName = try container.decodeIfPresent(String.self, forKey: .fileName) ?? attachment?.label
+        let decodedURL = try container.decodeIfPresent(String.self, forKey: .url) ?? attachment?.url
         self.url = decodedURL
         self.openUrl = try container.decodeIfPresent(String.self, forKey: .openUrl)
         self.artifactId = try container.decodeIfPresent(String.self, forKey: .artifactId)
+            ?? attachment?.artifactId
             ?? Self.managedArtifactId(
                 from: decodedURL,
                 type: self.type,
@@ -281,7 +293,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
         self.width = try container.decodeIfPresent(Int.self, forKey: .width)
         self.height = try container.decodeIfPresent(Int.self, forKey: .height)
-        self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
+        self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes) ?? attachment?.sizeBytes
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
             ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
         self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
@@ -354,9 +366,11 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         else { return nil }
         let normalizedType = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedMIME = mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let prefix = if normalizedType == "audio" || normalizedType == "video" ||
-            normalizedMIME?.hasPrefix("audio/") == true ||
-            normalizedMIME?.hasPrefix("video/") == true
+        let isImage = normalizedType == "image" || normalizedMIME?.hasPrefix("image/") == true
+        let prefix = if !isImage,
+                        ["audio", "video", "file", "attachment"].contains(normalizedType ?? "") ||
+                        normalizedMIME?.hasPrefix("audio/") == true ||
+                        normalizedMIME?.hasPrefix("video/") == true
         {
             "artifact_managed_media_"
         } else {

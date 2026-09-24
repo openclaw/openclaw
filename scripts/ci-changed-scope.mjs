@@ -12,6 +12,37 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const CHANGED_PATHS_OUTPUT_MAX_BYTES = 64 * 1024;
 
+/** @param {string} changedPath */
+export function isCiDocumentationPath(changedPath) {
+  if (
+    /(?:^|\/)(?:test|tests|__tests__|fixture|fixtures|__fixtures__|test-fixtures|templates)\//u.test(
+      changedPath,
+    )
+  ) {
+    return false;
+  }
+  const instruction =
+    /(?:^|\/)AGENTS\.md$/u.test(changedPath) ||
+    /^\.agents\/skills\/.+\.md$/u.test(changedPath) ||
+    /^skills\/[^/]+\/SKILL\.md$/u.test(changedPath);
+  return (
+    /(?:^|\/)README\.mdx?$/u.test(changedPath) || instruction || changedPath.startsWith("docs/")
+  );
+}
+
+/**
+ * Catalog data skips PR Node rows; generator/runtime code keeps its test owners.
+ * @param {string} changedPath
+ */
+export function isNodeTestDataOnlyPath(changedPath) {
+  return (
+    isCiDocumentationPath(changedPath) ||
+    /^(?:ui\/src\/i18n\/(?:locales\/[^/]+\.ts|\.i18n\/[^/]+\.(?:json|jsonl))$|src\/wizard\/i18n\/locales\/[^/]+\.ts$|apps\/\.i18n\/native\/[^/]+\.json$)/u.test(
+      changedPath,
+    )
+  );
+}
+
 /** @type {ChangedScope} */
 const FULL_SCOPE = {
   runNode: true,
@@ -44,6 +75,7 @@ const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
 const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
+const SWIFT_LINT_OWNER_RE = /^scripts\/(?:run-swiftlint|lib\/check-limits)\.mts$/;
 const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
@@ -155,13 +187,14 @@ const NODE_FAST_SCOPE_RE = new RegExp(
 
 /** @param {string} path Canonical repository-relative script or test path. */
 export function isMacosToolingPath(path) {
-  return MACOS_SCRIPT_SCOPE_RE.test(path);
+  return MACOS_SCRIPT_SCOPE_RE.test(path) || SWIFT_LINT_OWNER_RE.test(path);
 }
 
 /** @param {string} path Canonical repository-relative build input. */
 function isAppleSharedBuildInput(path) {
   return (
     APPLE_SWIFT_CONFIG_RE.test(path) ||
+    SWIFT_LINT_OWNER_RE.test(path) ||
     MERMAID_ASSET_INPUT_RE.test(path) ||
     path === "scripts/prepare-apple-mermaid.mjs"
   );
@@ -716,6 +749,9 @@ export function writeGitHubOutput(
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
+  const nodeTestDataOnly =
+    changedPaths !== null && changedPaths.length > 0 && changedPaths.every(isNodeTestDataOnlyPath);
+  appendFileSync(outputPath, `node_test_data_only=${nodeTestDataOnly}\n`, "utf8");
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
   appendFileSync(outputPath, `run_macos_node=${scope.runMacosNode}\n`, "utf8");

@@ -1441,6 +1441,15 @@ describe("release candidate checklist", () => {
     );
   });
 
+  it.each(["v2026.9.1", "v2026.9.1-1", "v2026.9.33"])(
+    "rejects beta-profile validation for stable candidate %s",
+    (tag) => {
+      expect(() => parseArgs(["--tag", tag, "--release-profile", "beta"])).toThrow(
+        "stable release candidates require --release-profile stable or full",
+      );
+    },
+  );
+
   it("defaults beta and alpha Parallels to postpublish confidence", () => {
     const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
     const alpha = parseArgs([

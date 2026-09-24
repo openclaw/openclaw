@@ -15,7 +15,11 @@ export type SessionRowReadView = {
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
-  readonly state: { cfg: OpenClawConfig; rowContext: SessionListRowContext };
+  readonly state: {
+    cfg: OpenClawConfig;
+    policyConfig: OpenClawConfig;
+    rowContext: SessionListRowContext;
+  };
 };
 
 export async function withPreparedSessionRows<T>(
@@ -97,7 +101,11 @@ function consumePreparedSessionRows<T>(
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
-  state = { cfg: preparedState.cfg, rowContext: preparedState.rowContext };
+  state = {
+    cfg: preparedState.cfg,
+    policyConfig: preparedState.policyConfig,
+    rowContext: preparedState.rowContext,
+  };
   let active = true;
   const assertActive = () => {
     if (!active || !isActive()) {

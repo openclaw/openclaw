@@ -96,7 +96,6 @@ export function createVitestReportFixture(
     OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
-    OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
     OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "20000",
   };
   for (const [key, value] of Object.entries(env)) {
@@ -168,8 +167,7 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
-    // Report paths identify attempts before spawn; a marker written during config
-    // loading would move the intentional hang to a retry after slow first startup.
+    // Report paths identify the first attempt before config startup can record state.
     for (const [index, name] of ["alpha", "beta"].entries()) {
       const prelude = `import fs from 'node:fs';
 ${mode === "watchdog" ? "import path from 'node:path';" : ""}
@@ -289,14 +287,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
       targets = ["test/vitest/vitest.extension-telegram.config.ts"];
     }
+    // Generated configs need no transforms. The real-home case imports the
+    // repository config and retains its source-aware loader.
+    const configLoader = `--configLoader=${realHomeReplay ? "runner" : "native"}`;
     const args = [
       "--reporter=verbose",
       "--reporter=json",
-      "--configLoader=runner",
+      configLoader,
       mode === "dotted" ? `--outputFile.json=${output}` : `--outputFile=${output}`,
     ];
     if (options.report === false) {
-      args.splice(0, args.length, "--configLoader=runner");
+      args.splice(0, args.length, configLoader);
     }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {
@@ -378,8 +379,6 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       OPENCLAW_TEST_PROJECTS_PARALLEL: isParallel ? "2" : "1",
       OPENCLAW_TEST_PROJECTS_SERIAL: isParallel ? "0" : "1",
       OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_NO_OUTPUT_RETRY:
-        mode === "watchdog" ? "1" : env.OPENCLAW_VITEST_NO_OUTPUT_RETRY,
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
         mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
     };

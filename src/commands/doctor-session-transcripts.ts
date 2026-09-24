@@ -18,6 +18,7 @@ import {
 } from "../config/sessions/legacy-transcript-repair.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import type {
@@ -39,7 +40,6 @@ import {
   repairReservedIncognitoSessionKeys,
   type ReservedIncognitoKeyRepairReport,
 } from "./doctor-session-incognito-key-repair.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
 import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import {
@@ -525,18 +525,7 @@ async function noteSessionSqliteMigrationHealth(params: {
     );
   }
   if (actionableIssues > 0) {
-    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets);
-    const deferredHistory = actionableTargets.reduce(
-      (count, target) =>
-        count +
-        target.issues.filter((issue) => issue.code === "historical_transcript_deferred").length,
-      0,
-    );
-    if (deferredHistory > 0) {
-      warnings.unshift(
-        `Deferred ${deferredHistory} historical transcript claim(s); originals remain protected. Preserve the named files and migration manifests, resolve the reported conflicts, then rerun "${formatCliCommand("openclaw doctor --fix", params.env)}".`,
-      );
-    }
+    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
     params.onWarnings?.(warnings);
     lines.push(...warnings.map((warning) => `- ${warning}`));
     lines.push(

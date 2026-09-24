@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
-import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
+import {
+  DoctorMaintenanceRefusalError,
+  normalizeUpdatePostInstallDoctorWarnings,
+} from "../../infra/update-doctor-result.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -27,7 +30,7 @@ import {
 } from "./update-command-post-core.js";
 import { convergePostCoreUpdatePlugins } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 export async function convergeUpdatePlugins(params: {
   coreAlreadyCurrent?: boolean;
@@ -137,37 +140,24 @@ export async function convergeUpdatePlugins(params: {
     );
   }
 
-  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () => {
-    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    const compatibilityHostVersion = params.candidateRuntime
-      ? (postUpdateInstalledVersion ?? VERSION)
-      : versionComparison != null && versionComparison > 0
-        ? postUpdateInstalledVersion
-        : null;
-    if (compatibilityHostVersion) {
-      // Downgraded parents and candidate workers both use the installed target,
-      // not a pre-update VERSION or an inherited compatibility-host override.
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityHostVersion;
-    }
-    try {
+  const compatibilityHostVersion = params.candidateRuntime
+    ? (postUpdateInstalledVersion ?? VERSION)
+    : versionComparison != null && versionComparison > 0
+      ? postUpdateInstalledVersion
+      : null;
+  // Downgraded parents and candidate workers select the installed target version.
+  const compatibilityEnv = compatibilityHostVersion
+    ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion }
+    : {};
+  return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
+    withUpdateEnv(compatibilityEnv, async () => {
       let postCorePluginUpdate;
       const doctorWarnings: string[] = [];
       const collectDoctorWarnings = (warnings: string[]) => {
         doctorWarnings.push(...warnings);
       };
       let targetRuntimeConverged = false;
-      const runtimeStartedAt = Date.now();
-      const runtime = await withPluginLifecycleLease({ assertCurrent }, (lease) =>
-        completeSourceUpdateRuntime({
-          root: postUpdateRoot,
-          timeoutMs: params.updateStepTimeoutMs,
-          lease,
-          beforePersistentEffect: assertCurrent,
-          beforePublication: params.beforeRuntimePublication,
-        }),
-      );
-      const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
-      assertCurrent?.();
+      let maintenanceDeferred = false;
       if (shouldResumePostCoreInFreshProcess) {
         if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
           await params.beforeDoctor?.();
@@ -222,6 +212,20 @@ export async function convergeUpdatePlugins(params: {
         };
       }
 
+      const runtimeStartedAt = Date.now();
+      const runtime = targetRuntimeConverged
+        ? { changed: false }
+        : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
+            completeSourceUpdateRuntime({
+              root: postUpdateRoot,
+              timeoutMs: params.updateStepTimeoutMs,
+              lease,
+              beforePersistentEffect: assertCurrent,
+              beforePublication: params.beforeRuntimePublication,
+            }),
+          );
+      const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
+      assertCurrent?.();
       if (!targetRuntimeConverged) {
         // Both current-runtime and migrated finalization use the same producer.
         // This caller owns completion; a candidate never delegates again.
@@ -253,12 +257,13 @@ export async function convergeUpdatePlugins(params: {
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
+        const producedPluginUpdate = postCorePluginUpdate;
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
-          pluginUpdate: postCorePluginUpdate,
-          freshDoctorRequired: postCorePluginUpdate.changed,
+          pluginUpdate: producedPluginUpdate,
+          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,
@@ -266,15 +271,30 @@ export async function convergeUpdatePlugins(params: {
           timeoutMs: params.updateStepTimeoutMs,
           onWarnings: collectDoctorWarnings,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+        }).catch((error: unknown) => {
+          if (
+            !(error instanceof DoctorMaintenanceRefusalError) ||
+            error.refusal.kind !== "deferred"
+          ) {
+            throw error;
+          }
+          maintenanceDeferred = true;
+          postCorePluginUpdate = { ...producedPluginUpdate, status: "warning" };
+          if (!doctorWarnings.includes(error.message)) {
+            collectDoctorWarnings([error.message]);
+          }
+          return undefined;
         });
         assertCurrent?.();
-        postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
-        postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+        if (completedPluginUpdate) {
+          postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+          postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+        }
       } else if (params.candidateRuntime) {
         postUpdateConfigSnapshot = await readConfigFileSnapshot({ observe: false });
       }
       assertCurrent?.();
-      if (params.candidateRuntime && postUpdateConfigSnapshot) {
+      if (!maintenanceDeferred && params.candidateRuntime && postUpdateConfigSnapshot) {
         await persistValidatedDowngradeConfig(postUpdateConfigSnapshot, assertCurrent);
         assertCurrent?.();
       }
@@ -369,14 +389,6 @@ export async function convergeUpdatePlugins(params: {
       }
 
       return { resultWithPostUpdate, postUpdateConfigSnapshot };
-    } finally {
-      if (compatibilityHostVersion) {
-        if (previousCompatibilityHostVersion === undefined) {
-          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-        } else {
-          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-        }
-      }
-    }
-  });
+    }),
+  );
 }

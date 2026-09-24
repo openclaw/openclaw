@@ -39,10 +39,24 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Linux (`ubuntu`) cross-OS lanes gate publication for beta, stable, and full.
-  Windows/macOS cross-OS lanes run in parallel as advisory coverage. Record
-  their actual pass/fail conclusions; failures do not block Release Decision,
-  npm publication, or `pnpm release:candidate`. Keep normal CI, npm
+- Every selected test lane gates validation across Linux, Windows, and macOS,
+  including native apps, UI, QA, Telegram, live providers, and performance.
+  Profiles never automatically downgrade failures to advisory success.
+  Omitted coverage stays not run.
+- Release priority: release runs always beat PR-side hosted-runner work. The
+  repo variable `OPENCLAW_RELEASE_PRIORITY_RUN` names the active FRV parent;
+  `pnpm ci:full-release` records the pause window, sets it on dispatch, and
+  clears it when the operation ends; `pnpm frv continue --failed` and
+  `pnpm frv verify` clear it on seal. While set, `CI`, Auto response, PR
+  context and evidence, Labeler, CodeQL, Periphery, Workflow Sanity,
+  ClawSweeper Dispatch, and Maintainer Command Reactions skip at the job level
+  unless dispatched or on a `release*/` branch (Security Review never pauses);
+  deferred CI fails its gate with `Deferred for release <run>`. When release
+  children starve behind queued PR runs, `pnpm frv prioritize --run <parent>`
+  records and cancels the still-queued non-release runs of those workflows;
+  after the seal, `pnpm frv prioritize --restore <record>` clears the variable
+  first and reruns the cancelled and deferred runs, newest per workflow and
+  branch. Never leave the variable set after a release. Keep normal CI, npm
   qualification, Docker, Package Acceptance, performance, and soak gates intact.
 - macOS app signing/notarization/appcast and Windows Hub asset promotion run
   in parallel with or after npm publication and never delay npm or GitHub
@@ -89,8 +103,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
   validation inputs remain exact. Newer child attempts replace matching jobs;
   jobs absent from a newer attempt carry forward. A duplicate job identity,
-  missing attempt, regressed attempt, or changed tuple fails closed.
-- Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
+  missing attempt, regressed attempt, or changed tuple fails closed. `frv status`
+  and `continue` allow up to 60 seconds of read-only reconciliation when GitHub
+  temporarily returns duplicate jobs in the newest retry attempt. The run tuple
+  and attempt stay pinned; persistent duplicates and older-attempt conflicts
+  remain errors.
+- Use `pnpm frv status|rerun --job|continue --failed|verify` for attempt-aware recovery.
   The controller is stateless: the immutable execution plan, exact GitHub run
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
   never writes a tag, package, registry entry, release candidate, or
@@ -106,7 +124,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   attempt-one failure to an attempt-two pass. The broker must emit its receipt
   without creating a release candidate, release artifact, publication,
   repository ref, replacement parent, or other workflow mutation. This is the
-  hosted GitHub failed-job rerun proof; focused controller tests own immutable
+  hosted GitHub targeted-job rerun proof; focused controller tests own immutable
   plan eligibility, green-attempt preservation, same-parent collection, and
   strict-verifier invocation. Never use a real Full Release Validation run for
   this proof. See
@@ -171,7 +189,7 @@ until their dependent enforcement changes land.
 - An `all` run without soak for an actual beta package on its matching canonical
   release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
   Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
-  Linux cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
+  Linux/Windows/macOS cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
   CI, performance, and published-package Telegram are deferred to confidence.
   Beta `all` without soak also defers Package Acceptance Telegram, including
   beta-profile checks of `main` or alpha. Record deferred checks as not run,
@@ -189,14 +207,27 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
-- For a supported parent, `pnpm frv continue --failed --run <parent-run-id>`
-  adopts any active newer child attempt, reruns failed child jobs in parallel,
-  leaves green children untouched, then reruns the parent once to restore the
-  immutable plan and seal a trusted all-group manifest. It does not start a
-  second child retry while an attempt is active. Each child or parent rerun
-  mutation is sent exactly once; ambiguous transport failures trigger only
-  bounded read reconciliation. The controller never repeats the mutation, and
-  provenance drift fails closed.
+- Never automatically rerun a failed or timed out test job. New dispatches reject
+  `known_flaky_jobs_json`; diagnose the original failure and fix its owner before
+  explicit operator recovery.
+- For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
+"<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
+  Actions job ID. Get the child key and exact name from `frv status --json`.
+  GitHub also reruns dependent jobs. The controller waits only for that child
+  before sending the request; it does not retry unrelated failures.
+- `pnpm frv continue --failed --run <parent-run-id>` reruns each failed child
+  as soon as it is terminal, even while the parent or siblings remain active.
+  It adopts active attempts and preserves green children. Once every required
+  child is green and the original parent finishes, it reruns the parent once
+  to restore the same immutable plan and seal the updated all-group manifest.
+  An early retry can invalidate the original Decision/Drain pairing; the final
+  reseal and strict verification own completion.
+- Each child or parent rerun mutation is sent exactly once per invocation;
+  ambiguous transport failures trigger bounded read-only reconciliation. Do
+  not blindly repeat an interrupted or timed-out command: inspect exact
+  attempts first. Targeted JSON results record the job ID, accepted source
+  attempt and observed retry attempt. Keep the command in a long-running shell
+  for its default 12-hour operation budget.
 - Inspect without mutation:
 
   ```bash
@@ -213,10 +244,10 @@ until their dependent enforcement changes land.
   or `performance`. Never use the removed `release-checks` handle. `qa` is
   only a direct-child manual aggregate, not a controller retry API.
 - Filtered retries fail closed unless the filter belongs to the selected group.
-  All-group runs also accept `cross_os_suite_filter`: for example,
-  `-f cross_os_suite_filter=ubuntu,macos` excludes Windows. `npm-stable-v1` and
-  `npm-beta-v1` still qualify when advisory OS lanes are omitted, provided all
-  Linux suites remain selected and the other policy requirements hold.
+  All-group `cross_os_suite_filter` selections must retain `packaged-fresh`,
+  `installer-fresh`, and `packaged-upgrade` on Linux (`ubuntu`), Windows, and
+  macOS: all nine OS/suite pairs are required for qualification. Focused
+  `cross-os` reruns may select individual lanes.
   Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
@@ -229,9 +260,14 @@ until their dependent enforcement changes land.
 
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.
-Bind both results to that exact SHA; either generated-locale drift blocks
-dispatch. Keep target execution outside the trusted dispatch helper—do not
-execute an arbitrary target checkout as helper code.
+Bind both results to that exact SHA. Report generated-locale drift as a warning
+and continue dispatch; source changes and the serialized locale-refresh workflows
+can temporarily leave generated output behind. Do not require regeneration before
+starting validation. FRV's normal-CI child retains the strict `control-ui-i18n`
+and `native-i18n` jobs and reports their actual results in the run summary;
+a failed locale job still fails validation. PR-side checks and release-prep and
+publication gates stay unchanged. Keep target execution outside the trusted
+dispatch helper—do not execute an arbitrary target checkout as helper code.
 
 Before expensive full validation, also run `pnpm ui:build` on the same frozen
 trusted target with its frozen dependencies in approved isolation, outside the
@@ -274,8 +310,8 @@ non-billable credentials fail before the expensive release matrix.
 
 For regular beta/stable protected publication, after evidence validation run
 `pnpm release:publish-preflight` with the intended tag, exact Full Release
-Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
-applicable, and protected publication tooling ref. `pnpm release:candidate`
+Validation run and attempt, npm dist-tag, plugin scope, and protected publication
+tooling ref. `pnpm release:candidate`
 invokes this check with its downloaded manifests; do not redownload them or
 replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
@@ -319,7 +355,7 @@ gh workflow run openclaw-performance.yml \
   infrastructure noise.
 - Full Release Validation requires blocking performance evidence for stable
   and full profiles. `npm-beta-v1` defers the child; explicit `performance`
-  and soak-enabled beta runs retain advisory performance coverage. Every
+  and soak-enabled beta runs retain blocking performance coverage. Every
   selected performance child must finish and prove artifact-only publication.
 
 Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
@@ -422,9 +458,45 @@ focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
-Stable publication requires soak unless the operator supplies `stable_soak_waiver`
-with a reason; the publisher forwards and records that reason in release evidence
-without changing validation coverage or other publication gates.
+Stable publication requires a stable/full validation profile, soak, and
+successful blocking performance evidence. Beta-profile evidence cannot authorize
+stable publication.
+
+### Publish children
+
+- npm children (`Plugin NPM Release`, `openclaw-npm-release.yml`) need their
+  own `npm-release` approval; the parent's approval does not always propagate,
+  and an unapproved core child sits `waiting` silently. Watch every child and
+  approve npm children only (environment id `13010111854`):
+  ```bash
+  gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments
+  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
+    -f state=approved -f comment="<reason>" -F 'environment_ids[]=13010111854'
+  ```
+- Never approve ClawHub children (`plugin-clawhub-release.yml`,
+  `plugin-clawhub-new.yml`) by hand: `Revalidate trusted tooling identity`
+  downloads `openclaw-clawhub-recovery-approval-<run>-1`, which only the
+  parent's approval path uploads, so every publish job fails
+  `Artifact not found`. If the parent died before approving them, cancel them
+  and re-dispatch the parent.
+- Before re-dispatching a failed publish parent, sweep its stale children;
+  otherwise the next parent fails at `Dispatch publish workflows` with
+  `ClawHub dispatch blocked by waiting run`. The parent's own cleanup misses
+  children that reach `waiting` after it dies. List `workflow_dispatch` runs by
+  `github-actions[bot]` created for this release, reject their gate, cancel:
+  ```bash
+  for s in waiting queued; do gh api "repos/openclaw/openclaw/actions/runs?status=$s&per_page=100" \
+    --jq '.workflow_runs[] | select(.event=="workflow_dispatch" and .actor.login=="github-actions[bot]") | select(.name | test("plugin-clawhub|Plugin NPM Release|openclaw-npm-release")) | [.id,.name,.created_at] | @tsv'; done
+  env_id=$(gh api repos/openclaw/openclaw/actions/runs/<child>/pending_deployments --jq '.[0].environment.id')
+  gh api -X POST repos/openclaw/openclaw/actions/runs/<child>/pending_deployments \
+    -f state=rejected -f comment="Reject stale release gate" -F "environment_ids[]=$env_id"
+  gh run cancel <child> --repo openclaw/openclaw
+  ```
+- `gh run rerun --failed` on a plugin npm child fails its attempt-bound
+  preflight artifact readback. The parent waits for the original child to
+  settle and propagates its failure without dispatching a replacement.
+  Diagnose and fix the failed owner before explicitly recovering publication;
+  preserve successful immutable packages and evidence.
 
 ### Extended-stable validation
 
@@ -516,6 +588,25 @@ races keep the candidate unchanged. Record repairs and superseded runs; any
 branch change requires a new complete parent. Omit only an explicitly
 unsupported frozen-target scenario, never a required behavior or package.
 
+### Frozen-target test omissions
+
+Use `plugin_prerelease_node_exclude_patterns_json` only for exact `src/plugins/`
+test paths in the Plugin Prerelease Node lane. Use
+`extension_test_exclude_patterns_json` for exact `extensions/` test paths in
+Plugin Prerelease extension shards. Normal CI does not own that sweep. Both
+default to `[]`; there is no implicit
+Codex omission. Pass JSON arrays at initial dispatch, retain the justification
+and owning fix, and report omitted coverage as not run.
+
+Preflight must discover every requested path in the selected frozen-target
+lane; nonexistent, out-of-lane, duplicate, basename, or glob inputs fail loudly.
+Trusted tooling applies exact exclusions to inline Vitest leaves while
+preserving candidate runtime preparation and restores original config bytes
+after the shard command. Do not substitute CLI `--exclude` or a new target-side
+environment variable: frozen inline projects may ignore them. Inputs remain in
+the immutable request, coverage/reuse identity, and final manifest; changing
+them requires a new request, never continuation.
+
 ## Watch
 
 Use the transition-only summary watcher instead of repeated raw polling:
@@ -545,8 +636,9 @@ Interpret state precisely:
 
 - `qualifying`: no decisive blocker yet; selected children are still active.
 - `blocked_diagnostics_running`: publication is blocked; Diagnostic Drain is
-  still collecting independent failures. Diagnose now, but do not retry until
-  the drain is terminal.
+  still collecting independent failures. Diagnose now and use `frv rerun` or
+  `continue --failed` when the failed child is terminal; final parent resealing
+  still waits for complete evidence.
 - `passed`: all required policy and exact-child evidence passed.
 - `blocked_complete`: publication is blocked and all selected diagnostics are
   terminal.
@@ -556,10 +648,9 @@ Interpret state precisely:
 - `cancelled_with_children`: the collector was cancelled while exact children
   remained active.
 
-Read **advisory** entries separately from Release Decision. Windows/macOS
-cross-OS lanes retain their actual conclusions in the manifest and summary;
-`passed` does not mean those advisory lanes passed. Selected lanes still need
-terminal evidence, and filtered-out lanes are not run, never passed.
+Selected lanes need successful terminal evidence. Failed attempts remain failures,
+while filtered-out or deferred lanes are not run, never passed. Gateway install
+and upgrade checks on Linux, Windows, and macOS block beta/stable/full validation.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -597,6 +688,16 @@ run-ID-cached bytes first.
      evidence, and repeat Release SHA proof
    - publish child/registry selector failure: keep Release SHA and resume the
      failed child; never rebuild an immutable version that already published
+   - parent failed after core npm published (for example a stale `beta`
+     dist-tag failing the completion verify): flip the GitHub release public
+     immediately with
+     `gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`;
+     never leave it drafted waiting for Docker, ClawHub, apps, or the resume.
+     Then run the beta-to-stable dist-tag sync, sweep stale children, and
+     dispatch a new parent with the same inputs: it recognizes published bytes
+     and only runs ClawHub, GitHub release evidence, and Docker
+   - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing
+     `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
      Only the first class changes the Code SHA. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
@@ -629,7 +730,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
-- Windows/macOS cross-OS advisory lane classifications and actual conclusions
+- Linux, Windows, and macOS Gateway cross-OS install/upgrade conclusions
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

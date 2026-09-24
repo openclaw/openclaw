@@ -95,16 +95,8 @@ export async function archiveWorkspaceSetupSource(
       await sourceRoot.create(relativePath, snapshot.buffer, {
         mode: 0o600,
         renameIdentity: "verify-content-with-lock",
+        durable: "file",
       });
-      const archive = await sourceRoot.open(relativePath, {
-        hardlinks: "reject",
-        symlinks: "reject",
-      });
-      try {
-        await archive.handle.sync();
-      } finally {
-        await archive[Symbol.asyncDispose]();
-      }
       requireDirectorySync(await parent.sync(), "Workspace setup archive directory");
     } finally {
       await parent.close();

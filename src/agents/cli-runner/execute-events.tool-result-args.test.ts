@@ -18,6 +18,11 @@ import {
   emitAgentEvent,
   onAgentEvent,
 } from "../../infra/agent-events.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { createCliEventHandlers } from "./execute-events.js";
@@ -30,6 +35,7 @@ vi.mock("../cli-runner.js", () => ({
 }));
 afterEach(() => {
   cliDispatchState.runCliAgentMock.mockReset();
+  resetGlobalHookRunner();
 });
 
 function buildContext(runId: string): PreparedCliRunContext {
@@ -235,6 +241,144 @@ describe("cli tool result events", () => {
       dispose();
     }
   });
+
+  it.each([false, true])(
+    "delivers native completions once to canonical matchers unless isolated (%s)",
+    async (isolatedCompletion) => {
+      const observed: unknown[] = [];
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "after_tool_call",
+            matcher: ["exec", "web_fetch"],
+            handler: (event) => observed.push(event),
+          },
+        ]),
+      );
+      const context = buildContext(`native-completion-${isolatedCompletion}`);
+      if (isolatedCompletion) {
+        context.params.isolatedCompletion = true;
+      }
+      const handlers = createCliEventHandlers({
+        context,
+        toolTracking: createCliToolTracking(context),
+        getRunState: () => ({ failed: false, error: undefined }),
+      });
+      handlers.emitCliToolUseStart({
+        toolCallId: "native-exec",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "pwd" },
+      });
+      const completed = {
+        toolCallId: "native-exec",
+        name: "Bash",
+        isError: false,
+        result: "/workspace",
+      };
+      handlers.emitCliToolResult(completed);
+      handlers.emitCliToolResult(completed);
+      handlers.emitCliDisplayToolUseStart({
+        toolCallId: "native-fetch",
+        name: "WebFetch",
+        kind: "tool_use",
+        args: { url: "https://example.com" },
+      });
+      handlers.emitCliDisplayToolResult({
+        toolCallId: "native-fetch",
+        name: "WebFetch",
+        isError: true,
+        result: { error: "request failed" },
+      });
+      for (const name of ["mcp__openclaw__exec", "mcp_openclaw_exec"]) {
+        handlers.emitCliToolUseStart({
+          toolCallId: name,
+          name,
+          kind: "mcp_tool_use",
+          args: { command: "pwd" },
+        });
+        handlers.emitCliToolResult({ ...completed, toolCallId: name, name });
+      }
+      handlers.emitCliToolResult({ ...completed, toolCallId: "unknown-call", name: "" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await vi.waitFor(() =>
+        expect(observed).toMatchObject(
+          isolatedCompletion
+            ? []
+            : [
+                {
+                  toolName: "exec",
+                  toolCallId: "native-exec",
+                  params: { command: "pwd" },
+                  result: "/workspace",
+                },
+                {
+                  toolName: "web_fetch",
+                  toolCallId: "native-fetch",
+                  params: { url: "https://example.com" },
+                  error: "request failed",
+                },
+              ],
+        ),
+      );
+    },
+  );
+
+  it("keeps named result-only completions and duplicate claims scoped to their parser run", async () => {
+    const observed: unknown[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "after_tool_call",
+          matcher: ["exec"],
+          handler: (event) => observed.push(event),
+        },
+      ]),
+    );
+    const parsers = ["previous", "current"].map((runId) => {
+      const context = buildContext(runId);
+      const handlers = createCliEventHandlers({
+        context,
+        toolTracking: createCliToolTracking(context),
+        getRunState: () => ({ failed: false, error: undefined }),
+      });
+      return createCliJsonlStreamingParser({
+        backend: { command: "synthetic", output: "jsonl" },
+        providerId: "synthetic-cli",
+        parseJsonlEvent: (line) => ({
+          kind: "toolResult",
+          toolCallId: "reused-id",
+          name: "Bash",
+          result: line.trim(),
+        }),
+        onAssistantDelta: () => {},
+        onDisplayToolResult: handlers.emitCliDisplayToolResult,
+      });
+    });
+    parsers[1]?.push('{"output":"current"}\n{"output":"duplicate"}\n');
+    parsers[0]?.push('{"output":"late previous"}\n');
+    await vi.waitFor(() =>
+      expect(observed).toMatchObject([
+        {
+          toolName: "exec",
+          runId: "current",
+          toolCallId: "reused-id",
+          params: {},
+          result: '{"output":"current"}',
+        },
+        {
+          toolName: "exec",
+          runId: "previous",
+          toolCallId: "reused-id",
+          params: {},
+          result: '{"output":"late previous"}',
+        },
+      ]),
+    );
+  });
+
   it("emits canonical CLI compaction lifecycle events", () => {
     const runId = "run-compaction-events";
     const handlers = createCliEventHandlers({

@@ -93,6 +93,7 @@ export function readSessionRowInputs(params: {
   modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -119,6 +120,7 @@ export function readSessionRowInputs(params: {
       cfg,
       key,
       entry,
+      preparedAcpMeta: params.preparedAcpMeta,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
       rowContext,
@@ -297,7 +299,7 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-function resolveGatewaySessionActiveModel(params: {
+export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;

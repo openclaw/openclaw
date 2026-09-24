@@ -7,7 +7,10 @@ import {
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
+import {
+  resolveSessionMethodScope,
+  type SessionOperatorScope,
+} from "../shared/session-method-scopes-base.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -46,7 +49,10 @@ import {
   resolveSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
-import { prepareProjectedSessionSharing } from "./session-sharing-read.js";
+import {
+  createSessionListEntryFilter,
+  prepareProjectedSessionSharing,
+} from "./session-sharing-read.js";
 import {
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
@@ -121,7 +127,6 @@ export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutation,
-  authorizeSessionSharing,
   authorizeSessionSharingTarget,
   canAccessIncognitoSession,
   canManageSessionSharing,
@@ -147,6 +152,8 @@ export function resolveSessionMutationAuthorization(params: {
   sessionRowRead?: SessionRowReadView;
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
   const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
+  const authorizesRead =
+    resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
   const bindsProgressLifecycle =
@@ -166,7 +173,7 @@ export function resolveSessionMutationAuthorization(params: {
   if (params.method === "sessions.describe") {
     const projection = params.sessionRowRead ?? getSessionRowProjection(params.context);
     if (projection) {
-      const { cfg } = projection.state;
+      const { cfg, policyConfig } = projection.state;
       for (const target of resolveDirectSessionTargets(params.method, params.requestParams)) {
         const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
         if (!agent.ok) {
@@ -174,7 +181,7 @@ export function resolveSessionMutationAuthorization(params: {
         }
         const row = projection.describe({ key: target.sessionKey, agentId: agent.agentId });
         const sharing = prepareProjectedSessionSharing({
-          cfg,
+          cfg: policyConfig,
           client: params.client,
           isMember: (_target, identityId) => row?.membership.has(identityId) ?? false,
         });
@@ -199,6 +206,16 @@ export function resolveSessionMutationAuthorization(params: {
   // config change cannot split target discovery from authorization.
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
+  const getPolicyConfig = () => params.context.getCommittedRuntimeConfig?.() ?? getCfg();
+  const authorizeTargetAccess = (cfg: OpenClawConfig, target: SessionSharingTarget) =>
+    authorizesRead
+      ? createSessionListEntryFilter({ cfg, client: params.client })?.(
+          target.storeKey,
+          target.entry,
+        ) === false
+        ? hiddenSessionNotFound(target.canonicalKey)
+        : null
+      : authorizeSessionSharingTarget({ cfg, client: params.client, target });
   // Each cache pair defines one synchronous freshness epoch: initial authorization shares one,
   // while commit-time guards start fresh after handler work.
   const createLookupCaches = (): {
@@ -264,7 +281,7 @@ export function resolveSessionMutationAuthorization(params: {
     !adminBypass &&
     directTargets.length > 0 &&
     gatewayClientSessionCreator(params.client) &&
-    operatorSessionCap(params.client, getCfg()) === "none";
+    operatorSessionCap(params.client, getPolicyConfig()) === "none";
   // Incognito and role-hidden direct reads share the same non-disclosing access boundary.
   const protectedTargets = hidesForeignSessions
     ? directTargets
@@ -360,6 +377,13 @@ export function resolveSessionMutationAuthorization(params: {
       return { error: resolved.error };
     }
     const target = resolved.target;
+    if (
+      bindsOwnProfile &&
+      (params.method === "sessions.patch" || params.method === "sessions.patchMany") &&
+      !target
+    ) {
+      return { error: hiddenSessionNotFound(targetRef.sessionKey) };
+    }
     const error =
       expectedSessionMutationTargetError(params.expectedTarget, target, params.method) ??
       authorizeOwnSessionMutation({
@@ -369,7 +393,7 @@ export function resolveSessionMutationAuthorization(params: {
       }) ??
       (target && authorizesAgentRun
         ? authorizeSessionAgentRun({
-            cfg: getCfg(),
+            cfg: getPolicyConfig(),
             client: params.client,
             target,
           })
@@ -382,9 +406,9 @@ export function resolveSessionMutationAuthorization(params: {
       (target &&
       !(
         VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-        (operatorSessionCap(params.client, getCfg()) ?? "write") === "write"
+        (operatorSessionCap(params.client, getPolicyConfig()) ?? "write") === "write"
       )
-        ? authorizeSessionSharingTarget({ cfg: getCfg(), client: params.client, target })
+        ? authorizeTargetAccess(getPolicyConfig(), target)
         : null);
     if (error) {
       return { error };
@@ -447,7 +471,11 @@ export function resolveSessionMutationAuthorization(params: {
         }
         const error =
           authorizesAgentRun &&
-          authorizeGatewaySessionCreation({ cfg, client: params.client, agentId: current.agentId });
+          authorizeGatewaySessionCreation({
+            cfg: params.context.getCommittedRuntimeConfig?.() ?? cfg,
+            client: params.client,
+            agentId: current.agentId,
+          });
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }
@@ -525,10 +553,14 @@ export function resolveSessionMutationAuthorization(params: {
         if (!current) {
           return;
         }
+        const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? currentCfg;
+        const visibilityAuthorized =
+          VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+          (operatorSessionCap(params.client, policyConfig) ?? "write") === "write";
         const error =
           (authorizesAgentRun
             ? authorizeSessionAgentRun({
-                cfg: currentCfg,
+                cfg: policyConfig,
                 client: params.client,
                 target: current,
               })
@@ -538,11 +570,7 @@ export function resolveSessionMutationAuthorization(params: {
             sessionKey: targetRef.sessionKey,
             target: current,
           }) ??
-          authorizeSessionSharingTarget({
-            cfg: currentCfg,
-            client: params.client,
-            target: current,
-          });
+          (visibilityAuthorized ? null : authorizeTargetAccess(policyConfig, current));
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

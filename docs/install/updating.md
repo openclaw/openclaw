@@ -17,6 +17,51 @@ Before a significant update, [create a verified backup](#before-updating-create-
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
+## Upgrading very old versions
+
+For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+Doctor migrations, and then upgrade to `latest`. The bridge release still
+imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
+`plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
+and includes the old runtime aliases.
+Current releases leave those retired database files untouched.
+If you already installed the latest version, Doctor stops before rewriting config
+that still contains these retired agent keys and directs you through the same bridge.
+
+Back up the state first and use a [supported Node version](/install/node):
+Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
+installation prefix, profile, and state/configuration paths throughout.
+
+For an npm installation with an OpenClaw-managed Gateway service, run this
+first stage from a terminal:
+
+```bash
+openclaw gateway stop &&
+  npm install -g openclaw@2026.9.5 --allow-scripts=openclaw &&
+  openclaw --version &&
+  openclaw doctor --fix
+```
+
+Confirm that the version output is `2026.9.5` and that Doctor imported the old
+task, flow, and plugin stores you need. Resolve any failed or conflicting
+imports before continuing. Then install the current release and restart:
+
+```bash
+npm install -g openclaw@latest --allow-scripts=openclaw &&
+  openclaw doctor --fix &&
+  openclaw gateway start &&
+  openclaw gateway status --deep
+```
+
+These npm commands are for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For a pnpm-owned installation, replace each install
+command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`, then
+`pnpm add -g --allow-build=openclaw openclaw@latest`. For Bun, use
+`bun add -g --trust openclaw@2026.9.5`, then `bun add -g --trust openclaw@latest`.
+Keep any normal `--profile` selector on every `openclaw` command. For a custom
+service or foreground Gateway, stop and start it through its actual owner
+instead of the managed-service commands above.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm, pnpm, Bun, or git), checks the new version while
@@ -44,6 +89,11 @@ the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
+The code update can report success while service reconciliation remains pending;
+a stopped service stays stopped until repaired. On Linux, regeneration preserves
+the order of retained `PATH` entries and prepends newly added managed entries.
+Paths carried over solely from the old definition still pass the existing safety
+filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command
@@ -107,6 +157,8 @@ include the FreeBSD fixes; changes on `main` are not a published release.
 Stop and start the Gateway through its actual supervisor or foreground process
 owner around the manual replacement. This recovery does not add CLI-managed
 FreeBSD rc.d service updates.
+
+After an upgrade, check the [FreeBSD model-runtime limitation](/install/installer#install-clish) before starting agent turns.
 </Note>
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
@@ -151,6 +203,11 @@ refresh, so a slow registry cannot consume the canary's startup budget.
 This candidate-side behavior also applies when the installed updater is 2026.9.3.
 That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
+
+Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
+them avoids a disk flush for every file; canonical state and recovery backups
+retain their existing durability guarantees. An older installed updater keeps
+its initial snapshot behavior until you launch an update from the newer version.
 
 Package updates also check npm availability for enabled configured plugins before
 stopping the serving Gateway or replacing the installed core. Registry targets

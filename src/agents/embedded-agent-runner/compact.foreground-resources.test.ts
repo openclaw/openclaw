@@ -9,6 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
@@ -23,6 +24,9 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
+import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
+import { isTerminalTaskStatus, type TaskStatus } from "../../tasks/task-registry.types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -54,7 +58,7 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
-it.each([
+it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
@@ -65,7 +69,7 @@ it.each([
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",
-  async ({ mode, factory, deferred }) => {
+  async ({ mode, factory, deferred }, { signal }) => {
     const state = await createOpenClawTestState({
       prefix: "openclaw-foreground-compaction-",
       layout: "split",
@@ -173,6 +177,8 @@ it.each([
       const values: unknown[] = [];
       let lateWriteBlocked = false;
       let disposalCalls = 0;
+      let resumedAt = 0;
+      let disposalLatency = 0;
       let physicalDisposals = 0;
       let workSignal: AbortSignal | undefined;
       let backendSignal: AbortSignal | undefined;
@@ -276,6 +282,7 @@ it.each([
                 : pending;
             },
             async dispose() {
+              disposalLatency = performance.now() - resumedAt;
               disposalCalls++;
               disposalEntered.resolve();
               const capturedSignal =
@@ -309,6 +316,19 @@ it.each([
       const caller = new AbortController();
       const callerReason = new Error("foreground compaction caller cancelled");
       let pending: Promise<unknown> | undefined;
+      const taskSettled = createDeferredCore<TaskStatus>();
+      const stopTaskObserver = deferred
+        ? onTaskRegistryChange((event) => {
+            if (
+              event?.kind === "upserted" &&
+              event.task.ownerKey === target.sessionKey &&
+              event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
+              isTerminalTaskStatus(event.task.status)
+            ) {
+              taskSettled.resolve(event.task.status);
+            }
+          })
+        : undefined;
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
@@ -376,15 +396,19 @@ it.each([
         if (factory === "none") {
           expect.soft(workSignal?.aborted ?? false).toBe(false);
         }
+        resumedAt = performance.now();
         resume.resolve();
+        if (deferred) {
+          // Worker bookkeeping publishes before engine disposal can start.
+          expect(await racePromiseWithAbortSignal(taskSettled.promise, signal)).toBe("succeeded");
+        }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
+        if (deferred) {
+          expect.soft(disposalLatency).toBeLessThan(50);
+        }
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,
@@ -417,6 +441,7 @@ it.each([
           reopened.close();
         }
       } finally {
+        stopTaskObserver?.();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();

@@ -77,6 +77,19 @@ vi.mock("../../timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
+  const { hasUsableSessionEntry } =
+    await importOriginal<typeof import("../announce/subagent-announce.js")>();
+  return {
+    hasUsableSessionEntry,
+    captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+    runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+  };
+});
+vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));
+
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
 
@@ -102,11 +115,6 @@ describe("announce loop guard (#18264)", () => {
     return entry;
   }
 
-  async function flushAsync() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
   async function waitForRun(
     runId: string,
     predicate: (run: SubagentRunRecord) => boolean,
@@ -119,7 +127,7 @@ describe("announce loop guard (#18264)", () => {
         return run;
       }
       await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
+      await vi.dynamicImportSettled();
     }
     throw new Error(`subagent run ${runId} did not reach expected state`);
   }
@@ -146,16 +154,10 @@ describe("announce loop guard (#18264)", () => {
     mocks.saveSubagentRegistryToSqlite.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.testing.setDepsForTest({
-      captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-    });
   });
 
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.testing.setDepsForTest();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -214,7 +216,7 @@ describe("announce loop guard (#18264)", () => {
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
     hydrateAndActivateRegistry();
-    await flushAsync();
+    await vi.dynamicImportSettled();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
@@ -316,7 +318,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     hydrateAndActivateRegistry();
-    await flushAsync();
+    await vi.dynamicImportSettled();
 
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
@@ -352,7 +354,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     hydrateAndActivateRegistry();
-    await flushAsync();
+    await vi.dynamicImportSettled();
 
     const stored = await waitForRun(
       runId,

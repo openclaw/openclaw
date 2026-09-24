@@ -281,6 +281,5 @@ export async function startCodexAttemptTurn(
     };
   }
   turnIdRef.current = started.turn.turn.id;
-  resourceState.nativeSubagentMonitor?.bindTurn(started.turn.turn.id);
   return started;
 }

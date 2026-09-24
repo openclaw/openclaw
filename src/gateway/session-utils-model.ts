@@ -15,6 +15,7 @@ import {
   modelSupportsInput,
 } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   findNormalizedProviderValue,
   isCliProvider,
@@ -108,7 +109,7 @@ function resolveGatewaySessionThinkingDefault(params: {
     agentRuntime: params.agentRuntime,
     providerPolicySource: params.providerPolicySource,
   });
-  return resolveGatewaySessionThinkingLevel({
+  const resolved = resolveGatewaySessionThinkingLevel({
     provider: params.provider,
     model: params.model,
     level: defaultLevel,
@@ -117,6 +118,11 @@ function resolveGatewaySessionThinkingDefault(params: {
     providerPolicySource: params.providerPolicySource,
     rowContext: params.rowContext,
   });
+  // A harness-only Ultra choice must not invent an unsupported Off default.
+  // An explicit Ultra default remains valid even without native effort controls.
+  return params.thinkingProfile.levels.some(({ id }) => id !== "ultra") || resolved === "ultra"
+    ? resolved
+    : undefined;
 }
 
 type GatewayModelThinkingParams = {
@@ -213,6 +219,7 @@ type GatewaySessionThinkingProjectionParams = {
   agentId: string;
   sessionKey: string;
   entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -297,6 +304,7 @@ export function getSessionDefaults(
   modelCatalog?: ModelCatalogEntry[],
   options?: {
     agentId?: string;
+    modelRef?: ModelRef;
     allowPluginNormalization?: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     providerPolicySource?: ThinkingProviderPolicySource;
@@ -305,20 +313,22 @@ export function getSessionDefaults(
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
   );
-  const resolved = options?.agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        allowPluginNormalization: options.allowPluginNormalization,
-        manifestPlugins: options.metadataSnapshot,
-      })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
-        manifestPlugins: options?.metadataSnapshot,
-      });
+  const resolved =
+    options?.modelRef ??
+    (options?.agentId
+      ? resolveDefaultModelForAgent({
+          cfg,
+          agentId,
+          allowPluginNormalization: options.allowPluginNormalization,
+          manifestPlugins: options.metadataSnapshot,
+        })
+      : resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+          allowPluginNormalization: options?.allowPluginNormalization,
+          manifestPlugins: options?.metadataSnapshot,
+        }));
   const displayModel = resolveSessionDisplayModelIdentityRef({
     cfg,
     provider: resolved.provider,

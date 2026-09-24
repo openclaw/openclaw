@@ -11,7 +11,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { readPostCoreSnapshot, recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
+import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
@@ -84,46 +84,11 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readUpdateJson(file, observationRoot) {
+function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
-  // April baselines print a pretty-printed core result before their fresh child
-  // inherits stdout and prints finalization. Never discard a failed/truncated child.
   const jsonStart = raw.indexOf("{");
   assert(jsonStart !== -1, "update reported no JSON result");
-  const reports = raw
-    .slice(jsonStart)
-    .trim()
-    .split(/\n(?=\{)/u)
-    .map((text) => JSON.parse(text));
-  assert(reports.length <= 2, "update reported unexpected extra results");
-  const [core, continuation] = reports;
-  let result = core;
-  if (continuation) {
-    assert(core.status === "ok", "historical core update did not succeed");
-    assert(continuation.mode === "unknown", "unexpected historical continuation mode");
-    assert(
-      Array.isArray(continuation.steps) && continuation.steps.length === 0,
-      "unexpected historical continuation steps",
-    );
-    assert(continuation.after === undefined, "historical continuation replaced the core result");
-    result = {
-      ...core,
-      status: continuation.status,
-      reason: continuation.reason,
-      postUpdate: continuation.postUpdate,
-    };
-  }
-  if (result.postUpdate !== undefined || !observationRoot) {
-    return result;
-  }
-  // April 23 omits the child result from stdout. Consume only this invocation's
-  // complete exit snapshot; explicit CLI results and nonzero child exits win.
-  const snapshot = readPostCoreSnapshot(observationRoot);
-  if (snapshot === null) {
-    return result;
-  }
-  assert(snapshot.childExitCode === 0, "historical post-core child did not exit successfully");
-  return { ...result, postUpdate: { plugins: snapshot.result } };
+  return JSON.parse(raw.slice(jsonStart));
 }
 
 function isCapabilityConsentReason(value) {
@@ -357,11 +322,7 @@ function acceptsIntent(coverage, id) {
   if (!coverage) {
     return true;
   }
-  return (
-    Array.isArray(coverage.acceptedIntents) &&
-    coverage.acceptedIntents.includes(id) &&
-    !coverage.skippedIntents?.includes(id)
-  );
+  return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
 function hasCoverage(coverage) {
@@ -555,9 +516,7 @@ function assertConfigSurvived() {
       config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
-    if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
-    }
+    assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
   }
 
   if (acceptsIntent(coverage, "skills")) {
@@ -1577,8 +1536,8 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, baselineVersion]) {
-  const result = readUpdateJson(file, observationRoot);
+function assertRecoverableUpdateJson([file, expectedVersion, , baselineVersion]) {
+  const result = readUpdateJson(file);
   assertStrict.ok(baselineVersion, "Expected baseline version is required.");
   assertStrict.ok(result.status === "error" || result.status === "ok");
   assertStrict.equal(result.mode, "npm");
@@ -1713,7 +1672,7 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   let message;
   try {
     assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-    result = readUpdateJson(file, observationRoot);
+    result = readUpdateJson(file);
     assertSuccessfulUpdateResult(result, expectedVersion);
     outcome = "passed";
   } catch (error) {
@@ -1785,161 +1744,6 @@ function assertRepairJson([file]) {
   assert(result?.restart === false, "update repair unexpectedly restarted the Gateway");
   assert(result?.postUpdate?.doctor?.status === "ok", "update repair doctor did not pass");
   assert(result?.postUpdate?.plugins?.status === "ok", "update repair plugins did not pass");
-}
-
-function parseStableVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/u.exec(version ?? "");
-  assert(match, `invalid stable package version: ${String(version)}`);
-  return match.slice(1).map((part) => Number(part ?? 0));
-}
-
-function compareStableVersions(left, right) {
-  const leftParts = parseStableVersion(left);
-  const rightParts = parseStableVersion(right);
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
-}
-
-function normalizeSystemctlInvocation(line) {
-  const parts = String(line ?? "")
-    .trim()
-    .split(/\s+/u)
-    .filter(Boolean);
-  const normalized = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (["--user", "--quiet", "--no-page", "--no-pager", "--now"].includes(part)) {
-      continue;
-    }
-    if (part === "--property") {
-      index += 1;
-      continue;
-    }
-    normalized.push(part);
-  }
-  return normalized.join(" ");
-}
-
-function assertUpdateRunSelfUpgrade([file]) {
-  assert(file, "assert-update-run-self-upgrade requires a summary path");
-  const summary = readJson(file);
-  const sourceVersion = summary?.source?.version;
-  const targetVersion = summary?.target?.resolvedVersion;
-  const updateRpc = summary?.updateRpcResult;
-  const sentinel = summary?.restartSentinel;
-  const qaChannelInstallRecord = summary?.qaChannelInstallRecord;
-  const targetQaChannelInstallRecord = summary?.targetPluginIndex?.installRecords?.["qa-channel"];
-  const gatewayStatus = summary?.gateway?.status;
-  const qaAccounts = summary?.qaChannel?.status?.channelAccounts?.["qa-channel"];
-  const targetServiceStarts = (summary?.supervisorHandoff?.systemctlInvocations ?? [])
-    .map(normalizeSystemctlInvocation)
-    .filter((invocation) => invocation === "start openclaw-gateway.service");
-
-  assert(summary?.status === "passed", "update.run self-upgrade summary did not pass");
-  assert(sourceVersion === "2026.4.26", `unexpected source version: ${String(sourceVersion)}`);
-  assert(summary?.source?.spec === "openclaw@2026.4.26", "source package spec was not exact");
-  assert(summary?.target?.tag === "latest", "target tag was not latest");
-  assert(
-    compareStableVersions(targetVersion, sourceVersion) > 0,
-    `target version did not advance beyond source: ${String(sourceVersion)} -> ${String(targetVersion)}`,
-  );
-  assert(
-    summary?.installedVersion === targetVersion,
-    `installed version mismatch: expected ${String(targetVersion)}, got ${String(summary?.installedVersion)}`,
-  );
-  assert(qaChannelInstallRecord?.source === "path", "QA channel was not path-installed");
-  assert(
-    typeof qaChannelInstallRecord?.sourcePath === "string" &&
-      qaChannelInstallRecord.sourcePath.includes("/extensions/qa-channel"),
-    "QA channel install record omitted its source path",
-  );
-  assert(
-    typeof qaChannelInstallRecord?.installPath === "string" &&
-      qaChannelInstallRecord.installPath.includes("/dist/extensions/qa-channel"),
-    "QA channel install record omitted its compiled local install path",
-  );
-  assert(
-    qaChannelInstallRecord?.version === "2026.4.25",
-    "QA channel install record version mismatch",
-  );
-  assert(
-    summary?.sourcePluginInspect?.plugin?.status === "loaded",
-    "source package did not load the compiled QA channel plugin",
-  );
-  assert(
-    targetQaChannelInstallRecord?.source === "path" &&
-      targetQaChannelInstallRecord?.installPath === qaChannelInstallRecord?.installPath,
-    "target SQLite index did not preserve the QA channel path install record",
-  );
-
-  assert(updateRpc?.ok === true, `update.run RPC did not report ok: ${JSON.stringify(updateRpc)}`);
-  assert(updateRpc?.result?.status === "ok", "update.run did not execute the package update");
-  assert(
-    updateRpc?.result?.before?.version === sourceVersion,
-    "update.run source version mismatch",
-  );
-  assert(updateRpc?.result?.after?.version === targetVersion, "update.run target version mismatch");
-  assert(
-    Array.isArray(updateRpc?.result?.steps) && updateRpc.result.steps.length > 0,
-    "update.run reported no executed update steps",
-  );
-  assert(updateRpc?.restart, "update.run did not schedule a Gateway restart");
-  assert(
-    updateRpc?.sentinel?.payload?.message === summary.expectedRestartNote,
-    "update.run response sentinel note mismatch",
-  );
-
-  assert(sentinel?.kind === "update", "final restart sentinel kind was not update");
-  assert(sentinel?.status === "ok", "final restart sentinel did not report ok");
-  assert(sentinel?.message === summary.expectedRestartNote, "final restart sentinel note mismatch");
-  assert(
-    sentinel?.stats?.before?.version === sourceVersion,
-    "restart sentinel source version mismatch",
-  );
-  assert(
-    sentinel?.stats?.after?.version === targetVersion,
-    "restart sentinel target version mismatch",
-  );
-  assert(
-    Number.isSafeInteger(summary?.supervisorHandoff?.servicePid) &&
-      summary.supervisorHandoff.servicePid > 1,
-    "supervisor handoff did not record the target service PID",
-  );
-  assert(targetServiceStarts.length === 1, "systemctl shim did not start the target exactly once");
-  assert(
-    summary?.supervisorHandoff?.monitorEvents?.some((line) =>
-      line.includes("source Gateway exited through supervised update handoff"),
-    ),
-    "supervisor monitor did not prove the source supervised handoff",
-  );
-
-  assert(
-    summary?.gateway?.healthz?.body?.ok === true &&
-      summary?.gateway?.healthz?.body?.status === "live",
-    "post-restart /healthz was not live",
-  );
-  assert(summary?.gateway?.readyz?.body?.ready === true, "post-restart /readyz was not ready");
-  assert(
-    gatewayStatus?.rpc?.ok === true &&
-      gatewayStatus?.rpc?.version === targetVersion &&
-      gatewayStatus?.gateway?.version === targetVersion &&
-      gatewayStatus?.cli?.version === targetVersion,
-    `post-restart Gateway did not report target version ${String(targetVersion)}`,
-  );
-  assert(Array.isArray(qaAccounts), "post-restart channels.status omitted qa-channel");
-  assert(
-    qaAccounts.some((account) => account?.running === true && account?.restartPending !== true),
-    "post-restart QA channel account was not running",
-  );
-  assert(
-    Number(summary?.qaChannel?.busPollsAfterRestart) > 0,
-    "QA channel did not poll its bus after the target Gateway restart",
-  );
 }
 
 function assertMobilePairingEvidence(files) {
@@ -2096,8 +1900,6 @@ if (command === "list-scenarios") {
   assertSuccessfulUpdateJson(process.argv.slice(3));
 } else if (command === "assert-repair-json") {
   assertRepairJson(process.argv.slice(3));
-} else if (command === "assert-update-run-self-upgrade") {
-  assertUpdateRunSelfUpgrade(process.argv.slice(3));
 } else if (command === "assert-mobile-pairing-evidence") {
   assertMobilePairingEvidence(process.argv.slice(3));
 } else {

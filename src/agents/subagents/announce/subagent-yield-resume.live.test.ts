@@ -8,6 +8,7 @@ import type {
   TasksCancelResult,
 } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import type { CommandLaneSnapshot } from "../../../process/command-queue.types.js";
 import { runCommandWithTimeout } from "../../../process/exec.js";
 import { isLiveTestEnabled } from "../../live-test-helpers.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
@@ -31,6 +32,161 @@ const enabled = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIV
 const describeLive = enabled ? describe : describe.skip;
 
 describeLive("OpenAI subagent yield and operator resume stress", () => {
+  it(
+    "limits siblings per spawning session while independent parents and nested children run",
+    async () => {
+      await runWithLiveSubagentGateway(
+        { maxConcurrent: 1 },
+        async ({ gateway, gates, start, record, waitForFinal }) => {
+          const id = randomUUID();
+          const parentA = `agent:main:live-capacity-a:${id}`;
+          const parentB = `agent:main:live-capacity-b:${id}`;
+          const markerA = `PARENT_A_${id}`;
+          const markerB = `PARENT_B_${id}`;
+          const siblingGates = [gates.create(), gates.create()];
+          const siblingResults = [randomUUID(), randomUUID()];
+          const leafGate = gates.create();
+          const leafResult = randomUUID();
+          const spawn = (taskName: string, task: string) => ({
+            taskName,
+            task,
+            cleanup: "keep",
+            context: "isolated",
+          });
+          const readSubagentLane = async () => {
+            const diagnostics = await gateway.request<{ lanes: CommandLaneSnapshot[] }>(
+              "diagnostics.lanes",
+              {},
+            );
+            return diagnostics.lanes.find((lane) => lane.lane === "subagent");
+          };
+          await start(
+            parentA,
+            [
+              "Spawn both workers below using sessions_spawn before waiting. Do not spawn any other workers or execute their commands yourself.",
+              ...siblingGates.map(
+                (gate, index) =>
+                  `sessions_spawn input: ${JSON.stringify(spawn(`sibling_${index}`, gateTask(gate.url)))}`,
+              ),
+              "After both spawns are accepted, call sessions_yield. Wait for both actual completion results.",
+              `Your only final reply must be ${markerA} on the first line, then each worker's exact result in task-name order, one result per line.`,
+            ].join("\n"),
+          );
+          const activeSibling = await until("one sibling running and one queued", async () => {
+            const children = listSubagentRunsForRequester(parentA);
+            const index = siblingGates.findIndex((gate) => gate.snapshot().waiting === 1);
+            const lane = await readSubagentLane();
+            return children.length === 2 && index >= 0 && lane?.queuedCount === 1
+              ? { index, lane }
+              : undefined;
+          });
+          const queuedIndex = 1 - activeSibling.index;
+          expect(activeSibling.lane).toMatchObject({
+            activeCount: 1,
+            maxConcurrent: 1,
+            concurrencyScope: "session",
+          });
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          record("sibling-capacity-held", {
+            parentA,
+            lane: activeSibling.lane,
+            gates: siblingGates.map((gate) => gate.snapshot()),
+          });
+
+          const orchestratorTask = [
+            `Call sessions_spawn exactly once with ${JSON.stringify(spawn("nested_leaf", gateTask(leafGate.url)))}.`,
+            'Call subagents with action="list" to find the child taskId, then action="wait" with taskIds containing that ID and timeoutSeconds=60. If the wait times out, wait again for the same task.',
+            "Keep this turn active until the child completes: do not call sessions_yield, execute commands, or spawn more work. When the child completes, reply with its exact result only.",
+          ].join("\n");
+          await start(
+            parentB,
+            [
+              `Call sessions_spawn exactly once with ${JSON.stringify(spawn("nested_orchestrator", orchestratorTask))}.`,
+              "After acceptance call sessions_yield and wait for the actual child completion. Do not execute commands yourself.",
+              `Your only final reply must be ${markerB} on the first line and the worker's exact result on the next line.`,
+            ].join("\n"),
+          );
+          const orchestrator = await until(
+            "independent nested worker holds its own capacity",
+            async () => {
+              const worker = listSubagentRunsForRequester(parentB)[0];
+              if (!worker || leafGate.snapshot().waiting !== 1) {
+                return undefined;
+              }
+              const messages = await history(worker.childSessionKey);
+              const waiting = messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  Array.isArray(message.content) &&
+                  message.content.some((part) => {
+                    const block = asOptionalRecord(part);
+                    return (
+                      block?.type === "toolCall" &&
+                      block.name === "subagents" &&
+                      asOptionalRecord(block.arguments)?.action === "wait"
+                    );
+                  }),
+              );
+              return waiting && worker.execution.status === "running" ? worker : undefined;
+            },
+          );
+          const concurrentLane = await readSubagentLane();
+          expect(concurrentLane).toMatchObject({
+            activeCount: 3,
+            queuedCount: 1,
+            maxConcurrent: 1,
+            concurrencyScope: "session",
+            saturatedLaneCount: 3,
+          });
+          expect(successfulYields(await history(orchestrator.childSessionKey))).toBe(0);
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          record("independent-parent-and-grandchild-running", {
+            parentA,
+            parentB,
+            orchestrator: orchestrator.childSessionKey,
+            lane: concurrentLane,
+            siblingGates: siblingGates.map((gate) => gate.snapshot()),
+            leafGate: leafGate.snapshot(),
+          });
+
+          leafGate.release(leafResult);
+          await waitForFinal(parentB, markerB, `${markerB}\n${leafResult}`);
+          expect(finalReplies(await history(orchestrator.childSessionKey), "")).toEqual([
+            leafResult,
+          ]);
+          expect(siblingGates[activeSibling.index]!.snapshot().waiting).toBe(1);
+          expect(siblingGates[queuedIndex]!.snapshot().requests).toBe(0);
+          siblingGates[activeSibling.index]!.release(siblingResults[activeSibling.index]!);
+          await until("queued sibling admitted after its own sibling finishes", () =>
+            siblingGates[queuedIndex]!.snapshot().waiting === 1 ? true : undefined,
+          );
+          record("queued-sibling-admitted", {
+            lane: await readSubagentLane(),
+            gates: siblingGates.map((gate) => gate.snapshot()),
+          });
+          siblingGates[queuedIndex]!.release(siblingResults[queuedIndex]!);
+          await waitForFinal(parentA, markerA, [markerA, ...siblingResults].join("\n"));
+          const children = await until("all four child delivery acknowledgments committed", () => {
+            const runs = [
+              ...listSubagentRunsForRequester(parentA),
+              ...listSubagentRunsForRequester(parentB),
+              ...listSubagentRunsForRequester(orchestrator.childSessionKey),
+            ];
+            return runs.length === 4 && runs.every((run) => run.delivery?.status === "delivered")
+              ? runs
+              : undefined;
+          });
+          expect(
+            children.every((run) => run.execution.outcome?.status === "ok"),
+            "every child completed successfully",
+          ).toBe(true);
+          record("session-capacity-settled", { lane: await readSubagentLane() });
+        },
+      );
+    },
+    15 * 60_000,
+  );
+
   it.each([false, true])(
     "keeps CLI coordination in the task completion path for visible=%s children and later turns",
     async (visible) => {

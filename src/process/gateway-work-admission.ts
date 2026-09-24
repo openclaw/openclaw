@@ -79,6 +79,8 @@ type GatewayRootWorkAdmissionLease = {
 export type GatewayRootWorkAdmissionContinuationScope = {
   release: () => void;
   run: <T>(run: () => Promise<T>) => Promise<T>;
+  /** Synchronous producers transfer accepted work to its own drain before returning. */
+  runSync: <T>(run: () => T) => T;
 };
 
 type GatewaySuspendAdmissionLease = {
@@ -547,6 +549,13 @@ function createGatewayRootWorkAdmissionContinuationScope(
   }
   const releaseAdmission = retainRoot ? createGatewayRootWorkRelease(current) : undefined;
   let released = false;
+  const enter = () => {
+    if (released || current.released || !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)) {
+      throw new GatewayDrainingError("gateway root work continuation is no longer active");
+    }
+    current.references += 1;
+    return createGatewayRootWorkRelease(current);
+  };
   return {
     release: () => {
       if (released) {
@@ -556,19 +565,19 @@ function createGatewayRootWorkAdmissionContinuationScope(
       releaseAdmission?.();
     },
     run: async <T>(run: () => Promise<T>) => {
-      if (
-        released ||
-        current.released ||
-        !GATEWAY_WORK_ADMISSION_STATE.activeRootWork.has(current)
-      ) {
-        throw new GatewayDrainingError("gateway root work continuation is no longer active");
-      }
       // Completion owners can settle and release their retained handle inside
       // this callback; keep the root live until that entire callback finishes.
-      current.references += 1;
-      const releaseRun = createGatewayRootWorkRelease(current);
+      const releaseRun = enter();
       try {
         return await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
+      } finally {
+        releaseRun();
+      }
+    },
+    runSync: <T>(run: () => T) => {
+      const releaseRun = enter();
+      try {
+        return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
       } finally {
         releaseRun();
       }

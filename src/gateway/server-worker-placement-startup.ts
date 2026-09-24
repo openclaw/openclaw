@@ -37,6 +37,7 @@ import { createWorkerRuntimeRefreshWaiter } from "./server-worker-placement-runt
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
+  createWorkerWorkspaceRecoveryPreparer,
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
   runWorkerPlacementSessionBarrier,
@@ -64,7 +65,6 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/se
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
-import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 
@@ -133,9 +133,10 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     warn: params.warn,
   });
-  const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
-    loadWorkerPlacementSessionRuntimeModule,
-  );
+  const withPreparedRecovery = createWorkerWorkspaceRecoveryPreparer({
+    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+    getConfig: getRuntimeConfig,
+  });
   const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
     bundleRetention: params.nodeWorkerBundleRetention,
     gatewayNamespace: params.gatewayNamespace,
@@ -238,7 +239,7 @@ export function createGatewayWorkerPlacementRuntime(
       runnerAvailability,
       resolveDevicePlacementRequirement,
       isCurrentNodePlacement: createDevicePlacementAuthority(() => nodeWorkerSupervisorTransport),
-      ...workspaceConflictHandlers,
+      withPreparedRecovery,
       ...reclaimBarriers,
       runLocalBarrier: async ({
         sessionId,
@@ -572,7 +573,12 @@ export function createGatewayWorkerPlacementRuntime(
           void reconcileActivePlacements();
           return;
         }
-        void pending.then(reconcileActivePlacements, reconcileActivePlacements);
+        // The sweep owns reporting and settlement; returning it would create an
+        // unobserved rejecting promise for this best-effort event subscriber.
+        const resume = () => {
+          void reconcileActivePlacements();
+        };
+        void pending.then(resume, resume);
       }
     });
     let stopPromise: Promise<void> | undefined;

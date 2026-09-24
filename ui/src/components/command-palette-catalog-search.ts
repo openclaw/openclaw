@@ -1,12 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  AgentsListResult,
-  CronJobsListResult,
-  CronCompactJob,
-  GatewaySessionRow,
-  SkillStatusReport,
-} from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SkillStatusReport } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
@@ -18,6 +12,7 @@ import type { NativeDeviceSettingsCapability } from "../app/native-device-settin
 import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { loadCronCatalog } from "../lib/cron/catalog.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
@@ -86,75 +81,38 @@ export function commandPaletteCategoryLabel(category: string): string {
 
 const CATALOG_SEARCH_LIMIT = 10;
 
+function navigationItem(
+  routeId: RouteId,
+  label: string,
+  icon: IconName,
+  options: { id?: string; description?: string } = {},
+): CommandPaletteItem {
+  return {
+    ...options,
+    id: `nav-${options.id ?? routeId}`,
+    label,
+    icon,
+    category: "navigation",
+    action: `nav:${routeId}`,
+  };
+}
+
 function getCommandPaletteBaseItems(
   desktopAvailable: boolean,
   custodianAvailable: boolean,
 ): CommandPaletteItem[] {
   return [
-    {
-      id: "nav-new-session",
-      label: t("newSession.title"),
-      icon: "plus",
-      category: "navigation",
-      action: "nav:new-session",
-    },
-    {
-      id: "nav-sessions",
-      label: t("palette.items.sessions"),
-      icon: "fileText",
-      category: "navigation",
-      action: "nav:sessions",
-    },
-    {
-      id: "nav-meetings",
-      label: t("tabs.meetings"),
+    navigationItem("new-session", t("newSession.title"), "plus"),
+    navigationItem("sessions", t("palette.items.sessions"), "fileText"),
+    navigationItem("meetings", t("tabs.meetings"), "book", {
       description: t("subtitles.meetings"),
-      icon: "book",
-      category: "navigation",
-      action: "nav:meetings",
-    },
-    {
-      id: "nav-cron",
-      label: t("palette.items.scheduled"),
-      icon: "scrollText",
-      category: "navigation",
-      action: "nav:cron",
-    },
-    {
-      id: "nav-skills",
-      label: t("palette.items.skills"),
-      icon: "zap",
-      category: "navigation",
-      action: "nav:skills",
-    },
-    {
-      id: "nav-plugins",
-      label: t("palette.items.plugins"),
-      icon: "plug",
-      category: "navigation",
-      action: "nav:plugins",
-    },
-    {
-      id: "nav-apps",
-      label: t("palette.items.apps"),
-      icon: "layoutGrid",
-      category: "navigation",
-      action: "nav:apps",
-    },
-    {
-      id: "nav-config",
-      label: t("palette.items.settings"),
-      icon: "settings",
-      category: "navigation",
-      action: "nav:config",
-    },
-    {
-      id: "nav-agents",
-      label: t("palette.items.agents"),
-      icon: "folder",
-      category: "navigation",
-      action: "nav:agents",
-    },
+    }),
+    navigationItem("cron", t("palette.items.scheduled"), "scrollText"),
+    navigationItem("skills", t("palette.items.skills"), "zap"),
+    navigationItem("plugins", t("palette.items.plugins"), "plug"),
+    navigationItem("apps", t("palette.items.apps"), "layoutGrid"),
+    navigationItem("appearance", t("palette.items.settings"), "settings", { id: "settings" }),
+    navigationItem("agents", t("palette.items.agents"), "folder"),
     {
       id: "slash:verbose",
       label: "/verbose",
@@ -324,14 +282,7 @@ export async function loadCommandPaletteCatalogItems(params: {
       : null;
   const [agents, automations, skills, plugins, models] = await Promise.all([
     params.agents().catch(() => null),
-    requestIfAvailable<CronJobsListResult<CronCompactJob>>("cron.list", {
-      includeDisabled: true,
-      limit: 200,
-      offset: 0,
-      sortBy: "name",
-      sortDir: "asc",
-      compact: true,
-    }),
+    params.methodAvailable("cron.list") ? loadCronCatalog(params.client).catch(() => null) : null,
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
     loadModelCatalog(params.client, { agentId: params.agentId }).catch(() => null),
@@ -346,7 +297,12 @@ export async function loadCommandPaletteCatalogItems(params: {
       routeId: "agents" as const,
       agentId: agent.id,
       description: agent.id,
-      searchText: [agent.id, agent.workspace, agent.model?.primary, agent.identity?.theme]
+      searchText: [
+        agent.id,
+        agent.workspace,
+        models && !models.modelSelectionPolicy?.restricted ? agent.model?.primary : undefined,
+        agent.identity?.theme,
+      ]
         .filter(Boolean)
         .join(" "),
     })),

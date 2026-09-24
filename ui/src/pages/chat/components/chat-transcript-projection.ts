@@ -396,7 +396,7 @@ export function projectChatTranscript(
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
-  const workingUsageKey = `usage:${runOutputTokens ?? ""}`;
+  const workingUsageKey = JSON.stringify([runOutputTokens]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
@@ -575,7 +575,13 @@ export function projectChatTranscript(
       }
     }
   }
-  const realtimeConversation = renderRealtimeTalkConversation(props);
+  const persistedIds = new Set(props.messages.map(persistedMessageEntryId));
+  const realtimeConversation = renderRealtimeTalkConversation({
+    ...props,
+    realtimeTalkConversation: props.realtimeTalkConversation?.filter(
+      (entry) => !entry.transcriptId || !persistedIds.has(entry.transcriptId),
+    ),
+  });
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
       kind: "content",

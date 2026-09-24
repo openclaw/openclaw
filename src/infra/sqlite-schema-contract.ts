@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteIndexContract,
   createSqliteTableContract,
@@ -78,6 +79,17 @@ export function collectSqliteSchemaIssues(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
+): SqliteSchemaIssue[] {
+  return runSqlitePinnedReadSnapshotSync(database, () =>
+    collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
+  );
+}
+
+function collectSqliteSchemaIssuesInSnapshot(
+  database: DatabaseSync,
+  schemaSql: string,
+  compatibility: SqliteSchemaCompatibility,
+  readTable: SqliteTableContractReader | undefined,
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);

@@ -29,6 +29,7 @@ import { getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
+import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
@@ -232,11 +233,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (form.deliveryMode === "webhook") {
-    const target = form.deliveryTo.trim();
-    if (!target) {
-      errors.deliveryTo = "cron.errors.webhookUrlRequired";
-    } else if (!/^https?:\/\//i.test(target)) {
-      errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    const error = resolveCronWebhookDeliveryError(form.deliveryTo);
+    if (error) {
+      errors.deliveryTo = error;
     }
   }
   if (form.failureAlertMode === "custom") {

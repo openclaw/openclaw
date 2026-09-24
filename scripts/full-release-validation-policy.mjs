@@ -10,7 +10,7 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
-import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -526,9 +526,11 @@ export function normalizeReleaseCoveragePolicy({
   candidateVersion,
   crossOsSuiteFilter = "",
 }) {
-  // All-group evidence may omit advisory OS lanes, never required Linux suites.
-  if (rerunGroup === "all" && !hasRequiredLinuxCrossOsSuites(crossOsSuiteFilter)) {
-    throw new Error("release coverage policy requires all Linux cross-OS suites");
+  // Full qualification requires install and upgrade proof on every supported OS.
+  if (rerunGroup === "all" && !hasRequiredCrossOsSuites(crossOsSuiteFilter)) {
+    throw new Error(
+      "release coverage policy requires all Linux, Windows, and macOS cross-OS suites",
+    );
   }
   if (coveragePolicy === undefined) {
     return undefined;
@@ -772,8 +774,11 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
         continue;
       }
       if (names.has(job.name)) {
-        throw new Error(
-          `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+        throw Object.assign(
+          new Error(
+            `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+          ),
+          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
       }
       names.add(job.name);
@@ -1087,7 +1092,18 @@ function hasExactKeys(value, expectedKeys) {
   );
 }
 
+// Published validation artifacts contain empty retired retry metadata. Preserve
+// those bytes for digest verification without accepting a retry allowance.
+export function validateRetiredReleaseRetryFields(value) {
+  for (const key of ["knownFlakyJobs", "automaticRetries"]) {
+    if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length !== 0)) {
+      throw new Error(`release artifact ${key} must be empty; automatic retries are disabled`);
+    }
+  }
+}
+
 function releaseExecutionPlanShape(payload) {
+  validateRetiredReleaseRetryFields(payload);
   const hasAttemptEvidence = Object.hasOwn(payload, "attemptEvidenceVersion");
   const attemptEvidenceVersion = hasAttemptEvidence ? payload.attemptEvidenceVersion : undefined;
   const basePlanKeys = hasAttemptEvidence
@@ -1096,6 +1112,7 @@ function releaseExecutionPlanShape(payload) {
   const expectedPlanKeys = [
     ...new Set([
       ...basePlanKeys,
+      ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
@@ -1111,6 +1128,7 @@ function releaseExecutionPlanShape(payload) {
     : HISTORICAL_EXECUTION_PLAN_CHILD_KEYS;
   if (
     (hasAttemptEvidence && ![2, 3].includes(attemptEvidenceVersion)) ||
+    (Object.hasOwn(payload, "knownFlakyJobs") && !hasAttemptEvidence) ||
     (Object.hasOwn(payload, "coveragePolicy") && attemptEvidenceVersion !== 3) ||
     !hasExactKeys(payload, expectedPlanKeys) ||
     !Array.isArray(payload.children) ||
@@ -1167,6 +1185,7 @@ function executionPlanDigestPayload(plan) {
     ...publication,
     ...waiver,
     ...coverage,
+    ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
     attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
     candidate: plan.candidate,
@@ -1500,91 +1519,22 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
-  // Cross-OS Windows/macOS results remain evidence without gating npm publication.
-  // Match only execution lanes: Linux and shared preparation still block.
-  if (/^cross_os_release_checks \/ (?:Windows|macOS) \/ /u.test(jobName)) {
-    return true;
-  }
-  if (
-    jobName.startsWith("Run QA Lab parity lane (") ||
-    jobName === "Run QA Lab parity report" ||
-    jobName.startsWith("Run QA Lab runtime-pair lane (") ||
-    jobName === "Verify QA Lab runtime-pair lanes" ||
-    jobName === "Run QA Lab live Telegram lane" ||
-    jobName.startsWith("Run package acceptance / Telegram package acceptance / ") ||
-    jobName === "Run QA Lab live Discord lane" ||
-    jobName === "Run QA Lab live WhatsApp lane" ||
-    jobName === "Run QA Lab live Slack lane"
-  ) {
-    return true;
-  }
-  if (/^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(workflowRef)) {
-    return !(
-      jobName === "resolve_target" ||
-      jobName === "Prepare release package artifact" ||
-      jobName.startsWith("install_smoke_release_checks / ") ||
-      jobName === "Run package acceptance" ||
-      jobName.startsWith("Run package acceptance / ")
-    );
-  }
+function isFailedJob(job) {
   return (
-    releaseProfile === "beta" &&
-    jobName.startsWith("Run repo/live E2E validation / ") &&
-    (jobName.includes("Docker live") ||
-      jobName.includes("Live media suites") ||
-      jobName.includes("validate_live_provider_suites") ||
-      jobName.includes("validate_release_live_cache") ||
-      jobName.includes("prepare_live_test_image"))
+    job.status === "completed" && !SUCCESSFUL_JOB_CONCLUSIONS.has(String(job.conclusion ?? ""))
   );
 }
 
-function isReleaseChecksChild(key) {
-  return ["releaseChecks", "releaseChecksIndependent", "releaseChecksCandidate"].includes(key);
+function failedJobsForPolicy(child) {
+  return child.jobs.filter(isFailedJob);
 }
 
-function isAdvisoryChild(key, releaseProfile) {
-  return key === "npmTelegram" || (key === "productPerformance" && releaseProfile === "beta");
-}
-
-function failedJobsForPolicy(child, releaseProfile, workflowRef) {
-  return child.jobs.filter((job) => {
-    if (
-      job.status !== "completed" ||
-      SUCCESSFUL_JOB_CONCLUSIONS.has(String(job.conclusion ?? ""))
-    ) {
-      return false;
-    }
-    if (isReleaseChecksChild(child.key)) {
-      return !isReleaseCheckJobAdvisory({
-        jobName: stringValue(job.name),
-        releaseProfile,
-        workflowRef,
-      });
-    }
-    return !isAdvisoryChild(child.key, releaseProfile);
-  });
-}
-
-export function terminalPolicyPass(child, releaseProfile, workflowRef) {
-  if (child.status !== "completed") {
-    return false;
-  }
-  if (child.conclusion === "success") {
-    return true;
-  }
-  if (isAdvisoryChild(child.key, releaseProfile)) {
-    return true;
-  }
-  if (isReleaseChecksChild(child.key)) {
-    const verifier = child.jobs.find((job) => job.name === "Verify release checks");
-    return (
-      verifier?.status === "completed" &&
-      verifier.conclusion === "success" &&
-      failedJobsForPolicy(child, releaseProfile, workflowRef).length === 0
-    );
-  }
-  return false;
+export function terminalPolicyPass(child) {
+  return (
+    child.status === "completed" &&
+    child.conclusion === "success" &&
+    failedJobsForPolicy(child).length === 0
+  );
 }
 
 function dispatchBlockers(children) {
@@ -1631,8 +1581,6 @@ export function classifyReleaseSnapshot({
   extraBlockers = [],
   extraErrors = [],
   localFailures = [],
-  releaseProfile,
-  workflowRef,
 }) {
   const selected = children.filter((child) => child.selected);
   const active = selected.filter(
@@ -1642,7 +1590,7 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    failedJobsForPolicy(child, releaseProfile, workflowRef).map((job) => ({
+    failedJobsForPolicy(child).map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1664,7 +1612,7 @@ export function classifyReleaseSnapshot({
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, releaseProfile, workflowRef) &&
+        !terminalPolicyPass(child) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1950,6 +1898,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("release state artifact is invalid");
   }
+  validateRetiredReleaseRetryFields(payload);
   const mode = expectedMode ?? payload.mode;
   const expectedKind =
     mode === "decision"

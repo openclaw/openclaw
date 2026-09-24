@@ -45,8 +45,13 @@ non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
 ```bash
+OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
+OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
+
+Run it from a checkout of the Release SHA once the registry lists the version
+(see [regular release](regular-release.md#publish-and-verify)).
 
 `pnpm qa:otel:smoke` supplies local OTLP/redaction coverage without hosted
 telemetry credentials. Video-provider checks are conditional on release scope:
@@ -58,20 +63,25 @@ Anthropic keys; missing either blocks those lanes, never print their values.
 
 ## Beta-publish
 
-Use `release_profile=beta`, `run_release_soak=false`. A qualifying `all` run for
+Use `release_profile=beta`, `run_release_soak=false` for beta. A qualifying `all` run for
 an actual beta on its canonical branch/tag records `npm-beta-v1`. Native app
 CI, performance, and published-package Telegram move to confidence. Required
-Node, Control UI, plugin, package, install/update, Linux cross-OS, QA parity,
+Node, Control UI, plugin, package, install/update, Linux/Windows/macOS cross-OS, QA parity,
 runtime-pair/restart and tool-coverage gates remain. Beta `all` without soak
 also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile main/alpha too, but those do
 not qualify for `npm-beta-v1`.
 
-Windows/macOS cross-OS are advisory for beta/stable/full. All-group
-`cross_os_suite_filter` may omit advisory OS lanes; `npm-beta-v1` and
-`npm-stable-v1` still require all Linux suites. Focused cross-OS rerun semantics
-remain unchanged. Read required versus advisory conclusions in the manifest
-and `release-ci-summary`.
+Native app publishers run separately from npm/ClawHub publication. Selected
+macOS Swift and Windows Node CI lanes remain required; repair and rerun failed
+lanes before publication.
+
+Linux, Windows, and macOS Gateway cross-OS install and upgrade suites block
+beta/stable/full validation. All-group `cross_os_suite_filter` selections must
+retain `packaged-fresh`, `installer-fresh`, and `packaged-upgrade` on all three
+OSes: all nine pairs are required for `npm-beta-v1` and `npm-stable-v1`. Focused
+`cross-os` reruns may select individual lanes. Retain each conclusion in the
+manifest and `release-ci-summary`.
 
 ## Postpublish confidence
 
@@ -101,18 +111,30 @@ admit a confirmed product fix only to a new operator-approved candidate.
 
 ## Stable-publish and bounded execution
 
-Stable/full requires its stable roster, soak, blocking performance and accepted
-confidence evidence. Matching beta confidence may support the light promotion
-roster in [regular release](regular-release.md), not waive a required gate.
-Native publication retains separate signing/notarization/promotion gates under
-[platform publication](platform-publication.md).
+Stable publication requires `release_profile=stable` or `full`, its required
+roster, soak, and successful blocking performance evidence. Beta-profile
+validation cannot authorize stable publication. Matching beta confidence may
+support the promotion roster in [regular release](regular-release.md), but does
+not waive a required gate.
 
-Bound long local lanes: install smoke 45 minutes, Docker-all 90 minutes,
-standalone Docker-live 60 minutes, explicitly requested full local QA 180
-minutes; use the Parallels skill's caps for VM lanes. Individual npm
-install/update phases cap at 300 seconds. On timeout, inspect the affected lane
-instead of leaving it running. Serialize build/package mutations before VM
-packing so a concurrent build cannot remove `dist`; avoid load-induced noise.
+Retain each child's first failure. Diagnose and fix the owning defect before
+focused validation; automatic retries and passing replays do not establish a
+fix. Preserve the candidate unless a confirmed product defect requires a new
+Code SHA, and record changes and proof in the release handoff.
+
+Native publication retains separate signing/notarization/promotion gates under
+[platform publication](platform-publication.md). Platform publisher failures
+are repaired in parallel. Selected macOS Swift and Windows Node shards inside
+the `ci.yml` aggregate remain required checks; repair and rerun failed lanes
+before publication.
+
+Local proof is targeted: never mirror Full Release Validation locally. Run a
+lane locally only after it failed in CI, to separate flake from defect, bounded
+to 15 minutes per lane; a lane that needs longer reruns in CI through its
+focused `rerun_group`. Individual npm install/update phases cap at 300 seconds.
+On timeout, inspect the affected lane instead of leaving it running. Serialize
+build/package mutations before VM packing so a concurrent build cannot remove
+`dist`; avoid load-induced noise.
 
 Fix related required failures at their owner and rerun affected evidence. For
 PR preparation/landing or observed hosted-runner stalls, use

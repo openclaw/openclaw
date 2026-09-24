@@ -1,5 +1,9 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
@@ -47,14 +51,22 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   delegatedAuthority: AgentRunDelegatedAuthority;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   receiptAuthority: () => void;
   sessionKey: string;
+  sessionTarget: Readonly<BoundAgentRunSessionTarget>;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
-export type WorkerTurnExecutionIdentityCapability = Readonly<{
-  run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
-}>;
+export type WorkerTurnTranscriptSource = Pick<
+  WorkerTurnExecutionIdentity,
+  "sessionTarget" | "receiptAuthority"
+>;
+
+export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
+  Readonly<{
+    run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
+  }>;
 
 type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 
@@ -107,15 +119,16 @@ function claimKey(claim: WorkerSessionTurnClaim): string {
   ]);
 }
 
-/** Bind every worker to its live run; diagnostic provenance remains optional. */
+/** Bind every worker to its live run and original operator source when one exists. */
 export function bindWorkerTurnOwner(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: { agentId: string; sessionKey: string },
+  source: BoundAgentRunSessionTarget,
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): (credentialHash: string) => WorkerTurnFinishingOutcome | undefined {
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -125,8 +138,10 @@ export function bindWorkerTurnOwner(
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
   const owners = workerTurnOwners.get(path) ?? new Map();
+  const sessionTarget = Object.freeze({ ...source });
   const assertActive = () => {
     assertRunActive();
+    operatorAuthority?.assertCurrent();
     if (
       owners.get(claim.sessionId) !== owner ||
       workerTurnOwners.get(path) !== owners ||
@@ -141,11 +156,15 @@ export function bindWorkerTurnOwner(
     delegatedAuthority,
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
+    ...(operatorAuthority ? { operatorAuthority } : {}),
     receiptAuthority: assertActive,
     sessionKey: source.sessionKey,
+    sessionTarget,
     turnClaim: claim,
   });
   const capability = Object.freeze({
+    sessionTarget,
+    receiptAuthority: assertActive,
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);

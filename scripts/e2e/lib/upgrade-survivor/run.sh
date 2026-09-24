@@ -191,49 +191,31 @@ export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON" "$ARTIFACT_ROOT/backup-rollback.json" "$ARTIFACT_ROOT/baseline-companion.json"
 : >"$PHASE_LOG"
 
-validate_baseline_package_spec() {
-  local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-    return 0
-  fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
-  return 1
+normalize_baseline_spec() {
+  node --input-type=module - "$1" <<'NODE'
+import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
+  normalizeUpgradeSurvivorBaselineSpec,
+} from "./scripts/lib/upgrade-survivor-policy.mjs";
+const spec = normalizeUpgradeSurvivorBaselineSpec(process.argv[2]);
+if (!spec) throw new Error("OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty");
+assertSupportedUpgradeSurvivorBaselineSpec(spec);
+process.stdout.write(spec);
+NODE
 }
 
 normalize_baseline() {
-  local raw="${BASELINE_RAW//[[:space:]]/}"
-  if [ -z "$raw" ]; then
-    echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE cannot be empty" >&2
-    return 1
-  fi
-  case "$raw" in
-    openclaw@*)
-      baseline_spec="$raw"
-      baseline_version="${raw#openclaw@}"
-      ;;
-    *@*)
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@<version> or a bare version" >&2
-      return 1
-      ;;
-    *)
-      baseline_version="$raw"
-      baseline_spec="openclaw@$raw"
-      ;;
-  esac
+  baseline_spec="$(normalize_baseline_spec "$BASELINE_RAW")" || return "$?"
+  baseline_version="${baseline_spec#openclaw@}"
   case "$baseline_version" in
     latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
-    dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
-      return 1
-      ;;
     *)
       baseline_version_expected="1"
       ;;
   esac
-  validate_baseline_package_spec "$baseline_spec"
 }
 
 validate_update_restart_mode() {
@@ -1010,6 +992,7 @@ install_baseline() {
     return 1
   fi
   installed_version="$(read_installed_version)"
+  normalize_baseline_spec "$installed_version" >/dev/null || return "$?"
   if [ "$baseline_version_expected" = "1" ] && [ "$installed_version" != "$baseline_version" ]; then
     echo "baseline package version mismatch: expected $baseline_version, got $installed_version" >&2
     cat "$(package_root)/package.json" >&2 || true
@@ -1422,10 +1405,6 @@ resolve_candidate_version() {
     echo "could not resolve candidate version from $CANDIDATE_KIND:$CANDIDATE_SPEC" >&2
     return 1
   fi
-  OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-    node scripts/e2e/lib/package-compat.mjs "$candidate_version"
-  )"
-  export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
 resolve_candidate_install_mode() {
@@ -1875,8 +1854,7 @@ assert_volume_idempotence() {
   budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS 60)"
   echo "SQLite volume idempotence doctor completed in ${idempotence_seconds}s (budget ${budget}s)."
   if [ "$idempotence_seconds" -gt "$budget" ]; then
-    echo "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" >&2
-    return 1
+    node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade idempotence budget" "SQLite volume idempotence exceeded budget: ${idempotence_seconds}s > ${budget}s" || return "$?"
   fi
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE="$survival_assert_stage" \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
@@ -1966,9 +1944,10 @@ start_gateway() {
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+      return 1
+    fi
   fi
 }
 
@@ -2008,9 +1987,10 @@ check_gateway_status() {
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
   if [ "$status_seconds" -gt "$budget" ]; then
-    echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$STATUS_JSON" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/run.sh "Upgrade status budget" "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$STATUS_JSON" >&2
+      return 1
+    fi
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }

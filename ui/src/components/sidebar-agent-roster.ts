@@ -24,8 +24,7 @@ import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
 import "../styles/sidebar-agent-roster.css";
 
 registerAgentsHomeEnglish();
-type RosterHost = AppSidebarRenderHost &
-  SessionListHost & { loadMoreSidebarSessions(): Promise<void> };
+type RosterHost = AppSidebarRenderHost & SessionListHost;
 
 class SidebarAgentRoster extends AgentRosterElement {
   @property({ attribute: false }) host!: RosterHost;

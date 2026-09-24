@@ -40,7 +40,7 @@ export function createGatewayMatrixPluginManifest(requiredTools: readonly string
 
 const EMPTY_INPUT = { type: "object", properties: {}, additionalProperties: false };
 
-function pluginSource(registration: string): string {
+export function createGatewayMatrixPluginSource(registration: string): string {
   return `import fs from "node:fs";
 export default function register(api) {
 const receiptFile = api.pluginConfig.receiptsPath;
@@ -119,7 +119,7 @@ function invoiceFixture(repetition: number) {
     prompt:
       "Fetch the invoice export. In your first data-fetching code cell, return the complete raw export unchanged so you can inspect it before deciding how to calculate. Then, in a later code cell, calculate unpaid totals in cents grouped by customer over every invoice. Avoid fetching the same export again. Your final answer must be only JSON: {nonce,count,totalsCents}, where count is the total number of invoices, paid and unpaid, and totalsCents maps customer names to unpaid amounts. Do not print invoice records in the final answer.",
     expected: { nonce, count: invoices.length, totalsCents },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       readOnlyTool(
         "matrix_invoice_export",
         "Fetch the complete invoice export snapshot, including its nonce and all invoices. This tool has no declared output schema.",
@@ -194,7 +194,7 @@ function inventoryFixture(repetition: number) {
         a.supplierId.localeCompare(b.supplierId),
       ),
     },
-    pluginSource: pluginSource(
+    pluginSource: createGatewayMatrixPluginSource(
       [
         readOnlyTool(
           "matrix_inventory_export",
@@ -234,7 +234,7 @@ function partialFailureFixture(repetition: number) {
   return {
     prompt: `Settle synthetic operation ${operationId} once and report its actual resulting state. Use the available settlement tools; no real account is involved. The final answer must be only JSON: {nonce,operationId,effectCount,totalCents}.`,
     expected: { nonce, operationId, effectCount: 1, totalCents },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_settle", label: "Matrix settlement",
     description: "Apply a settlement to the named synthetic operation. Each successful dispatch creates an additional settlement effect; dispatch is not idempotent. Use matrix_settlement_inspect to read actual persisted state.",
     parameters: ${JSON.stringify(input)},
@@ -279,7 +279,7 @@ return {
     prompt: `Run the following JavaScript program unchanged in exactly one exec cell. Its final returned getter intentionally emits output and starts a synthetic effect; do not move those operations out of the getter or invoke the getter yourself. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
     probeCode,
     expected: { nonce, marker },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_return_effect", label: "Record return-value effect",
     description: "Record one synthetic effect receipt for the return-value probe. Each call adds an effect.",
     parameters: { type: "object", properties: { nonce: { type: "string", const: ${JSON.stringify(nonce)} } }, required: ["nonce"], additionalProperties: false },
@@ -322,7 +322,7 @@ return { nonce: loaded.nonce, rejected, deleted };`;
     prompt: `Run the following JavaScript program unchanged in exactly one exec cell. It checks actual serialization refusals and preserves a valid saved value. Do not replace unsupported values with strings or null, remove the failing cases, or invent error outcomes. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
     probeCode,
     expected: { nonce, rejected: ["bigint", "cycle", "throwing-toJSON"], deleted: true },
-    pluginSource: pluginSource(`api.registerTool({
+    pluginSource: createGatewayMatrixPluginSource(`api.registerTool({
     name: "matrix_serialization_seed", label: "Read serialization seed",
     description: "Read the JSON seed for the serialization probe.",
     parameters: ${JSON.stringify(EMPTY_INPUT)},
@@ -371,7 +371,11 @@ export function createGatewayMatrixFixture(
       requiredTools: ["matrix_settle", "matrix_settlement_inspect"],
     };
   }
-  const common = { pluginSource: pluginSource(""), interviewPrompt: interview, requiredTools: [] };
+  const common = {
+    pluginSource: createGatewayMatrixPluginSource(""),
+    interviewPrompt: interview,
+    requiredTools: [],
+  };
   if (task === "gateway-config-read") {
     const probe = `gateway-config-r${repetition}`;
     return {

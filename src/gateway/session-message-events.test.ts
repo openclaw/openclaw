@@ -23,7 +23,6 @@ import {
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
 import type { CronJob } from "../cron/types.js";
@@ -44,6 +43,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { seedCompletedSessionTranscript } from "./session-row-fixtures.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -56,10 +56,6 @@ import {
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
-import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
-import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
-import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
-import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -2709,39 +2705,12 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
-      session: { mainKey: "main", store: storePath },
-    };
-    const ledger: WorkerTranscriptCommitStore = {
-      begin: () => ({ kind: "claimed" }),
-      complete: ({ outcome }) => outcome,
-      discardUncommitted: () => {},
-    };
-    const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
-    const identity: WorkerConnectionIdentity = {
-      environmentId: "environment-fanout",
-      credentialHash: ["fanout", "credential", "hash"].join("-"),
-      bundleHash: "f".repeat(64),
-      sessionId,
-      runId: "run-fanout",
-      turnClaim: {
+    const { committer, identity, receiver, push, sessionTarget, source } =
+      createWorkerFanoutFixture({
+        storePath,
         sessionId,
-        claimId: "claim-fanout",
-        runId: "run-fanout",
-        placementGeneration: 4,
-        owner: { kind: "worker", environmentId: "environment-fanout", ownerEpoch: 4 },
-      },
-      ownerEpoch: 4,
-      rpcSetVersion: 1,
-      protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
-      credentialExpiresAtMs: Date.now() + 10_000,
-    };
-    const receiver = createWorkerLiveEventReceiver({
-      getConfig: () => config,
-      startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
-      startupOwners: new Map([[identity.environmentId, 4]]),
-    });
+        sessionKey,
+      });
     const ws = await harness.openWs();
     const workerChats: Record<string, unknown>[] = [];
     const collectWorkerChats = (data: RawData) => {
@@ -2777,7 +2746,11 @@ describe("session.message websocket events", () => {
         ),
       );
       const outcome = await committer.commit({
-        assertCurrent: () => undefined,
+        assertCurrent: () => {
+          source.receiptAuthority();
+          return undefined;
+        },
+        sessionTarget,
         identity,
         request: {
           runEpoch: identity.ownerEpoch,
@@ -2822,13 +2795,6 @@ describe("session.message websocket events", () => {
             (payload as Record<string, unknown>).runId === runId,
           timeoutMs,
         );
-      const liveEvent = {
-        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
-        lastAckedSeq: 0,
-        seq: 1,
-      } as const;
-      const push = (runEpoch = 4, runId = "worker") =>
-        receiver.apply({ identity, request: { ...liveEvent, runEpoch, runId } });
       const [workerEvent] = await Promise.all([
         waitForChat("worker"),
         expectNoMessageWithin({

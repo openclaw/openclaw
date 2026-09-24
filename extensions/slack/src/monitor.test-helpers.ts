@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 // Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -17,6 +18,7 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { sendMessageSlack } from "./monitor/send.runtime.js";
 import { setSlackRuntime } from "./runtime.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
@@ -71,7 +73,7 @@ type SlackTestState = {
   appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   httpRequestListenerMock: Mock<(...args: unknown[]) => unknown>;
   interactionRegistrations: string[];
-  sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  sendMock: Mock<typeof sendMessageSlack>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
   reactMock: Mock<(...args: unknown[]) => unknown>;
@@ -341,7 +343,21 @@ export async function resetSlackTestState(
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.httpRequestListenerMock.mockReset();
   slackTestState.interactionRegistrations.length = 0;
-  slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.sendMock.mockReset().mockImplementation(async (target, _text, options) => {
+    const channelId = target.replace(/^channel:/, "");
+    const messageId = `2000000000.${String(slackTestState.sendMock.mock.calls.length).padStart(6, "0")}`;
+    const result = {
+      channelId,
+      messageId,
+      threadTs: options.threadTs,
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", channelId, messageId }],
+        threadId: options.threadTs,
+      }),
+    };
+    await options.onDeliveryResult?.(result);
+    return result;
+  });
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
   slackTestState.reactMock.mockReset();
@@ -429,7 +445,8 @@ vi.mock("./client.js", async () => {
 
 vi.mock("./monitor/send.runtime.js", () => {
   return {
-    sendMessageSlack: (...args: unknown[]) => slackTestState.sendMock(...args),
+    sendMessageSlack: (...args: Parameters<typeof sendMessageSlack>) =>
+      slackTestState.sendMock(...args),
   };
 });
 

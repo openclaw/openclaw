@@ -9,6 +9,24 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Managed node workspace acquisition
+
+Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`
+before using the returned workspace and release its lease in `finally`. The host
+checks the exact invocation session before and after acquisition, releases a
+late lease if the invocation closes, and keeps prepared-workspace SQLite work
+off the node's event loop. Continue checking command cancellation before starting
+external work.
+
+The synchronous `context.acquireManagedWorkspace(request)` callback shipped in
+2026.9.4 remains available for external plugin compatibility and is deprecated.
+Its return value stays synchronous. Bundled commands use the async companion;
+plugins requiring that companion should report an unavailable host capability
+instead of falling back to synchronous acquisition. Removal of the deprecated
+callback requires an explicitly approved future breaking Plugin SDK release.
+The `next-plugin-sdk-major` gate does not itself authorize removal or shorten
+an existing compatibility window.
+
 ## How to migrate
 
 <Steps>

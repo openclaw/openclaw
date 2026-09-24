@@ -1,12 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { requireTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewaysShareOrigin,
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
-import { parsePort } from "../shared/parse-port.js";
 
 type NodeGatewayOptions = {
   host?: string;
@@ -72,7 +72,7 @@ export function resolveNodeGatewayOptions(
   const baselineHost = pair?.host ?? config?.gateway?.host ?? "127.0.0.1";
   const baselinePort = pair?.port ?? config?.gateway?.port ?? 18789;
   const host = normalizeOptionalString(options.host) || baselineHost;
-  const port = options.port === undefined ? baselinePort : parsePort(options.port);
+  const port = options.port === undefined ? baselinePort : parseTcpPort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
   const selectedTlsFingerprint =

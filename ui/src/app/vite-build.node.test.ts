@@ -14,29 +14,26 @@ import controlUiViteConfig from "../../vite.config.ts";
 describe("Control UI Vite build", () => {
   let root: string;
   let outDir: string;
-  let config: InlineConfig;
   const info = vi.fn<(message: string) => void>();
 
-  function captureLogs(level: "info" | "silent") {
+  function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
     info.mockReset();
-    config.logLevel = level;
-    config.customLogger = createLogger(level, {
-      allowClearScreen: false,
-      console: { ...console, log: info, error: vi.fn() },
-    });
+    return {
+      ...controlUiViteConfig({ outDir }),
+      configFile: false,
+      root,
+      publicDir: false,
+      logLevel: level,
+      customLogger: createLogger(level, {
+        allowClearScreen: false,
+        console: { ...console, log: info, error: vi.fn() },
+      }),
+    };
   }
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
     outDir = path.join(root, "dist");
-    config = {
-      ...controlUiViteConfig({ outDir }),
-      configFile: false,
-      root,
-      publicDir: false,
-      logLevel: "silent",
-    };
-    captureLogs("silent");
     await fs.writeFile(
       path.join(root, "index.html"),
       '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
@@ -61,8 +58,50 @@ describe("Control UI Vite build", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
+    const config = createConfig();
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js");',
+    );
+    await fs.writeFile(path.join(root, "shared.js"), 'export const shared = "shared";');
+    await fs.writeFile(path.join(root, "lazy-only.js"), 'export const lazy = "lazy-only";');
+    await fs.writeFile(
+      path.join(root, "lazy.js"),
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+    );
+    const productionBuild = config.build!;
+    config.build = {
+      ...productionBuild,
+      rolldownOptions: {
+        ...productionBuild.rolldownOptions,
+        output: {
+          codeSplitting: {
+            groups: ["shared", "lazy-only"].map((name) => ({
+              name,
+              test: (id: string) => id === path.join(root, `${name}.js`),
+            })),
+          },
+        },
+      },
+    };
+    await build(config);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
+    const entry = await fs.readFile(path.join(outDir, "assets", entryName), "utf8");
+    const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
+    expect(table).toBeDefined();
+    const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
+    const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
+    expect(entry).toContain(sharedName);
+    expect(table).not.toContain(sharedName);
+    expect(table).toContain(lazyName);
+    expect(table).toMatch(/lazy-[^"/]+\.css/u);
+    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain(sharedName);
+  });
+
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');
 
     const result = build(config);
@@ -74,7 +113,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("reports completed compression work before build completion at a bounded cadence", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     let clockMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clockMs);
     const writeFileSync = fsSync.writeFileSync;
@@ -147,7 +186,7 @@ describe("Control UI Vite build", () => {
     ),
   )("finalizes $output assets and maps (release=$release)", async ({ output, release }) => {
     vi.stubEnv("OPENCLAW_CONTROL_UI_RELEASE_BUILD", release ? "1" : undefined);
-    config = { ...config, ...controlUiViteConfig({ outDir }) };
+    const config = createConfig();
     const configuredOutDir = outDir;
     if (output !== "configured") {
       outDir = path.join(root, "overridden-output");
@@ -246,6 +285,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("changes the public asset version after a same-commit rebuild without changing worker identity", async () => {
+    const config = createConfig();
     const publicDir = path.join(root, "public");
     await fs.mkdir(publicDir);
     config.publicDir = publicDir;
@@ -269,6 +309,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("carries the Cloudflare Rocket Loader bypass on every emitted script tag", async () => {
+    const config = createConfig();
     await build(config);
 
     const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
@@ -280,6 +321,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("fails when a completed build emits outside the required assets directory", async () => {
+    const config = createConfig();
     config.build = { ...config.build, assetsDir: "bundles" };
 
     await expect(build(config)).rejects.toThrow(/ENOENT.*assets/u);
@@ -291,7 +333,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("preserves an output write failure without finalizing the build", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     await fs.mkdir(outDir);
     await fs.writeFile(path.join(outDir, "blocked"), "output obstruction");
     config.build = { ...config.build, emptyOutDir: false, assetsDir: "blocked" };
@@ -308,7 +350,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("does not count an asset or report completion when its second sidecar write fails", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     const writeFileSync = fsSync.writeFileSync;
     vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
       if (String(file).endsWith(".gz")) {

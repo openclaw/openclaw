@@ -209,7 +209,17 @@ async function runNativeHookRelayPreToolUse(params: {
     if (params.executionAdmission?.toolNames.includes(toolName)) {
       // Accepted execution outlives the one-shot hook transport, while this
       // request must still be current before returning or publishing approval.
-      params.executionAdmission.admit(params.invocation, params.assertExecutionAdmissionCurrent);
+      await params.executionAdmission.admit(
+        params.invocation,
+        params.assertExecutionAdmissionCurrent,
+        {
+          signal: params.registration.signal,
+          assertCurrent: () => {
+            params.registration.signal?.throwIfAborted();
+            params.registration.assertActive?.();
+          },
+        },
+      );
       params.registration.signal?.throwIfAborted();
       params.registration.assertActive?.();
     }

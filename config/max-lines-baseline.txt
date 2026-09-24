@@ -8,7 +8,6 @@ extensions/active-memory/index.test.ts
 extensions/amazon-bedrock/index.test.ts
 extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/index.test.ts
-extensions/anthropic/register.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
 extensions/browser/src/browser/chrome-mcp.test.ts
@@ -117,7 +116,6 @@ extensions/matrix/src/cli.test.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
-extensions/matrix/src/matrix/sdk/verification-manager.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
@@ -211,22 +209,17 @@ extensions/slack/src/monitor/slash.test.ts
 extensions/slack/src/monitor/slash.ts
 extensions/slack/src/send.blocks.test.ts
 extensions/slack/src/send.ts
-extensions/telegram/src/action-runtime.test.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
-extensions/telegram/src/bot/delivery.test.ts
 extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
 extensions/telegram/src/draft-stream.ts
-extensions/telegram/src/fetch.test.ts
 extensions/telegram/src/fetch.ts
-extensions/telegram/src/format.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
-extensions/telegram/src/send.test.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
@@ -258,7 +251,6 @@ packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
-packages/ai/src/transports/anthropic-transport-stream.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
@@ -350,7 +342,6 @@ src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
 src/agents/runtime-plan/prepare-auth.test.ts
-src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
@@ -372,7 +363,6 @@ src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
-src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
@@ -385,7 +375,6 @@ src/agents/tools/web-fetch.ts
 src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
-src/auto-reply/inbound.test.ts
 src/auto-reply/reply/abort.test.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
@@ -432,7 +421,6 @@ src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
-src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
@@ -474,7 +462,6 @@ src/commands/doctor-gateway-services.test.ts
 src/commands/doctor-gateway-services.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
-src/commands/doctor-memory-search.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
@@ -582,7 +569,6 @@ src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
-src/gateway/server-methods/devices.ts
 src/gateway/server-methods/doctor.test.ts
 src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
@@ -591,7 +577,6 @@ src/gateway/server-methods/nodes.invoke-wake.test.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
-src/gateway/server-methods/skills.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -623,7 +608,6 @@ src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
-src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
 src/infra/device-pairing.test.ts
@@ -774,7 +758,6 @@ ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
 ui/src/pages/agents/memory/view.ts
-ui/src/pages/agents/panels-tools-skills.ts
 ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-command-executor.ts
 ui/src/pages/chat/chat-gateway.test.ts
@@ -793,7 +776,6 @@ ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

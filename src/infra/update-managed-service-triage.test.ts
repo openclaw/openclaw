@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const boundaries: Awaited<ReturnType<typeof createTriageBoundary>>[] = [];
 afterEach(async () => {

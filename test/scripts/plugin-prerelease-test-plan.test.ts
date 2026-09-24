@@ -1,13 +1,6 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,35 +48,6 @@ function getDockerLane(name: string) {
     throw new Error(`Missing Docker E2E lane ${name}`);
   }
   return lane;
-}
-
-function runFrozenTargetNodeExclusionValidation(params: {
-  fullReleaseValidation: boolean;
-  patternsJson: string;
-}) {
-  const workflow = readPluginPrereleaseWorkflow();
-  const validationStep = workflow.jobs.preflight.steps.find(
-    (step: WorkflowStep) => step.name === "Validate frozen-target Node exclusions",
-  );
-  if (!validationStep?.run) {
-    throw new Error("Missing frozen-target Node exclusion validation step");
-  }
-
-  const root = tempDirs.make("openclaw-plugin-prerelease-excludes-");
-  const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", validationStep.run], {
-    encoding: "utf8",
-    env: {
-      FULL_RELEASE_VALIDATION: String(params.fullReleaseValidation),
-      GITHUB_OUTPUT: outputPath,
-      NODE_TEST_EXCLUDE_PATTERNS_JSON: params.patternsJson,
-      PATH: process.env.PATH,
-    },
-  });
-  return {
-    ...result,
-    output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
-  };
 }
 
 function pluginCandidateArtifactJson(selectedSha = "a".repeat(40)) {
@@ -275,8 +239,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-plugin",
       resources: ["npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 3,
     });
@@ -343,8 +305,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-rpc",
       resources: ["service", "npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       timeoutMs: 1_500_000,
       weight: 3,
@@ -382,8 +342,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "plugins",
       resources: ["npm", "service"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 6,
     });
@@ -397,54 +355,25 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
   });
 
-  it("validates and forwards frozen-target Node omissions", () => {
-    const patterns = ["src/plugins/example.test.ts"];
-    const result = runFrozenTargetNodeExclusionValidation({
-      fullReleaseValidation: true,
-      patternsJson: JSON.stringify(patterns),
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.output).toBe(`patterns_json=${JSON.stringify(patterns)}\n`);
-
+  it("forwards validated frozen-target omissions to the selected shard adapters", () => {
     const workflow = readPluginPrereleaseWorkflow();
     const preflight = workflow.jobs.preflight;
-    const nodeShard = workflow.jobs["plugin-prerelease-node-shard"];
-    const runNodeShard = nodeShard.steps.find(
+    const nodeStep = workflow.jobs["plugin-prerelease-node-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
+    );
+    const extensionStep = workflow.jobs["plugin-prerelease-extension-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run extension shard",
     );
     expect(preflight.outputs.node_test_exclude_patterns_json).toBe(
       "${{ steps.node_test_exclusions.outputs.patterns_json }}",
     );
-    expect(runNodeShard?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
+    expect(nodeStep.env.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ needs.preflight.outputs.node_test_exclude_patterns_json }}",
     );
-    if (!runNodeShard?.run) {
-      throw new Error("Missing release-only plugin Node shard");
-    }
-
-    const root = tempDirs.make("openclaw-plugin-prerelease-node-shard-");
-    const pnpmPath = join(root, "pnpm");
-    const argsPath = join(root, "pnpm-args");
-    writeFileSync(pnpmPath, '#!/bin/sh\nprintf "%s\\n" "$@" > "$PNPM_ARGS_PATH"\n', "utf8");
-    chmodSync(pnpmPath, 0o755);
-    const shardResult = spawnSync("bash", ["-c", runNodeShard.run], {
-      encoding: "utf8",
-      env: {
-        NODE_TEST_EXCLUDE_PATTERNS_JSON: JSON.stringify(patterns),
-        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.plugins.config.ts"]),
-        OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: "null",
-        PATH: `${root}:${process.env.PATH}`,
-        PNPM_ARGS_PATH: argsPath,
-      },
-    });
-    expect(shardResult.status, shardResult.stderr).toBe(0);
-    expect(readFileSync(argsPath, "utf8").trim().split("\n")).toEqual([
-      "test",
-      "--",
-      "test/vitest/vitest.plugins.config.ts",
-      "--",
-      "--exclude=example.test.ts",
-    ]);
+    expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
+      "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
+    );
+    expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 
   it("keeps the trusted security scanner outside the candidate test process", () => {
@@ -744,9 +673,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
       OPENCLAW_CI_DOCS_ONLY:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_RELEASE_GATE: "${{ inputs.release_gate && 'true' || 'false' }}",
@@ -756,10 +685,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUNNER_PROFILE: "${{ steps.runner_profile.outputs.runner_profile }}",
+      OPENCLAW_CI_NODE_RUNNER_BACKEND: "${{ steps.runner_profile.outputs.node_runner_backend }}",
+      OPENCLAW_CI_QUALIFICATION: "${{ steps.runner_profile.outputs.ci_qualification }}",
+      OPENCLAW_CI_SHAPE: "${{ steps.runner_profile.outputs.ci_shape }}",
       OPENCLAW_CI_RUN_ANDROID:
-        "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
       OPENCLAW_CI_RUN_IOS_BUILD:
         "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
@@ -767,21 +699,21 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       OPENCLAW_CI_RUN_MACOS_NODE:
         "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}",
       OPENCLAW_CI_RUN_NATIVE_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_ONLY:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
       OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.workflow_sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
@@ -835,7 +767,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
     ).run;
     expect(pluginNodeShardScript).toContain(
-      'spawnSync("pnpm", ["test", "--", ...configs, "--", ...excludeArgs]',
+      '".frv-tooling/scripts/frv-test-exclusions.mjs", "run", "--", "pnpm", "test", "--", ...configs',
     );
     expect(pluginNodeShardScript).not.toContain("scripts/test-projects.mts");
     expect(pluginWorkflow.on.workflow_dispatch.inputs.target_ref).toEqual({
@@ -864,6 +796,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       type: "string",
     });
     expect(pluginManifestEnv).toEqual({
+      NODE_TEST_EXCLUDE_PATTERNS_JSON: "${{ steps.node_test_exclusions.outputs.patterns_json }}",
+      EXTENSION_TEST_EXCLUDE_PATTERNS_JSON:
+        "${{ steps.node_test_exclusions.outputs.extension_patterns_json }}",
       FULL_RELEASE_VALIDATION: "${{ inputs.full_release_validation && 'true' || 'false' }}",
       PHASE: "${{ inputs.phase }}",
     });
@@ -882,6 +817,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         "${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}",
       plugin_prerelease_node_matrix: "${{ steps.manifest.outputs.plugin_prerelease_node_matrix }}",
       node_test_exclude_patterns_json: "${{ steps.node_test_exclusions.outputs.patterns_json }}",
+      extension_test_exclude_patterns_json:
+        "${{ steps.node_test_exclusions.outputs.extension_patterns_json }}",
       plugin_prerelease_static_matrix:
         "${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}",
       run_plugin_prerelease_docker: "${{ steps.manifest.outputs.run_plugin_prerelease_docker }}",
@@ -906,9 +843,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
-    expect(
-      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
-    ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
     expect(inspector.needs).toEqual(["resolve_target", "preflight"]);
     expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'");
@@ -1201,7 +1135,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
-    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+    ]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",
     );
@@ -1209,7 +1147,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}",
+      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('[\"success\",\"skipped\"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(

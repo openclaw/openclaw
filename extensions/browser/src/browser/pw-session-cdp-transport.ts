@@ -1,10 +1,12 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserEngineId } from "./engines/types.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
 // Playwright allocates positive command IDs and reserves -9999 for Browser.close.
@@ -37,6 +39,7 @@ type CdpTransportOptions = {
   lookup?: CdpSocketLookup;
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
+  engine?: BrowserEngineId;
 };
 
 async function openCdpTransportSocket(
@@ -98,6 +101,7 @@ export async function connectOverCdpTransport(
   connectionUrl: string,
   opts: CdpTransportOptions,
 ): Promise<Browser> {
+  const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
   try {
     let onMessage: ((message: object) => void) | undefined;
@@ -114,6 +118,7 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      normalizer?.clear();
       if (onClose) {
         onClose(reason);
         return;
@@ -132,6 +137,7 @@ export async function connectOverCdpTransport(
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
       closingReason = reason;
+      normalizer?.clear();
       // Borrowed streams close only after the real owner acknowledges native cleanup.
       wire.close();
     };
@@ -180,7 +186,12 @@ export async function connectOverCdpTransport(
         if (closingReason || transportClosed) {
           throw new Error("CDP transport closed");
         }
-        wire.send(message);
+        try {
+          wire.send(normalizer?.send(message) ?? message);
+        } catch (error) {
+          closeTransportSocket(formatErrorMessage(error));
+          throw error;
+        }
       },
       close: () => {
         closeTransportSocket();
@@ -215,9 +226,13 @@ export async function connectOverCdpTransport(
     Object.assign(wire, {
       onmessage: (message: object) => {
         try {
-          const parsed = asOptionalRecord(message);
-          if (!parsed) {
+          const received = asOptionalRecord(message);
+          if (!received) {
             closeTransportSocket();
+            return;
+          }
+          const parsed = normalizer ? normalizer.receive(received) : received;
+          if (!parsed) {
             return;
           }
           const id = parsed.id;
@@ -244,6 +259,7 @@ export async function connectOverCdpTransport(
     });
     return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
+    normalizer?.clear();
     wire.close();
     throw error;
   }

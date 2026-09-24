@@ -151,7 +151,7 @@ describe("qa compaction scenario catalog", () => {
     );
     const terminalEvidenceAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes(
-        "terminalContinuations[0].providerVariant === 'openai'",
+        "terminalContinuations[0].codeModeExecSurface === 'native'",
       ),
     );
     const outboundWaitIndex = actionIndex(
@@ -161,7 +161,7 @@ describe("qa compaction scenario catalog", () => {
     );
     const stableCellIdAssertExpr = readAssertExpression("continuationChain.waits.length === 0");
     const terminalEvidenceAssertExpr = readAssertExpression(
-      "terminalContinuations[0].providerVariant === 'openai'",
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
     const compactionSummaryAssertExpr = readAssertExpression("compactionSummaryRequests.some");
     const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
@@ -317,16 +317,16 @@ describe("qa compaction scenario catalog", () => {
       "new Set(continuationChain.waits.map((request) => request.plannedToolArgs.cell_id)).size === 1",
     );
     expect(terminalEvidenceAssertExpr).toContain("writeWireToolName !== 'exec'");
-    const openAiEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'openai'",
+    const nativeEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
-    const anthropicEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'anthropic'",
+    const guestEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'guest'",
     );
     const unknownProviderFailClosedIndex = terminalEvidenceAssertExpr.lastIndexOf(": false");
-    expect(openAiEvidenceIndex).toBeGreaterThanOrEqual(0);
+    expect(nativeEvidenceIndex).toBeGreaterThanOrEqual(0);
     expect(terminalEvidenceAssertExpr).toContain("startsWith('Script completed\\n')");
-    expect(anthropicEvidenceIndex).toBeGreaterThan(openAiEvidenceIndex);
+    expect(guestEvidenceIndex).toBeGreaterThan(nativeEvidenceIndex);
     expect(terminalEvidenceAssertExpr).toContain(
       "JSON.parse(String(terminalContinuations[0].toolOutput ?? ''))",
     );
@@ -334,7 +334,7 @@ describe("qa compaction scenario catalog", () => {
     expect(terminalEvidenceAssertExpr).toContain("typeof parsed === 'object'");
     expect(terminalEvidenceAssertExpr).toContain("!Array.isArray(parsed)");
     expect(terminalEvidenceAssertExpr).toContain("parsed.status === 'completed'");
-    expect(unknownProviderFailClosedIndex).toBeGreaterThan(anthropicEvidenceIndex);
+    expect(unknownProviderFailClosedIndex).toBeGreaterThan(guestEvidenceIndex);
     expect(continuationAssertIndex).toBeGreaterThanOrEqual(0);
     expect(terminalAssertIndex).toBeGreaterThan(continuationAssertIndex);
     expect(distinctCallIdsAssertIndex).toBeGreaterThan(terminalAssertIndex);

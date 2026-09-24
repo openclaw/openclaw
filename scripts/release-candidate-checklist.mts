@@ -173,7 +173,7 @@ Options:
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
-  --skip-dispatch                     Require Full Release Validation run; separate npm run only for historical recovery.
+  --skip-dispatch                    Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
@@ -332,6 +332,13 @@ export function parseArgs(argv: string[]) {
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
+  }
+  if (
+    !options.tag.includes("-alpha.") &&
+    !options.tag.includes("-beta.") &&
+    options.releaseProfile === "beta"
+  ) {
+    throw new Error("stable release candidates require --release-profile stable or full");
   }
   if (options.runParallels && options.skipParallels) {
     throw new Error("--run-parallels and --skip-parallels cannot be combined");
@@ -2373,7 +2380,6 @@ async function main() {
       npmDistTag: options.npmDistTag,
       pluginPublishScope: publicationSelection.pluginPublishScope,
       plugins: options.plugins,
-      stableSoakWaiver: "",
       workflowRef:
         options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
       releaseProfile: "from-validation",
