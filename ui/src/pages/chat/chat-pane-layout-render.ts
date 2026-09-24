@@ -147,7 +147,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const companionSessionKey = state.sessionKey;
+    const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
     const companionPresented =
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
@@ -239,6 +240,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+      onCompanionAttachmentsChange: (attachments) =>
+        this.sessionCompanionThreads.setAttachments(
+          companionSessionKey,
+          attachments,
+          currentAgentId,
+        ),
       onCompanionVisibilityChange: this.setSessionObserverVisibility,
       connected: state.connected,
       onClearCompanion: () => void this.clearSessionCompanion(),

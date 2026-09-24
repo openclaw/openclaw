@@ -37,13 +37,8 @@ function setup(
     requestUpdate: vi.fn(),
     updateComplete: Promise.resolve(true),
   } satisfies ReactiveControllerHost;
-  const initial = responses[0];
-  const categories = initial && !(initial instanceof Promise) ? (initial.categories ?? []) : [];
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
-    if (method === "plugins.catalog.categories") {
-      return { categories };
-    }
     if (responder) {
       return (await responder(method, params)) as never;
     }
@@ -67,7 +62,79 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("populates home shelves with one overview alongside the category read", async () => {
+it("loads category navigation without waiting for catalog cards", async () => {
+  const browse = createDeferred<PluginDiscoveryResult>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller, request } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : browse.promise,
+  );
+  const loading = controller.refresh();
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
+  expect(controller.categories).toEqual(categories);
+  expect(controller.loading).toBe(true);
+  browse.resolve({ items: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {
+  let fail = true;
+  const { controller, request } = setup([], async () => {
+    if (fail) {
+      throw new Error("Categories unavailable");
+    }
+    return { categories: [] };
+  });
+  await controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categoriesError).toContain("Categories unavailable");
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledOnce();
+  fail = false;
+  await controller.ensureCategories(true);
+  expect(controller.categoriesError).toBeNull();
+  expect(controller.categoriesLoading).toBe(false);
+  await controller.ensureCategories();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("uses overview categories when they arrive first without accepting a late category reply", async () => {
+  const pending = createDeferred<{ categories: never[] }>();
+  const categories = [
+    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+  ];
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? pending.promise : { items: [], categories },
+  );
+  const loading = controller.ensureCategories();
+  expect(controller.categoriesLoading).toBe(true);
+  await controller.refresh();
+  expect(controller.categoriesLoading).toBe(false);
+  expect(controller.categories).toEqual(categories);
+  pending.resolve({ categories: [] });
+  await loading;
+  expect(controller.categories).toEqual(categories);
+});
+
+it("discards category navigation and late responses across connection invalidation", async () => {
+  const pending = createDeferred<{
+    categories: { slug: string; label: string; description: string; icon: string; order: number }[];
+  }>();
+  const { controller } = setup([], async () => pending.promise);
+  const loading = controller.ensureCategories();
+  controller.invalidate();
+  pending.resolve({
+    categories: [{ slug: "old", label: "Old", description: "Old", icon: "brain", order: 0 }],
+  });
+  await loading;
+  expect(controller.categories).toEqual([]);
+  expect(controller.categoriesLoading).toBe(false);
+});
+
+it("populates the grouped home page from one overview response", async () => {
   const featured = entry(1);
   featured.catalog.featured = true;
   featured.catalog.featuredRank = 0;
@@ -86,7 +153,7 @@ it("populates home shelves with one overview alongside the category read", async
   expect(controller.categories).toEqual(categories);
   expect(controller.featured.map((item) => item.id)).toEqual([featured.id]);
   expect(controller.trending.map((item) => item.id)).toEqual([trending.id]);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
   expect(request).toHaveBeenCalledWith(
     "plugins.catalog.browse",
     { intent: "all", pageSize: 100 },
@@ -137,7 +204,7 @@ it("preserves home navigation when a category completes during the search deboun
 
   category.resolve({ items: categoryItems });
   await vi.advanceTimersByTimeAsync(0);
-  expect(request).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
   expect(controller.result?.items).toEqual(categoryItems);
   expect.soft(controller.categories).toEqual(categories);
@@ -233,7 +300,7 @@ it("loads one bounded page initially and continues only after explicit expansion
 
   await controller.refresh();
   expect(controller.result?.items).toHaveLength(100);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledTimes(1);
   expect(request).toHaveBeenCalledWith(
     "plugins.catalog.browse",
     { intent: "all", category: "tools", pageSize: 100 },
@@ -244,7 +311,7 @@ it("loads one bounded page initially and continues only after explicit expansion
 
   expect(controller.result?.items).toHaveLength(101);
   expect(controller.result?.items[0]?.id).toBe(promotedMatch.id);
-  expect(request).toHaveBeenCalledTimes(3);
+  expect(request).toHaveBeenCalledTimes(2);
   expect(request).toHaveBeenLastCalledWith(
     "plugins.catalog.browse",
     { intent: "all", category: "tools", cursor: "catalog-page-2", pageSize: 100 },
@@ -333,11 +400,15 @@ it("preserves category navigation when a filtered view reconnects", async () => 
       order: 0,
     },
   ];
-  const { controller } = setup([{ items: [entry(1)], categories }, { items: [entry(2)] }]);
+  const { controller } = setup([], async (method) =>
+    method === "plugins.catalog.categories" ? { categories } : { items: [entry(1)], categories },
+  );
 
   await controller.refresh();
   controller.category = "channels";
   controller.invalidate();
+  expect(controller.categories).toEqual([]);
+  await controller.ensureCategories();
   await controller.refresh();
 
   expect(controller.categories).toEqual(categories);

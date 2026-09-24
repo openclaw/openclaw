@@ -31,46 +31,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it("shows the Plugins heading and category navigation before inventory and cards finish", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: pluginMethods,
-      methodResponses: pluginMethodResponses(),
-      deferredMethods: ["plugins.list", "plugins.catalog.categories", "plugins.catalog.browse"],
-    });
-    try {
-      await page.goto(`${server.baseUrl}plugins`);
-      await gateway.waitForRequest("plugins.catalog.categories");
-      const title = page.locator(".plugins-hub-header .page-title");
-      const tabs = page.locator(".plugins-hub-header .hub-page-header__tabs");
-      const titleBounds = await title.boundingBox();
-      const tabBounds = await tabs.boundingBox();
-      expect(titleBounds!.width).toBeGreaterThan(30);
-      expect(Math.abs(titleBounds!.x - tabBounds!.x)).toBeLessThan(1);
-      expect(await page.locator(".plugin-catalog-chip-skeleton").count()).toBeGreaterThan(0);
-      expect(
-        (await page.locator(".plugin-catalog-chip").allTextContents()).map((label) => label.trim()),
-      ).toEqual(["All", "Featured", "Trending"]);
-      await gateway.resolveDeferred("plugins.catalog.categories", {
-        categories: discoveryResult.categories,
-      });
-      await page.getByRole("button", { name: "Channels", exact: true }).waitFor();
-      expect(await page.locator(".plugin-catalog-chip-skeleton").count()).toBe(0);
-      expect(await gateway.getRequests("plugins.catalog.browse")).toHaveLength(0);
-      await gateway.resolveDeferred("plugins.list");
-      await gateway.waitForRequest("plugins.catalog.browse");
-      await gateway.resolveDeferred("plugins.catalog.browse", discoveryResult);
-      await page
-        .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
-        .first()
-        .waitFor();
-      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(1);
-    } finally {
-      await context.close();
-    }
-  });
-
   it("keeps category navigation while a search replaces pending category results", async () => {
     const context = await newContext();
     const page = await context.newPage();

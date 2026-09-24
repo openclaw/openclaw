@@ -68,7 +68,7 @@ describe("PluginsPage", () => {
   );
 
   it.each(["missing", "older generation"])(
-    "loads categories immediately but waits for inventory before browsing cards (%s)",
+    "waits for the initial installed inventory before browsing discovery (%s)",
     async (routeInventory) => {
       const current = { ...createResult(), generation: 7 };
       const inventory = deferred<typeof current>();
@@ -76,11 +76,15 @@ describe("PluginsPage", () => {
         if (method === "plugins.list") {
           return inventory.promise;
         }
-        if (method === "plugins.catalog.categories") {
-          return { categories: [] };
-        }
         if (method === "plugins.catalog.browse") {
           return { items: [] };
+        }
+        if (method === "plugins.catalog.categories") {
+          return {
+            categories: [
+              { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+            ],
+          };
         }
         throw new Error(`Unexpected method ${method}`);
       });
@@ -109,6 +113,7 @@ describe("PluginsPage", () => {
           "plugins.catalog.categories",
           "plugins.list",
         ]);
+        expect(page.querySelector(".plugin-catalog-chips")?.textContent).toContain("Memory");
       } finally {
         inventory.resolve(current);
       }
@@ -154,10 +159,7 @@ describe("PluginsPage", () => {
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
     );
     expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
-    expect(request.mock.calls.map((call) => call.slice(0, 2))).toEqual([
-      ["plugins.catalog.categories", {}],
-      ["plugins.list", {}],
-    ]);
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.anything());
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {

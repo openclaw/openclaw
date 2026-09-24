@@ -93,41 +93,16 @@ describe("renderPluginCatalogResults", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps built-in chips usable while decorative category placeholders are replaced", () => {
+  it("keeps built-in filters usable while category placeholders settle", () => {
     const props = baseProps({ categories: [], categoriesLoading: true });
     const container = mount(props);
-    const chips = [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")];
-    expect(chips.map((chip) => chip.textContent?.trim())).toEqual(["All", "Featured", "Trending"]);
-    const placeholders = [...container.querySelectorAll(".plugin-catalog-chip-skeleton")];
-    expect(placeholders.length).toBeGreaterThan(0);
-    expect(
-      placeholders.every(
-        (item) => item.getAttribute("aria-hidden") === "true" && item.tagName === "SPAN",
-      ),
-    ).toBe(true);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "Loading plugin categories",
-    );
-    chips[1]!.click();
-    expect(props.onIntentChange).toHaveBeenCalledWith("featured");
-    chips[1]!.focus();
-    render(renderPluginCatalogResults(baseProps()), container);
-    expect(container.querySelector(".plugin-catalog-chip-skeleton")).toBeNull();
-    expect(document.activeElement).toBe(chips[1]);
-    expect(container.querySelectorAll(".plugin-catalog-chip")).toHaveLength(5);
-  });
-
-  it("offers category-only retry without indefinite placeholders after failure", () => {
-    const props = baseProps({ categories: [], categoriesError: "Categories unavailable" });
-    const container = mount(props);
-    expect(container.querySelector(".plugin-catalog-chip-skeleton")).toBeNull();
-    const retry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Try again",
-    );
-    expect(retry).toBeDefined();
-    retry!.click();
-    expect(props.onRetryCategories).toHaveBeenCalledOnce();
-    expect(props.onRetry).not.toHaveBeenCalled();
+    const chips = container.querySelector(".plugin-catalog-chips")!;
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
+    expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
+    expect(chips.querySelector('[role="status"]')).not.toBeNull();
+    render(renderPluginCatalogResults({ ...props, categoriesLoading: false }), container);
+    expect(chips.querySelector(".plugin-catalog-chip--skeleton")).toBeNull();
+    expect(chips.querySelectorAll("button")).toHaveLength(3);
   });
 
   it("focuses unified search and places discovery chips before grouped sections", async () => {

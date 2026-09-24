@@ -279,7 +279,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         categories: discovery.categories,
                         categoriesLoading: discovery.categoriesLoading,
                         categoriesError: discovery.categoriesError,
-                        onRetryCategories: () => void discovery.loadCategories(true),
+                        onRetryCategories: () => void discovery.ensureCategories(true),
                         featured: discovery.featured,
                         featuredLoading: discovery.featuredLoading,
                         trending: discovery.trending,

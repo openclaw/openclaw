@@ -64,6 +64,9 @@ export type PluginCatalogResultsProps = {
 };
 
 const SECTION_SIZE = 8;
+// Estimate the current registry footprint without duplicating its taxonomy.
+// The actual labels, ordering, and count still come only from ClawHub.
+const CATEGORY_SKELETON_COUNT = 22;
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
@@ -328,54 +331,59 @@ function renderSection(params: {
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
   const activeAll = props.intent === "all" && props.category === null;
   return html`<div
-      class="plugin-catalog-chips"
-      role="group"
-      aria-label=${t("pluginsPage.categoriesLabel")}
+    class="plugin-catalog-chips"
+    role="group"
+    aria-label=${t("pluginsPage.categoriesLabel")}
+  >
+    <button
+      type="button"
+      class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"
+      aria-pressed=${activeAll}
+      @click=${() => props.onIntentChange("all")}
     >
-      <button
+      <span aria-hidden="true">${icons.layoutGrid}</span>${t("pluginsPage.intentAll")}
+    </button>
+    <button
+      type="button"
+      class="plugin-catalog-chip ${props.intent === "featured" ? "is-active" : ""}"
+      aria-pressed=${props.intent === "featured"}
+      @click=${() => props.onIntentChange("featured")}
+    >
+      <span aria-hidden="true">${icons.star}</span>${t("pluginsPage.featuredTitle")}
+    </button>
+    <button
+      type="button"
+      class="plugin-catalog-chip ${props.intent === "trending" ? "is-active" : ""}"
+      aria-pressed=${props.intent === "trending"}
+      @click=${() => props.onIntentChange("trending")}
+    >
+      <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
+    </button>
+    ${
+      props.categoriesLoading
+        ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
+            ${Array.from(
+              { length: CATEGORY_SKELETON_COUNT },
+              () => html`<span
+                class="skeleton plugin-catalog-chip--skeleton"
+                aria-hidden="true"
+              ></span>`,
+            )} `
+        : nothing
+    }
+    ${repeat(
+      props.categories.toSorted((left, right) => left.order - right.order),
+      (item) => item.slug,
+      (item) => html`<button
         type="button"
-        class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"
-        aria-pressed=${activeAll}
-        @click=${() => props.onIntentChange("all")}
+        class="plugin-catalog-chip ${props.category === item.slug ? "is-active" : ""}"
+        aria-pressed=${props.category === item.slug}
+        @click=${() => props.onCategoryChange(item.slug)}
       >
-        <span aria-hidden="true">${icons.layoutGrid}</span>${t("pluginsPage.intentAll")}
-      </button>
-      <button
-        type="button"
-        class="plugin-catalog-chip ${props.intent === "featured" ? "is-active" : ""}"
-        aria-pressed=${props.intent === "featured"}
-        @click=${() => props.onIntentChange("featured")}
-      >
-        <span aria-hidden="true">${icons.star}</span>${t("pluginsPage.featuredTitle")}
-      </button>
-      <button
-        type="button"
-        class="plugin-catalog-chip ${props.intent === "trending" ? "is-active" : ""}"
-        aria-pressed=${props.intent === "trending"}
-        @click=${() => props.onIntentChange("trending")}
-      >
-        <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
-      </button>
-      ${
-        props.categoriesLoading
-          ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
-              ${Array.from({ length: 24 }, () => html`<span class="plugin-catalog-chip-skeleton skeleton" aria-hidden="true"></span>`)}`
-          : nothing
-      }
-      ${repeat(
-        props.categories.toSorted((left, right) => left.order - right.order),
-        (item) => item.slug,
-        (item) => html`<button
-          type="button"
-          class="plugin-catalog-chip ${props.category === item.slug ? "is-active" : ""}"
-          aria-pressed=${props.category === item.slug}
-          @click=${() => props.onCategoryChange(item.slug)}
-        >
-          <span aria-hidden="true">${categoryIcon(item.icon)}</span>${item.label}
-        </button>`,
-      )}
-    </div>
-    ${props.categoriesError ? renderError(props.categoriesError, props.onRetryCategories) : nothing}`;
+        <span aria-hidden="true">${categoryIcon(item.icon)}</span>${item.label}
+      </button>`,
+    )}
+  </div>`;
 }
 
 function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
@@ -539,6 +547,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
       />
     </label>
     ${renderCategoryChips(props)}
+    ${props.categoriesError ? renderError(props.categoriesError, props.onRetryCategories) : nothing}
     ${
       props.remoteError
         ? html`<div class="callout warning oc-banner" role="status">
