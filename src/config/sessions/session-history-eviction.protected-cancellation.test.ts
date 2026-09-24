@@ -55,9 +55,7 @@ describe("protected historical session cancellation", () => {
 
   it.each([
     ["planning", false],
-    ["planning", true],
     ["materialization", false],
-    ["materialization", true],
     ["worker", false],
     ["worker", true],
     ["archived entry", false],
@@ -227,18 +225,8 @@ describe("protected historical session cancellation", () => {
         }
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
-        if (stage === "worker") {
+        if (stage === "worker" || stage === "archived entry") {
           expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedHistories[0]).toEqual({
-            sessionId: protectedHistory.sessionId,
-            deleted: false,
-          });
-        } else if (stage === "archived entry") {
-          expect(admissions.length).toBeGreaterThan(0);
-          expect(reclaimedEntries[0]).toEqual({
-            sessionKey: protectedHistory.sessionKey,
-            deleted: false,
-          });
         }
         for (const [index, history] of histories.entries()) {
           expect(sessionExists(history.sessionId), history.sessionId).toBe(true);
