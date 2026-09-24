@@ -11,8 +11,6 @@ import { mutateMatrixQaCliStateLoss } from "./scenario-runtime-e2ee-state.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-const testing = { assertMatrixQaCliBackupRestoreFailed };
-
 const destructiveScenarioMocks = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
   createMatrixQaE2eeScenarioClient: vi.fn(),
@@ -390,141 +388,73 @@ describe("Matrix wrong-account recovery-key isolation", () => {
 });
 
 describe("Matrix destructive E2EE backup failure assertions", () => {
-  it("requires a nonzero CLI exit", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { decryptionKeyCached: false },
-            backupVersion: "1",
-            error: "backup key unavailable",
-            success: false,
-          },
-          result: { exitCode: 0 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("returned a successful exit code");
-  });
-
-  it("rejects unrelated CLI failures without backup-key evidence", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { decryptionKeyCached: false },
-            backupVersion: "1",
-            error: "network unavailable",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("without the expected missing-recovery-key diagnostic");
-  });
-
-  it("accepts a failed restore with structured backup-key evidence", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              keyLoadError: "Error decrypting secret: Bad MAC",
-              matchesDecryptionKey: false,
-            },
-            backupVersion: "1",
-            error: "Matrix room key backup is not usable",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
-  });
-
-  it("accepts the SDK bad-MAC diagnostic from the restore error", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              decryptionKeyCached: false,
-              keyLoadError: "getSecretStorageKey callback returned falsey",
-              matchesDecryptionKey: false,
-            },
-            backupVersion: "1",
-            error:
-              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (Error decrypting secret m.megolm_backup.v1: bad MAC).",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
-  });
-
-  it("rejects a wrapper-only key-mismatch diagnostic", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: { matchesDecryptionKey: false },
-            backupVersion: "1",
-            error: "backup key mismatch",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "rejected-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).toThrow("without the expected rejected-recovery-key diagnostic");
-  });
-
-  it("accepts the SDK secret-storage load diagnostic", () => {
-    expect(() =>
-      testing.assertMatrixQaCliBackupRestoreFailed(
-        {
-          payload: {
-            backup: {
-              decryptionKeyCached: false,
-              keyLoadError: "getSecretStorageKey callback returned falsey",
-            },
-            backupVersion: "1",
-            error:
-              "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (getSecretStorageKey callback returned falsey).",
-            success: false,
-          },
-          result: { exitCode: 1 },
-        },
-        {
-          expectedBackupVersion: "1",
-          failureKind: "missing-recovery-key",
-          label: "restore",
-        },
-      ),
-    ).not.toThrow();
+  it.each<{
+    name: string;
+    backup: Parameters<typeof assertMatrixQaCliBackupRestoreFailed>[0]["payload"]["backup"];
+    error: string;
+    failureKind: Parameters<typeof assertMatrixQaCliBackupRestoreFailed>[1]["failureKind"];
+    exitCode?: number;
+    rejection?: string;
+  }>([
+    {
+      name: "requires a nonzero CLI exit",
+      backup: { decryptionKeyCached: false },
+      error: "backup key unavailable",
+      failureKind: "missing-recovery-key",
+      exitCode: 0,
+      rejection: "returned a successful exit code",
+    },
+    {
+      name: "rejects unrelated CLI failures without backup-key evidence",
+      backup: { decryptionKeyCached: false },
+      error: "network unavailable",
+      failureKind: "missing-recovery-key",
+      rejection: "without the expected missing-recovery-key diagnostic",
+    },
+    {
+      name: "accepts a failed restore with structured backup-key evidence",
+      backup: { keyLoadError: "Error decrypting secret: Bad MAC", matchesDecryptionKey: false },
+      error: "Matrix room key backup is not usable",
+      failureKind: "rejected-recovery-key",
+    },
+    {
+      name: "accepts the SDK bad-MAC diagnostic from the restore error",
+      backup: {
+        decryptionKeyCached: false,
+        keyLoadError: "getSecretStorageKey callback returned falsey",
+        matchesDecryptionKey: false,
+      },
+      error:
+        "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (Error decrypting secret m.megolm_backup.v1: bad MAC).",
+      failureKind: "rejected-recovery-key",
+    },
+    {
+      name: "rejects a wrapper-only key-mismatch diagnostic",
+      backup: { matchesDecryptionKey: false },
+      error: "backup key mismatch",
+      failureKind: "rejected-recovery-key",
+      rejection: "without the expected rejected-recovery-key diagnostic",
+    },
+    {
+      name: "accepts the SDK secret-storage load diagnostic",
+      backup: {
+        decryptionKeyCached: false,
+        keyLoadError: "getSecretStorageKey callback returned falsey",
+      },
+      error:
+        "Matrix room key backup is not usable: backup decryption key could not be loaded from secret storage (getSecretStorageKey callback returned falsey).",
+      failureKind: "missing-recovery-key",
+    },
+  ])("$name", ({ backup, error, failureKind, exitCode = 1, rejection }) => {
+    const assertRestore = () =>
+      assertMatrixQaCliBackupRestoreFailed(
+        { payload: { backup, backupVersion: "1", error, success: false }, result: { exitCode } },
+        { expectedBackupVersion: "1", failureKind, label: "restore" },
+      );
+    if (rejection) {
+      expect(assertRestore).toThrow(rejection);
+    } else {
+      expect(assertRestore).not.toThrow();
+    }
   });
 });

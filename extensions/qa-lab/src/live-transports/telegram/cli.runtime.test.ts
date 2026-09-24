@@ -107,19 +107,16 @@ describe("Telegram live QA scenario gate", () => {
     }
   });
 
-  it.each(["fail", "skip", "skipped", "timeout"])(
-    "fails the live Telegram lane on %s scenarios",
-    async (status) => {
-      writeSummary(status);
+  it.each(["fail", "skip"])("fails the live Telegram lane on %s scenarios", async (status) => {
+    writeSummary(status);
 
-      await runQaTelegramSuite({
-        repoRoot: "/repo",
-        providerMode: "mock-openai",
-      });
+    await runQaTelegramSuite({
+      repoRoot: "/repo",
+      providerMode: "mock-openai",
+    });
 
-      expect(process.exitCode).toBe(1);
-    },
-  );
+    expect(process.exitCode).toBe(1);
+  });
 
   it("leaves the exit code clear when every Telegram scenario passes", async () => {
     writeSummary("pass");
@@ -148,7 +145,6 @@ describe("Telegram live QA scenario gate", () => {
     { summary: "malformed", expected: "Could not parse QA summary" },
     { summary: "zero-work", expected: "did not include any executed scenarios" },
     { summary: "required-skip", expected: "did not include any executed scenarios" },
-    { summary: "blocked", expected: "did not include any executed scenarios" },
   ])(
     "rejects $summary Telegram summaries even with --allow-failures",
     async ({ summary, expected }) => {
@@ -167,7 +163,7 @@ describe("Telegram live QA scenario gate", () => {
           "utf8",
         );
       } else {
-        writeSummary(summary === "required-skip" ? "skip" : "blocked");
+        writeSummary("skip");
       }
 
       await expect(

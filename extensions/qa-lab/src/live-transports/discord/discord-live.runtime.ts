@@ -1561,7 +1561,6 @@ const testing = {
   sendChannelMessage,
   getChannelMessage,
   getCurrentDiscordVoiceState,
-  listApplicationCommands,
   resolveDiscordQaVoiceChannel,
   matchesDiscordScenarioReply,
   normalizeDiscordReactionSnapshot,
