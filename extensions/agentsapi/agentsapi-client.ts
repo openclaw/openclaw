@@ -391,6 +391,10 @@ export class AgentsApiError extends Error {
   }
 }
 
+export function isAgentsApiTerminalTurn(status?: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 async function* observeEvents(
   stream: AsyncIterable<AgentSessionEvent>,
   signal: AbortSignal,

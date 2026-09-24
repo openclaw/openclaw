@@ -13,7 +13,11 @@ import {
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
-import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
+import {
+  isAgentsApiTerminalTurn,
+  type AgentsApiEvent,
+  type AgentsApiItem,
+} from "./agentsapi-client.js";
 import { AgentsApiNativeToolProjection } from "./agentsapi-native-tool-projection.js";
 import {
   appendAgentsApiTranscriptMessage,
@@ -289,7 +293,7 @@ class AgentsApiMessageProjection {
     this.presentationEnabled = previousPresentation && options.presentation !== false;
     try {
       let transcriptReady = true;
-      const terminalTurn = isTerminalTurn(turn.status);
+      const terminalTurn = isAgentsApiTerminalTurn(turn.status);
       for (const projected of iterateAgentsApiTranscriptItems(
         turn.id,
         items,
@@ -312,7 +316,7 @@ class AgentsApiMessageProjection {
         );
       }
       this.recordTurnUsage(turn);
-      if (isTerminalTurn(turn.status)) {
+      if (isAgentsApiTerminalTurn(turn.status)) {
         for (const state of this.items.values()) {
           if (state.turnId !== turn.id || state.terminal) {
             continue;
@@ -382,7 +386,7 @@ class AgentsApiMessageProjection {
       assistantTexts: [text],
       reasoningText: this.reasoningText(),
       promptError: turn.error,
-      turnCompleted: isTerminalTurn(turn.status),
+      turnCompleted: isAgentsApiTerminalTurn(turn.status),
     });
     if (text) {
       this.reply.lastAssistant = await this.append({
@@ -698,10 +702,6 @@ function emptyUsage(): AssistantMessage["usage"] {
     // Turn billing sums hosted model calls; it is not a latest-call context snapshot.
     contextUsage: { state: "unavailable" },
   };
-}
-
-function isTerminalTurn(status?: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 const INTERNAL_EVENT_TYPES = new Set([

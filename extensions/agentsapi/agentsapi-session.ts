@@ -6,6 +6,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   AgentsApiClient,
   AgentsApiError,
+  isAgentsApiTerminalTurn,
   type AgentsApiEvent,
   type AgentsApiFunctionCall,
   type AgentsApiItem,
@@ -120,7 +121,7 @@ export function createAgentsApiSession(options: {
     }
     const latest = turns.at(-1);
     latestInputTurnId = latest?.id;
-    rootTurn = latest && isTerminalTurn(latest.status) ? latest : undefined;
+    rootTurn = latest && isAgentsApiTerminalTurn(latest.status) ? latest : undefined;
     turnFailure =
       latest?.status === "failed"
         ? new AgentsApiError(latest.error?.message ?? "Agents API turn failed", latest.error ?? {})
@@ -198,7 +199,7 @@ export function createAgentsApiSession(options: {
     }
     const priorTurns = turns
       .slice(0, baselineIndex + 1)
-      .filter((turn) => isTerminalTurn(turn.status));
+      .filter((turn) => isAgentsApiTerminalTurn(turn.status));
     if (!priorTurns.length) {
       return;
     }
@@ -663,10 +664,6 @@ export function createAgentsApiSession(options: {
       closed = true;
     },
   };
-}
-
-function isTerminalTurn(status: string): boolean {
-  return ["completed", "failed", "cancelled"].includes(status);
 }
 
 function isAgentsApiTransportDisconnect(error: unknown): boolean {
