@@ -398,13 +398,11 @@ export type SessionTranscriptWriteLockAccessorContext = {
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
-export type SessionTranscriptWriteTransactionContext = {
-  /** Canonical transcript identity owned by the transaction. */
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+/** Canonical transcript identity owned by the transaction. */
+export type SessionTranscriptWriteTransactionContext = Pick<
+  SessionTranscriptRuntimeTarget,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+>;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
@@ -422,12 +420,7 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   shouldAppendInTransaction?: (latestAssistantMessage: unknown) => boolean;
 };
 
-export type SessionTranscriptTurnWriteContext = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-};
+export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptWriteTransactionContext>;
 
 export type SessionTranscriptTurnPersistOptions = {
   /** Runtime config used for lock settings, redaction, and header metadata. */

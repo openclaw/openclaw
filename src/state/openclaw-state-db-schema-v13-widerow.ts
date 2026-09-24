@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import { repairLegacySubagentRetainedResults } from "./openclaw-state-db-legacy-backfills.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -94,17 +94,9 @@ function rebuildJsonCanonicalTable(db: DatabaseSync, tableName: string): void {
   if (tableExists(db, migrationTable)) {
     throw new Error(`OpenClaw v13 migration table already exists: ${migrationTable}`);
   }
-  const startMarker = `CREATE TABLE IF NOT EXISTS ${tableName} (`;
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error(`Canonical ${tableName} schema block is missing`);
-  }
-  const migrationSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length).replace(
-    startMarker,
-    `CREATE TABLE ${migrationTable} (`,
-  );
+  const migrationSchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, tableName, {
+    errorMessage: `Canonical ${tableName} schema block is missing`,
+  }).replace(`CREATE TABLE IF NOT EXISTS ${tableName} (`, `CREATE TABLE ${migrationTable} (`);
   db.exec(migrationSchema);
   const columns = db
     .prepare(`PRAGMA table_xinfo(${migrationTable})`)

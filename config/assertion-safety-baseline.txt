@@ -2266,7 +2266,7 @@ src/config/official-external-channel-secret-schema.ts	3
 src/config/plugin-auto-enable.apply.ts	1
 src/config/plugin-auto-enable.detect.ts	1
 src/config/plugin-auto-enable.shared.ts	1
-src/config/plugin-install-record-map.ts	3
+src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	2
@@ -2308,7 +2308,6 @@ src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	2
 src/config/sessions/transcript-assistant-message.ts	2
-src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
@@ -3135,7 +3134,7 @@ src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-schema.ts	1
 src/state/openclaw-agent-db-session-migrations.ts	4
-src/state/openclaw-agent-db-session-provenance.ts	2
+src/state/openclaw-agent-db-session-provenance.ts	1
 src/state/openclaw-agent-standing-intents-schema.ts	1
 src/state/openclaw-database-verify.impl.ts	1
 src/state/openclaw-database-verify.worker.ts	1

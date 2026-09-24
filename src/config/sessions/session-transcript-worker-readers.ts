@@ -67,10 +67,8 @@ export function createSessionHistoryWorkerReaders(
       await runRequest(
         () => ({ kind: "historical-eviction-candidates", ...input }),
         JSON.stringify(input).length * 2,
-        (value) => {
-          assertResultKind(value, "historical-eviction-candidates", "eviction candidates");
-          return value.sessionIds;
-        },
+        (value) =>
+          readResult(value, "historical-eviction-candidates", "eviction candidates").sessionIds,
       ),
     readArchivePruning: async (input) =>
       await runRequest(
@@ -255,10 +253,10 @@ export function createSessionHistoryWorkerReaders(
         () => ({ kind: "session-entry-read", ...input }),
         JSON.stringify(input).length * 2,
         (value) => {
-          assertResultKind(value, "session-entry-read", "an entry");
-          return value.readError
-            ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-            : ok(value.entry);
+          const result = readResult(value, "session-entry-read", "an entry");
+          return result.readError
+            ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+            : ok(result.entry);
         },
       ),
     readDiagnosticText: async (input) =>

@@ -12,6 +12,7 @@ import {
   legacySqliteSchemaIssueMessages,
   throwSqliteSchemaMismatches,
 } from "../infra/sqlite-schema-issues.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -53,6 +54,7 @@ import {
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export {
   assertSupportedAgentSchemaVersion,
@@ -177,17 +179,15 @@ function repairAndAssertAgentSchemaGroup(
   assertOpenClawAgentSchemaContains(database, pathname, schemaSql, "legacy");
 }
 
-const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
-const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
-
 /** Ensure the additive session-key contract table inside the caller's transaction. */
 export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
-  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
-  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
-  }
-  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+  db.exec(
+    extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, "session_key_contract", {
+      endMarker: "CREATE TABLE IF NOT EXISTS session_windows (",
+      includeEndMarker: false,
+      errorMessage: "OpenClaw agent session-key contract schema markers are missing.",
+    }),
+  ); // sqlite-allow-raw -- Idempotent additive lazy ensure.
 }
 
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
@@ -314,11 +314,7 @@ function hasPendingSessionKeyContractSchemaMigration(db: DatabaseSync): boolean 
   if (!sessionNodeColumns) {
     return false;
   }
-  const hasContractTable = Boolean(
-    db
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_key_contract'")
-      .get(),
-  );
+  const hasContractTable = tableExists(db, "session_key_contract");
   return !sessionNodeColumns.has("entry_valid") || !hasContractTable;
 }
 

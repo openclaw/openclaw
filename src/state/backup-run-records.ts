@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
@@ -45,13 +45,8 @@ function parseBackupRun(row: BackupRunDatabase["backup_runs"]): BackupRunRecord 
   if (row.status !== "ok" && row.status !== "failed") {
     return undefined;
   }
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(row.manifest_json) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(manifest)) {
+  const manifest = safeParseJsonRecord(row.manifest_json);
+  if (!manifest) {
     return undefined;
   }
   if (
