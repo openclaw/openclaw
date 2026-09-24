@@ -614,5 +614,3 @@ export function createUpdateCliFixture() {
   registerUpdateCliLifecycle(fixture);
   return fixture;
 }
-
-export type UpdateCliFixture = ReturnType<typeof createUpdateCliFixture>;

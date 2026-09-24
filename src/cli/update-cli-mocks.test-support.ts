@@ -379,7 +379,9 @@ vi.mock("../process/exec.js", async (importOriginal) => {
     isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
     // The real snapshot worker has separate WAL/source-inode boundary coverage.
     // Retain real rehearsal config projection and drift checks in this CLI fixture.
-    runCommandBuffered: async (argv: string[], options: { input: string; timeoutMs?: number }) => {
+    runCommandBuffered: async (
+      ...[, options]: [string[], { input: string; timeoutMs?: number }]
+    ) => {
       const input: unknown = JSON.parse(options.input);
       const mode = isRecord(input) ? input.mode : undefined;
       if (mode !== "inventory" && mode !== "snapshot") {

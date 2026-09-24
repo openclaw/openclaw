@@ -13,6 +13,7 @@ import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -21,7 +22,6 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
-import type { UpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
   candidateValidation,
   checkShellCompletionStatus,
@@ -109,7 +109,26 @@ import { reportUpdateCliHomeCleanupFailure } from "./update-cli/update-cli-failu
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export function registerUpdateCliLifecycle(fixture: UpdateCliFixture): void {
+type UpdateCliLifecycleFixture = {
+  baseConfig: ConfigFileSnapshot["config"];
+  baseSnapshot: ConfigFileSnapshot;
+  fixtureRoot: string;
+  fixtureStateDatabases: Set<string>;
+  globalNpmConfig: string;
+  initializeExistingUpdateProfile: () => void;
+  mockGatewayHealth: (version: string, connId: string) => void;
+  primeNpmChannelTag: (tag: string, version: string | null) => void;
+  reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
+    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void },
+    result: T,
+  ) => T;
+  setStdoutTty: (value: boolean | undefined) => void;
+  setTty: (value: boolean | undefined) => void;
+  tempDirs: { make: (prefix: string) => string };
+  tempDirsToCleanup: Set<string>;
+};
+
+export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): void {
   const {
     baseConfig,
     baseSnapshot,
