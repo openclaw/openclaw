@@ -52,6 +52,16 @@ describe("bounded native rollout snapshot", () => {
     },
   );
 
+  it("reads a rollout that another Codex home hard-links", async () => {
+    const f = await fixture([meta()]);
+    const mirror = path.join(path.dirname(f.dir), "mirror");
+    await fs.mkdir(mirror);
+    await fs.link(f.rolloutPath, path.join(mirror, "rollout.jsonl"));
+    const snapshot = await f.read();
+    expect(snapshot.metadata).toEqual(meta().payload);
+    await snapshot.assertUnchanged();
+  });
+
   it("prefers the exact plain file and rejects later replacement or growth", async () => {
     const f = await fixture([meta("source", "plain")]);
     await fs.writeFile(
