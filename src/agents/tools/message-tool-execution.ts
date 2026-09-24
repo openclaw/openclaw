@@ -326,7 +326,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           }),
         );
       }
-      // `final` is a Codex app-server-only source-delivery control. It must
+      // `final` is a host-owned source-reply completion control. It must
       // not be dispatched to a provider or participate in idempotency.
       const requestedSourceReplyFinal =
         typeof params.final === "boolean" ? params.final : undefined;
@@ -665,6 +665,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,
+            sourceReplyFinal: requestedSourceReplyFinal,
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =

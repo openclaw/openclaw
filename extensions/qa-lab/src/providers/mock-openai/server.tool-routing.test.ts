@@ -96,7 +96,7 @@ describe("mock scenario tool routing", () => {
       expect(call).toMatchObject({ type: "function_call", name: wireName });
       const args =
         action === "react"
-          ? { action, emoji: "👍" }
+          ? { action, emoji: "👍", final: true }
           : { action, caption: token, contentType: "image/png" };
       expect(outputToolArgs(payload)).toMatchObject(
         surface === "catalog" ? { id: "message", args } : args,
