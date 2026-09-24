@@ -62,20 +62,10 @@ export function buildSlackPostMessagePayload(params: {
         ? { thread_ts: params.threadTs }
         : {};
   const unfurlPayload = buildSlackUnfurlPayload(params.unfurl);
-  if (params.blocks?.length) {
-    return {
-      channel: params.channelId,
-      text: params.text,
-      blocks: params.blocks,
-      ...(params.metadata ? { metadata: params.metadata } : {}),
-      ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
-      ...threadPayload,
-      ...unfurlPayload,
-    };
-  }
   return {
     channel: params.channelId,
     text: params.text,
+    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     ...(params.metadata ? { metadata: params.metadata } : {}),
     ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,

@@ -36,7 +36,7 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
-import { registerProfileAccessEnglish } from "../../i18n/locales/en-profile-access.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -51,7 +51,7 @@ import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { renderProfileHero } from "./profile-hero.ts";
 
 registerModelAccountsEnglish();
-registerProfileAccessEnglish();
+registerProfileEnglish();
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 

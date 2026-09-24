@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Blocks new raw fetch callsites in channel and plugin runtime sources.
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { bundledPluginCallsite } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import {
@@ -79,9 +79,8 @@ function isRawFetchCall(expression: ts.Expression) {
 /**
  * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
  */
-function findRawFetchCallLines(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  return collectCallExpressionLines(ts, sourceFile, (node) =>
+function findRawFetchCallLines(_content: string, _fileName: string, sourceFile: ts.SourceFile) {
+  return collectCallExpressionLines(sourceFile, (node) =>
     isRawFetchCall(node.expression) ? node.expression : null,
   );
 }

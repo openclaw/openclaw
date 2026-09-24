@@ -254,36 +254,22 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-    if (isReset) {
-      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-        delete targetSessionEntry.responseUsage;
-        params.sessionStore[params.sessionKey] = targetSessionEntry;
-        if (
-          !(await persistCommandSession({
-            ...params,
-            sessionEntry: targetSessionEntry,
-            touchedFields: ["responseUsage"],
-          }))
-        ) {
-          return sessionEntryPersistenceConflictReply();
-        }
-      }
-      return sessionCommandReply("⚙️ Usage footer: reset to default.");
+    let next: ReturnType<typeof normalizeUsageDisplay>;
+    if (!isReset) {
+      const current = resolveEffectiveResponseUsage(
+        targetSessionEntry?.responseUsage,
+        params.cfg.messages?.responseUsage,
+        params.command.channel,
+      );
+      next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
     }
 
-    const replyChannel = params.command.channel;
-    const currentRaw = targetSessionEntry?.responseUsage;
-    const current = resolveEffectiveResponseUsage(
-      currentRaw,
-      params.cfg.messages?.responseUsage,
-      replyChannel,
-    );
-    const next =
-      requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      targetSessionEntry.responseUsage = next;
-      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      if (isReset) {
+        delete targetSessionEntry.responseUsage;
+      } else {
+        targetSessionEntry.responseUsage = next;
+      }
       if (
         !(await persistCommandSession({
           ...params,
@@ -295,7 +281,9 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
       }
     }
 
-    return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
+    return sessionCommandReply(
+      isReset ? "⚙️ Usage footer: reset to default." : `⚙️ Usage footer: ${next}.`,
+    );
   },
 );
 

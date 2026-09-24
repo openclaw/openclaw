@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
-import { isGatewayArgv } from "../infra/gateway-process-argv.js";
+import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
 import { tryAcquireGatewayLifecycleCleanupCoordinator } from "../infra/state-database-coordinator.js";
@@ -186,9 +186,10 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
           (listener) =>
             typeof listener.pid === "number" &&
             listener.commandLine &&
-            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
-              allowGatewayBinary: true,
-            }),
+            classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
+              command: "gateway",
+              pid: listener.pid,
+            }).kind === "openclaw",
         )
         .map((listener) => listener.pid as number),
     ),
@@ -419,7 +420,7 @@ export async function describeUnverifiedPortListeners(
     const pid = typeof listener.pid === "number" ? listener.pid : null;
     const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
     const identity = argv
-      ? isGatewayArgv(argv, { allowGatewayBinary: true })
+      ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
         ? "openclaw gateway"
         : "not an openclaw gateway"
       : "argv unavailable";

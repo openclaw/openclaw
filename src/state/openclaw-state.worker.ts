@@ -32,6 +32,11 @@ let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") 
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
+function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
+  const context = getSqliteWorkerStateContext();
+  return context.initializationEnvironment ?? context.environment;
+}
+
 export function createSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
@@ -39,13 +44,14 @@ export function createSqliteWorkerBackend(
   if (context.preparation?.type === "deviceIdentity") {
     loadOrCreateDeviceIdentity({
       path: context.databasePath,
-      env: getSqliteWorkerStateContext().environment,
+      env: stateDatabaseInitializationEnvironment(),
       identityKey: context.preparation.identityKey,
     });
   }
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
-    env: getSqliteWorkerStateContext().environment,
+    env: stateDatabaseInitializationEnvironment(),
+    initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
   });
   return createSharedStateWorkerBackend(context, database);
 }
@@ -68,7 +74,8 @@ function createSharedStateWorkerBackend(
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
+        env: stateDatabaseInitializationEnvironment(),
+        initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
       });
       borrow = retainOpenClawStateDatabase(opened);
       nativeDatabase = opened;
@@ -132,7 +139,7 @@ function createSharedStateWorkerBackend(
           return loadOrCreateDeviceIdentity({
             path: context.databasePath,
             identityKey: command.input.identityKey,
-            env: getSqliteWorkerStateContext().environment,
+            env: stateDatabaseInitializationEnvironment(),
           });
         } finally {
           // An existing-only actor may acquire its first writable handle through this owner.

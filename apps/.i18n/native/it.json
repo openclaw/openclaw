@@ -593,7 +593,6 @@
     "native.android.56ba8fc553a399af": "Le azioni di applicazione, rifiuto e quarantena richiedono l'ambito operator.admin. Riconnettiti con l'autenticazione condivisa del gateway oppure approva l'aggiornamento dell'ambito del dispositivo a operator.admin per abilitare le azioni del ciclo di vita.",
     "native.android.56d46eccb37487c3": "Pianificazione",
     "native.android.56d7703155f09152": "Connettiti a un Gateway per esaminare le modifiche.",
-    "native.android.56da9a315483abe4": "Conversazione vocale interrotta",
     "native.android.56de778dd64c4cba": "Prossimo ciclo",
     "native.android.56eac13e3394c87f": "Esci",
     "native.android.5731193296f6ca25": "applica",

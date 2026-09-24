@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { BrowserConfig, BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
   isLocalManagedProfile,

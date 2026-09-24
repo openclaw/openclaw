@@ -92,42 +92,6 @@ function warnOnSuspiciousCallbackUrl(params: {
   }
 }
 
-async function registerSlashCommandsAcrossTeams(params: {
-  client: MattermostClient;
-  teams: Array<{ id: string }>;
-  botUserId: string;
-  callbackUrl: string;
-  commands: MattermostCommandSpec[];
-  runtime: RuntimeEnv;
-}): Promise<{
-  registered: MattermostRegisteredCommand[];
-  teamRegistrationFailures: number;
-}> {
-  const registered: MattermostRegisteredCommand[] = [];
-  let teamRegistrationFailures = 0;
-
-  for (const team of params.teams) {
-    try {
-      const created = await registerSlashCommands({
-        client: params.client,
-        teamId: team.id,
-        creatorUserId: params.botUserId,
-        callbackUrl: params.callbackUrl,
-        commands: params.commands,
-        log: (msg) => params.runtime.log?.(msg),
-      });
-      registered.push(...created);
-    } catch (err) {
-      teamRegistrationFailures += 1;
-      params.runtime.error?.(
-        `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
-      );
-    }
-  }
-
-  return { registered, teamRegistrationFailures };
-}
-
 export async function registerMattermostMonitorSlashCommands(params: {
   client: MattermostClient;
   cfg: OpenClawConfig;
@@ -165,14 +129,26 @@ export async function registerMattermostMonitorSlashCommands(params: {
         nativeSkills: slashConfig.nativeSkills === true,
       }),
     );
-    const { registered, teamRegistrationFailures } = await registerSlashCommandsAcrossTeams({
-      client: params.client,
-      teams,
-      botUserId: params.botUserId,
-      callbackUrl: slashCallbackUrl,
-      commands: dedupedCommands,
-      runtime: params.runtime,
-    });
+    const registered: MattermostRegisteredCommand[] = [];
+    let teamRegistrationFailures = 0;
+    for (const team of teams) {
+      try {
+        const created = await registerSlashCommands({
+          client: params.client,
+          teamId: team.id,
+          creatorUserId: params.botUserId,
+          callbackUrl: slashCallbackUrl,
+          commands: dedupedCommands,
+          log: (msg) => params.runtime.log?.(msg),
+        });
+        registered.push(...created);
+      } catch (err) {
+        teamRegistrationFailures += 1;
+        params.runtime.error?.(
+          `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
+        );
+      }
+    }
 
     if (registered.length === 0) {
       params.runtime.error?.(

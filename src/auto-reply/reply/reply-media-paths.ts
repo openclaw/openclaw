@@ -113,10 +113,6 @@ function isLikelyLocalMediaSource(media: string): boolean {
   );
 }
 
-function getPayloadMediaList(payload: ReplyPayload): string[] {
-  return resolveSendableOutboundReplyParts(payload).mediaUrls;
-}
-
 type PreparedReplyMediaSource = {
   mediaUrl: string;
   trustedLocalMedia: boolean;
@@ -269,6 +265,20 @@ export function createReplyMediaSourcePreparer(params: {
     return await persistPromise;
   };
 
+  const prepareLocalReplyMedia = async (
+    media: string,
+    sessionWorkspaceDir?: string,
+    workspaceDir?: string,
+  ): Promise<PreparedReplyMediaSource> => {
+    const persisted = await persistLocalReplyMedia(media, sessionWorkspaceDir, workspaceDir);
+    return {
+      mediaUrl: persisted.path,
+      trustedLocalMedia: true,
+      fileName: path.basename(media),
+      ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
+    };
+  };
+
   const resolveWorkspaceRelativeMedia = (media: string): string => {
     const relativeWorkspacePath = toRelativeWorkspacePath(params.workspaceDir, media, {
       cwd: params.workspaceDir,
@@ -287,14 +297,7 @@ export function createReplyMediaSourcePreparer(params: {
     }
   };
 
-  const normalizeMediaSource = async (
-    raw: string,
-  ): Promise<{
-    mediaUrl: string;
-    trustedLocalMedia: boolean;
-    fileName?: string;
-    mimeType?: string;
-  }> => {
+  const normalizeMediaSource = async (raw: string): Promise<PreparedReplyMediaSource> => {
     const source = raw.trim();
     const mapping = params.workspaceMediaRoot
       ? resolveSandboxPathMapping(
@@ -319,13 +322,7 @@ export function createReplyMediaSourcePreparer(params: {
       ? resolveAbsoluteWorkspaceMedia(media)
       : undefined;
     if (absoluteWorkspaceMedia) {
-      const persisted = await persistLocalReplyMedia(absoluteWorkspaceMedia);
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(absoluteWorkspaceMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
+      return prepareLocalReplyMedia(absoluteWorkspaceMedia);
     }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&
@@ -357,29 +354,16 @@ export function createReplyMediaSourcePreparer(params: {
         }
         throw err;
       }
-      const persisted = await persistLocalReplyMedia(
+      return prepareLocalReplyMedia(
         sandboxResolvedMedia,
         sandboxWorkspace.root,
         // Without a mounted workspace, the session's media workspace is its sandbox,
         // never the host agent workspace.
         workspaceMounted ? undefined : sandboxWorkspace.root,
       );
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(sandboxResolvedMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
     }
     if (isRelativeLocalMedia) {
-      const workspaceMedia = resolveWorkspaceRelativeMedia(media);
-      const persisted = await persistLocalReplyMedia(workspaceMedia);
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(workspaceMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
+      return prepareLocalReplyMedia(resolveWorkspaceRelativeMedia(media));
     }
     if (!isLikelyLocalMediaSource(media)) {
       return { mediaUrl: media, trustedLocalMedia: false };
@@ -389,13 +373,7 @@ export function createReplyMediaSourcePreparer(params: {
         "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
       );
     }
-    const persisted = await persistLocalReplyMedia(media);
-    return {
-      mediaUrl: persisted.path,
-      trustedLocalMedia: true,
-      fileName: path.basename(media),
-      ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-    };
+    return prepareLocalReplyMedia(media);
   };
 
   return async (sources) => {
@@ -420,7 +398,7 @@ export function applyPreparedReplyMedia(
   payload: ReplyPayload,
   prepared: PreparedReplyMedia,
 ): ReplyPayload {
-  const mediaList = getPayloadMediaList(payload);
+  const mediaList = resolveSendableOutboundReplyParts(payload).mediaUrls;
   if (!mediaList.length || !prepared.length) {
     return payload;
   }
@@ -492,29 +470,15 @@ export function applyPreparedReplyMedia(
   const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
   const assistantMediaFailures = [...previousMediaFailures, ...mediaFailures];
 
-  if (normalizedMedia.length === 0) {
-    const normalized = copyReplyPayloadMetadata(payload, {
-      ...payload,
-      text,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      attachments: undefined,
-    });
-    return setReplyPayloadMetadata(normalized, {
-      replyMediaSourceUrls: undefined,
-      ...(mediaFailures.length > 0 ? { assistantMediaFailures } : {}),
-    });
-  }
-
   const normalized = copyReplyPayloadMetadata(payload, {
     ...payload,
     text,
     mediaUrl: normalizedMedia[0],
-    mediaUrls: normalizedMedia,
+    mediaUrls: normalizedMedia.length > 0 ? normalizedMedia : undefined,
     attachments: normalizedAttachments.some((attachment) => Object.keys(attachment).length > 0)
       ? normalizedAttachments
       : undefined,
-    ...(hasTrustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    ...(normalizedMedia.length > 0 && hasTrustedLocalMedia ? { trustedLocalMedia: true } : {}),
   });
   return setReplyPayloadMetadata(normalized, {
     replyMediaSourceUrls,
@@ -527,7 +491,10 @@ export function createReplyMediaPathNormalizer(
 ): (payload: ReplyPayload) => Promise<ReplyPayload> {
   const prepare = createReplyMediaSourcePreparer(params);
   return async (payload) =>
-    applyPreparedReplyMedia(payload, await prepare(getPayloadMediaList(payload)));
+    applyPreparedReplyMedia(
+      payload,
+      await prepare(resolveSendableOutboundReplyParts(payload).mediaUrls),
+    );
 }
 
 export type ReplyMediaContext = {

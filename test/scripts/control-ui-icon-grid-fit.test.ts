@@ -1,16 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { auditIconButtons } from "../../scripts/audit-control-ui-icon-buttons.mts";
 import {
   collectIconFixtures,
   type IconFixture,
 } from "../../scripts/lib/control-ui-icon-fixtures.mts";
 import { scanIconGridFit } from "../../scripts/lib/control-ui-icon-grid-fit.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function collect(source: string, file: string, document: Document): IconFixture[] {
+  return collectIconFixtures(parser.parseSourceFile(file, source), file, document);
+}
 const base = "* { box-sizing: border-box; }";
 const fixture: IconFixture = {
   file: "ui/src/control.ts",
@@ -178,9 +185,9 @@ describe("fixed icon-grid fit", () => {
     const dom = new JSDOM();
     try {
       const extra = 'html`<button class="icon"><span></span>${icons.refresh}</button>`';
-      expect(collectIconFixtures(extra, "ui/src/extra.ts", dom.window.document)).toEqual([]);
+      expect(collect(extra, "ui/src/extra.ts", dom.window.document)).toEqual([]);
       const source = 'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`';
-      const fixtures = collectIconFixtures(source, "ui/src/state.ts", dom.window.document);
+      const fixtures = collect(source, "ui/src/state.ts", dom.window.document);
       const result = scanIconGridFit(
         original + '.icon:not([aria-pressed="true"]) {padding:8px}',
         fixtures,
@@ -198,12 +205,44 @@ describe("fixed icon-grid fit", () => {
     try {
       const source =
         'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`';
-      const fixtures = collectIconFixtures(source, "ui/src/control.ts", dom.window.document);
+      const fixtures = collect(source, "ui/src/control.ts", dom.window.document);
       expect(fixtures).toHaveLength(1);
       const template = dom.window.document.createElement("template");
       template.innerHTML = fixtures[0]!.html;
       expect(template.content.querySelectorAll("[data-icon-grid-control]")).toHaveLength(1);
       expect(scanIconGridFit(original, fixtures, base).findings).toHaveLength(2);
+    } finally {
+      dom.window.close();
+    }
+  });
+
+  it("preserves template locations and excludes custom render roots with the native AST", () => {
+    const dom = new JSDOM();
+    try {
+      const source = [
+        "class Control extends OpenClawLightDomElement {",
+        "  render() {",
+        '    return html`<button class="icon">${(busy ? icons.loader : icons.refresh)}</button>`;',
+        "  }",
+        "}",
+      ].join("\n");
+      expect(collect(source, "ui/src/control.ts", dom.window.document)).toEqual([
+        expect.objectContaining({ file: "ui/src/control.ts", line: 3 }),
+      ]);
+      expect(
+        collect(
+          source.replace("OpenClawLightDomElement", "LitElement"),
+          "ui/src/shadow.ts",
+          dom.window.document,
+        ),
+      ).toEqual([]);
+      expect(
+        collect(
+          source.replace("render()", "createRenderRoot()"),
+          "ui/src/custom-root.ts",
+          dom.window.document,
+        ),
+      ).toEqual([]);
     } finally {
       dom.window.close();
     }

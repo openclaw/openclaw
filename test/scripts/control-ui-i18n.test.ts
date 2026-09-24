@@ -5,8 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { AssistantMessage } from "@openclaw/ai";
-import * as ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
@@ -30,6 +29,7 @@ import {
 import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixtures.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -37,6 +37,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -44,6 +45,8 @@ import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
 const testNodeExecPath = resolveTestNodeExecPath();
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
@@ -161,16 +164,31 @@ describe("translation provider privacy and fallback", () => {
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
 
-  it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
+  it("translates native artifacts without Gateway state or Control UI catalogs", async () => {
     const temp = createTempDirTracker();
     const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const scriptUrl = pathToFileURL(path.resolve("scripts/control-ui-i18n.ts")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/native-app-i18n.ts")).href;
+      const uiOnlyModules = [
+        "scripts/lib/control-ui-i18n-catalog.ts",
+        "scripts/control-ui-i18n-verify.ts",
+        "scripts/lib/control-ui-i18n-raw-copy.ts",
+      ].map((file) => pathToFileURL(path.resolve(file)).href);
+      const translationsDir = path.join(path.dirname(stateDir), "translations");
       const code = `
         import assert from "node:assert/strict";
+        import { readFile } from "node:fs/promises";
         import net from "node:net";
-        import { syncBuiltinESMExports } from "node:module";
+        import { registerHooks, syncBuiltinESMExports } from "node:module";
+        const uiOnlyModules = new Set(${JSON.stringify(uiOnlyModules)});
+        registerHooks({
+          resolve(specifier, context, nextResolve) {
+            const resolved = nextResolve(specifier, context);
+            assert.ok(!uiOnlyModules.has(resolved.url), "Native translation loaded a Control UI catalog owner: " + resolved.url);
+            return resolved;
+          },
+        });
         const rejectNetwork = () => { throw new Error("Unexpected network connection"); };
         net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
         syncBuiltinESMExports();
@@ -182,8 +200,9 @@ describe("translation provider privacy and fallback", () => {
           assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
           assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
+          assert.ok(JSON.stringify(payload).includes("Connect -> Connecter"), "native glossary must reach the provider request");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
-          const text = JSON.stringify({ connect: "Connecter" });
+          const text = JSON.stringify({ "native.android.0123456789abcdef": "Connecter {count}" });
           const events = [
             { type: "response.created", response: { id: "response" } },
             { type: "response.output_item.added", output_index: 0, item },
@@ -194,9 +213,11 @@ describe("translation provider privacy and fallback", () => {
           ];
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
-        const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
-        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml", sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], "fr");
-        assert.equal(result.get("connect"), "Connecter");
+        const { syncNativeLocale } = await import(${JSON.stringify(scriptUrl)});
+        const result = await syncNativeLocale("fr", [{ id: "native.android.0123456789abcdef", source: "Connect {count}", surface: "android", sites: [{ kind: "fixture", path: "apps/android/wear/src/main/res/values/strings.xml" }], sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], { glossary: [{ source: "Connect", target: "Connecter" }], translationsDir: ${JSON.stringify(translationsDir)} });
+        const artifact = JSON.parse(await readFile(${JSON.stringify(path.join(translationsDir, "fr.json"))}, "utf8"));
+        assert.equal(artifact.translations["native.android.0123456789abcdef"], "Connecter {count}");
+        assert.equal(result.translated, 1);
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
@@ -323,6 +344,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerBackgroundTasksEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
+      registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
       const lazyCopy = flattenControlUiCatalog(fragment, "lazy copy");
@@ -568,17 +590,11 @@ describe("control-ui-i18n process runner", () => {
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
       'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
-    const sourceFile = ts.createSourceFile(
-      "ui/src/pages/example.ts",
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TSX,
-    );
+    const sourceFile = parser.parseSourceFile("ui/src/pages/example.tsx", source);
 
     expect(
       collectControlUiRawCopyFromSource({
-        filePath: path.resolve("ui/src/pages/example.ts"),
+        filePath: path.resolve("ui/src/pages/example.tsx"),
         source,
         sourceFile,
       }).map(({ kind, text }) => ({ kind, text })),

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { getChangedPathFacts, isTestSupportFileTarget } from "./changed-path-facts.mjs";
+import { createNativeTypeScriptParser, type NativeTypeScriptSource } from "./native-typescript.mts";
 
 export type IconFixture = { file: string; line: number; html: string };
 const dynamic = "openclaw_unresolved_expression";
@@ -23,11 +24,10 @@ function iconExpression(expression: ts.Expression): boolean {
 
 /** Only literal HTML ancestry and a single known SVG are witnesses, not invented class combinations. */
 export function collectIconFixtures(
-  source: string,
+  parsed: ts.SourceFile,
   file: string,
   document: Document,
 ): IconFixture[] {
-  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const fixtures: IconFixture[] = [];
   // Plain stylesheets cannot establish the cascade inside a shadow/custom render root.
   let customRoot = false;
@@ -39,11 +39,19 @@ export function collectIconFixtures(
       if (base && !["OpenClawLightDomElement", "OpenClawLightDomContentsElement"].includes(base)) {
         customRoot = true;
       }
-      if (node.members.some((member) => member.name?.getText(parsed) === "createRenderRoot")) {
+      if (
+        node.members.some(
+          (member) =>
+            (ts.isMethodDeclaration(member) ||
+              ts.isPropertyDeclaration(member) ||
+              ts.isAccessorDeclaration(member)) &&
+            member.name.getText(parsed) === "createRenderRoot",
+        )
+      ) {
         customRoot = true;
       }
     }
-    ts.forEachChild(node, inspectRoot);
+    node.forEachChild(inspectRoot);
   };
   inspectRoot(parsed);
   if (customRoot) {
@@ -112,7 +120,7 @@ export function collectIconFixtures(
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(parsed);
   return fixtures;
@@ -123,6 +131,8 @@ export function loadIconFixtures(rootDir: string): IconFixture[] {
   const dom = new JSDOM();
   const fixtures: IconFixture[] = [];
   try {
+    using parser = createNativeTypeScriptParser({ cwd: rootDir });
+    const sources: NativeTypeScriptSource[] = [];
     for (const relative of fs.readdirSync(sourceRoot, { recursive: true }).map(String).toSorted()) {
       const sourcePath = path.join("ui/src", relative).split(path.sep).join("/");
       const facts = getChangedPathFacts(sourcePath);
@@ -140,7 +150,11 @@ export function loadIconFixtures(rootDir: string): IconFixture[] {
       if (!source.includes("<button") && !source.includes("<a")) {
         continue;
       }
-      fixtures.push(...collectIconFixtures(source, sourcePath, dom.window.document));
+      sources.push({ fileName: sourcePath, text: source });
+    }
+    for (const parsed of parser.parseSourceFiles(sources)) {
+      const sourcePath = path.relative(rootDir, parsed.fileName).split(path.sep).join("/");
+      fixtures.push(...collectIconFixtures(parsed, sourcePath, dom.window.document));
     }
   } finally {
     dom.window.close();

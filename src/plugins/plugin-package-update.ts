@@ -90,9 +90,9 @@ export function reconcilePluginPackageUpdateConfig(params: {
       [
         after.value.installRecord.installPath,
         after.value.installRecord.sourcePath,
-        ...params.afterIndex.plugins
-          .filter((plugin) => afterPluginIds.has(plugin.pluginId))
-          .flatMap((plugin) => [plugin.source, plugin.rootDir]),
+        ...params.afterIndex.plugins.flatMap((plugin) =>
+          afterPluginIds.has(plugin.pluginId) ? [plugin.source, plugin.rootDir] : [],
+        ),
       ]
         .filter((value): value is string => Boolean(value))
         .map(resolveComparableUninstallPathInternal),

@@ -1,14 +1,9 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
 import { setSignalRuntime } from "./runtime.js";
@@ -48,7 +43,7 @@ const signalToolResultSessionStore = vi.hoisted(() => ({ path: "" }));
 const signalToolResultIngressMonitor = vi.hoisted(() => ({
   current: undefined as SignalIngressMonitor | undefined,
 }));
-let signalToolResultStateDir: string | undefined;
+let signalToolResultState: OpenClawTestState | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
 export function toSignalToolResultTestError(value: unknown, fallbackMessage: string): Error {
@@ -316,11 +311,11 @@ export function installSignalToolResultTestHooks() {
       import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
-    const createdStateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-signal-tool-result-state-"),
-    );
-    const stateDir = await fs.realpath(createdStateDir);
-    signalToolResultStateDir = stateDir;
+    signalToolResultState = await createOpenClawTestState({
+      prefix: "openclaw-signal-tool-result-state-",
+      layout: "state-only",
+    });
+    const stateDir = signalToolResultState.stateDir;
     signalToolResultSessionStore.path = path.join(stateDir, "sessions.json");
     signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
@@ -382,15 +377,12 @@ export function installSignalToolResultTestHooks() {
   });
 
   afterEach(async () => {
+    await signalToolResultIngressMonitor.current?.stop();
     clearSignalRuntimeForTest();
     signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    if (signalToolResultStateDir) {
-      await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
-      signalToolResultStateDir = undefined;
-    }
+    await signalToolResultState?.cleanup();
+    signalToolResultState = undefined;
     signalToolResultSessionStore.path = "";
   });
 }

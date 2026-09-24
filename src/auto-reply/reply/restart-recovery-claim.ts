@@ -443,37 +443,20 @@ export function createReplyRestartRecoveryClaimController(params: {
         // Unknown provider outcome is terminal for this live run. Retire its source without
         // replay so later distinct turns can proceed; a crash before this point leaves the
         // active receipt for restart-safe model reconciliation.
-        if (current.restartRecoveryDeliveryReceiptState === "terminal-pending") {
-          const endedAt = Date.now();
-          return {
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry: current,
-              recordTerminalSource: true,
-              terminalSourceRunId: recoverySourceRunId,
-            }),
-            abortedLastRun: true,
-            endedAt,
-            lifecycleRunId: undefined,
-            pendingFinalDelivery: undefined,
-            runtimeMs:
-              typeof current.startedAt === "number"
-                ? Math.max(0, endedAt - current.startedAt)
-                : undefined,
-            status: "failed" as const,
-            updatedAt: endedAt,
-          };
-        }
-        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
+        const terminalPending = current.restartRecoveryDeliveryReceiptState === "terminal-pending";
+        const preservesPendingFinal =
+          !terminalPending && current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
-        const endedAt = completesHandledSilent ? Date.now() : undefined;
+        const endedAt = terminalPending || completesHandledSilent ? Date.now() : undefined;
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
             recordTerminalSource: true,
             terminalSourceRunId: recoverySourceRunId,
           }),
+          ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
           // Transport settlement owns this final checkpoint. Keep enough provenance for a
           // restart to enforce hook safety until that exact pending intent is resolved.
           ...(preservesPendingFinal
@@ -485,14 +468,14 @@ export function createReplyRestartRecoveryClaimController(params: {
             : {}),
           ...(endedAt !== undefined
             ? {
-                abortedLastRun: false,
+                abortedLastRun: terminalPending,
                 endedAt,
                 lifecycleRunId: undefined,
                 runtimeMs:
                   typeof current.startedAt === "number"
                     ? Math.max(0, endedAt - current.startedAt)
                     : undefined,
-                status: "done" as const,
+                status: terminalPending ? ("failed" as const) : ("done" as const),
               }
             : {}),
           updatedAt: endedAt ?? Date.now(),

@@ -15,6 +15,7 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
 import { DecisionContractError, validateDecisionBatch } from "./validation.js";
@@ -58,24 +59,29 @@ export async function evaluateDecisionInRegistry(
     throw new DecisionContractError();
   }
   options.signal.throwIfAborted();
+  const started = performance.now();
+  const skipped = (outcome: DecisionOutcome): DecisionOutcome => {
+    logDecisionEvaluation({ options, facts: { dispatched: false }, started, outcome });
+    return outcome;
+  };
   if (!validateDecisionBatch(batch)) {
-    return { status: "unavailable", reason: "unsupported-input" };
+    return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
-    return { status: "unavailable", reason: "disabled" };
+    return skipped({ status: "unavailable", reason: "disabled" });
   }
   if (config.plugins?.enabled === false) {
-    return { status: "unavailable", reason: "disabled" };
+    return skipped({ status: "unavailable", reason: "disabled" });
   }
   const entry = registry?.decisionProviders.find(
     (candidate) => candidate.host.provider.id === selected.provider,
   );
   if (!entry || !registry) {
-    return { status: "unavailable", reason: "not-configured" };
+    return skipped({ status: "unavailable", reason: "not-configured" });
   }
   if (config.plugins?.entries?.[entry.pluginId]?.enabled === false) {
-    return entry.host.unavailable("disabled");
+    return skipped(entry.host.unavailable("disabled"));
   }
   let capturedOperator: ReturnType<typeof captureAmbientGatewayOperatorAuthority> | undefined;
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;

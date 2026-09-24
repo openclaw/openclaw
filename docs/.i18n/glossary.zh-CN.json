@@ -3892,6 +3892,10 @@
     "target": "远程与托管浏览器"
   },
   {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
+  },
+  {
     "source": "Browser security",
     "target": "浏览器安全"
   },
@@ -4922,5 +4926,9 @@
   {
     "source": "Onnx plugin reference",
     "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
   }
 ]

@@ -22,7 +22,6 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
@@ -175,6 +174,9 @@ export function registerChatAbortController(params: {
   controlUiVisible?: boolean;
   projectSessionActive?: boolean;
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
+  resolveTerminalProducer?: (
+    entry: ChatAbortControllerEntry,
+  ) => ReturnType<NonNullable<ChatAbortControllerEntry["resolveTerminalProducer"]>>;
   onRemoved?: () => void;
   kind?: ChatAbortControllerEntry["kind"];
   turnKind?: ChatAbortControllerEntry["turnKind"];
@@ -298,6 +300,9 @@ export function registerChatAbortController(params: {
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
     controlUiVisible: params.controlUiVisible,
     isAbortable: params.isAbortable,
+    resolveTerminalProducer: params.resolveTerminalProducer
+      ? () => params.resolveTerminalProducer?.(entry)
+      : undefined,
     onRemoved: params.onRemoved,
     projectSessionActive: params.projectSessionActive ?? true,
     kind: params.kind,
@@ -419,72 +424,6 @@ export function resolveInFlightRunSnapshot(params: {
     runId: best.runId,
     startedAtMs: best.startedAtMs,
   });
-}
-
-export function boundInFlightRunSnapshotForChatHistory(params: {
-  snapshot: InFlightRunSnapshot | undefined;
-  messages: unknown[];
-  getMessagesBytes?: () => number;
-  maxBytes: number;
-}): InFlightRunSnapshot | undefined {
-  if (!params.snapshot) {
-    return undefined;
-  }
-  const messagesBytes = params.getMessagesBytes?.() ?? jsonUtf8Bytes(params.messages);
-  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
-  if (messagesBytes + snapshotBytes <= params.maxBytes) {
-    return params.snapshot;
-  }
-  // Recovery priority is run adoption, authoritative timing, active progress,
-  // plan replay, and opportunistic text. Explicit empty projections
-  // authoritatively clear stale client state when a richer snapshot cannot fit.
-  let bounded: InFlightRunSnapshot = {
-    runId: params.snapshot.runId,
-    text: "",
-    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
-    ...(params.snapshot.events ? { events: [] } : {}),
-    ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
-  };
-
-  if (params.snapshot.startedAt !== undefined) {
-    const candidate = { ...bounded, startedAt: params.snapshot.startedAt };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-
-  if (params.snapshot.events) {
-    const events = params.snapshot.events;
-    let start = 0;
-    let end = events.length;
-    // Try all progress first, then search suffixes instead of serializing each eviction.
-    let middle = 0;
-    while (start < end) {
-      const candidate = { ...bounded, events: events.slice(middle) };
-      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-        bounded = candidate;
-        end = middle;
-      } else {
-        start = middle + 1;
-      }
-      middle = Math.floor((start + end) / 2);
-    }
-  }
-
-  if (params.snapshot.plan) {
-    const candidate = { ...bounded, plan: params.snapshot.plan };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-
-  if (params.snapshot.text) {
-    const candidate = { ...bounded, text: params.snapshot.text };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
-  }
-  return bounded;
 }
 
 export type ChatAbortOps = {
@@ -622,6 +561,7 @@ export function abortChatRunById(
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    onAbortCommitted?: () => void;
   },
 ): { aborted: boolean } {
   const { runId, sessionKey, stopReason } = params;
@@ -655,6 +595,12 @@ export function abortChatRunById(
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
     active.abortStopReason = stopReason;
+  }
+  // Reserve transcript settlement while this exact producer still has authority.
+  try {
+    params.onAbortCommitted?.();
+  } catch {
+    // Transcript handoff failure cannot prevent an already accepted cancellation.
   }
   active.projectSessionActive = false;
   // Reserve terminal ownership before abort listeners run; synchronous caller

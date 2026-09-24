@@ -14,6 +14,19 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+## Shared output projection
+
+Codex uses the shared native harness projection owners for bounded tool output,
+attributed assistant and tool messages, and presentation callback settlement.
+The shared settlement owner preserves callback order and joins pending
+presentation work before terminal delivery. Projection draining stays under the
+attempt cancellation and settlement deadline.
+
+The Codex adapter retains native item identities, protocol parsing, approvals,
+hook handling, and transcript provenance. Constructed messages are persisted
+through the existing scoped transcript APIs; the shared projection helpers do
+not own storage.
+
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
 decoder. This includes cumulative turn diffs; file-change items still carry the
@@ -286,8 +299,23 @@ generic peak requires a paged state API.
 
 Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
 the current turn as untrusted external content, subject to the existing file
-extraction limits. This also applies to adopted and forked Codex sessions with
-locked model selection. Images continue through Codex's native image input.
+extraction limits. Extracted attachments use the sender's filename in model context,
+even when the stored or staged copy has a generated name. This also applies to
+adopted and forked Codex sessions with locked model selection. Images continue
+through Codex's native image input.
+
+For an unsandboxed local Codex process with file-read permission, OpenClaw also
+supplies verified paths to saved documents. Codex can process the complete file
+when inline extraction is bounded. OpenClaw adds the paths to the admitted native
+input without changing its canonical attachment references or transcript text.
+If the path note cannot fit the native input budget, OpenClaw omits it and retains
+the original request and inline attachment context.
+JSON escapes keep mention characters in attachment metadata from selecting skills
+or plugins while preserving the decoded filenames and paths.
+Codex retains that input in its own native conversation history. The path note
+identifies a file; later turns still use the existing execution and tool-policy
+admission. This does not expand workspace-only policies or expose Gateway paths
+to remote app-servers.
 
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
@@ -362,6 +390,15 @@ agent-readable environment values or protected egress sentinels. It is pinned
 to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
+
+A native shell command can yield a session handle before it exits. When a
+successful turn ends with that exact command still owned by the native thread,
+its tool row records **Outcome unknown** and explains that the process is still
+running. This is not command success or failure. Collect the retained handle
+with the native process-wait tool to obtain its output and exit code. The
+continuation records that result without rewriting the earlier turn's snapshot.
+The existing unknown-outcome audit diagnostic remains; cancellation and a
+command with no confirmed live owner retain their failure handling.
 
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and

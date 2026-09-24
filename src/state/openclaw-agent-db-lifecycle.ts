@@ -81,6 +81,10 @@ export type PendingAgentDatabaseOpen = {
   promise: Promise<OpenClawAgentDatabase>;
   assertHeld?: () => void;
   operations: number;
+  /** Shared physical preparation; caller cancellation never owns another waiter. */
+  lifecyclePrepared?: Promise<void>;
+  /** Latest admitted waiter deadline; each waiter still owns its own shorter timer. */
+  lifecycleDeadlineMs?: number;
   releaseBorrow?: () => void;
   validation?: OpenClawAgentDatabaseValidation;
 };
@@ -312,7 +316,7 @@ export function closeCachedOpenClawAgentDatabase(
   if (lease) {
     releaseOpenClawAgentDatabaseLease(
       lease.leaseId,
-      { env: lease.env },
+      { env: lease.env, initializationAgentPaths: [database.path] },
       clean ?? (retainRuntimeProof ? "uncheckpointed" : undefined),
     );
     cache.leases.delete(database.path);
@@ -428,7 +432,10 @@ export function settleOpenClawAgentDatabaseWorkerClose(
     const lease = cache.leases.get(resolvedPath);
     if (lease) {
       try {
-        releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
+        releaseOpenClawAgentDatabaseLease(lease.leaseId, {
+          env: lease.env,
+          initializationAgentPaths: [resolvedPath],
+        });
         cache.leases.delete(resolvedPath);
       } catch (error) {
         errors.push(error instanceof Error ? error : new Error(String(error)));

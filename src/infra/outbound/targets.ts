@@ -317,14 +317,16 @@ export async function resolveHeartbeatDeliveryTarget(params: {
   const heartbeatAccountId = ownerTurnSource ? undefined : heartbeat?.accountId?.trim();
   // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
-
-  if (!resolvedTarget.channel || !resolvedTarget.to) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: target === "last" || ownerMode ? "no-route" : "no-target",
-      accountId: effectiveAccountId,
+  const rejectDelivery = (reason: string, accountId = effectiveAccountId) =>
+    buildNoHeartbeatDeliveryTarget({
+      reason,
+      accountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,
     });
+
+  if (!resolvedTarget.channel || !resolvedTarget.to) {
+    return rejectDelivery(target === "last" || ownerMode ? "no-route" : "no-target");
   }
 
   // Bootstrap once after a concrete route exists, then carry the prepared plugin
@@ -347,12 +349,7 @@ export async function resolveHeartbeatDeliveryTarget(params: {
         accountIds.map((accountId) => normalizeAccountId(accountId)),
       );
       if (!normalizedAccountIds.has(normalizedAccountId)) {
-        return buildNoHeartbeatDeliveryTarget({
-          reason: ownerMode ? "no-route" : "unknown-account",
-          accountId: normalizedAccountId,
-          lastChannel: resolvedTarget.lastChannel,
-          lastAccountId: resolvedTarget.lastAccountId,
-        });
+        return rejectDelivery(ownerMode ? "no-route" : "unknown-account", normalizedAccountId);
       }
       effectiveAccountId = normalizedAccountId;
     }
@@ -370,12 +367,7 @@ export async function resolveHeartbeatDeliveryTarget(params: {
     },
   });
   if (!resolved?.ok) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: ownerMode ? "no-route" : "no-target",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
+    return rejectDelivery(ownerMode ? "no-route" : "no-target");
   }
 
   // Chat type belongs to the stored channel/account/destination, not a later wake route.
@@ -396,12 +388,7 @@ export async function resolveHeartbeatDeliveryTarget(params: {
     sessionChatTypeHint ??
     inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
+    return rejectDelivery("dm-blocked");
   }
   if (
     ownerMode &&
@@ -412,12 +399,7 @@ export async function resolveHeartbeatDeliveryTarget(params: {
       chatType: deliveryChatType,
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: effectiveAccountId,
-      lastChannel: resolvedTarget.lastChannel,
-      lastAccountId: resolvedTarget.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
 
   let reason: string | undefined;
@@ -551,21 +533,15 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     return delivery;
   }
   let routeResolvedTarget: ResolvedMessagingTarget | undefined;
-  const targetResolution = await (async () => {
-    try {
-      return await resolveChannelTarget({
-        cfg: params.cfg,
-        channel: delivery.channel as ChannelId,
-        input: deliveryTo,
-        accountId: delivery.accountId,
-        unknownTargetMode: "normalized",
-        plugin,
-      });
-    } catch {
-      // Target normalization failure should not suppress an otherwise deliverable heartbeat.
-      return null;
-    }
-  })();
+  // Target normalization failure should not suppress an otherwise deliverable heartbeat.
+  const targetResolution = await resolveChannelTarget({
+    cfg: params.cfg,
+    channel: delivery.channel as ChannelId,
+    input: deliveryTo,
+    accountId: delivery.accountId,
+    unknownTargetMode: "normalized",
+    plugin,
+  }).catch(() => null);
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
   } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
@@ -586,24 +562,18 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   if (!resolveSessionRoute) {
     return delivery;
   }
-  const route = await (async () => {
-    try {
-      return await resolveOutboundSessionRoute({
-        cfg: params.cfg,
-        channel: delivery.channel as ChannelId,
-        plugin,
-        agentId: params.agentId,
-        accountId: delivery.accountId,
-        target: routeResolvedTarget?.to ?? deliveryTo,
-        ...(ownerRouteMustBeDirect ? { deliveryPurpose: "heartbeat-owner" as const } : {}),
-        resolvedTarget: routeResolvedTarget,
-        currentSessionKey: params.currentSessionKey,
-        threadId: delivery.threadId,
-      });
-    } catch {
-      return null;
-    }
-  })();
+  const route = await resolveOutboundSessionRoute({
+    cfg: params.cfg,
+    channel: delivery.channel as ChannelId,
+    plugin,
+    agentId: params.agentId,
+    accountId: delivery.accountId,
+    target: routeResolvedTarget?.to ?? deliveryTo,
+    ...(ownerRouteMustBeDirect ? { deliveryPurpose: "heartbeat-owner" as const } : {}),
+    resolvedTarget: routeResolvedTarget,
+    currentSessionKey: params.currentSessionKey,
+    threadId: delivery.threadId,
+  }).catch(() => null);
   if (!route) {
     return delivery;
   }
@@ -703,19 +673,12 @@ function resolveHeartbeatSenderId(params: {
   if (mapAllowFromEntries(allowFrom).some((entry) => entry.trim() === "*")) {
     return candidates[0] ?? "heartbeat";
   }
-  if (candidates.length > 0 && allowList.length > 0) {
-    const matched = candidates.find((candidate) => allowList.includes(candidate));
-    if (matched) {
-      return matched;
-    }
-  }
-  if (candidates.length > 0 && allowList.length === 0) {
-    return candidates[0];
-  }
-  if (allowList.length > 0) {
-    return allowList[0];
-  }
-  return candidates[0] ?? "heartbeat";
+  return (
+    candidates.find((candidate) => allowList.includes(candidate)) ??
+    allowList[0] ??
+    candidates[0] ??
+    "heartbeat"
+  );
 }
 
 /** Resolves the sender id/allow-list context used for heartbeat sends. */

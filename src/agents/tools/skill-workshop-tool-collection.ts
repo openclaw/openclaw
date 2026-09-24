@@ -43,7 +43,7 @@ export async function executeSkillCollectionRestore(params: {
   );
 }
 
-export function executeSkillCollectionHistory(
+export async function executeSkillCollectionHistory(
   params: {
     workspaceDir: string;
     config: OpenClawConfig;
@@ -55,7 +55,7 @@ export function executeSkillCollectionHistory(
   if (!params.agentId) {
     throw new ToolInputError("Skill Workshop history requires the active agent id");
   }
-  const outcomes = listSkillCollectionReviewOutcomes(params.agentId, {
+  const outcomes = await listSkillCollectionReviewOutcomes(params.agentId, {
     config: params.config,
     ...(params.env ? { env: params.env } : {}),
   });

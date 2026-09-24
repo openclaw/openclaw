@@ -23,6 +23,11 @@ Every automation subcommand accepts the shared Gateway connection options. Use
 an explicit WebSocket URL. Do not combine them. Connection options such as
 `--port`, `--url`, and `--token` may appear before or after the subcommand.
 
+Automation commands require a running Gateway. With token, password, or `none`
+authentication, calls to the configured local loopback Gateway do not open the
+shared state database for device authentication. Remote and explicit URL targets
+retain their device authentication and pairing requirements.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
