@@ -469,7 +469,7 @@ describe("sessions.usage result cache", () => {
       summaries: [sessionSummary(20)],
       cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
     });
-    publishSessionCostUsageUpdated();
+    publishSessionCostUsageUpdated("main");
     const result = await runSessionsUsage(baseParams);
     expect(result.totals.totalTokens).toBe(20);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);

@@ -201,6 +201,13 @@ suite.define(() => {
     try {
       const response = await page.goto(`${suite.server.baseUrl}usage`);
       expect(response?.status()).toBe(200);
+      const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await agentScope.locator(".agent-select__trigger").click();
+      await agentScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .click();
+      await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
       await expect
         .poll(() =>
           page.evaluate(() => ({
@@ -213,6 +220,7 @@ suite.define(() => {
       await captureProof(page, "usage-original-response.png");
       const beforeFailure = await requestCount(gateway, "sessions.usage");
       await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
         usageUpdatedAt: ++usageUpdatedAt,
         usageRefreshFailed: true,
       });
@@ -221,6 +229,20 @@ suite.define(() => {
         .toContain("Automatic checks paused");
       expect(await page.locator(".usage-loading-card").count()).toBe(0);
       expect(await requestCount(gateway, "sessions.usage")).toBe(beforeFailure);
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 1);
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
+      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "other",
+        usageUpdatedAt: ++usageUpdatedAt,
+      });
+      expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
+        agentScope: "all",
+      });
+      await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 2);
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
+      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
       await captureProof(page, "usage-failed-no-rollup.png");
       const refresh = page
         .locator("openclaw-usage-page")
@@ -242,7 +264,7 @@ suite.define(() => {
         const sessionsBefore = await requestCount(gateway, "sessions.usage");
         const catalogsBefore = await requestCount(gateway, "models.list");
         await gateway.setMethodResponse("sessions.usage", freshSessions);
-        const publication = { usageUpdatedAt: ++usageUpdatedAt };
+        const publication = { agentId: "main", usageUpdatedAt: ++usageUpdatedAt };
         await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await expect

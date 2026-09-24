@@ -114,15 +114,19 @@ it.each([false, true])(
     const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
     const lifecycle = await pending;
     await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
-    publishSessionCostUsageUpdated(failed);
+    publishSessionCostUsageUpdated("main", failed);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
-      { usageUpdatedAt: expect.any(Number), ...(failed ? { usageRefreshFailed: true } : {}) },
+      {
+        agentId: "main",
+        usageUpdatedAt: expect.any(Number),
+        ...(failed ? { usageRefreshFailed: true } : {}),
+      },
       { dropIfSlow: true },
     );
     expect(mocks.refresh).not.toHaveBeenCalled();
     await sidecarOwner.stop();
-    publishSessionCostUsageUpdated();
+    publishSessionCostUsageUpdated("main");
     expect(broadcast).toHaveBeenCalledTimes(1);
   },
 );

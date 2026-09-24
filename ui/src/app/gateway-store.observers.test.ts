@@ -94,26 +94,32 @@ describe("application gateway observer ownership", () => {
     const observed = vi.fn();
     const stop = gateway.subscribe(observed);
     observed.mockClear();
-    const publish = (usageUpdatedAt: number, usageRefreshFailed = false) =>
+    const publish = (usageUpdatedAt: number, usageRefreshFailed = false, agentId = "main") =>
       current().opts.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
-        payload: { usageUpdatedAt, usageRefreshFailed },
+        payload: { agentId, usageUpdatedAt, usageRefreshFailed },
       });
     for (const usageUpdatedAt of [20, 20, 10]) {
       publish(usageUpdatedAt);
     }
-    expect(gateway.snapshot.usageUpdatedAt).toBe(20);
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(20);
     expect(observed).toHaveBeenCalledOnce();
     publish(21, true);
-    expect(gateway.snapshot.usageRefreshFailed).toBe(true);
-    publish(22);
-    expect(gateway.snapshot.usageRefreshFailed).toBe(false);
+    expect(gateway.snapshot.usagePublications?.main).toMatchObject({
+      usageRefreshFailed: true,
+      committedAt: 20,
+    });
+    const failed = gateway.snapshot.usagePublications?.main;
+    publish(22, false, "other");
+    expect(gateway.snapshot.usagePublications?.main).toBe(failed);
+    publish(23);
+    expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
     current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
-    expect(gateway.snapshot.usageUpdatedAt).toBeUndefined();
+    expect(gateway.snapshot.usagePublications).toBeUndefined();
     current().opts.onHello?.(HELLO);
     publish(1);
-    expect(gateway.snapshot.usageUpdatedAt).toBe(1);
+    expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(1);
     stop();
     gateway.stop();
   });

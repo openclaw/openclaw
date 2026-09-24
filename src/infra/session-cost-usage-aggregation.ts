@@ -30,6 +30,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
 }): Promise<"refreshed" | "busy"> {
+  const agentId = normalizeAgentId(params.agentId);
   try {
     const prepared = prepareUsageCostWorker(params);
     const result = await runUsageCostWorker(prepared, {
@@ -47,12 +48,12 @@ export async function refreshCostUsageCacheForAgent(params: {
       throw new Error("Invalid usage refresh worker result");
     }
     if (result.changed) {
-      publishSessionCostUsageUpdated();
+      publishSessionCostUsageUpdated(agentId);
     }
     return "refreshed";
   } catch (error) {
     if (!getAsyncWorkSignal()?.aborted) {
-      publishSessionCostUsageUpdated(true);
+      publishSessionCostUsageUpdated(agentId, true);
     }
     throw error;
   }

@@ -709,7 +709,7 @@ describe("sidebar attention source publication", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(authCalls).toBe(1);
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
-    harness.emitEvent("chat.metadata.changed", { usageUpdatedAt: now });
+    harness.emitEvent("chat.metadata.changed", { agentId: "main", usageUpdatedAt: now });
     await Promise.resolve();
     expect(authCalls).toBe(1);
     harness.emitEvent("chat.metadata.changed", {});

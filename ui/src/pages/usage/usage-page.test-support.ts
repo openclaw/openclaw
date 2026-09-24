@@ -25,8 +25,15 @@ export type TestUsagePage = HTMLElement & {
   readonly updateComplete: Promise<boolean>;
 };
 
+type UsagePublicationFixture = {
+  agentId?: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: boolean;
+};
+
 export function contextWithClient(client: GatewayBrowserClient): ApplicationContext & {
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  publishUsage: (publication: UsagePublicationFixture) => void;
 } {
   const subscribe = () => () => undefined;
   let snapshot = {
@@ -39,13 +46,31 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
   return {
-    setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
+    setGatewaySnapshot,
+    publishUsage: ({
+      agentId = "main",
+      usageUpdatedAt,
+      usageRefreshFailed,
+    }: UsagePublicationFixture) =>
+      setGatewaySnapshot({
+        usagePublications: {
+          ...snapshot.usagePublications,
+          [agentId]: {
+            usageUpdatedAt,
+            committedAt: usageRefreshFailed
+              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              : usageUpdatedAt,
+            usageRefreshFailed: usageRefreshFailed || undefined,
+          },
+        },
+      }),
     basePath: "",
     gateway: {
       get snapshot() {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -96,19 +96,11 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        update_id: ++updateId,
-        message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-      }),
-    }),
-  );
+  // Match durable ingress dispatch; HTTP acknowledgement has a separate owner.
+  await bot.handleUpdate({
+    update_id: ++updateId,
+    message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
+  });
 }
 
 describe("Telegram recorded session destinations", () => {
@@ -385,7 +377,6 @@ describe("Telegram recorded session destinations", () => {
         date: 1736380700,
         chat: groupChat,
         forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
-        reply_to_message: undefined,
       },
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({

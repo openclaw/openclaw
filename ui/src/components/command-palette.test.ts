@@ -173,7 +173,7 @@ describe("CommandPalette search", () => {
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
-    harness.emit("chat.metadata.changed", { usageUpdatedAt: 1 });
+    harness.emit("chat.metadata.changed", { agentId: "main", usageUpdatedAt: 1 });
     await vi.advanceTimersByTimeAsync(200);
     expect(request).toHaveBeenCalledOnce();
 

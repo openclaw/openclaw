@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
@@ -10,11 +11,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
-  payload: {
-    modelSelectionChanged?: boolean;
-    usageUpdatedAt?: number;
-    usageRefreshFailed?: true;
-  } = {},
+  payload: Partial<SessionCostUsagePublication> & { modelSelectionChanged?: boolean } = {},
 ): void {
   try {
     context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });

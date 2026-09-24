@@ -1,3 +1,4 @@
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionsUsageResult } from "./data-types.ts";
 import type { UsageProps } from "./types.ts";
 
@@ -30,4 +31,24 @@ export function resolveUsageOverviewState(
     !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length);
   const loadingOverview = data.loading || (awaitingUsage && data.cacheRefresh === "retrying");
   return { hasOverviewData, loadingOverview };
+}
+
+export function resolveUsagePublication(
+  publications: ApplicationGatewaySnapshot["usagePublications"],
+  agentId?: string,
+) {
+  let committedAt = 0;
+  let failedAt = 0;
+  for (const publication of agentId
+    ? [publications?.[agentId]]
+    : Object.values(publications ?? {})) {
+    if (!publication) {
+      continue;
+    }
+    committedAt = Math.max(committedAt, publication.committedAt);
+    if (publication.usageRefreshFailed) {
+      failedAt = Math.max(failedAt, publication.usageUpdatedAt);
+    }
+  }
+  return { updatedAt: Math.max(committedAt, failedAt), committedAt, failedAt };
 }

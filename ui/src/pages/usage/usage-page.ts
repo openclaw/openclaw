@@ -18,7 +18,7 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isUsageCacheIncomplete } from "./cache-status.ts";
+import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
 import { createUsageJsonExportRequest } from "./export.ts";
@@ -61,7 +61,6 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private providerUsageUnavailable = false;
   @state() private providerUsageIncomplete = false;
   @state() private usageError: string | null = null;
-  @state() private usageRefreshFailed = false;
   private readonly initialDateRange = createDefaultUsageDateRange();
   @state() private usageStartDate = this.initialDateRange.startDate;
   @state() private usageEndDate = this.initialDateRange.endDate;
@@ -98,12 +97,17 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   // The client survives transport reconnects, so retry budgets need a separate epoch.
   private connectionEpoch: object = {};
-  private usageUpdatedAt: number | undefined;
+  private usageUpdatedAt = 0;
+  private usageFailureAcknowledgedAt = 0;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.usageLoading,
     reload: (reason) => {
+      if (reason === "manual") {
+        this.usageUpdatedAt = this.usagePublication.updatedAt;
+        this.usageFailureAcknowledgedAt = this.usageUpdatedAt;
+      }
       this.clearDateDebounce();
       const sessionKey =
         reason === "manual" && this.usageSelectedSessions.length === 1
@@ -265,10 +269,11 @@ class UsagePage extends OpenClawLightDomElement {
     };
     this.applyUsageLoadState(data.providerUsage, this.connectionEpoch, data.loadedAtMs);
     this.usageError = data.error;
-    const publication = this.gateway.snapshot;
-    const usageChanged = data.gatewaySnapshot.usageUpdatedAt !== publication?.usageUpdatedAt;
-    this.usageRefreshFailed = usageChanged && publication?.usageRefreshFailed === true;
-    if (usageChanged && !this.usageRefreshFailed) {
+    const preloadUpdatedAt = resolveUsagePublication(
+      data.gatewaySnapshot.usagePublications,
+      this.currentQuery.agentId,
+    ).updatedAt;
+    if (this.usagePublication.committedAt > preloadUpdatedAt) {
       this.refreshPolicy.request("publication");
     }
     this.refreshPolicy.flushPending();
@@ -326,6 +331,17 @@ class UsagePage extends OpenClawLightDomElement {
       snapshot.state === "pending" || this.usageCacheIncomplete ? null : loadedAtMs,
       { incomplete: this.providerUsageIncomplete, connection },
     );
+  }
+
+  private get usagePublication() {
+    return resolveUsagePublication(
+      this.gateway.snapshot?.usagePublications,
+      this.currentQuery.agentId,
+    );
+  }
+
+  private get usageRefreshFailed(): boolean {
+    return this.usagePublication.failedAt > this.usageFailureAcknowledgedAt;
   }
 
   private get usageCacheIncomplete(): boolean {
@@ -408,7 +424,6 @@ class UsagePage extends OpenClawLightDomElement {
     // so it cannot publish under the newly rendered query controls.
     this.routeDataEnabled = false;
     this.usageError = null;
-    this.usageRefreshFailed = false;
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
@@ -449,17 +464,16 @@ class UsagePage extends OpenClawLightDomElement {
       return;
     }
     void this.context.agents.ensureList();
-    const usageChanged = this.usageUpdatedAt !== change.snapshot.usageUpdatedAt;
-    this.usageUpdatedAt = change.snapshot.usageUpdatedAt;
-    if (usageChanged) {
-      this.usageRefreshFailed = change.snapshot.usageRefreshFailed === true;
-    }
+    const publication = this.usagePublication;
+    const usageCommitted = publication.committedAt > this.usageUpdatedAt;
+    this.usageUpdatedAt = publication.updatedAt;
     if (change.identityChanged || change.becameConnected) {
+      this.usageFailureAcknowledgedAt = 0;
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
       }
-    } else if (usageChanged && this.routeDataInitialized && !this.usageRefreshFailed) {
+    } else if (usageCommitted && this.routeDataInitialized) {
       this.refreshPolicy.request("publication");
     }
     const sessionKey =

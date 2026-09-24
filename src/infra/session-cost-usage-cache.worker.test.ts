@@ -505,7 +505,10 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       unsubscribeUsage();
     }
     expect(await refresh).toBe("refreshed");
-    expect(published).toHaveBeenCalledExactlyOnceWith({ usageUpdatedAt: expect.any(Number) });
+    expect(published).toHaveBeenCalledExactlyOnceWith({
+      agentId,
+      usageUpdatedAt: expect.any(Number),
+    });
     expect((await loadCostUsageSummaryFromCache(summaryParams)).totals.totalTokens).toBe(30);
   });
 }, 30_000);
@@ -605,6 +608,7 @@ it("reports the failed session in doctor and clears it after successful refresh"
         refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] }),
       ).rejects.toThrow("private transcript content");
       expect(published).toHaveBeenCalledExactlyOnceWith({
+        agentId,
         usageUpdatedAt: expect.any(Number),
         usageRefreshFailed: true,
       });
@@ -625,7 +629,7 @@ it("reports the failed session in doctor and clears it after successful refresh"
     );
     await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
     expect(published).toHaveBeenCalledTimes(2);
-    expect(published).toHaveBeenLastCalledWith({ usageUpdatedAt: expect.any(Number) });
+    expect(published).toHaveBeenLastCalledWith({ agentId, usageUpdatedAt: expect.any(Number) });
     expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);
     note.mockClear();
     await maybeRepairLegacyRuntimeFiles(false, state.env);

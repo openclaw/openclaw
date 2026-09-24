@@ -12,6 +12,12 @@ import type {
   SessionToolUsage,
 } from "../infra/session-cost-usage.types.js";
 
+export type SessionCostUsagePublication = {
+  agentId: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: true;
+};
+
 export type SessionUsageCreator = {
   /** Opaque, namespace-qualified identity used by the creator filter. */
   key: string;

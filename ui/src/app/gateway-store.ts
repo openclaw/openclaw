@@ -152,8 +152,7 @@ export function createApplicationGateway(
         ? snapshot.suspensionPhase
         : undefined;
       snapshot.pluginCapabilities = null;
-      snapshot.usageUpdatedAt = undefined;
-      snapshot.usageRefreshFailed = undefined;
+      snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
     if (metadataObserver.synchronize(previous, snapshot)) {
@@ -195,11 +194,25 @@ export function createApplicationGateway(
         });
     } else if (event.event === "chat.metadata.changed") {
       const publication = asOptionalRecord(event.payload);
+      const agentId = publication?.agentId;
       const usageUpdatedAt = publication?.usageUpdatedAt;
-      if (typeof usageUpdatedAt === "number" && usageUpdatedAt > (snapshot.usageUpdatedAt ?? 0)) {
+      if (
+        typeof agentId === "string" &&
+        typeof usageUpdatedAt === "number" &&
+        usageUpdatedAt > (snapshot.usagePublications?.[agentId]?.usageUpdatedAt ?? 0)
+      ) {
         setSnapshot({
-          usageUpdatedAt,
-          usageRefreshFailed: publication?.usageRefreshFailed === true,
+          usagePublications: {
+            ...snapshot.usagePublications,
+            [agentId]: {
+              usageUpdatedAt,
+              committedAt:
+                publication?.usageRefreshFailed === true
+                  ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+                  : usageUpdatedAt,
+              usageRefreshFailed: publication?.usageRefreshFailed === true || undefined,
+            },
+          },
         });
       }
     } else if (event.event === "gateway.suspension") {
