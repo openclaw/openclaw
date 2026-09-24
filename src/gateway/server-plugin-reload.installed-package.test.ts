@@ -841,15 +841,21 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
     if (bundledDir) {
       expect((await probe("bundled-probe")).helper).toBe("A");
+      const unchangedBundled = await reload(changedSettings, ["bundled-probe"]);
+      expect(unchangedBundled.runtime.restartRequired ?? false).toBe(false);
+      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
       fs.writeFileSync(path.join(bundledDir, "dist", "helper.cjs"), 'module.exports = "B";');
       const bundledReload = await reload(changedSettings, ["bundled-probe"]);
-      expect((await probe("bundled-probe", { starts: 2, stops: 1 })).helper).toBe("A");
+      expect((await probe("bundled-probe", { starts: 3, stops: 2 })).helper).toBe("A");
       expect(bundledReload.runtime).toMatchObject({
         restartRequired: true,
         pluginIds: ["bundled-probe"],
         warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
       });
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
+      const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);
+      expect(repeatedBundled.runtime.restartRequired).toBe(true);
+      expect((await probe("bundled-probe", { starts: 4, stops: 3 })).helper).toBe("A");
     }
   });
 }

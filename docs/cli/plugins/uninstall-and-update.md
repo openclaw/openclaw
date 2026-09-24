@@ -149,10 +149,13 @@ retrying; restart the Gateway if residual plugin behavior causes problems.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
 Compiled bundled plugins reuse their process-loaded code when their registrations
-reload. The result reports `restartRequired: true` with a warning, and CLI and tool
+reload. If the plugin's files changed while its original module remains loaded,
+the result reports `restartRequired: true` with a warning, and CLI and tool
 output explain that a Gateway restart is needed to load edited code. Reload does
 not rebuild compiled bundled code; source installations also need a build.
 External captured sources return `restartRequired: false` after replacement.
+Reloading unchanged bundled files also returns `restartRequired: false`; channel
+and service registrations can be replaced without restarting the Gateway.
 Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 

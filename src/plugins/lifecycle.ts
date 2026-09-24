@@ -2,6 +2,7 @@ import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryVersion } from "./runtime.js";
 
@@ -71,7 +72,7 @@ export function createPluginRuntimeApplication(params: {
   warnings: readonly string[];
 }): PluginRuntimeApplication {
   const sourceDigests = new Map<string, string>();
-  let restartRequired = false;
+  const restartWarnings = new Set<string>();
   for (const record of params.registry.plugins) {
     if (!params.pluginIds.has(record.id)) {
       continue;
@@ -79,29 +80,26 @@ export function createPluginRuntimeApplication(params: {
     const instance = getPluginInstance(record);
     if (instance?.sourceDigest) {
       sourceDigests.set(record.id, instance.sourceDigest);
-    } else if (
+    }
+    if (
       params.reloadPluginIds?.has(record.id) &&
       record.enabled &&
       record.status === "loaded" &&
-      record.origin === "bundled" &&
       instance
     ) {
-      // Compiled bundled modules keep process identity instead of a source capture.
-      restartRequired = true;
+      const warning = getSharedPluginCodeReloadWarning(instance);
+      if (warning) {
+        restartWarnings.add(warning);
+      }
     }
   }
-  const warnings = [...params.warnings];
-  if (restartRequired) {
-    warnings.unshift(
-      "Compiled bundled plugin code remains loaded. Restart the Gateway to load edited code.",
-    );
-  }
+  const warnings = [...restartWarnings, ...params.warnings];
   return {
     operationId: params.operationId,
     generation: params.generation,
     pluginIds: [...params.pluginIds].toSorted(),
     sourceDigests: Object.fromEntries(sourceDigests),
-    ...(restartRequired ? { restartRequired } : {}),
+    ...(restartWarnings.size ? { restartRequired: true } : {}),
     ...(warnings.length ? { warnings } : {}),
   };
 }
