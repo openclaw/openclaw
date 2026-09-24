@@ -73,7 +73,13 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
-    additionalNeeds?: Record<string, { outputs: Record<string, string> }>;
+    additionalNeeds?: Record<
+      string,
+      {
+        outputs: Record<string, string>;
+        result?: "success" | "failure" | "cancelled" | "skipped";
+      }
+    >;
     jobResults?: Record<string, string>;
     pullRequestNumber?: number;
     ref?: string;
