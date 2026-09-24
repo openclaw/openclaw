@@ -94,6 +94,13 @@ export type PersistedEchoEntry = {
 // fall out of the dedupe set before a reconnect burst replays the messages
 // around them.
 export const IMESSAGE_SENT_ECHOES_TTL_MS = 12 * 60 * 60 * 1000;
+// Reflection window for heuristic parent/body (reply_to_guid + text) echo
+// matching. Real iMessage reflections arrive within ~2.2s (SQLite poll bound);
+// 4s matches the in-memory text-reflection TTL. The strict reply_to_guid probe
+// must not outlive this window, or a genuine same-text inline reply hours later
+// is dropped as an echo. Exact outbound-GUID matching is unaffected and keeps
+// the 12h retention above so reconnect re-emits still resolve.
+export const IMESSAGE_ECHO_REFLECTION_WINDOW_MS = 4_000;
 export const IMESSAGE_SENT_ECHOES_NAMESPACE = "imessage.sent-echoes";
 export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 

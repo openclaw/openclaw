@@ -201,6 +201,9 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
+  // Maintainer proof harnesses are invoked manually from PR evidence.
+  "scripts/proof-137834-reply-to-guid-echo.mjs!",
+  "scripts/proof-137834-limiter-boundary.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   // Docker/release workflows launch the warning relay from copied harness roots.

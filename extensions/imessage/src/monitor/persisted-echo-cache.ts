@@ -6,6 +6,7 @@ import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
   IMESSAGE_SENT_ECHOES_NAMESPACE,
   IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  IMESSAGE_ECHO_REFLECTION_WINDOW_MS,
   resolveIMessageSentEchoEntryKey,
   resolveIMessageEchoMediaKey,
   type PersistedEchoEntry,
@@ -158,6 +159,7 @@ export async function hasPersistedIMessageEcho(params: {
   messageId?: string;
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireMessageIdTextMatch?: boolean;
 }): Promise<boolean> {
   const text = normalizeText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
@@ -165,21 +167,40 @@ export async function hasPersistedIMessageEcho(params: {
   if (!text && !mediaKey && !messageId) {
     return false;
   }
+  const now = Date.now();
   for (const entry of await readRecentEntries()) {
     if (entry.scope !== params.scope) {
       continue;
     }
     if (messageId && entry.messageId === messageId) {
-      return true;
+      if (!params.requireMessageIdTextMatch) {
+        // Exact outbound-GUID match: safe for the full retention window so a
+        // reconnect re-emit of an own outbound row still resolves.
+        return true;
+      }
+      // Strict reply_to_guid heuristic: a mirror row references the outbound
+      // GUID via reply_to_guid with the same body. Require BOTH a text match
+      // and a fresh reflection window — without the window this would also
+      // drop a genuine same-text inline reply hours later, since a human
+      // threaded reply carries the same reply_to_guid + body signature.
+      if (
+        text &&
+        entry.text === text &&
+        now - entry.timestamp <= IMESSAGE_ECHO_REFLECTION_WINDOW_MS
+      ) {
+        return true;
+      }
     }
     const hasConflictingMessageIds = Boolean(
       messageId && entry.messageId && messageId !== entry.messageId,
     );
-    // Same-id echoes match on the messageId branch above. Known conflicting
-    // GUIDs identify new messages, while no-GUID self-chat rows opt into text
-    // fallback because their numeric SQLite IDs cannot equal outbound GUIDs.
+    // The strict reply_to_guid probe (requireMessageIdTextMatch) must only
+    // resolve on a GUID+text pair within the reflection window — never fall
+    // through to text-only matching, which lives on the 12h retention and
+    // would drop a genuine same-text inline reply hours later.
     if (
       text &&
+      !params.requireMessageIdTextMatch &&
       (!hasConflictingMessageIds || params.skipIdShortCircuit) &&
       entry.text === text &&
       (!entry.pending || params.includePendingText)
@@ -188,6 +209,7 @@ export async function hasPersistedIMessageEcho(params: {
     }
     if (
       mediaKey &&
+      !params.requireMessageIdTextMatch &&
       !hasConflictingMessageIds &&
       resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
       (!entry.pending || params.includePendingText)
