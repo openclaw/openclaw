@@ -299,7 +299,7 @@ it.each([
             await recovery?.complete(false);
           }
           // Windows cannot remove the fixture home while its coordinator handles are open.
-          expect(databases.filter((database) => database.isOpen)).toEqual([]);
+          expect(databases.filter((connection) => connection.isOpen)).toEqual([]);
         },
       ),
   );
