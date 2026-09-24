@@ -283,6 +283,7 @@ async function runDoctorHealthFlowWithResult(
       const { CONFIG_PATH } = await loadConfigModule();
       const ctx: DoctorHealthFlowContext = {
         runtime: effectiveRuntime,
+        env: process.env,
         options,
         prompter,
         configResult,

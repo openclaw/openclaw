@@ -7,6 +7,7 @@ import * as configFlow from "../commands/doctor-config-flow.js";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gatewayClient from "../gateway/call.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
@@ -21,6 +22,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
+import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -40,6 +42,40 @@ beforeEach(() => {
   vi.mocked(execFile).mockReset();
   mocks.packageRoot.mockReturnValue(undefined);
   mocks.runContributions.mockReset();
+});
+
+it("uses an explicit Gateway port for ordinary Doctor's final model finding", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const modelRef = "google/gemini-3.8-flash";
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { fallbacks: [modelRef] } } },
+    };
+    mocks.config.mockReturnValue(cfg);
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18891");
+    const gatewayCall = vi.spyOn(gatewayClient, "callGateway").mockImplementation((async () => ({
+      models: [{ provider: "google", id: "gemini-3.8-flash" }],
+    })) as typeof gatewayClient.callGateway);
+    const findings: string[] = [];
+    mocks.runContributions.mockImplementation(async (ctx) => {
+      expect(ctx.env?.OPENCLAW_GATEWAY_PORT).toBe("18891");
+      const result = await createModelReferenceCheck().detect({
+        mode: "doctor",
+        runtime: ctx.runtime,
+        cfg: ctx.cfg,
+        env: ctx.env,
+      });
+      findings.push(...result.map((finding) => finding.target ?? ""));
+    });
+    try {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await runDoctorHealthFlow(runtime, { nonInteractive: true });
+      expect(gatewayCall).toHaveBeenCalledOnce();
+      expect(findings).not.toContain(modelRef);
+    } finally {
+      gatewayCall.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 it("shares one fleet preflight with Doctor admission and its health contribution", async () => {

@@ -15,8 +15,15 @@ type ModelReferenceInspection = {
    * `uncatalogued-provider`: the provider is installed or configured but
    * contributes no catalog rows to compare against (no manifest seed rows and
    * no `models.providers.<id>.models`), so membership cannot be judged offline.
+   * `published-model`: the offline metadata does not list the id, but the catalog a
+   * running Gateway publishes does, so the reference is not missing.
    */
-  status: "known" | "unknown-model" | "uncatalogued-provider" | "unknown-provider";
+  status:
+    | "known"
+    | "published-model"
+    | "unknown-model"
+    | "uncatalogued-provider"
+    | "unknown-provider";
 };
 
 type ModelReferenceInspectionParams = {
@@ -24,6 +31,12 @@ type ModelReferenceInspectionParams = {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
+  /**
+   * Provider/model rows a running Gateway publishes. Providers can publish ids
+   * that offline metadata cannot enumerate, so an offline miss only means the
+   * reference is unknown once the published rows also lack it.
+   */
+  publishedModelCatalog?: readonly { provider: string; id: string }[];
 };
 
 function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
@@ -59,6 +72,11 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
       cataloguedProviders.add(normalizeProviderId(provider));
     }
   }
+  const publishedModels = new Set(
+    (params.publishedModelCatalog ?? []).map((row) =>
+      buildModelCatalogMergeKey(row.provider, row.id),
+    ),
+  );
   const inspect = (candidate: { provider: string; model: string }): ModelReferenceInspection => {
     const provider = normalizeProviderId(candidate.provider);
     const model = candidate.model.trim();
@@ -68,6 +86,11 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     }
     if (knownModels.has(buildModelCatalogMergeKey(provider, model))) {
       return { ref, provider, model, status: "known" };
+    }
+    // A provider that discovers its catalog at runtime publishes ids the offline
+    // metadata cannot enumerate, so an offline miss alone is not a defect.
+    if (publishedModels.has(buildModelCatalogMergeKey(provider, model))) {
+      return { ref, provider, model, status: "published-model" };
     }
     // A provider with zero catalog rows (runtime-discovered catalogs such as
     // OpenRouter) gives the membership check nothing to compare against, so an

@@ -45,4 +45,29 @@ describe("inspectModelReference", () => {
     expect(inspect(cfg, "openrouter", "openrouter/auto")).toBe("known");
     expect(inspect(cfg, "openrouter", "deepseek/deepseek-v4-pro")).toBe("unknown-model");
   });
+
+  it("treats an id the running Gateway publishes as catalogued", () => {
+    // Google keeps ten static manifest rows and publishes runtime-discovered ids
+    // on top, so its advertised alias is missing offline but present at runtime.
+    expect(inspect({}, "google", "gemini-flash-lite-latest")).toBe("unknown-model");
+    expect(
+      inspectModelReference({
+        cfg: {},
+        env: {},
+        ref: { provider: "google", model: "gemini-flash-lite-latest" },
+        publishedModelCatalog: [{ provider: "google", id: "gemini-flash-lite-latest" }],
+      }).status,
+    ).toBe("published-model");
+  });
+
+  it("keeps an unconfirmed id unknown when the published catalog lacks it", () => {
+    expect(
+      inspectModelReference({
+        cfg: {},
+        env: {},
+        ref: { provider: "google", model: "gemini-flash-lite-lates" },
+        publishedModelCatalog: [{ provider: "google", id: "gemini-flash-lite-latest" }],
+      }).status,
+    ).toBe("unknown-model");
+  });
 });
