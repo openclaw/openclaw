@@ -18,7 +18,6 @@ type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
 
 const {
   createLineBotMock,
-  createLineNodeWebhookHandlerMock,
   registerWebhookTargetWithPluginRouteMock,
   runDetachedWebhookWorkMock,
   unregisterHttpMock,
@@ -28,16 +27,12 @@ const {
     handleWebhook: vi.fn<LineHandleWebhook>().mockResolvedValue("durable"),
     stop: vi.fn(),
   })),
-  createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
-    vi.fn<LineNodeWebhookHandler>(async () => {}),
-  ),
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
   runDetachedWebhookWorkMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
-let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 type RegisteredRoute = {
   accountId?: string;
@@ -119,14 +114,6 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
   };
 });
 
-vi.mock("./webhook-node.js", async () => {
-  const actual = await vi.importActual<typeof import("./webhook-node.js")>("./webhook-node.js");
-  return {
-    ...actual,
-    createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
-  };
-});
-
 vi.mock("./auto-reply-delivery.js", () => ({
   deliverLineAutoReply: vi.fn(),
 }));
@@ -160,7 +147,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
-    vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
     vi.doUnmock("./send.js");
@@ -178,10 +164,6 @@ describe("monitorLineProvider lifecycle", () => {
     // Clear call history only; the implementation was wired to the actual
     // helper once in the module mock factory.
     runDetachedWebhookWorkMock.mockClear();
-    innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
-    createLineNodeWebhookHandlerMock
-      .mockReset()
-      .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
       const withLeadingSlash = params.target.path.startsWith("/")

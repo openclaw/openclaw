@@ -1119,7 +1119,23 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-assert.deepEqual(result.steps, [], "second update executed package mutations");
+// The isolated state directory records a service refusal without running the suggested command.
+const expectedSteps = result.steps.length === 0 ? [] : [{
+  name: "managed-service-reconciliation",
+  command: "openclaw gateway install --force",
+  cwd: result.root ?? "",
+  durationMs: 0,
+  exitCode: 0,
+  advisory: {
+    kind: "recoverable-maintenance",
+    message:
+      "service management skipped: non-default state dir or config path. " +
+      "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
+      "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
+      "at the canonical paths for that account home and profile to manage the gateway service during update.",
+  },
+}];
+assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE

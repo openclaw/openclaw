@@ -147,7 +147,6 @@ extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	26
 extensions/codex/src/app-server/approval-bridge.ts	1
-extensions/codex/src/app-server/attempt-context.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3
 extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
@@ -168,10 +167,8 @@ extensions/codex/src/app-server/event-projector-values.ts	1
 extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/explicit-skill-input.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
-extensions/codex/src/app-server/native-config-fence.ts	1
 extensions/codex/src/app-server/native-mcp-app.ts	9
 extensions/codex/src/app-server/native-skill-isolation.ts	1
-extensions/codex/src/app-server/native-subagent-task-mirror.ts	2
 extensions/codex/src/app-server/plan-compaction-state.ts	1
 extensions/codex/src/app-server/plugin-activation.ts	4
 extensions/codex/src/app-server/plugin-approval-roundtrip.ts	1
@@ -202,7 +199,6 @@ extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-history-projection.ts	1
-extensions/codex/src/app-server/transcript-mirror-attestation.ts	2
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/app-server/upstream-fork-boundary.ts	1
@@ -216,7 +212,6 @@ extensions/codex/src/migration/helpers.ts	1
 extensions/codex/src/migration/plan.ts	5
 extensions/codex/src/migration/session-binding-sidecars.ts	4
 extensions/codex/src/migration/source-files.ts	1
-extensions/codex/src/session-catalog-listing.ts	3
 extensions/codex/src/session-catalog-node-continue.ts	1
 extensions/codex/src/session-catalog-parsing.ts	2
 extensions/codex/src/session-catalog-transcript-item.ts	1
@@ -547,7 +542,6 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/bot-handlers.ts	1
-extensions/line/src/bot-message-context.ts	1
 extensions/line/src/card-command.ts	3
 extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
@@ -559,7 +553,6 @@ extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	6
-extensions/line/src/rich-menu.ts	1
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -1904,7 +1897,6 @@ src/agents/tools/session-status-tool.ts	5
 src/agents/tools/sessions-history-tool.ts	3
 src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
-src/agents/tools/sessions-send-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
@@ -2815,8 +2807,7 @@ src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
-src/infra/outbound/delivery-queue-preparation.ts	1
-src/infra/outbound/delivery-queue-storage.ts	6
+src/infra/outbound/delivery-queue-storage.ts	3
 src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	2
 src/infra/outbound/message-action-execution.ts	3

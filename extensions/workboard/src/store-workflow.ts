@@ -207,10 +207,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardHeartbeatInput & { status?: unknown } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       const status =
         input.status === undefined
           ? existing.status
@@ -243,10 +240,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    const existing = await this.get(id);
-    if (!existing) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const existing = await this.requireCard(id);
     assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
     const now = Date.now();
     const createdCardIds = normalizeStringList(input.createdCardIds, "created card ids", 120);
@@ -382,10 +376,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     options: { clearExecutionAssociation?: boolean } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const now = Date.now();
       const reason =
@@ -397,10 +388,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
 
   async unblock(id: string, scope?: WorkboardMutationScope): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
       return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
@@ -413,10 +401,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const agentId =
         input.agentId === undefined ? existing.agentId : normalizeOptionalString(input.agentId);
@@ -449,10 +434,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const now = Date.now();
       const reason =
@@ -487,10 +469,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   }
 
   async runs(id: string): Promise<{ card: WorkboardCard; attempts: WorkboardRunAttempt[] }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return { card, attempts: card.metadata?.attempts ?? [] };
   }
 
@@ -500,10 +479,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       if (
         existing.status !== "triage" &&
@@ -555,10 +531,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     return await this.enqueueMutation(
       async () =>
         await this.withCardCompensation(async () => {
-          const parent = await this.get(id);
-          if (!parent) {
-            throw new Error(`card not found: ${id}`);
-          }
+          const parent = await this.requireCard(id);
           assertCanMutateClaimedCard(parent, scope === null ? undefined : scope);
           const childrenInput = Array.isArray(input.children) ? input.children : [];
           if (childrenInput.length === 0) {
