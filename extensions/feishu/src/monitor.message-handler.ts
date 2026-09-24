@@ -11,7 +11,7 @@ import {
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { createSequentialQueue } from "./sequential-queue.js";
-import type { FeishuChatType } from "./types.js";
+import { normalizeFeishuEventChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
@@ -20,6 +20,8 @@ type FeishuMessageReceiveHandlerContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
   handleMessage: (params: {
     cfg: ClawdbotConfig;
     event: FeishuMessageEvent;
@@ -33,6 +35,7 @@ type FeishuMessageReceiveHandlerContext = {
     processingClaim?: FeishuMessageProcessingClaim;
     messageDedupeKey?: string;
     turnAdoptionLifecycle?: FeishuIngressLifecycle;
+    trackTask?: (task: Promise<void>) => void;
   }) => Promise<void>;
   resolveDebounceText: (params: {
     event: FeishuMessageEvent;
@@ -62,12 +65,6 @@ type FeishuMessageReceiveHandlerContext = {
   resolveIngressLifecycle?: (data: unknown) => FeishuIngressLifecycle | undefined;
 };
 
-function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
-    ? value
-    : undefined;
-}
-
 function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -83,7 +80,7 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   }
   const messageId = readString(message.message_id);
   const chatId = readString(message.chat_id);
-  const chatType = normalizeFeishuChatType(message.chat_type);
+  const chatType = normalizeFeishuEventChatType(message.chat_type);
   const messageType = readString(message.message_type);
   // Feishu can deliver a legitimately empty message body; keep absent or
   // non-string bodies malformed instead of inventing fallback content.
@@ -177,6 +174,8 @@ export function createFeishuMessageReceiveHandler({
   runtime,
   chatHistories,
   fireAndForget,
+  isAccountActive = () => true,
+  trackTask,
   handleMessage,
   resolveDebounceText: resolveText,
   hasProcessedMessage,
@@ -221,7 +220,8 @@ export function createFeishuMessageReceiveHandler({
         await turnAdoptionLifecycle.onAbandoned();
         return;
       }
-      await handleMessage({
+      const handling = handleMessage({
+        trackTask,
         cfg,
         event,
         preparedContent,
@@ -235,6 +235,8 @@ export function createFeishuMessageReceiveHandler({
         messageDedupeKey,
         turnAdoptionLifecycle,
       });
+      trackTask?.(handling);
+      await handling;
     };
     await enqueue(sequentialKey, task);
   };
@@ -307,6 +309,7 @@ export function createFeishuMessageReceiveHandler({
             replayClaim: entry.processingClaim,
           })),
           {
+            trackTask,
             onReplayCommitError: (err) =>
               error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
           },
@@ -400,6 +403,10 @@ export function createFeishuMessageReceiveHandler({
 
   return async (data) => {
     const turnAdoptionLifecycle = resolveIngressLifecycle?.(data);
+    if (!isAccountActive() || turnAdoptionLifecycle?.abortSignal.aborted) {
+      await turnAdoptionLifecycle?.onAbandoned();
+      return undefined;
+    }
     const completeSuppressedIngress = async () => {
       if (!turnAdoptionLifecycle) {
         return;
@@ -441,6 +448,14 @@ export function createFeishuMessageReceiveHandler({
       namespace: accountId,
       log,
     });
+    if (!isAccountActive() || turnAdoptionLifecycle?.abortSignal.aborted) {
+      const stoppedError = new Error("feishu account stopped before message admission");
+      if (claim.kind === "claimed") {
+        claim.handle.release({ error: stoppedError });
+      }
+      await turnAdoptionLifecycle?.onAbandoned();
+      return { kind: "failed-retryable", error: stoppedError };
+    }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {
       log(`feishu[${accountId}]: dropping ${claim.kind} event for message ${messageId}`);
       await completeSuppressedIngress();

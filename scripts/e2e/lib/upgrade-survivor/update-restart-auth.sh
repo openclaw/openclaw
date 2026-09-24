@@ -2,11 +2,14 @@
 
 install_update_restart_systemctl_shim() {
   local shim_dir="$npm_config_prefix/bin"
+  export XDG_RUNTIME_DIR="$shim_dir/runtime"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
   local manager_env
   manager_env="$(node <<'MANAGER_ENV'
 const keys = [
   "CI", "OPENCLAW_NO_ONBOARD", "OPENCLAW_NO_PROMPT", "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_SKIP_CHANNELS", "OPENCLAW_DISABLE_BONJOUR",
+  "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
 ];
 const captured = Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]));
 const registry = process.env.NPM_CONFIG_REGISTRY || process.env.npm_config_registry || null;
@@ -73,6 +76,12 @@ if [ "${#filtered[@]}" -gt 2 ] ||
   exit 1
 fi
 
+case "$command" in
+  stop | start | restart | enable | disable)
+    node "$manager_script" record-caller "${log_file}.callers" "$PPID" "$command"
+    ;;
+esac
+
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid stat_line stat_tail
@@ -108,6 +117,7 @@ unit_path() {
 start_gateway() {
   local exec_start
   exec_start="$(node "$manager_script" command)"
+  node "$manager_script" begin-start
   rm -f "$pid_file" "$supervisor_script"
   rm -f "${daemon_log}.exit.json"
   cat >"$supervisor_script" <<'SUPERVISOR'
@@ -149,7 +159,19 @@ let activeGroupPid;
 let drainingGroupPid;
 let stopping = false;
 
+const publishRuntime = (pid, supervisorPid = process.pid) => {
+  const file = `${daemonLog}.runtime.json`;
+  // Both manager adapters observe the ExecStart child, not this synthetic manager.
+  fs.writeFileSync(`${file}.pending`, JSON.stringify({
+    pid, supervisorPid, groupPid: activeGroupPid ?? 0,
+    restarts: totalStarts - 1, entered: Number(process.hrtime.bigint() / 1000n),
+  }));
+  fs.renameSync(`${file}.pending`, file);
+};
+
 const finish = () => {
+  // Retire normal-exit custody before these numeric process identities can be reused.
+  publishRuntime(0, 0);
   try {
     fs.closeSync(output);
   } catch {}
@@ -190,7 +212,7 @@ const drainProcessGroup = (pid, onStopped) => {
   signalProcessGroup(pid, "SIGTERM");
   const forceKill = setTimeout(() => {
     signalProcessGroup(pid, "SIGKILL");
-    complete();
+    // Signal delivery is not settlement; the existing observer must confirm exit.
   }, stopTimeoutMs);
   const finishWhenStopped = () => {
     if (completed) return;
@@ -237,14 +259,13 @@ const start = () => {
     stdio: ["ignore", output, output],
   });
   activeGroupPid = child.pid;
-  fs.writeFileSync(`${daemonLog}.runtime.json`, JSON.stringify({
-    restarts: totalStarts - 1, entered: Math.trunc(performance.now() * 1000),
-  }));
+  publishRuntime(child.pid ?? 0);
   const childGroupPid = activeGroupPid;
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
   });
   child.once("close", (code, signal) => {
+    publishRuntime(0);
     const observed = { code, signal, at: new Date().toISOString() };
     firstExit ??= observed;
     try {
@@ -316,8 +337,9 @@ case "$command" in
   status)
     [ "$system_scope" = 0 ] || exit 1
     [ -z "$unit_name" ] && exit 0
-    [ "$unit_name" = openclaw-gateway.service ] && is_running && exit 0
-    exit 3
+    [ "$unit_name" = openclaw-gateway.service ] || exit 3
+    node "$manager_script" is-active
+    exit "$?"
     ;;
   stop)
     [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
@@ -338,8 +360,8 @@ case "$command" in
     ;;
   is-active)
     [ "$system_scope" = 0 ] && [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    is_running && exit 0
-    exit 3
+    node "$manager_script" is-active
+    exit "$?"
     ;;
   show)
     if [ "$system_scope" = "1" ]; then
@@ -370,21 +392,7 @@ case "$command" in
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
     fi
-    if is_running; then
-      printf 'ActiveState=active\nSubState=running\nMainPID=%s\n' "$(cat "$pid_file")"
-    else
-      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\n'
-    fi
-    # Missing observations stay unknown, including bootstrap failures.
-    node - "${daemon_log}.exit.json" <<'EXIT_STATUS'
-const fs = require("node:fs");
-try {
-  const { last } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-  if (Number.isInteger(last.code) && last.code >= 0 && last.code <= 255) {
-    process.stdout.write(`ExecMainStatus=${last.code}\nExecMainCode=exited\n`);
-  }
-} catch {}
-EXIT_STATUS
+    node "$manager_script" runtime
     exit 0
     ;;
   *)
@@ -534,9 +542,10 @@ run_update_restart_probe_gateway() {
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$log_file" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh "Upgrade service startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$log_file" >&2
+      return 1
+    fi
   fi
 }
 

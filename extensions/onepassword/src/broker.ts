@@ -1,8 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -18,7 +15,8 @@ import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
 import {
   AUTHORIZATION_NONCE_PARAM,
-  consumeUniquePendingAuthorization,
+  consumePendingAuthorization,
+  registerPendingAuthorization,
 } from "./pending-authorization.js";
 
 type AuditOutcome =
@@ -67,7 +65,7 @@ type AuditErrorCode = OnePasswordErrorCode | AuditInternalErrorCode;
 type BrokerStores = {
   audit: PluginStateKeyedStore<AuditRow>;
   grants: PluginStateKeyedStore<StandingGrant>;
-  pending: PluginStateSyncKeyedStore<PendingAuthorization>;
+  pending: PluginStateKeyedStore<PendingAuthorization>;
 };
 
 type BrokerOptions = {
@@ -222,8 +220,13 @@ export class OnePasswordBroker {
     return { config, fingerprint };
   }
 
-  private registerPending(nonce: string, authorization: PendingAuthorization): void {
-    this.stores.pending.register(nonce, authorization, { ttlMs: PENDING_AUTHORIZATION_TTL_MS });
+  private async registerPending(nonce: string, authorization: PendingAuthorization): Promise<void> {
+    await registerPendingAuthorization(
+      this.stores.pending,
+      nonce,
+      authorization,
+      PENDING_AUTHORIZATION_TTL_MS,
+    );
   }
 
   private context(
@@ -333,7 +336,7 @@ export class OnePasswordBroker {
     const nonce = randomUUID();
     const authorizedParams = { ...event.params, [AUTHORIZATION_NONCE_PARAM]: nonce };
     if (item.policy === "auto") {
-      this.registerPending(nonce, {
+      await this.registerPending(nonce, {
         ...context,
         outcome: "auto",
         persistGrant: false,
@@ -353,7 +356,7 @@ export class OnePasswordBroker {
       grant.expiresAtMs > this.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
-      this.registerPending(nonce, {
+      await this.registerPending(nonce, {
         ...context,
         outcome: "grant",
         persistGrant: false,
@@ -379,12 +382,9 @@ export class OnePasswordBroker {
           context.agentId === "unknown"
             ? ["allow-once", "deny"]
             : ["allow-once", "allow-always", "deny"],
-        // Core fires onResolution without awaiting it; the synchronous store write
-        // below is what guarantees the authorization exists before the tool
-        // handler runs. Do not move it behind an await.
         onResolution: async (decision) => {
           if (decision === "allow-once" || decision === "allow-always") {
-            this.registerPending(nonce, {
+            await this.registerPending(nonce, {
               ...context,
               outcome: "approved",
               persistGrant: decision === "allow-always" && context.agentId !== "unknown",
@@ -409,28 +409,43 @@ export class OnePasswordBroker {
 
   async list(invocation: ToolInvocationContext): Promise<ListedItem[]> {
     const { config } = this.currentConfig();
-    const grants = new Map(
-      (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
+    const items = Object.entries(config.items).toSorted(([left], [right]) =>
+      left.localeCompare(right),
     );
-    const now = this.now();
     const agentId = invocation.agentId;
-    return Object.entries(config.items)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([slug, item]) => {
-        const grant = agentId ? grants.get(standingGrantKey(agentId, slug)) : undefined;
-        return {
-          slug,
-          description: item.description ?? "",
-          policy: item.policy,
-          standingGrantActive: Boolean(
-            grant &&
-            grant.agentId === agentId &&
-            grant.slug === slug &&
-            grant.expiresAtMs > now &&
-            grant.targetFingerprint === fingerprintOnePasswordTarget(item),
-          ),
-        };
-      });
+    let grants: Array<StandingGrant | undefined> = [];
+    if (agentId) {
+      const keys = items.map(([slug]) => standingGrantKey(agentId, slug));
+      if (this.stores.grants.lookupMany) {
+        grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
+        });
+      } else {
+        const entries = new Map(
+          (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
+        );
+        grants = keys.map((key) => entries.get(key));
+      }
+    }
+    const now = this.now();
+    return items.map(([slug, item], index) => {
+      const grant = grants[index];
+      return {
+        slug,
+        description: item.description ?? "",
+        policy: item.policy,
+        standingGrantActive: Boolean(
+          grant &&
+          grant.agentId === agentId &&
+          grant.slug === slug &&
+          grant.expiresAtMs > now &&
+          grant.targetFingerprint === fingerprintOnePasswordTarget(item),
+        ),
+      };
+    });
   }
 
   async get(
@@ -450,10 +465,17 @@ export class OnePasswordBroker {
     // A present-but-unknown nonce means forgery, replay, or a consumed entry:
     // fail closed. The identity fallback applies only when the nonce param was
     // dropped entirely by another hook's params rewrite.
-    const authorization =
-      nonce !== undefined
-        ? this.stores.pending.consume(nonce)
-        : consumeUniquePendingAuthorization(this.stores.pending, fallbackContext);
+    let authorization: PendingAuthorization | undefined;
+    try {
+      authorization = await consumePendingAuthorization(
+        this.stores.pending,
+        fallbackContext,
+        nonce,
+      );
+    } catch (error) {
+      await this.audit(fallbackContext, "error", { errorCode: errorCode(error) });
+      throw error;
+    }
     if (
       !authorization ||
       authorization.slug !== input.slug ||

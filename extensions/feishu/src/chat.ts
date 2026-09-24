@@ -1,4 +1,3 @@
-// Feishu plugin module implements chat behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -10,6 +9,7 @@ import { formatFeishuApiError } from "./comment-shared.js";
 import {
   assertFeishuChatReadAllowed,
   authorizeFeishuChatMemberRead,
+  readFeishuChatInfoWithAuthorization,
   resolveFeishuChatReadPreliminaryAuthorization,
   type FeishuChatMemberReadAuthorization,
 } from "./read-policy.js";
@@ -65,22 +65,6 @@ export async function getChatInfo(client: Lark.Client, chatId: string) {
   };
 }
 
-function authorizeFeishuChatInfo(params: {
-  cfg: NonNullable<OpenClawPluginApi["config"]>;
-  account: ReturnType<typeof resolveFeishuToolAccount>;
-  chatId: string;
-  chat: Awaited<ReturnType<typeof getChatInfo>>;
-  ctx: OpenClawPluginToolContext;
-}): void {
-  assertFeishuChatReadAllowed({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: params.chatId,
-    chatType: resolveFeishuChatType(params.chat),
-    ctx: params.ctx,
-  });
-}
-
 async function getAuthorizedFeishuChatInfo(params: {
   client: Lark.Client;
   cfg: NonNullable<OpenClawPluginApi["config"]>;
@@ -102,30 +86,15 @@ async function getAuthorizedFeishuChatInfo(params: {
       ctx: params.ctx,
     });
   }
-  let chat: Awaited<ReturnType<typeof getChatInfo>>;
-  try {
-    // Only targets with at least one authorized conversation kind reach metadata.
-    // Hide lookup failures when type is needed so metadata cannot become an existence oracle.
-    chat = await getChatInfo(params.client, preliminary.chatId);
-  } catch (error) {
-    if (preliminary.decision === "needs-metadata") {
-      assertFeishuChatReadAllowed({
-        cfg: params.cfg,
-        account: params.account,
-        chatId: preliminary.chatId,
-        ctx: params.ctx,
-      });
-    }
-    throw error;
-  }
-  authorizeFeishuChatInfo({
-    cfg: params.cfg,
-    account: params.account,
-    chatId: preliminary.chatId,
-    chat,
-    ctx: params.ctx,
-  });
-  return chat;
+  return readFeishuChatInfoWithAuthorization(
+    {
+      cfg: params.cfg,
+      account: params.account,
+      ctx: params.ctx,
+      preliminary,
+    },
+    (chatId) => getChatInfo(params.client, chatId),
+  );
 }
 
 export async function getChatMembers(

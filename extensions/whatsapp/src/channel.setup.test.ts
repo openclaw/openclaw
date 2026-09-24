@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Whatsapp tests cover channel.setup plugin behavior.
 import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappSetupPlugin } from "./channel.setup.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
@@ -107,12 +107,6 @@ vi.mock("./auth-store.js", async () => {
   };
 });
 
-function createRuntime(): RuntimeEnv {
-  return {
-    error: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
 describe("WhatsApp setup promotion contract", () => {
   it("exposes authDir on the setup-only plugin surface", () => {
     expect(whatsappSetupPlugin.setupContract?.singleAccountKeysToMove).toEqual(["authDir"]);
@@ -130,7 +124,7 @@ async function runConfigureWithHarness(params: {
     accountId: DEFAULT_ACCOUNT_ID,
     forceAllowFrom: params.forceAllowFrom ?? false,
     prompter: params.harness.prompter,
-    runtime: params.runtime ?? createRuntime(),
+    runtime: params.runtime ?? createRuntimeSpies(),
   });
   return {
     accountId: DEFAULT_ACCOUNT_ID,
@@ -204,7 +198,7 @@ describe("whatsapp setup wizard", () => {
       accountId: DEFAULT_ACCOUNT_ID,
       forceAllowFrom: false,
       prompter: harness.prompter,
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       options: { deferDeviceLinkToClient: true },
     });
 
@@ -389,7 +383,7 @@ describe("whatsapp setup wizard", () => {
   it("runs WhatsApp login when not linked and user confirms linking", async () => {
     hoisted.hasWebCredsSync.mockReturnValue(false);
     const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
-    const runtime = createRuntime();
+    const runtime = createRuntimeSpies();
 
     await runConfigureWithHarness({
       harness,

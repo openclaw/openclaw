@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
+import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
 // Cache only a successful self read: this identity lasts for the process.
@@ -63,14 +64,18 @@ export function isPidDefinitelyDead(pid: number): boolean {
   return isZombieProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number | null {
+function getDarwinProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv,
+  timeoutMs = PROCESS_START_TIMEOUT_MS,
+): number | null {
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: PROCESS_START_TIMEOUT_MS,
+        timeout: timeoutMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -110,7 +115,7 @@ export function getProcessStartTime(pid: number): number | null {
 export function getFileLockProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  windowsTimeoutMs?: number,
+  timeoutMs?: number,
 ): number | null {
   if (!isValidPid(pid)) {
     return null;
@@ -121,10 +126,12 @@ export function getFileLockProcessStartTime(
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid, env)
+      ? getDarwinProcessStartTime(pid, env, timeoutMs)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid, windowsTimeoutMs, env)
-        : getProcessStartTime(pid);
+        ? readWindowsProcessStartTimeSync(pid, timeoutMs, env)
+        : process.platform === "freebsd"
+          ? readFreeBsdProcessStartTime(pid)
+          : getProcessStartTime(pid);
   if (isSelf && startTime !== null) {
     selfStartTime = startTime;
   }

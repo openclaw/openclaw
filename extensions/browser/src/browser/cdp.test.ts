@@ -2,10 +2,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type WebSocket, WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
 import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
 import {

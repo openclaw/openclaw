@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
@@ -12,9 +13,11 @@ import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
-} from "../realtime-talk-input.ts";
-import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+} from "../talk/input.ts";
+import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
+import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
+import { renderRealtimeVoicePicker } from "./chat-realtime-controls.ts";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
@@ -29,6 +32,7 @@ export type ChatRunControlsProps = {
   connected: boolean;
   draft: string;
   hasAttachments?: boolean;
+  preparingAttachments?: boolean;
   isBusy: boolean;
   followUpMode?: ControlUiFollowUpMode;
   alternateFollowUpMode?: ChatFollowUpMode;
@@ -50,6 +54,8 @@ export type ChatRunControlsProps = {
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
+  voice?: RealtimeVoiceSelectionState;
+  onSelectVoice?: (voice: string) => void;
 };
 
 type MicrophonePickerProps = {
@@ -141,8 +147,20 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       @wa-show=${props.onOpen}
       @wa-hide=${props.onClose}
       @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        props.onSelect(event.detail.item.value ?? "");
-        releaseMicrophonePickerFocus(event.currentTarget, event.detail.item);
+        const item = event.detail.item;
+        if (item.hasAttribute("data-chat-talk-device")) {
+          props.onSelect(item.value ?? "");
+          releaseMicrophonePickerFocus(event.currentTarget, item);
+          return;
+        }
+        event.preventDefault();
+        if (item.dataset.chatTalkPreference === "hold-to-dictate") {
+          props.onHoldToDictateChange?.(props.holdToDictate === false);
+          return;
+        }
+        unavailableCapabilities
+          .find((capability) => capability.key === item.dataset.chatTalkCapability)
+          ?.onOpenSettings?.();
       }}
     >
       <button
@@ -158,14 +176,16 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       <div class="chat-talk-input-picker__heading">${label}</div>
       ${
         unavailable
-          ? html`<div
-              class="chat-talk-input-picker__empty${
-                unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""
-              }"
-              role="status"
-            >
-              ${realtimeTalkDeviceIssueMessage(unavailable, "audioinput")}
-            </div>`
+          ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+              <div
+                class="chat-talk-input-picker__empty${
+                  unavailableIsFault ? " chat-talk-input-picker__empty--fault" : ""
+                }"
+                role="status"
+              >
+                ${realtimeTalkDeviceIssueMessage(unavailable, "audioinput")}
+              </div>
+            </wa-dropdown-item>`
           : html`
               ${options.map((option) => {
                 const selected = option.deviceId === props.selectedDeviceId;
@@ -176,6 +196,7 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                 return html`
                   <wa-dropdown-item
                     class="chat-talk-input-picker__item"
+                    data-chat-talk-device
                     value=${option.deviceId}
                     role="menuitemradio"
                     aria-checked=${String(selected)}
@@ -193,108 +214,93 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
               })}
               ${
                 props.loading
-                  ? html`<div class="chat-talk-input-picker__note" role="status">
-                      ${t("common.loading")}
-                    </div>`
+                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+                      <div class="chat-talk-input-picker__note" role="status">
+                        ${t("common.loading")}
+                      </div>
+                    </wa-dropdown-item>`
                   : nothing
               }
               ${
                 props.issue
-                  ? html`<div class="chat-talk-input-picker__warning" role="alert">
-                      ${realtimeTalkDeviceIssueMessage(props.issue, "audioinput")}
-                    </div>`
+                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+                      <div class="chat-talk-input-picker__warning" role="alert">
+                        ${realtimeTalkDeviceIssueMessage(props.issue, "audioinput")}
+                      </div>
+                    </wa-dropdown-item>`
                   : nothing
               }
               ${
                 props.voiceActive
-                  ? html`<div class="chat-talk-input-picker__hint">
-                      ${t("chat.composer.microphoneAppliesNextSession")}
-                    </div>`
+                  ? html`<wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
+                      <div class="chat-talk-input-picker__hint">
+                        ${t("chat.composer.microphoneAppliesNextSession")}
+                      </div>
+                    </wa-dropdown-item>`
                   : nothing
               }
             `
       }
-      ${
-        unavailableCapabilities.length > 0
-          ? html`
-              <div class="chat-talk-input-picker__capabilities">
-                ${unavailableCapabilities.map(
-                  (capability) => html`
-                    <div
-                      class="chat-talk-input-picker__capability"
-                      data-chat-talk-capability=${capability.key}
-                      data-status=${capability.status}
-                      role="status"
-                    >
-                      <span class="chat-talk-input-picker__capability-copy">
-                        <strong>
-                          ${
-                            capability.status === "unavailable"
-                              ? html`<span
-                                  class="chat-talk-input-picker__capability-alert"
-                                  aria-hidden="true"
-                                  >${icons.alertTriangle}</span
-                                >`
-                              : nothing
-                          }
-                          <span>${capability.label}</span>
-                        </strong>
-                        <span>
-                          ${
-                            capability.status === "checking"
-                              ? t("chat.composer.talkCapabilityChecking")
-                              : capability.status === "unknown"
-                                ? t("chat.composer.talkCapabilityUnknown")
-                                : capability.unavailableReason
-                          }
-                        </span>
-                      </span>
-                      ${
-                        capability.onOpenSettings
-                          ? html`
-                              <button
-                                type="button"
-                                class="chat-talk-input-picker__settings"
-                                @click=${(event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  capability.onOpenSettings?.();
-                                }}
-                              >
-                                ${icons.settings}<span
-                                  >${t("chat.composer.configureCapability")}</span
-                                >
-                              </button>
-                            `
-                          : nothing
-                      }
-                    </div>
-                  `,
-                )}
-              </div>
-            `
-          : nothing
-      }
+      ${unavailableCapabilities.map(
+        (capability) => html`
+          <wa-dropdown-item
+            class="chat-talk-input-picker__capability"
+            data-chat-talk-capability=${capability.key}
+            data-status=${capability.status}
+            ?disabled=${!capability.onOpenSettings}
+          >
+            <span class="chat-talk-input-picker__capability-copy" role="status">
+              <strong>
+                ${
+                  capability.status === "unavailable"
+                    ? html`<span class="chat-talk-input-picker__capability-alert" aria-hidden="true"
+                        >${icons.alertTriangle}</span
+                      >`
+                    : nothing
+                }
+                <span>${capability.label}</span>
+              </strong>
+              <span>
+                ${
+                  capability.status === "checking"
+                    ? t("chat.composer.talkCapabilityChecking")
+                    : capability.status === "unknown"
+                      ? t("chat.composer.talkCapabilityUnknown")
+                      : capability.unavailableReason
+                }
+              </span>
+            </span>
+            ${
+              capability.onOpenSettings
+                ? html`<span slot="details" class="chat-talk-input-picker__settings">
+                    <span aria-hidden="true">${icons.settings}</span>
+                    <span>${t("chat.composer.configureCapability")}</span>
+                  </span>`
+                : nothing
+            }
+          </wa-dropdown-item>
+        `,
+      )}
       ${
         props.onHoldToDictateChange
           ? html`
-              <div class="chat-talk-input-picker__preference">
+              <wa-dropdown-item
+                class="chat-talk-input-picker__preference"
+                data-chat-talk-preference="hold-to-dictate"
+                type="checkbox"
+                .checked=${live(props.holdToDictate !== false)}
+              >
                 <span>${t("chat.composer.holdToDictate")}</span>
-                <button
+                <span
+                  slot="details"
                   class="chat-controls__speed-toggle ${
                     props.holdToDictate !== false ? "chat-controls__speed-toggle--active" : ""
                   }"
-                  type="button"
-                  role="switch"
-                  aria-checked=${props.holdToDictate !== false ? "true" : "false"}
-                  aria-label=${t("chat.composer.holdToDictate")}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    props.onHoldToDictateChange?.(props.holdToDictate === false);
-                  }}
+                  aria-hidden="true"
                 >
                   <span class="chat-controls__speed-toggle-thumb"></span>
-                </button>
-              </div>
+                </span>
+              </wa-dropdown-item>
             `
           : nothing
       }
@@ -593,14 +599,16 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // same slot shows stop while empty, then becomes the follow-up action as soon
   // as the operator composes content; two competing primary buttons never render.
   const sendAction = html`
-    <openclaw-tooltip .content=${sendStatus ?? activeRunActionTooltip}>
+    <openclaw-tooltip
+      .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
+    >
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
         ?disabled=${!props.canSend || props.sending || Boolean(sendDisabledReason) || !hasComposedContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
-        aria-busy=${sendBusy ? "true" : "false"}
+        aria-busy=${sendBusy || props.preparingAttachments ? "true" : "false"}
       >
         ${sendBusy ? html`<span class="btn__spinner" aria-hidden="true"></span>` : icons.arrowUp}
         <span class="agent-chat__control-label">${activeRunActionLabel}</span>
@@ -644,6 +652,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     ${
       props.voiceActive && props.onToggleVoice
         ? html`
+            ${renderRealtimeVoicePicker({
+              ...props.voice,
+              disabled: !props.connected || voiceErrored,
+              onChange: props.onSelectVoice,
+            })}
             <span class="chat-talk-control chat-talk-control--active">
               <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
                 <button

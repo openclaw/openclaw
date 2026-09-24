@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -85,6 +87,10 @@ describe("full backup config include capture", () => {
             .replace('ownership: "explicit"', "defaults: { workspace: 42 }");
           graph.files.set(state.configPath, raw);
           await fs.writeFile(state.configPath, raw);
+          await expect(
+            createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false }),
+          ).rejects.toThrow(/ownership could not be resolved/i);
+          return;
         }
         if (rootLink) {
           const authoredRoot = state.path("authored-config.json5");
@@ -318,6 +324,48 @@ describe("full backup config include capture", () => {
       }
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a config replaced by a FIFO at open without dispatching a blocking read",
+    async () => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const graph = await configGraph(state);
+        const resolve = backupShared.resolveBackupPlanFromDisk;
+        let replaced = false;
+        let blockingOpen = false;
+        vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockImplementationOnce(
+          async (options) => {
+            const plan = await resolve(options);
+            const open = fs.open;
+            vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+              if (!replaced && args[0] === graph.leafPath) {
+                replaced = true;
+                await fs.rename(graph.leafPath, `${graph.leafPath}.original`);
+                execFileSync("mkfifo", [graph.leafPath]);
+                const flags = args[1];
+                if (typeof flags !== "number" || !(flags & fsSync.constants.O_NONBLOCK)) {
+                  blockingOpen = true;
+                  throw new Error("refusing a blocking FIFO open in the test");
+                }
+              }
+              return open(...args);
+            });
+            return plan;
+          },
+        );
+        const output = state.path("refused.tar.gz");
+        await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
+          /required config file .*retry backup/s,
+        );
+        expect(replaced).toBe(true);
+        expect(blockingOpen).toBe(false);
+        await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readFile(`${graph.leafPath}.original`, "utf8")).toBe(
+          graph.files.get(graph.leafPath),
+        );
+      });
+    },
+  );
 
   it.each(["present", "missing"])(
     "does not archive a later include-bearing root that was %s without includes at capture",

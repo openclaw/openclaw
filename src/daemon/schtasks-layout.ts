@@ -14,6 +14,7 @@ import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } f
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -38,8 +39,105 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 // heuristics fail closed for permission prompts (#112173).
 const STDIN_NUL_REDIRECT = "< NUL";
 
-function stripStdinNulRedirect(commandLine: string): string {
-  return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
+function stripTrailingCmdRedirections(commandLine: string): string {
+  const tokens: { start: number; end: number; redirect?: string }[] = [];
+  // Validate the entire command before removing anything. A compound command or
+  // uncertain cmd/argv quote boundary must never become exact process-ownership proof.
+  for (let index = 0; index < commandLine.length;) {
+    if (/[ \t]/.test(commandLine.charAt(index))) {
+      index++;
+      continue;
+    }
+    let start = index;
+    const operator = commandLine[index];
+    if (operator === ">" || operator === "<") {
+      const previous = tokens.at(-1);
+      if (previous && !previous.redirect && previous.end === index) {
+        const word = commandLine.slice(previous.start, previous.end);
+        if (/\d$/.test(word)) {
+          // A digit attached to an argument can instead be cmd's handle number.
+          // Do not guess which bytes of that argument belong to the process.
+          if (!/^\d$/.test(word)) {
+            return commandLine;
+          }
+          start = previous.start;
+          tokens.pop();
+        }
+      }
+      index++;
+      let redirect: "<" | ">" | ">>" | ">&" = operator;
+      if (operator === ">" && commandLine[index] === ">") {
+        redirect = ">>";
+        index++;
+      }
+      if (redirect === ">" && commandLine[index] === "&") {
+        if (!/[0-9]/.test(commandLine[index + 1] ?? "")) {
+          return commandLine;
+        }
+        redirect = ">&";
+        index += 2;
+      }
+      tokens.push({ start, end: index, redirect });
+      continue;
+    }
+    let quoted = false;
+    while (index < commandLine.length) {
+      const char = commandLine.charAt(index);
+      if (
+        char === "\r" ||
+        char === "\n" ||
+        (char === "\\" && commandLine[index + 1] === '"') ||
+        (char === "^" && (!quoted || commandLine[index + 1] === '"'))
+      ) {
+        return commandLine;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+      } else if (!quoted) {
+        if ("&|()".includes(char)) {
+          return commandLine;
+        }
+        if (/[ \t<>]/.test(char)) {
+          break;
+        }
+      }
+      index++;
+    }
+    if (quoted) {
+      return commandLine;
+    }
+    tokens.push({ start, end: index });
+  }
+
+  const firstRedirect = tokens.findIndex((token) => token.redirect !== undefined);
+  const firstToken = tokens[firstRedirect];
+  if (!firstToken) {
+    return commandLine;
+  }
+  for (let index = firstRedirect; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (!token?.redirect) {
+      return commandLine;
+    }
+    if (token.redirect === ">&") {
+      continue;
+    }
+    const target = tokens[++index];
+    if (!target || target.redirect) {
+      return commandLine;
+    }
+    const value = commandLine.slice(target.start, target.end);
+    // Unquoted expansions can introduce filename delimiters and leave extra argv.
+    if (
+      (value.includes('"') && !/^"[^"]+"$/.test(value)) ||
+      (!value.includes('"') && /[,;=%!]/.test(value)) ||
+      (token.redirect === "<" && !/^(?:NUL|"NUL")$/i.test(value))
+    ) {
+      return commandLine;
+    }
+  }
+  // Redirection alone has no executable for the service reader to inspect.
+  return commandLine.slice(0, firstToken.start);
 }
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
@@ -184,7 +282,11 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
-  await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
+  await publishServiceFile({
+    filePath: xmlPath,
+    contents: Buffer.concat([bom, body]),
+    mode: 0o600,
+  });
   return xmlPath;
 }
 
@@ -256,9 +358,9 @@ export async function readScheduledTaskCommand(
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
-      // Generated launchers redirect stdin so a hidden service console never
-      // presents as interactive (#112173); the redirection is not an argument.
-      commandLine = stripStdinNulRedirect(line);
+      // Generated stdin and operator-added output redirections are shell syntax,
+      // not arguments of the process whose ownership lifecycle controls verify.
+      commandLine = stripTrailingCmdRedirections(line);
       break;
     }
     if (!commandLine) {

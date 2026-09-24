@@ -26,7 +26,7 @@ import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   normalizeThinkLevel,
-  resolveSupportedThinkingLevel,
+  resolveThinkingSelectionForModel,
 } from "../thinking.js";
 import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
@@ -235,7 +235,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
   let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
-  let thinkingLevelSupported = isThinkingLevelSupported({
+  let thinkingSelection = resolveThinkingSelectionForModel({
     provider,
     model,
     level: resolvedThinkLevel,
@@ -243,7 +243,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     agentRuntime: thinkingRuntime,
   });
   const shouldHydrateThinkingCatalog =
-    !thinkingLevelSupported ||
+    !thinkingSelection.supported ||
     (resolvedThinkLevel !== "off" &&
       !hasResolvedThinkingCatalogEntry({ catalog: thinkingCatalog, provider, model }));
   if (shouldHydrateThinkingCatalog) {
@@ -254,7 +254,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
       modelState.resolveThinkingCatalog({ provider, model }),
     );
-    thinkingLevelSupported = isThinkingLevelSupported({
+    thinkingSelection = resolveThinkingSelectionForModel({
       provider,
       model,
       level: resolvedThinkLevel,
@@ -262,7 +262,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       agentRuntime: thinkingRuntime,
     });
   }
-  if (!thinkingLevelSupported) {
+  if (!thinkingSelection.supported) {
     const explicitThink =
       (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
       explicitThinkingLevelOverride !== undefined;
@@ -275,13 +275,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         },
       } as const;
     }
-    const fallbackThinkLevel = resolveSupportedThinkingLevel({
-      provider,
-      model,
-      level: resolvedThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    });
+    const fallbackThinkLevel = thinkingSelection.level;
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       // Execution fallbacks are turn-local; directive/model persistence owns
       // durable thinking remaps so explicit session overrides survive replies.
@@ -416,7 +410,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: context.runtimePolicySessionKey,
       });
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId) {
+    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -425,7 +419,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       };
     }
     const shouldUseEphemeralSession =
-      params.autoFallbackPrimaryProbe !== undefined || params.configuredProfileId !== undefined;
+      params.autoFallbackPrimaryProbe !== undefined ||
+      params.configuredProfileId !== undefined ||
+      modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry =
       shouldUseEphemeralSession && preparedSessionState.sessionEntry
@@ -520,6 +516,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
     const adoption = await admitReplyTurn({
+      providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
@@ -589,8 +586,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
       queueMode: activeRunQueueMode,
-      sessionKey,
-      sessionId: sessionIdFinal,
       interruptActiveRun: async () => {
         if (activeRunInterruptTarget) {
           return (

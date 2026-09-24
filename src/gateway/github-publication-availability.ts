@@ -2,6 +2,7 @@ import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -62,6 +63,16 @@ export async function prepareCurrentGitHubPublicationIdentity(
   });
 }
 
+export async function prepareCurrentGitHubPublicationOptionsIdentity(agentId: string) {
+  await requestCurrentGitHubOAuthRefresh(agentId);
+  const snapshot = publicationConfigSnapshot();
+  return await prepareGitHubPublicationOptionsIdentity({
+    config: snapshot.config,
+    sourceConfig: snapshot.sourceConfig,
+    agentId,
+  });
+}
+
 export function matchesCurrentGitHubPublicationIdentity(params: {
   agentId: string;
   identity: PreparedGitHubPublicationIdentity;
@@ -111,7 +122,7 @@ function readPublicationWorktreeOwner(
     worktree.branch !== entry.worktree.branch ||
     worktree.repoRoot !== entry.worktree.repoRoot
   ) {
-    throw new Error("GitHub publication session worktree owner changed.");
+    throw new GitHubPublicationSessionChangedError();
   }
   if (
     expected &&

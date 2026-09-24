@@ -118,6 +118,7 @@ async function watchSystemProfileCookies(params: {
   const readSecret = await cacheKeychainSecret(source.browser, controller.signal);
   let debounce: NodeJS.Timeout | undefined;
   let inFlight = false;
+  let pending = false;
   let stopped = false;
   let stopError: Error | undefined;
   let resolveStopped: (() => void) | undefined;
@@ -128,9 +129,14 @@ async function watchSystemProfileCookies(params: {
   });
 
   const runCycle = async () => {
-    if (stopped || inFlight) {
+    if (stopped) {
       return;
     }
+    if (inFlight) {
+      pending = true;
+      return;
+    }
+    pending = false;
     inFlight = true;
     try {
       const summary = await pushSystemProfileCookies({
@@ -151,6 +157,8 @@ async function watchSystemProfileCookies(params: {
         } else {
           resolveStopped?.();
         }
+      } else if (pending) {
+        void runCycle();
       }
     }
   };

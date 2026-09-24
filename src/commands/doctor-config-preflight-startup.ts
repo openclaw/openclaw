@@ -1,12 +1,16 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, type ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
+import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type {
   MigrationCheckpointIdentity,
@@ -20,7 +24,9 @@ import {
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
+  PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
+import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -30,7 +36,12 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   migrationCheckpointIdentitiesMatch,
   resolveMigrationCheckpointIdentity,
@@ -38,9 +49,8 @@ import {
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 import {
-  formatStartupPluginVerificationFailure,
   refreshStartupPluginQuarantine,
-  runStartupUpgradeConvergence,
+  runDoctorPluginConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
@@ -52,6 +62,7 @@ import {
   type planAutomaticConfigRepair,
   resolveStartupConfigSnapshot,
 } from "./doctor/shared/automatic-startup-config-repair.js";
+import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
 
 /** Admit the same config and state before the lease and again before migration writes. */
 export async function readStartupMigrationSnapshot(params: {
@@ -62,41 +73,79 @@ export async function readStartupMigrationSnapshot(params: {
   ) => ReturnType<typeof planAutomaticConfigRepair>;
   validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
   beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
-}): Promise<DoctorConfigPreflightPluginSnapshotRead & { recovery?: PreparedConfigRecovery }> {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  preparePluginMigrations?: (
+    snapshot: ConfigFileSnapshot,
+  ) => Promise<readonly DeferredPluginMigration[]>;
+}): Promise<
+  DoctorConfigPreflightPluginSnapshotRead & {
+    recovery?: PreparedConfigRecovery;
+    pendingDatabasePaths?: readonly string[];
+  }
+> {
   return await withArtifactPreservingStateReads(async () => {
-    await refuseStartupMigrationsForLiveGatewayOwner(params.env);
+    await measureDoctorConfigPreflightStep("admission.live-owner", () =>
+      refuseStartupMigrationsForLiveGatewayOwner(params.env),
+    );
     try {
-      const selected = await readConfigFileSnapshot({
-        observe: false,
-        isolateEnv: true,
-        pluginValidation: "core-only",
-      });
+      const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
+        readConfigFileSnapshot({
+          observe: false,
+          isolateEnv: true,
+          pluginValidation: "core-only",
+          deferredPluginMigrations: params.deferredPluginMigrations,
+        }),
+      );
       const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
-      const coreRecovery = await createConfigIO({
-        ...recoveryOptions,
-        pluginValidation: "core-only",
-      }).prepareConfigRecovery(selected);
+      const coreRecovery = await measureDoctorConfigPreflightStep("admission.core-recovery", () =>
+        createConfigIO({
+          ...recoveryOptions,
+          pluginValidation: "core-only",
+          deferredPluginMigrations: params.deferredPluginMigrations,
+        }).prepareConfigRecovery(selected),
+      );
       const candidate = coreRecovery?.snapshot ?? selected;
       const startupConfig = resolveStartupConfigSnapshot(candidate);
-      await assertStartupStateMigrationReady({
+      const { prepareDoctorDatabasePreflight } = await import("./doctor-database-preflight.js");
+      // Old schemas and legacy files are migration inputs, not runtime refusals.
+      // Doctor still rejects incompatible versions before any startup write.
+      const databases = await prepareDoctorDatabasePreflight({
         cfg: startupConfig?.sourceConfig ?? candidate.sourceConfig ?? candidate.config,
-        env: params.env,
       });
-      // Core readiness must be decided before plugin metadata opens shared state.
+      const deferredPluginMigrations = await measureDoctorConfigPreflightStep(
+        "admission.plugin-migrations",
+        () => params.preparePluginMigrations?.(candidate),
+      );
+      // Validate the selected core config before plugin metadata opens shared state.
       if (startupConfig) {
         await params.validateConfig?.(startupConfig);
       }
-      let read: DoctorConfigPreflightPluginSnapshotRead = coreRecovery
-        ? {
-            ...(await createConfigIO({
-              ...recoveryOptions,
-              env: cloneEnvWithPlatformSemantics(params.env),
-            }).readConfigFileSnapshotWithPluginMetadata({ allowCurrentPluginMetadata: false })),
-            pluginMigrationFingerprint: null,
-          }
-        : await params.readSnapshot();
+      // Discovery policy and the persisted index must see one admitted generation.
+      // End its private read scope before recovery, guards, or lease acquisition.
+      let read: DoctorConfigPreflightPluginSnapshotRead = await withDeferredPluginDoctorMigrations(
+        deferredPluginMigrations?.map((entry) => entry.pluginId) ?? [],
+        () =>
+          withOpenClawStateDatabaseReadSnapshot(
+            async () =>
+              coreRecovery || deferredPluginMigrations?.length
+                ? {
+                    ...(await createConfigIO({
+                      ...recoveryOptions,
+                      env: cloneEnvWithPlatformSemantics(params.env),
+                      ...(deferredPluginMigrations ? { deferredPluginMigrations } : {}),
+                    }).readConfigFileSnapshotWithPluginMetadata({
+                      allowCurrentPluginMetadata: false,
+                    })),
+                    pluginMigrationFingerprint: null,
+                  }
+                : await params.readSnapshot(),
+            { env: params.env },
+          ),
+      );
       assertStartupConfigUnchanged(selected, read.snapshot);
-      const recovery = await createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot);
+      const recovery = await measureDoctorConfigPreflightStep("admission.config-recovery", () =>
+        createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
+      );
       if (Boolean(coreRecovery) !== Boolean(recovery)) {
         throwStartupMigrationIdentityChanged();
       }
@@ -114,10 +163,19 @@ export async function readStartupMigrationSnapshot(params: {
         throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
       }
       await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
-      if (params.beforeStateMigrations && !(await params.beforeStateMigrations(read.snapshot))) {
+      if (
+        params.beforeStateMigrations &&
+        !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
+          params.beforeStateMigrations?.(read.snapshot),
+        ))
+      ) {
         throwStartupMigrationGuardRejected();
       }
-      return { ...read, ...(recovery ? { recovery } : {}) };
+      return {
+        ...read,
+        pendingDatabasePaths: databases.pendingMigrations?.map((database) => database.path) ?? [],
+        ...(recovery ? { recovery } : {}),
+      };
     } catch (error) {
       if (error instanceof ExitError) {
         throw error;
@@ -127,47 +185,130 @@ export async function readStartupMigrationSnapshot(params: {
   });
 }
 
+/** Preserve the old database generation before image replacement advances its schemas. */
+export async function backupStartupMigrationDatabases(params: {
+  env: NodeJS.ProcessEnv;
+  lease: StartupMigrationLease;
+  pendingDatabasePaths: readonly string[];
+}): Promise<MigrationMessages> {
+  const { detectOpenClawStateDatabaseSchemaMigrations } =
+    await import("../state/openclaw-state-db-schema-discovery.js");
+  const sharedPath = resolveOpenClawStateSqlitePath(params.env);
+  const pending = new Set(params.pendingDatabasePaths);
+  if (detectOpenClawStateDatabaseSchemaMigrations({ env: params.env }).length > 0) {
+    pending.add(sharedPath);
+  }
+  if (pending.size === 0) {
+    return { changes: [], warnings: [] };
+  }
+  // The registry and migration receipts must roll back with their agent databases.
+  if (existsSync(sharedPath)) {
+    pending.add(sharedPath);
+  }
+  const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
+  const { sanitizeOpenClawStateLeaseRows } =
+    await import("../state/openclaw-state-snapshot-sanitizer.js");
+  const backupId = randomUUID();
+  const changes: string[] = [];
+  for (const sourcePath of new Set([...pending].map((pathname) => realpathSync.native(pathname)))) {
+    params.lease.heartbeat();
+    const backup = await createVerifiedSqliteSnapshot({
+      sourcePath,
+      targetPath: `${sourcePath}.pre-startup-migration-${backupId}.bak`,
+      preserveRowIds: true,
+      transform: sanitizeOpenClawStateLeaseRows,
+      beforePublish: () => params.lease.heartbeat(),
+    });
+    params.lease.heartbeat();
+    changes.push(`Saved pre-migration SQLite backup: ${backup.path}`);
+  }
+  return { changes, warnings: [] };
+}
+
 function assertStartupConfigUnchanged(before: ConfigFileSnapshot, after: ConfigFileSnapshot): void {
-  if (
-    before.path !== after.path ||
-    !isDeepStrictEqual(before.sourceConfig ?? before.config, after.sourceConfig ?? after.config)
-  ) {
-    throwStartupMigrationIdentityChanged();
+  const change = describeConfigSnapshotInputChange(before, after);
+  if (change) {
+    throwStartupMigrationIdentityChanged(change);
   }
 }
 
-/** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */
+/** Runtime readiness is checked after the leased Doctor migration has completed. */
 async function assertStartupStateMigrationReady(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const { assertOpenClawDatabasesReady } = await import("../state/openclaw-database-preflight.js");
-  await assertOpenClawDatabasesReady({
-    env: params.env,
-    config: params.cfg,
-    operation: "gateway-startup",
-  });
-  const { assertSessionStoreMigrationComplete } =
-    await import("../config/sessions/startup-migration.js");
-  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
-    await import("../config/sessions/targets.js");
-  const { inspectOpenClawRegisteredAgentDatabases } =
-    await import("../state/openclaw-agent-db-registry.js");
-  const targets = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
-    env: params.env,
-    registeredDatabases: inspectOpenClawRegisteredAgentDatabases({
-      env: params.env,
-      includeIncompatibleSchemaVersions: true,
-    }),
-  }).filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env: params.env }));
-  assertSessionStoreMigrationComplete({ ...params, targets });
-  recordStartupMigrationWarnings(
-    listAgentDatabaseAdmissionRefusals({ env: params.env }).map(
-      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-    ),
+  const { assertOpenClawDatabasesReady } = await measureDoctorConfigPreflightStep(
+    "admission.database-runtime-import",
+    () => import("../state/openclaw-database-preflight.js"),
   );
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  await assertConfiguredWorkspaceStateReady(params);
+  const agentCount = listAgentIds(params.cfg).length;
+  const admissionMetrics: Record<string, number> = { agentCount };
+  await measureDoctorConfigPreflightStep(
+    "admission.database-readiness",
+    () =>
+      assertOpenClawDatabasesReady({
+        env: params.env,
+        config: params.cfg,
+        operation: "gateway-startup",
+        onAgentInspection: (stats) => {
+          Object.assign(admissionMetrics, stats);
+        },
+      }),
+    undefined,
+    () => admissionMetrics,
+  );
+  const [
+    { assertSessionStoreMigrationComplete },
+    { resolveAllAgentSessionStoreCandidateTargetsSync },
+    { inspectOpenClawRegisteredAgentDatabases },
+  ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
+    Promise.all([
+      import("../config/sessions/startup-migration.js"),
+      import("../config/sessions/targets.js"),
+      import("../state/openclaw-agent-db-registry.js"),
+    ]),
+  );
+  const registeredDatabases = await measureDoctorConfigPreflightStep(
+    "admission.agent-inventory",
+    () =>
+      inspectOpenClawRegisteredAgentDatabases({
+        env: params.env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+  );
+  const targets = await measureDoctorConfigPreflightStep(
+    "admission.session-targets",
+    () =>
+      resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
+        env: params.env,
+        registeredDatabases,
+      }).filter(
+        (target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env: params.env }),
+      ),
+    undefined,
+    () => ({ agentCount, registeredDatabaseCount: registeredDatabases.length }),
+  );
+  await measureDoctorConfigPreflightStep(
+    "admission.session-readiness",
+    () => assertSessionStoreMigrationComplete({ ...params, targets, registeredDatabases }),
+    undefined,
+    () => ({ targetCount: targets.length }),
+  );
+  recordStartupMigrationWarnings(
+    listAgentDatabaseAdmissionRefusals({ env: params.env })
+      .filter((refusal) => canIsolateAgentDatabase(params.cfg, refusal.agentId))
+      .map((refusal) => `${refusal.reason}\n${refusal.repairHint}`),
+  );
+  const { assertConfiguredWorkspaceStateReady } = await measureDoctorConfigPreflightStep(
+    "admission.workspace-runtime-import",
+    () => import("../agents/workspace-state-dirs.js"),
+  );
+  await measureDoctorConfigPreflightStep(
+    "admission.workspace-readiness",
+    () => assertConfiguredWorkspaceStateReady(params),
+    undefined,
+    () => ({ agentCount }),
+  );
 }
 
 type MigrationCheckpoint = {
@@ -184,7 +325,7 @@ type MigrationCheckpoint = {
 };
 
 /** Settle package repairs before state migrations select their plugin owners. */
-export async function prepareStartupMigrationPlugins(params: {
+export async function prepareDoctorMigrationPlugins(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
@@ -193,23 +334,22 @@ export async function prepareStartupMigrationPlugins(params: {
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  onWarnings: (warnings: readonly string[]) => void;
+  onDeferredPlugins: (
+    pending: readonly DeferredPluginMigration[],
+    inspection?: PluginMigrationInspection,
+  ) => void;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   if (params.converge) {
-    if (!params.lease) {
-      throw new Error("Startup plugin convergence requires the startup migration lease.");
-    }
-    params.lease.heartbeat();
+    params.lease?.heartbeat();
   }
-  setActiveDegradedPlugins([]);
   const convergence = await (
-    params.converge ? runStartupUpgradeConvergence : refreshStartupPluginQuarantine
+    params.converge ? runDoctorPluginConvergence : refreshStartupPluginQuarantine
   )(params);
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
-  if (convergence.blockingDiagnostic) {
-    throwStartupMigrationRefusal(
-      formatStartupPluginVerificationFailure(convergence.blockingDiagnostic),
-    );
-  }
+  params.onWarnings(convergence.warnings ?? []);
+  params.lease?.heartbeat();
+  params.onDeferredPlugins(convergence.deferredPlugins ?? [], convergence.migrationInspection);
   if (!params.converge) {
     return params.snapshotRead;
   }
@@ -244,10 +384,17 @@ export async function completeStartupMigrationPreflight(params: {
   startupMigrationHeartbeatError: unknown;
   startupMigrationLease: StartupMigrationLease | undefined;
   startupMigrationWarnings: readonly string[];
+  hasPendingPluginMigrations?: boolean;
   stateMigrationsAllowed: boolean | undefined;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
   let snapshotRead = params.snapshotRead;
   const snapshot = snapshotRead.snapshot;
+  if (params.gatewayStartupCheckpointRequired && snapshot.valid) {
+    await assertStartupStateMigrationReady({
+      cfg: snapshot.runtimeConfig ?? snapshot.config,
+      env: params.startupMigrationEnv,
+    });
+  }
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError
@@ -283,6 +430,13 @@ export async function completeStartupMigrationPreflight(params: {
         pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
       });
       if (
+        params.hasPendingPluginMigrations &&
+        !params.migrationCheckpointIdentity &&
+        !convergedIdentity
+      ) {
+        // Deferred package validation cannot certify an inventory; still pin the source config.
+        assertStartupConfigUnchanged(snapshot, convergedSnapshotRead.snapshot);
+      } else if (
         !migrationCheckpointIdentitiesMatch(params.migrationCheckpointIdentity, convergedIdentity)
       ) {
         throwStartupMigrationIdentityChanged();
@@ -305,10 +459,15 @@ export async function completeStartupMigrationPreflight(params: {
   return snapshotRead;
 }
 
-export async function assertDoctorPreflightMigrationsComplete(params: {
+export async function completeDoctorPreflightMigrations(params: {
   cfg: OpenClawConfig;
-  stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+  stepReceipts: LegacyStateMigrationStepReceipt[];
   report: (result: MigrationMessages) => void;
+  startup?: {
+    env: NodeJS.ProcessEnv;
+    lease?: StartupMigrationLease;
+    postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  };
 }): Promise<void> {
   const scopedRefusals = params.stepReceipts.filter(
     (receipt) =>
@@ -320,11 +479,17 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
   const admissions =
     scopedRefusals.length > 0 ? await evaluateAgentDatabaseAdmissions(params.cfg) : [];
   if (scopedRefusals.length > 0) {
-    recordAgentDatabaseAdmissions(admissions);
+    recordAgentDatabaseAdmissions(admissions, {
+      source: getAgentDatabaseStartupAdmission() ? "startup" : "diagnostic",
+    });
   }
   const isolatedPaths = new Set(
     admissions
-      .filter((refusal) => canIsolateAgentDatabase(params.cfg, refusal.agentId))
+      .filter(
+        (refusal) =>
+          refusal.code !== "agent-database-ownership-mismatch" ||
+          canIsolateAgentDatabase(params.cfg, refusal.agentId),
+      )
       .flatMap((refusal) => refusal.paths.map((pathname) => path.resolve(pathname))),
   );
   for (const receipt of scopedRefusals) {
@@ -338,6 +503,19 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
   }
   try {
     throwIfDoctorStateMigrationRefused(params.stepReceipts);
+    if (params.startup) {
+      params.startup.lease?.heartbeat();
+      const { noteSessionTranscriptHealth } = await import("./doctor-session-transcripts.js");
+      await noteSessionTranscriptHealth({
+        cfg: params.cfg,
+        env: params.startup.env,
+        shouldRepair: true,
+        postSessionPluginMigration: params.startup.postSessionPluginMigration,
+        postSessionPluginMigrationPlanBound: true,
+        onStepReceipt: (receipt) => params.stepReceipts.push(receipt),
+      });
+      throwIfDoctorStateMigrationRefused(params.stepReceipts);
+    }
   } catch (error) {
     if (error instanceof DoctorStateMigrationRefusalError) {
       // A refused owner stops all later repairs. Still diagnose canonical
@@ -354,8 +532,16 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
   }
 }
 
-export function noteStateMigrationResult(result: MigrationMessages): void {
+export function noteStateMigrationResult(
+  result: MigrationMessages,
+  collectedWarnings?: string[],
+  quietWarnings = false,
+): void {
+  collectedWarnings?.push(...result.warnings);
   for (const key of ["changes", "notices", "warnings"] as const) {
+    if (key === "warnings" && quietWarnings) {
+      continue;
+    }
     if (result[key]?.length) {
       note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
     }

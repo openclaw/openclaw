@@ -18,6 +18,7 @@ export type BrowserNodeTarget = {
 
 export async function resolveBrowserToolNodeTarget(params: {
   requestedNode?: string;
+  profile?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -35,7 +36,7 @@ export async function resolveBrowserToolNodeTarget(params: {
   const explicitTarget = params.target === "node";
   const requestedNode = params.requestedNode?.trim();
   if (policy?.mode === "off") {
-    resolveBrowserNodeTarget({ nodes: [], policy, requestedNode, explicitTarget });
+    await resolveBrowserNodeTarget({ nodes: () => [], config: cfg, requestedNode, explicitTarget });
     return null;
   }
   if (params.sandboxBridgeUrl?.trim() && !explicitTarget && !requestedNode) {
@@ -59,13 +60,15 @@ export async function resolveBrowserToolNodeTarget(params: {
   ) {
     return null;
   }
-  const node = resolveBrowserNodeTarget({
-    nodes: await listNodes({}, params.signal),
-    policy,
+  const node = await resolveBrowserNodeTarget({
+    nodes: () => listNodes({}, params.signal),
+    config: cfg,
+    profile: params.profile,
     requestedNode,
     explicitTarget,
     requireConnected: true,
   });
+  params.signal?.throwIfAborted();
   return node
     ? {
         nodeId: node.nodeId,

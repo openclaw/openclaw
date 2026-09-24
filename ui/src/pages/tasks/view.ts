@@ -10,7 +10,7 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { createMsFormatter, formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
@@ -43,6 +43,7 @@ type TasksProps = {
   onRetry: (taskId: string) => void;
   onDismiss: (taskId: string) => void;
   onCopyResult: (taskId: string) => void;
+  onViewTranscript: (taskId: string, trigger: HTMLButtonElement) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
 
@@ -75,7 +76,11 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
   >`;
 }
 
-function renderTask(task: TaskSummary, props: TasksProps) {
+function renderTask(
+  task: TaskSummary,
+  props: TasksProps,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
+) {
   const active = task.status === "queued" || task.status === "running";
   const timestamp = taskTimestampMs(task.updatedAt ?? task.createdAt);
   const detail = taskDetail(task);
@@ -88,6 +93,17 @@ function renderTask(task: TaskSummary, props: TasksProps) {
     (active && props.canCancel) ||
     (retainedResult && props.canCopy) ||
     (recoverableDelivery && props.canCancel);
+  const renderAction = (label: string, onClick: () => void, ariaLabel?: string) => html`
+    <button
+      class="btn btn--sm"
+      type="button"
+      aria-label=${ariaLabel ?? nothing}
+      ?disabled=${cancelling || !props.connected}
+      @click=${onClick}
+    >
+      ${label}
+    </button>
+  `;
   return html`
     <div class="settings-row task-row" data-task-id=${task.id}>
       <div class="settings-row__text task-row__content">
@@ -124,10 +140,26 @@ function renderTask(task: TaskSummary, props: TasksProps) {
         <div class="task-row__links">
           ${
             timestamp > 0
-              ? html`<span title=${formatMs(timestamp)}
+              ? html`<span title=${formatTimestamp(timestamp)}
                   >${formatRelativeTimestamp(timestamp)}</span
                 >`
               : html`<span>${t("common.na")}</span>`
+          }
+          ${
+            task.hasTranscript && props.canCopy
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  ?disabled=${!props.connected}
+                  @click=${(event: MouseEvent) => {
+                    if (event.currentTarget instanceof HTMLButtonElement) {
+                      props.onViewTranscript(task.id, event.currentTarget);
+                    }
+                  }}
+                >
+                  ${t("tasksPage.viewTranscript")}
+                </button>`
+              : nothing
           }
           ${renderSessionLink(task, props)}
         </div>
@@ -136,48 +168,23 @@ function renderTask(task: TaskSummary, props: TasksProps) {
             ? html`<div class="task-row__actions">
                 ${
                   active && props.canCancel
-                    ? html`<button
-                        class="btn btn--sm"
-                        type="button"
-                        aria-label=${t("tasksPage.cancelTask", { title })}
-                        ?disabled=${cancelling || !props.connected}
-                        @click=${() => props.onCancel(task.taskId)}
-                      >
-                        ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
-                      </button>`
+                    ? renderAction(
+                        cancelling ? t("tasksPage.cancelling") : t("common.cancel"),
+                        () => props.onCancel(task.taskId),
+                        t("tasksPage.cancelTask", { title }),
+                      )
                     : nothing
                 }
                 ${
                   retainedResult && props.canCopy
-                    ? html`<button
-                        class="btn btn--sm"
-                        type="button"
-                        ?disabled=${cancelling || !props.connected}
-                        @click=${() => props.onCopyResult(task.taskId)}
-                      >
-                        ${t("tasksPage.copyResult")}
-                      </button>`
+                    ? renderAction(t("tasksPage.copyResult"), () => props.onCopyResult(task.taskId))
                     : nothing
                 }
                 ${
                   recoverableDelivery && props.canCancel
                     ? html`
-                        <button
-                          class="btn btn--sm"
-                          type="button"
-                          ?disabled=${cancelling || !props.connected}
-                          @click=${() => props.onRetry(task.taskId)}
-                        >
-                          ${t("tasksPage.retryDelivery")}
-                        </button>
-                        <button
-                          class="btn btn--sm"
-                          type="button"
-                          ?disabled=${cancelling || !props.connected}
-                          @click=${() => props.onDismiss(task.taskId)}
-                        >
-                          ${t("tasksPage.dismissDelivery")}
-                        </button>
+                        ${renderAction(t("tasksPage.retryDelivery"), () => props.onRetry(task.taskId))}
+                        ${renderAction(t("tasksPage.dismissDelivery"), () => props.onDismiss(task.taskId))}
                       `
                     : nothing
                 }
@@ -236,6 +243,7 @@ function renderSection(
   tasks: readonly TaskSummary[],
   emptyText: string,
   props: TasksProps,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
 ) {
   const rows =
     tasks.length === 0
@@ -243,7 +251,7 @@ function renderSection(
       : repeat(
           tasks,
           (task) => task.id,
-          (task) => renderTask(task, props),
+          (task) => renderTask(task, props, formatTimestamp),
         );
   return html`<div data-task-section=${id}>
     ${renderSettingsSection({ title: html`${title}${renderHeadingFacts(id, tasks)}` }, rows)}
@@ -251,6 +259,7 @@ function renderSection(
 }
 
 export function renderTasks(props: TasksProps) {
+  const formatTimestamp = createMsFormatter();
   const { active, recent } = partitionTasks(props.tasks);
   return renderSettingsPage(
     html`<div class="tasks-page-list">
@@ -275,8 +284,8 @@ export function renderTasks(props: TasksProps) {
           ? renderSettingsEmpty(t("tasksPage.empty"))
           : nothing
       }
-      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props)}
-      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props)}
+      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props, formatTimestamp)}
+      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props, formatTimestamp)}
     </div>`,
     { wide: true },
   );

@@ -1,4 +1,3 @@
-// Slack plugin module implements members behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -137,33 +136,19 @@ export function registerSlackMemberEvents(params: {
     }
   };
 
-  ctx.app.event(
-    "member_joined_channel",
-    async (args: SlackEventMiddlewareArgs<"member_joined_channel"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      await handleMemberChannelEvent({
-        verb: "joined",
-        event: event as SlackMemberChannelEvent,
-        body,
-        eventId: body.event_id,
-        context,
-        client,
-      });
-    },
-  );
-
-  ctx.app.event(
-    "member_left_channel",
-    async (args: SlackEventMiddlewareArgs<"member_left_channel"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      await handleMemberChannelEvent({
-        verb: "left",
-        event: event as SlackMemberChannelEvent,
-        body,
-        eventId: body.event_id,
-        context,
-        client,
-      });
-    },
-  );
+  for (const verb of ["joined", "left"] as const) {
+    ctx.app.event(
+      `member_${verb}_channel`,
+      async (
+        args: SlackEventMiddlewareArgs<"member_joined_channel" | "member_left_channel"> &
+          AllMiddlewareArgs,
+      ) => {
+        await handleMemberChannelEvent({
+          verb,
+          ...args,
+          eventId: args.body.event_id,
+        });
+      },
+    );
+  }
 }

@@ -371,7 +371,7 @@
           restarting, or this page may reference assets from a different OpenClaw version.
         </p>
         <ul>
-          <li>OpenClaw will retry the current app bundle automatically.</li>
+          <li>If startup fails, OpenClaw will retry the current app bundle automatically.</li>
           <li>If this persists, reload or try a clean browser profile.</li>
           <li>
             See
@@ -404,7 +404,9 @@
         if (!app || !fallback) return;
 
         var panel = fallback.querySelector(".mount-fallback__panel");
+        var title = document.getElementById("openclaw-mount-fallback-title");
         var summary = document.getElementById("openclaw-mount-fallback-summary");
+        var failureSummary = summary.textContent;
         var retry = document.getElementById("openclaw-mount-retry");
         var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
@@ -413,9 +415,10 @@
         var timer;
         var recoveryTimer;
         var recoveryAttempt = 0;
-        var recoveryInFlight = false;
         var recoveryNavigation = false;
         var appStarted = false;
+        var documentLoaded = document.readyState === "complete";
+        var recoveryController;
 
         try {
           var initialUrl = new URL(window.location.href);
@@ -435,6 +438,12 @@
           if (summary) summary.textContent = text;
         }
 
+        function cancelRecovery() {
+          window.clearTimeout(recoveryTimer);
+          if (recoveryController) recoveryController.abort();
+          recoveryController = undefined;
+        }
+
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
           if (appStarted || recoveryAttempt >= maxRecoveryAttempts) return;
@@ -443,7 +452,7 @@
         }
 
         function finishRecoveryAttempt() {
-          recoveryInFlight = false;
+          recoveryController = undefined;
           if (appStarted) return;
           if (recoveryAttempt >= maxRecoveryAttempts) {
             setSummary(
@@ -476,7 +485,7 @@
         function retryCurrentDocument() {
           if (
             appStarted ||
-            recoveryInFlight ||
+            recoveryController ||
             recoveryAttempt >= maxRecoveryAttempts ||
             typeof window.fetch !== "function"
           )
@@ -488,24 +497,26 @@
             );
             return;
           }
-          recoveryInFlight = true;
           recoveryAttempt += 1;
           documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
-          var recoveryController = new AbortController();
+          var controller = new AbortController();
+          recoveryController = controller;
           var requestTimer = window.setTimeout(function () {
-            recoveryController.abort();
+            controller.abort();
           }, delay);
           window
             .fetch(documentUrl.href, {
               cache: "no-store",
               credentials: "same-origin",
-              signal: recoveryController.signal,
+              signal: controller.signal,
             })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
-              if (!appStarted) window.location.replace(documentUrl.href);
+              if (!appStarted && recoveryController === controller)
+                window.location.replace(documentUrl.href);
             })
             .catch(function () {
+              if (recoveryController !== controller) return;
               unregisterServiceWorkers();
               finishRecoveryAttempt();
             })
@@ -516,10 +527,19 @@
 
         function showFallback() {
           if (appStarted) return;
-          retryCurrentDocument();
+          title.textContent = documentLoaded
+            ? "Control UI did not start"
+            : "Control UI is still loading";
+          fallback.setAttribute("role", documentLoaded ? "alert" : "status");
+          setSummary(
+            documentLoaded
+              ? failureSummary
+              : "The browser is still loading the app. OpenClaw will keep waiting without interrupting the download.",
+          );
+          if (documentLoaded) retryCurrentDocument();
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
-          if (panel && typeof panel.focus === "function") {
+          if (documentLoaded && panel && typeof panel.focus === "function") {
             try {
               panel.focus({ preventScroll: true });
             } catch (e) {
@@ -535,12 +555,23 @@
 
         armFallbackTimer();
 
+        // Deferred module graphs settle before DOMContentLoaded. A slow download
+        // is not a failed bootstrap: replacing the document would cancel it.
+        document.addEventListener(
+          "DOMContentLoaded",
+          function () {
+            documentLoaded = true;
+            if (!fallback.hidden) showFallback();
+          },
+          { once: true },
+        );
+
         window.addEventListener(
           "openclaw-control-ui-rendered",
           function () {
             appStarted = true;
             window.clearTimeout(timer);
-            window.clearTimeout(recoveryTimer);
+            cancelRecovery();
             hideFallback();
           },
           { once: true },
@@ -548,6 +579,7 @@
 
         if (retry) {
           retry.addEventListener("click", function () {
+            cancelRecovery();
             unregisterServiceWorkers();
             window.location.reload();
           });
@@ -555,8 +587,8 @@
         if (wait) {
           wait.addEventListener("click", function () {
             hideFallback();
+            cancelRecovery();
             recoveryAttempt = 0;
-            retryCurrentDocument();
             armFallbackTimer();
           });
         }

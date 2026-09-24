@@ -32,6 +32,12 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
     collapsedBody: true,
     startsTurn: false,
   },
+  claude_cli_task_notification: {
+    icon: "cpu",
+    labelKey: "chat.systemNotice.claudeCliTaskNotification.label",
+    collapsedBody: true,
+    startsTurn: false,
+  },
 };
 
 export function resolveSystemNoticeKind(

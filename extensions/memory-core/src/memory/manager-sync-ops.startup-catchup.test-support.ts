@@ -48,8 +48,6 @@ type MemorySessionTranscriptUpdate = {
   };
 };
 
-const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
-const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
 
 /** Clears the module-owned listener between tests; ESM bindings cannot be reassigned by importers. */
@@ -93,27 +91,6 @@ function createStartupHarnessDatabase(sourceRows: SourceStateRow[]): DatabaseSyn
   startupHarnessDatabases.add(db);
   return db;
 }
-export function setStartupStateDir(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-export function setStartupConfigPath(configPath: string): void {
-  Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-}
-
-export function restoreStartupEnv(): void {
-  if (originalStartupStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStartupStateDir);
-  }
-  if (originalStartupConfigPath === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", originalStartupConfigPath);
-  }
-}
-
 export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
   transcriptUpdateListener?.(update);
 }
@@ -172,6 +149,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   readonly syncCalls: SyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
+  readonly deletedSources: Array<{ path: string; source: MemorySource; expectedHash?: string }> =
+    [];
   corpusListCalls = 0;
   private afterNextCorpusList: (() => Promise<void>) | null = null;
   private corpusListWork: Promise<void> = Promise.resolve();
@@ -360,8 +339,8 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected override listSessionCorpusEntries(options?: { includeContentRevision?: boolean }) {
-    const work = super.listSessionCorpusEntries(options).then(async (entries) => {
+  protected override listSessionCorpusEntries() {
+    const work = super.listSessionCorpusEntries().then(async (entries) => {
       this.corpusListCalls += 1;
       const callback = this.afterNextCorpusList;
       this.afterNextCorpusList = null;
@@ -388,5 +367,18 @@ export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   ): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.indexedContents.push(options.content ?? "");
+  }
+
+  protected override async deleteIndexedFile(
+    pathname: string,
+    source: MemorySource,
+    expectedHash?: string,
+  ): Promise<void> {
+    // This in-memory harness tests corpus selection. File-owned publication,
+    // workspace locking and conditional deletion have separate integration tests.
+    this.deletedSources.push({ path: pathname, source, expectedHash });
+    this.db
+      .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ? AND hash = ?")
+      .run(pathname, source, expectedHash ?? null);
   }
 }

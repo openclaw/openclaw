@@ -1,253 +1,216 @@
 import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
+import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
+import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { mapTaskFlowView } from "../tasks/task-domain-views.js";
-import { runManagedTaskInFlowInDatabase } from "../tasks/task-flow-managed-run-task.kernel.js";
-import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
+import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
-  assertControllerId,
-  normalizeRestoredFlowRecord,
-} from "../tasks/task-flow-registry.records.js";
-import {
-  bindTaskFlowRecord,
-  listTaskFlowRecordsForOwnerReadInDatabase,
-  readTaskFlowRecord,
-  listTaskFlowViewRecordsForOwnerInDatabase,
-  readTaskFlowViewRecordInDatabase,
-  updateTaskFlowRecordInDatabase,
-  upsertTaskFlowRowInDatabase,
-} from "../tasks/task-flow-registry.store.kernel.js";
-import { isTerminalTaskFlow, type TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
-import {
-  findTaskRecordByRunIdForViewInDatabase,
-  listTaskRecordsForFlowReadInDatabase,
-  listTaskRecordsForOwnerReadInDatabase,
-  readTaskViewRecordInDatabase,
-  readTaskRegistryMutationSnapshotInDatabase,
-  summarizeTaskRecordsForFlowInDatabase,
-} from "../tasks/task-registry.store.kernel.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  clearOpenClawStateDatabaseOpenFailure,
+  openClawStateDatabaseCache,
+  retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
-import { withSharedStateWriteCoordinator } from "./openclaw-state-db-write-coordination.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "./openclaw-state-db.js";
+  acquireOpenClawStateLeaseInWorker,
+  executeOpenClawStateLeaseCommand,
+} from "./openclaw-state-lease-worker.js";
 import type {
-  OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
+  OpenClawStateWorkerBackend,
+  OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
-import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 
-const log = createSubsystemLogger("state/worker");
-type ManagedFlowWriteResult =
-  | OpenClawStateWorkerOperations["flows.createManaged"]["output"]
-  | OpenClawStateWorkerOperations["flows.updateManaged"]["output"];
+const loadAgentCleanup = createLazyRuntimeModule(
+  () => import("./openclaw-agent-execution-cleanup.worker.js"),
+);
+let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
+
+const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
+let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
 export function createSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
-  openOpenClawStateDatabase({
+  context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
+): OpenClawStateWorkerBackend {
+  if (context.preparation?.type === "deviceIdentity") {
+    loadOrCreateDeviceIdentity({
+      path: context.databasePath,
+      env: getSqliteWorkerStateContext().environment,
+      identityKey: context.preparation.identityKey,
+    });
+  }
+  const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   });
-  return openExistingSqliteWorkerBackend(undefined, context);
+  return createSharedStateWorkerBackend(context, database);
 }
 
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
-  const open = () =>
-    openOpenClawStateDatabase({
+): OpenClawStateWorkerBackend {
+  return createSharedStateWorkerBackend(context);
+}
+
+function createSharedStateWorkerBackend(
+  context: { databasePath: string },
+  initialDatabase?: OpenClawStateDatabase,
+): OpenClawStateWorkerBackend {
+  let nativeDatabase = initialDatabase;
+  let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
+  let closed = false;
+  const open = (): OpenClawStateDatabase => {
+    if (!nativeDatabase) {
+      const opened = openOpenClawStateDatabase({
+        path: context.databasePath,
+        env: getSqliteWorkerStateContext().environment,
+      });
+      borrow = retainOpenClawStateDatabase(opened);
+      nativeDatabase = opened;
+    }
+    if (
+      !nativeDatabase.db.isOpen ||
+      openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
+        nativeDatabase
+    ) {
+      throw new Error("Shared-state worker lost its retained native database");
+    }
+    return openOpenClawStateDatabase({
+      database: nativeDatabase,
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
     });
-  const listFlows = (db: ReturnType<typeof open>["db"], ownerKey: string) =>
-    listTaskFlowRecordsForOwnerReadInDatabase(db, ownerKey).map(normalizeRestoredFlowRecord);
-  const ownedFlow = (flow: ReturnType<typeof readTaskFlowRecord>, ownerKey: string) =>
-    flow?.ownerKey.trim() === ownerKey ? normalizeRestoredFlowRecord(flow) : undefined;
+  };
   return {
-    execute(command) {
-      if (command.type === "database.generationMatches") {
-        // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-        return sameSqliteFileGeneration(
-          command.input.generation,
-          readStableSqliteFileGeneration(context.databasePath),
-        );
+    [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType === "agentDatabases.releaseExitedLease") {
+        if (agentCleanup) {
+          return undefined;
+        }
+        return loadAgentCleanup().then((loaded) => {
+          agentCleanup = loaded;
+        });
       }
-      if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
-        return executeUserPreferenceCommand(command, {
+      if (
+        commandType === "plugins.metadata.read" ||
+        commandType === "database.inspectIdle" ||
+        commandType === "stateLease.acquire" ||
+        commandType === "deviceIdentity.read" ||
+        commandType === "deviceIdentity.load" ||
+        commandType === "stateLease.verify" ||
+        commandType === "stateLease.renew" ||
+        commandType === "stateLease.release"
+      ) {
+        return undefined;
+      }
+      if (runtime) {
+        return runtime.prepareSharedStateCommand(commandType);
+      }
+      return loadRuntime().then((loaded) => {
+        runtime = loaded;
+        return runtime.prepareSharedStateCommand(commandType);
+      });
+    },
+    prepare() {
+      return openClawStateDatabaseCache.waitForCachedOpenClawStateSchemaProbe(context.databasePath);
+    },
+    execute(command) {
+      if (closed) {
+        throw new Error("Shared-state worker is closed");
+      }
+      if (command.type === "deviceIdentity.read") {
+        return loadDeviceIdentityIfPresent({
           path: context.databasePath,
+          identityKey: command.input.identityKey,
           env: getSqliteWorkerStateContext().environment,
         });
       }
-      if (command.type === "flows.runTask") {
-        let committed: RunTaskInFlowResult | undefined;
+      if (command.type === "deviceIdentity.load") {
         try {
-          const database = open();
-          return withSharedStateWriteCoordinator(
-            { databasePath: database.path, existing: database.db, operationLabel: "flows.runTask" },
-            () =>
-              runManagedTaskInFlowInDatabase(
-                database.db,
-                command.input,
-                (operation) =>
-                  runOpenClawStateWriteTransaction(operation, {
-                    database,
-                    path: context.databasePath,
-                    env: getSqliteWorkerStateContext().environment,
-                  }),
-                (result) => {
-                  committed = result;
-                },
-              ),
-          );
-        } catch (error) {
-          if (committed) {
-            log.warn("Managed child task operation completed before cleanup failed", {
-              flowId: command.input.params.flowId,
-              error,
-            });
-            return committed;
-          }
-          throw error;
-        }
-      }
-      if (command.type === "flows.createManaged" || command.type === "flows.updateManaged") {
-        let observed: TaskFlowRecord | undefined;
-        let committed: ManagedFlowWriteResult | undefined;
-        try {
-          const database = open();
-          return runOpenClawStateWriteTransaction(
-            ({ db: writer }) => {
-              let result: ManagedFlowWriteResult;
-              if (command.type === "flows.createManaged") {
-                const flow = command.input.flow;
-                if (flow.syncMode !== "managed") {
-                  throw new Error("Worker creation requires a managed flow");
-                }
-                assertControllerId(flow.controllerId);
-                upsertTaskFlowRowInDatabase(writer, bindTaskFlowRecord(flow));
-                result = flow;
-              } else {
-                observed = ownedFlow(
-                  readTaskFlowRecord(writer, command.input.flowId),
-                  command.input.ownerKey,
-                );
-                result = !observed
-                  ? { applied: false, reason: "not_found" }
-                  : observed.syncMode !== "managed" || !observed.controllerId
-                    ? { applied: false, reason: "not_managed", current: observed }
-                    : updateTaskFlowRecordInDatabase(writer, command.input);
-              }
-              deferSqlitePostCommitPublication(writer, () => {
-                committed = result;
-              });
-              return result;
-            },
-            {
-              path: context.databasePath,
-              database,
-              env: getSqliteWorkerStateContext().environment,
-            },
-          );
-        } catch (error) {
-          if (committed) {
-            log.warn("Managed task-flow write committed before cleanup failed", {
-              flowId:
-                command.type === "flows.createManaged"
-                  ? command.input.flow.flowId
-                  : command.input.flowId,
-              error,
-            });
-            return committed;
-          }
-          if (command.type === "flows.createManaged") {
-            throw error;
-          }
-          log.warn("Failed to persist managed task-flow update", {
-            flowId: command.input.flowId,
-            error,
+          return loadOrCreateDeviceIdentity({
+            path: context.databasePath,
+            identityKey: command.input.identityKey,
+            env: getSqliteWorkerStateContext().environment,
           });
-          return {
-            applied: false,
-            reason: "persist_failed",
-            ...(observed ? { current: observed } : {}),
-          };
+        } finally {
+          // An existing-only actor may acquire its first writable handle through this owner.
+          const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+            context.databasePath,
+          );
+          if (!nativeDatabase && database) {
+            borrow = retainOpenClawStateDatabase(database);
+            nativeDatabase = database;
+          }
         }
       }
-      const { db } = open();
-      return runSqliteDeferredTransactionSync(db, () => {
-        switch (command.type) {
-          case "tasks.mutationSnapshot":
-            return readTaskRegistryMutationSnapshotInDatabase(db, command.input);
-          case "tasks.get":
-            return readTaskViewRecordInDatabase(db, command.input.taskId);
-          case "tasks.list":
-            return listTaskRecordsForOwnerReadInDatabase(db, command.input.ownerKey);
-          case "tasks.resolve": {
-            const { ownerKey, token } = command.input;
-            return {
-              direct: readTaskViewRecordInDatabase(db, token),
-              byRun: findTaskRecordByRunIdForViewInDatabase(db, token),
-              related: listTaskRecordsForOwnerReadInDatabase(db, ownerKey, token),
-            };
-          }
-          case "flows.list":
-            return listFlows(db, command.input.ownerKey);
-          case "flows.views":
-            return listTaskFlowViewRecordsForOwnerInDatabase(db, command.input.ownerKey)
-              .map(normalizeRestoredFlowRecord)
-              .map(mapTaskFlowView);
-          case "flows.summary": {
-            const { ownerKey, flowId } = command.input;
-            const flow = ownedFlow(readTaskFlowViewRecordInDatabase(db, flowId), ownerKey);
-            return flow ? summarizeTaskRecordsForFlowInDatabase(db, flow.flowId) : undefined;
-          }
-          case "flows.current": {
-            const flow = readTaskFlowRecord(db, command.input.flowId);
-            return flow ? normalizeRestoredFlowRecord(flow) : undefined;
-          }
-          case "flows.read":
-          case "flows.detail": {
-            const { ownerKey, lookup, token } = command.input;
-            const direct = token === undefined ? undefined : readTaskFlowRecord(db, token);
-            let flow = ownedFlow(direct, ownerKey);
-            if (
-              !flow &&
-              (lookup === "latest" || (lookup === "resolve" && token?.trim() === ownerKey))
-            ) {
-              const flows = listFlows(db, ownerKey);
-              flow =
-                lookup === "resolve"
-                  ? (flows.find((candidate) => !isTerminalTaskFlow(candidate)) ?? flows[0])
-                  : flows[0];
-            }
-            if (!flow) {
-              return undefined;
-            }
-            return command.type === "flows.detail"
-              ? { flow, tasks: listTaskRecordsForFlowReadInDatabase(db, flow.flowId) }
-              : flow;
-          }
-          default:
-            throw new Error("Unknown shared-state SQLite command");
+      if (command.type === "agentDatabases.releaseExitedLease") {
+        if (!agentCleanup) {
+          throw new Error("Agent database cleanup runtime is not prepared");
         }
-      });
+        return agentCleanup.executeAgentDatabaseCleanupCommand(
+          command,
+          open(),
+          getSqliteWorkerStateContext().environment,
+        );
+      }
+      if (command.type === "stateLease.acquire") {
+        return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
+      }
+      if (
+        command.type === "stateLease.verify" ||
+        command.type === "stateLease.renew" ||
+        command.type === "stateLease.release"
+      ) {
+        return executeOpenClawStateLeaseCommand(command, open());
+      }
+      if (command.type === "plugins.metadata.read") {
+        return readPluginMetadataStateRowSync(
+          command.input.selector,
+          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+          command.input.artifactPreservingReadOnly,
+        );
+      }
+      if (command.type === "database.inspectIdle") {
+        // Idle maintenance must never materialize a connection for an artifact-preserving reader.
+        if (
+          !nativeDatabase?.db.isOpen ||
+          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
+            nativeDatabase
+        ) {
+          return "retire";
+        }
+        assertOpenClawStateDatabaseOwner(nativeDatabase.db, { pathname: nativeDatabase.path });
+        return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
+      }
+      if (!runtime) {
+        throw new Error("Shared-state worker command runtime is not prepared");
+      }
+      return runtime.executeSharedStateCommand(
+        command,
+        context,
+        open,
+        nativeDatabase?.db.isOpen === true,
+      );
+    },
+    assertSettled() {
+      if (nativeDatabase) {
+        assertTransactionUsable(nativeDatabase.db);
+        if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
+          throw new Error("Shared-state worker retained an unsettled transaction");
+        }
+        if (nativeDatabase.db.isOpen) {
+          assertNoActiveSqliteReaders(nativeDatabase.db, "Shared-state worker");
+        }
+      }
     },
     close() {
-      closeOpenClawStateDatabaseByPath(context.databasePath);
-      clearOpenClawStateDatabaseOpenFailure(context.databasePath);
+      closed = true;
+      borrow?.release();
     },
   };
 }

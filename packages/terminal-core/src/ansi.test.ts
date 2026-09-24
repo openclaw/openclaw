@@ -80,6 +80,27 @@ describe("terminal ansi helpers", () => {
     expect(controls).toEqual(expected);
   });
 
+  it.each([
+    ["CSI to ESC CSI", "\x1b[?1", "\x1b[6n", ["6n"]],
+    ["CSI to C1 CSI", "\x1b[?1", "\x9b6n", ["6n"]],
+    ["CSI to C1 OSC", "\x1b[?1", "\x9d0;\x1b[6n\x07", []],
+    ["escape to ESC CSI", "\x1b", "\x1b[6n", ["6n"]],
+    ["escape to C1 CSI", "\x1b", "\x9b6n", ["6n"]],
+    ["escape to C1 OSC", "\x1b", "\x9d0;\x1b[6n\x07", []],
+    ["compatibility to ESC CSI", "\x1b(", "\x1b[6n", ["6n"]],
+    ["compatibility to C1 CSI", "\x1b(", "\x9b6n", ["6n"]],
+    ["compatibility to C1 OSC", "\x1b(", "\x9d0;\x1b[6n\x07", []],
+  ])("restarts %s across every chunk boundary", (_label, pending, restart, expected) => {
+    const input = `A${pending}${restart}B`;
+    for (let split = 0; split <= input.length; split += 1) {
+      const controls: string[] = [];
+      const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+      expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe("AB");
+      expect(controls).toEqual(expected);
+      expect(stripper.finish()).toBe("");
+    }
+  });
+
   it("drops oversized and unfinished CSI metadata without dispatching partial controls", () => {
     const controls: string[] = [];
     const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));

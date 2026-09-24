@@ -1,7 +1,16 @@
 // Upgrade Survivor Baselines tests cover upgrade survivor baselines script behavior.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -31,6 +40,112 @@ function withJsonFixture<T>(name: string, contents: unknown, fn: (file: string) 
 }
 
 describe("scripts/resolve-upgrade-survivor-baselines", () => {
+  it.each([false, true])(
+    "discovers all release pages before publishing baselines (API failure: %s)",
+    (failApi) => {
+      const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
+        jobs: { resolve_package: { steps: Array<{ id?: string; run?: string }> } };
+      };
+      const run = workflow.jobs.resolve_package.steps.find(
+        (step) => step.id === "upgrade_survivor_baselines",
+      )?.run;
+      assert(run);
+      // Mixed prereleases put the requested cutoff beyond the first 100 records.
+      const releases = Array.from({ length: 130 }, (_, index) => {
+        const publishedAt = new Date(Date.UTC(2026, 8, 1) - index * 86_400_000);
+        const version = `${publishedAt.getUTCFullYear()}.${publishedAt.getUTCMonth() + 1}.${publishedAt.getUTCDate()}`;
+        return {
+          tagName: `v${version}${index % 3 === 0 ? "-beta.1" : ""}`,
+          publishedAt: publishedAt.toISOString(),
+          isPrerelease: index % 3 === 0,
+        };
+      });
+      const versions = releases
+        .filter((release) => !release.isPrerelease && release.tagName !== "v2026.5.26")
+        .map((release) => release.tagName.slice(1));
+      withReleaseFixture(releases, (file) => {
+        const root = path.dirname(file);
+        const bin = path.join(root, "bin");
+        const output = path.join(root, "output");
+        mkdirSync(bin);
+        mkdirSync(path.join(root, ".artifacts/package-candidate-input"), { recursive: true });
+        mkdirSync(path.join(root, "scripts"));
+        copyFileSync(
+          "scripts/resolve-upgrade-survivor-baselines.mts",
+          path.join(root, "scripts/resolve-upgrade-survivor-baselines.mts"),
+        );
+        symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"));
+        mkdirSync(path.join(root, "node_modules"));
+        symlinkSync(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+          path.join(root, "node_modules/tsx"),
+          "junction",
+        );
+        writeFileSync(output, "");
+        writeFileSync(
+          path.join(bin, "npm"),
+          `#!/bin/sh\nprintf '%s' '${JSON.stringify(versions)}'\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(
+          path.join(bin, "gh"),
+          `#!/usr/bin/env node
+const fs = require("node:fs");
+const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
+const args = process.argv.slice(2);
+if (args[0] === "release") {
+  console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
+} else {
+  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
+    tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
+  })));
+  console.log(JSON.stringify(process.env.FAIL_API === "true" ? pages.slice(0, 1) : pages));
+}
+if (process.env.FAIL_API === "true") process.exit(75);
+`,
+          { mode: 0o755 },
+        );
+        const invoke = () =>
+          execFileSync("bash", ["-c", run], {
+            cwd: root,
+            encoding: "utf8",
+            stdio: "pipe",
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RELEASE_FIXTURE: file,
+              FAIL_API: String(failApi),
+              FALLBACK_BASELINE: "openclaw@2026.5.24",
+              REQUESTED_BASELINES: "all-since-2026.5.24",
+              CANDIDATE_VERSION: "2026.9.1",
+              CANDIDATE_PUBLISHED: "false",
+              GITHUB_REPOSITORY: "openclaw/openclaw",
+              GITHUB_OUTPUT: output,
+              RUNNER_TEMP: root,
+              TARGET_CONTEXT_REF: "",
+            },
+          });
+        if (failApi) {
+          expect(invoke).toThrow();
+          expect(readFileSync(output, "utf8")).toBe("");
+        } else {
+          invoke();
+          const expected = releases
+            .filter(
+              (release) =>
+                release.publishedAt >= "2026-05-24T00:00:00.000Z" &&
+                versions.includes(release.tagName.slice(1)),
+            )
+            .map((release) => release.tagName.slice(1));
+          expect(readFileSync(output, "utf8")).toBe(
+            `baselines=${expected.map((version) => `openclaw@${version}`).join(" ")}\nbaseline_scope=all-scenarios\nbaseline=openclaw@2026.5.24\n`,
+          );
+        }
+      });
+    },
+  );
+
   it("rejects short flag values before resolving baselines", () => {
     expect(() => parseArgs(["--fallback", "-h"])).toThrow("missing value for --fallback");
     expect(() => parseArgs(["--github-output", "-h"])).toThrow("missing value for --github-output");
@@ -296,9 +411,14 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     },
     {
       tags: { latest: "2026.9.2", "extended-stable": "2026.6.99" },
-      versions: ["2026.6.34", "2026.9.2"],
-      error: "npm extended-stable must name a published stable version",
+      versions: ["2026.6.34", "2026.9.1", "2026.9.2"],
+      error: "npm extended-stable must name a published extended-stable version",
     },
+    ...["2026.9.1", "2026.6.35-1", "2026.6.35-beta.1"].map((extended) => ({
+      tags: { latest: "2026.9.2", "extended-stable": extended },
+      versions: ["2026.6.34", "2026.9.1", "2026.9.2", extended],
+      error: "npm extended-stable must name a published extended-stable version",
+    })),
     {
       tags: { latest: "2026.9.2" },
       versions: ["2026.9.1", "2026.9.2"],
@@ -474,6 +594,32 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
           ]);
         },
       );
+    });
+  });
+
+  it("excludes extended-stable GitHub releases from regular stable baselines", () => {
+    const releases = [
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-02T00:00:00Z",
+        tagName: "v2026.6.34",
+      },
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-01T00:00:00Z",
+        tagName: "v2026.7.12",
+      },
+    ];
+
+    withReleaseFixture(releases, (file) => {
+      expect(
+        resolveBaselines(
+          new Map([
+            ["requested", "last-stable-1"],
+            ["releases-json", file],
+          ]),
+        ),
+      ).toEqual(["openclaw@2026.7.12"]);
     });
   });
 

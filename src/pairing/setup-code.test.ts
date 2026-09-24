@@ -515,7 +515,7 @@ describe("pairing setup code", () => {
     await expect(resolvePairingSetupFromConfig(config, options)).rejects.toThrow(expectedError);
   });
 
-  it.each(["none", "trusted-proxy"] as const)(
+  it.each(["none"] as const)(
     "names gateway.auth.mode %s when setup code generation lacks a shared secret",
     async (mode) => {
       await expectResolvedSetupFailureCase({

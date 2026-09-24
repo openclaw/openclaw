@@ -1,8 +1,10 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
-import { createUpdateFailureFact } from "./update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
+import { createNpmFailureFacts } from "./update-npm-failure.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
@@ -12,7 +14,6 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
-export const UPDATE_RUNNER_TIMEOUT_MS = 20 * 60_000;
 export const MAX_LOG_CHARS = 8000;
 
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
@@ -55,35 +56,55 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     : undefined;
   heartbeat?.unref();
   let result: Awaited<ReturnType<CommandRunner>>;
+  let commandError: { cause: unknown } | undefined;
+  let failureFacts: UpdateStepResult["failureFacts"];
   try {
     result = await runCommand(argv, {
       cwd,
       timeoutMs,
       env,
     });
+  } catch (error) {
+    commandError = { cause: error };
+    const fact = createUpdateErrorFact(name, error, env);
+    failureFacts = [fact];
+    result = { code: 1, stdout: "", stderr: fact.message ?? "" };
   } finally {
     clearInterval(heartbeat);
   }
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
-  const failureFacts =
-    result.code !== 0 || result.killed || result.termination === "timeout"
-      ? [
-          createUpdateFailureFact(
-            {
-              check: name.startsWith("global ") ? "package-install" : name,
-              code:
-                result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
-                (result.termination && result.termination !== "exit"
-                  ? result.termination
-                  : "command-failed"),
-              message: result.stderr,
-            },
-            env,
-          ),
-        ]
-      : undefined;
+  if (
+    !failureFacts &&
+    result.code !== 0 &&
+    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
+    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+      /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
+  ) {
+    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+  }
+  failureFacts ??= isFailedUpdateStep({
+    exitCode: result.code,
+    killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
+    termination: result.termination,
+  })
+    ? [
+        createUpdateFailureFact(
+          {
+            check: name,
+            code:
+              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              (result.termination && result.termination !== "exit"
+                ? result.termination
+                : "command-failed"),
+            message: result.stderr,
+          },
+          env,
+        ),
+      ]
+    : undefined;
 
   const completion: Omit<UpdateStepResult, "cwd"> = {
     name,
@@ -94,6 +115,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     stderrTail,
     signal: result.signal,
     killed: result.killed,
+    outputLimitExceeded: result.outputLimitExceeded,
     termination: result.termination,
     ...(failureFacts ? { failureFacts } : {}),
   };
@@ -104,6 +126,9 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     cwd,
   };
   opts.results?.push(stepResult);
+  if (commandError) {
+    throw commandError.cause;
+  }
   return stepResult;
 }
 
@@ -111,17 +136,17 @@ export function normalizeFallbackFailureReason(
   stepName: string,
 ): NonNullable<UpdateRunResult["reason"]> {
   switch (stepName) {
-    case "global update":
-    case "global update (omit optional)":
-    case "global install stage":
-    case "global install verify":
-    case "global install swap":
+    case "package-install":
+    case "package-install-omit-optional":
+    case "package-stage":
+    case "package-verify":
+    case "package-swap":
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";
-    case "post-install verification":
+    case "post-install-verify":
       return "runtime-verification-failed";
-    case "ui:build (post-doctor repair)":
+    case "post-doctor-ui-build":
       return "ui-build-failed";
     default:
       return "unexpected-error";

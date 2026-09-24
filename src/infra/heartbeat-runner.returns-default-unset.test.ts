@@ -4,7 +4,6 @@ import path from "node:path";
 // Tests heartbeat runner behavior when defaults are unset.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,7 +15,12 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -25,15 +29,9 @@ import {
 import { typedCases } from "../test-utils/typed-cases.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
-  type HeartbeatDeps,
-  isHeartbeatEnabledForAgent,
-  resolveHeartbeatIntervalMs,
-  resolveConfiguredHeartbeatPrompt,
-  resolveHeartbeatSummaryForAgent,
-  runHeartbeatOnce,
-} from "./heartbeat-runner.js";
-import {
+  heartbeatTestConfig,
   readSessionStoreForTest,
   seedHeartbeatScratchForTest,
   seedSessionStore,
@@ -350,6 +348,12 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  if (fixtureRoot) {
+    await closeOpenClawAgentDatabasesAsync(fixtureRoot);
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(fixtureRoot, "state") }),
+    );
+  }
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -364,165 +368,6 @@ afterAll(async () => {
   }
 });
 
-describe("resolveHeartbeatIntervalMs", () => {
-  it("reports owner as the default delivery target", () => {
-    expect(resolveHeartbeatSummaryForAgent({}).target).toBe("owner");
-  });
-
-  it("reports the merged per-agent heartbeat session", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { session: "telegram:default" } },
-        list: [{ id: "main", heartbeat: { session: "telegram:alerts" } }],
-      },
-    };
-
-    expect(resolveHeartbeatSummaryForAgent(cfg, "main").session).toBe("telegram:alerts");
-  });
-
-  it.each([
-    {
-      label: "global",
-      cfg: {
-        agents: {
-          defaults: {
-            heartbeat: { every: "0m", target: "last", session: "telegram:default" },
-          },
-        },
-      },
-      session: "telegram:default",
-    },
-    {
-      label: "per-agent",
-      cfg: {
-        agents: {
-          defaults: {
-            heartbeat: { every: "30m", target: "last", session: "telegram:default" },
-          },
-          list: [{ id: "main", heartbeat: { every: "0m", session: "telegram:alerts" } }],
-        },
-      },
-      session: "telegram:alerts",
-    },
-  ] satisfies Array<{ label: string; cfg: OpenClawConfig; session: string }>)(
-    "reports a disabled $label heartbeat as disabled",
-    ({ cfg, session }) => {
-      expect(resolveHeartbeatSummaryForAgent(cfg, "main")).toMatchObject({
-        enabled: false,
-        every: "disabled",
-        everyMs: null,
-        target: "last",
-        session,
-      });
-    },
-  );
-
-  it("returns default when unset", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
-  });
-
-  it("returns null when invalid or zero", () => {
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "0m" } } },
-      }),
-    ).toBeNull();
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "oops" } } },
-      }),
-    ).toBeNull();
-  });
-
-  it("parses duration strings with minute defaults", () => {
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "5m" } } },
-      }),
-    ).toBe(5 * 60_000);
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "5" } } },
-      }),
-    ).toBe(5 * 60_000);
-    expect(
-      resolveHeartbeatIntervalMs({
-        agents: { defaults: { heartbeat: { every: "2h" } } },
-      }),
-    ).toBe(2 * 60 * 60_000);
-  });
-
-  it("uses explicit heartbeat overrides when provided", () => {
-    expect(
-      resolveHeartbeatIntervalMs(
-        { agents: { defaults: { heartbeat: { every: "30m" } } } },
-        undefined,
-        { every: "5m" },
-      ),
-    ).toBe(5 * 60_000);
-  });
-});
-
-describe("resolveConfiguredHeartbeatPrompt", () => {
-  it.each([
-    { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
-    {
-      name: "trimmed override prompt",
-      cfg: {
-        agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
-      } as OpenClawConfig,
-      expected: "ping",
-    },
-  ])("uses $name", ({ cfg, expected }) => {
-    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
-  });
-});
-
-describe("isHeartbeatEnabledForAgent", () => {
-  it("enables only explicit heartbeat agents when configured", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { every: "30m" } },
-        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
-      },
-    };
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
-  });
-
-  it("uses global heartbeat defaults for all agents when no explicit heartbeat entries exist", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { every: "30m" } },
-        list: [{ id: "main" }, { id: "ops" }],
-      },
-    };
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
-  });
-
-  it("uses the configured ambient heartbeat owner when one is explicit", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { heartbeat: { agentId: "ops", every: "30m" } },
-        list: [{ id: "main" }, { id: "ops" }],
-      },
-    };
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
-  });
-
-  it("falls back to the sole agent when no heartbeat config exists", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [{ id: "main" }],
-      },
-    };
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
-  });
-});
-
 describe("resolveHeartbeatDeliveryTarget", () => {
   const baseEntry = {
     sessionId: "sid",
@@ -533,12 +378,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     delivery: normalizeSessionDeliveryState({ context: { channel, to } }),
   });
 
-  it("resolves target variants across route and allowlist rules", () => {
+  it("resolves target variants across route and allowlist rules", async () => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
       entry: typeof baseEntry & { delivery?: ReturnType<typeof normalizeSessionDeliveryState> };
-      expected: ReturnType<typeof resolveHeartbeatDeliveryTarget>;
+      expected: Awaited<ReturnType<typeof resolveHeartbeatDeliveryTarget>>;
     }> = [
       {
         name: "target none",
@@ -691,7 +536,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
     ];
     for (const { cfg, entry, name, expected } of cases) {
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toMatchObject(expected);
+      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toMatchObject(expected);
     }
   });
 
@@ -745,7 +590,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     },
   ] as const)(
     "handles explicit heartbeat accountId allow/deny: $name",
-    ({ accountId, expected }) => {
+    async ({ accountId, expected }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -754,17 +599,17 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
         channels: { telegram: { accounts: { work: { botToken: "token" } } } },
       };
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
+      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
     },
   );
 
-  it("prefers per-agent heartbeat overrides when provided", () => {
+  it("prefers per-agent heartbeat overrides when provided", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "-100123" } } },
     };
     const heartbeat = { target: "whatsapp", to: "120363401234567890@g.us" } as const;
     expect(
-      resolveHeartbeatDeliveryTarget({
+      await resolveHeartbeatDeliveryTarget({
         cfg,
         entry: {
           ...baseEntry,
@@ -1178,10 +1023,8 @@ describe("runHeartbeatOnce", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
-    expectWhatsAppSendCall(sendWhatsApp, 0, {
-      to: "+15555550166",
-      text: 'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.\nFirst alert',
-    });
+    expect(sendWhatsApp.mock.calls[0]?.[0]).toBe("+15555550166");
+    expect(sendWhatsApp.mock.calls[0]?.[1]).toContain("\nFirst alert");
     expectWhatsAppSendCall(sendWhatsApp, 1, {
       to: "+15555550166",
       text: "Second alert",
@@ -1350,19 +1193,7 @@ describe("runHeartbeatOnce", () => {
       try {
         const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: {
-                every: "5m",
-                target: "last",
-              },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        };
+        const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
         const mainSessionKey = resolveMainSessionKey(cfg);
         const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
         const overrideSessionKey = buildAgentPeerSessionKey({
@@ -1425,19 +1256,7 @@ describe("runHeartbeatOnce", () => {
     try {
       const tmpDir = await createCaseDir("hb-subagent-guard");
       const storePath = path.join(tmpDir, "sessions.json");
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "last",
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
       const mainSessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
       const subagentKey = `agent:${agentId}:subagent:task-abc`;
@@ -1481,16 +1300,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.fn();
     try {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "whatsapp" },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
       const sessionKey = resolveMainSessionKey(cfg);
 
       await seedWhatsAppSession(storePath, sessionKey, {
@@ -1520,16 +1330,7 @@ describe("runHeartbeatOnce", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.fn();
     try {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "whatsapp" },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
       const sessionKey = resolveMainSessionKey(cfg);
       const nowMs = 60_000;
       await seedWhatsAppSession(storePath, sessionKey, {
@@ -1612,19 +1413,7 @@ describe("runHeartbeatOnce", () => {
       try {
         const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: {
-                every: "5m",
-                target: "whatsapp",
-              },
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        };
+        const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
         const sessionKey = resolveMainSessionKey(cfg);
 
         await seedWhatsAppSession(storePath, sessionKey);
@@ -1659,16 +1448,7 @@ describe("runHeartbeatOnce", () => {
     try {
       const tmpDir = await createCaseDir("hb-legacy-reasoning-unset");
       const storePath = path.join(tmpDir, "sessions.json");
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "whatsapp" },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
       const sessionKey = resolveMainSessionKey(cfg);
       await seedWhatsAppSession(storePath, sessionKey);
 
@@ -2155,16 +1935,7 @@ tasks:
   it("uses an internal-only cron prompt when heartbeat delivery target is none", async () => {
     const tmpDir = await createCaseDir("hb-cron-target-none");
     const storePath = path.join(tmpDir, "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: { every: "5m", target: "none" },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
-    };
+    const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "none", "whatsapp", storePath);
     const sessionKey = resolveMainSessionKey(cfg);
     await seedWhatsAppSession(storePath, sessionKey);
     enqueueSystemEvent("Cron: rotate logs", {
@@ -2198,16 +1969,7 @@ tasks:
   it("uses an internal-only exec prompt when heartbeat delivery target is none", async () => {
     const tmpDir = await createCaseDir("hb-exec-target-none");
     const storePath = path.join(tmpDir, "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: { every: "5m", target: "none" },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
-    };
+    const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "none", "whatsapp", storePath);
     const sessionKey = resolveMainSessionKey(cfg);
     await seedWhatsAppSession(storePath, sessionKey);
     enqueueSystemEvent("exec finished: backup completed", {

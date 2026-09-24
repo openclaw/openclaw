@@ -12,13 +12,12 @@ import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./memory/embeddings.js";
-import { readMemoryDatabaseRevision } from "./memory/manager-db.js";
+import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./memory/manager-index.test-support.js";
-import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.js";
 import { createMemoryGetTool, createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
@@ -33,6 +32,80 @@ describe("memory_search real manager", () => {
   beforeEach(() => {
     testing.resetMemorySearchToolCooldowns();
   });
+
+  it.each([
+    { name: "main first", reverse: false, systemAgent: false, pinned: false },
+    { name: "other first", reverse: true, systemAgent: false, pinned: false },
+    { name: "non-first system agent", reverse: false, systemAgent: true, pinned: false },
+    { name: "pinned workspaces", reverse: false, systemAgent: false, pinned: true },
+  ])(
+    "reads the indexed agent file with explicit ownership: $name",
+    async ({ reverse, systemAgent, pinned }) => {
+      const cfg = fixture.createConfig({
+        provider: "none",
+        sources: ["memory"],
+        vectorEnabled: false,
+        minScore: 0,
+      });
+      const workspaces = {
+        main: path.join(fixture.paths.workspace, pinned ? "pinned-main" : "main"),
+        other: path.join(fixture.paths.workspace, pinned ? "pinned-other" : "other"),
+      };
+      const main = pinned ? { workspace: workspaces.main } : {};
+      const other = pinned ? { workspace: workspaces.other } : {};
+      cfg.agents = {
+        ownership: "explicit",
+        defaults: {
+          workspace: fixture.paths.workspace,
+          ...(systemAgent ? { systemAgent: { agentId: "other" } } : {}),
+        },
+        entries: reverse ? { other, main } : { main, other },
+      };
+      cfg.memory = { ...cfg.memory, citations: "off" };
+      await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
+      for (const [agentId, workspace] of Object.entries(workspaces)) {
+        const marker = `Orchid workspace ${agentId}`;
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "USER.md"), marker);
+        const manager = fixture.requireManager(
+          await getMemorySearchManager({ cfg, agentId, purpose: "cli" }),
+        );
+        fixture.trackManager(manager);
+        await manager.sync({ reason: "cli", force: true });
+        await manager.close();
+
+        const options = { config: cfg, agentId, oneShotCliRun: true };
+        const search = createMemorySearchTool(options)!;
+        const get = createMemoryGetTool(options)!;
+        const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
+        const { results } = found.details as {
+          results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
+        };
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({
+          path: "USER.md",
+          startLine: 1,
+          endLine: 1,
+          snippet: marker,
+        });
+        const hit = results[0]!;
+        const excerpt = await get.execute("workspace-get", {
+          path: hit.path,
+          from: hit.startLine,
+          lines: hit.endLine - hit.startLine + 1,
+        });
+        expect(excerpt.details).toMatchObject({
+          status: "ok",
+          path: "USER.md",
+          from: 1,
+          lines: 1,
+          text: marker,
+        });
+        const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
+        expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
+      }
+    },
+  );
 
   it.each([
     {
@@ -239,14 +312,20 @@ describe("memory_search real manager", () => {
     }
   });
 
-  it.each(["before", "after"] as const)(
+  it.each(["before", "after", "before status", "after repair"] as const)(
     "recovers when the memory manager closes %s retrieval without rebuilding its index",
     async (closeAt) => {
       const cfg = fixture.createConfig({ vectorEnabled: false, minScore: 0 });
+      cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
       const manager = await fixture.getFreshManager(cfg);
       await manager.sync({ reason: "cli", force: true });
       const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
       const embeddingCalls = fixture.provider.embedBatchCalls;
+      if (closeAt === "after repair") {
+        db.prepare(
+          "UPDATE memory_index_meta SET value = json_set(value, '$.provenanceVersion', 0) WHERE key = 'memory_index_meta_v1'",
+        ).run();
+      }
       const search = manager.search.bind(manager);
       const close = async () => {
         await manager.close();
@@ -258,12 +337,16 @@ describe("memory_search real manager", () => {
           await close();
         }
         const results = await search(...args);
-        if (closeAt === "after") {
+        if (closeAt === "after" || closeAt === "after repair") {
           await close();
         }
         return results;
       });
       const getSpy = vi.spyOn(MemoryIndexManager, "get");
+      if (closeAt === "before status") {
+        await close();
+        getSpy.mockResolvedValueOnce(manager);
+      }
       try {
         const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
         if (!tool) {
@@ -278,7 +361,15 @@ describe("memory_search real manager", () => {
           results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
         });
         expect(result.details).not.toHaveProperty("unavailable");
-        expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+        expect(fixture.provider.embedBatchCalls).toBe(
+          embeddingCalls + (closeAt === "after repair" ? 1 : 0),
+        );
+        if (closeAt === "after repair") {
+          expect(result.details).toHaveProperty(
+            "warning",
+            expect.stringContaining("provider cost"),
+          );
+        }
         expect(
           getSpy.mock.calls.filter(([params]) => (params.purpose ?? "default") === "default"),
         ).toHaveLength(2);
@@ -286,56 +377,6 @@ describe("memory_search real manager", () => {
         getSpy.mockRestore();
         searchSpy.mockRestore();
       }
-    },
-  );
-
-  it.each([undefined, 0, MEMORY_INDEX_PROVENANCE_VERSION])(
-    "memory_search repairs provenance %s once and preserves current indexes",
-    async (provenanceVersion) => {
-      const cfg = fixture.createConfig({
-        provider: "none",
-        vectorEnabled: false,
-      });
-      const manager = await fixture.getFreshManager(cfg);
-      await manager.sync({ reason: "cli", force: true });
-      await manager.close();
-      await closeAllMemorySearchManagers();
-
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      const row = db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-        .get() as { value: string };
-      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-        JSON.stringify({ ...JSON.parse(row.value), provenanceVersion }),
-      );
-      const before = readMemoryDatabaseRevision(db);
-
-      const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
-      if (!tool) {
-        throw new Error("memory_search tool missing");
-      }
-      const result = await tool.execute("provenance-mismatch", {
-        query: "alpha",
-        corpus: "memory",
-      });
-      expect(result.details).toMatchObject({
-        results: [
-          expect.objectContaining({
-            path: "memory/2026-01-12.md",
-            citation: expect.stringContaining("memory/2026-01-12.md"),
-          }),
-        ],
-      });
-      expect(result.details).not.toHaveProperty("unavailable");
-      const after = readMemoryDatabaseRevision(db);
-      if (provenanceVersion === MEMORY_INDEX_PROVENANCE_VERSION) {
-        expect(after).toBe(before);
-      } else {
-        expect(after).toBeGreaterThan(before);
-      }
-      await tool.execute("provenance-current", { query: "alpha", corpus: "memory" });
-      expect(readMemoryDatabaseRevision(db)).toBe(after);
-      expect(fixture.provider.embedQueryCalls).toBe(0);
     },
   );
 
@@ -702,16 +743,18 @@ describe("memory_search real manager", () => {
     const execution = tool.execute("keyword-deadline", { query: "zebra", corpus: "memory" });
     try {
       await queryEntered.promise;
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       const result = await execution;
       expect(result.details).toMatchObject({
         results: [expect.objectContaining({ path: "memory/2026-01-12.md", source: "memory" })],
         partial: true,
+        timedOut: true,
+        timeoutMs: 30_000,
         mode: "keyword-only",
         warning: expect.stringContaining("Only memory-file keyword matches"),
-        error: "memory_search timed out after 15s",
+        error: "memory_search timed out after 30s",
         corpora: [{ corpus: "memory", outcome: "partial" }],
-        debug: { searchMs: 15_000 },
+        debug: { searchMs: 30_000 },
       });
       expect(result.details).not.toHaveProperty("unavailable");
     } finally {
@@ -902,7 +945,7 @@ describe("memory_search real manager", () => {
     });
     try {
       await searchStarted.promise;
-      await vi.advanceTimersByTimeAsync(15_100);
+      await vi.advanceTimersByTimeAsync(30_100);
       expect(executionSettled).toBe(true);
       await cleanupStarted.promise;
       await expect(execution).resolves.toMatchObject({

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -9,7 +10,12 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
-import { loadPreparedModelCatalogView, prepareModelCatalogView } from "./model-catalog-view.js";
+import {
+  createModelCatalogView,
+  loadPreparedModelCatalogView,
+  prepareModelCatalogView,
+  selectModelCatalogRuntimeEntry,
+} from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   setPreparedModelRuntimeAuthLabels,
@@ -54,6 +60,39 @@ describe("prepared model catalog view", () => {
     mocks.loadOwner.mockImplementation(() => {
       throw new Error("Scoped browsing acquired the full catalog");
     });
+  });
+
+  it("prepares physical variants with provider-bounded identity discovery", () => {
+    const policy = vi
+      .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
+      .mockImplementation((provider) =>
+        provider === "fixture"
+          ? { normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^vendor\//u, "") }
+          : null,
+      );
+    try {
+      const canonical = Array.from({ length: 64 }, (_, index) => row("fixture", `model-${index}`));
+      const physical = canonical.map((entry) => ({ ...entry, id: `vendor/${entry.id}` }));
+      const distinct = [row("unknown", "Reader"), row("unknown", "reader@variant")];
+      const view = createModelCatalogView({
+        cfg: {},
+        catalog: [...canonical, ...physical, ...distinct],
+      });
+
+      expect(view.logicalEntries).toEqual([...canonical, ...distinct]);
+      expect(policy).toHaveBeenCalledTimes(2);
+      const variant = physical[0]!;
+      expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
+      policy.mockReturnValue(null);
+      expect(view.variantsOf(variant)).toBeUndefined();
+      expect(view.project(variant, { availability: true, routeResolution: null }).entry.id).toBe(
+        variant.id,
+      );
+      variant.id = canonical[0]!.id;
+      expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
+    } finally {
+      policy.mockRestore();
+    }
   });
 
   it("keeps missing runtime credentials labeled missing", async () => {
@@ -115,7 +154,7 @@ describe("prepared model catalog view", () => {
     expect(view.catalog).toEqual(entries);
   });
 
-  it("includes only configured static identities and preserves committed rows", () => {
+  it("enriches permitted static choices and current metadata while preserving committed rows", () => {
     const committed = { ...row("custom", "vendor/model"), name: "Committed" };
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: "custom/vendor/model", models: { "custom/extra": {} } } },
@@ -133,7 +172,15 @@ describe("prepared model catalog view", () => {
     ).toEqual([committed, row("custom", "extra")]);
     expect(
       prepareModelCatalogView({ ...facts(cfg), snapshot: captured, view: "default" }).catalog,
-    ).toEqual([committed]);
+    ).toEqual([committed, row("custom", "extra")]);
+    expect(
+      prepareModelCatalogView({
+        ...facts(cfg),
+        snapshot: captured,
+        view: "configured",
+        retainedModel: { provider: "custom", model: "model" },
+      }).catalog,
+    ).toEqual([committed, row("custom", "model"), row("custom", "extra")]);
   });
 
   it("uses authored inventory membership with canonical route metadata", () => {
@@ -166,6 +213,44 @@ describe("prepared model catalog view", () => {
     ]);
     expect(inventory).toMatchObject([canonical, { provider: "custom", id: "private" }]);
     expect(inventory.map(({ id }) => id)).toEqual(["kept", "private"]);
+  });
+
+  it("refreshes provider identity for each authored inventory read", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://authored.example/v1",
+            models: Array.from({ length: 32 }, (_, index) => ({
+              id: `vendor/model-${String(index).padStart(2, "0")}`,
+              name: `Authored ${String(index).padStart(2, "0")}`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 1024,
+            })),
+          },
+        },
+      },
+    };
+    const canonical = Array.from({ length: 32 }, (_, index) =>
+      row("fixture", `model-${String(index).padStart(2, "0")}`),
+    );
+    const view = prepareModelCatalogView(facts(cfg));
+    const policy = vi
+      .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
+      .mockReturnValue({
+        normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^vendor\//u, ""),
+      });
+    try {
+      expect(view.providerInventory(cfg, canonical)).toEqual(canonical);
+      policy.mockReturnValue(null);
+      expect(view.providerInventory(cfg, canonical).map(({ id }) => id)).toEqual(
+        cfg.models!.providers!.fixture!.models.map(({ id }) => id),
+      );
+    } finally {
+      policy.mockRestore();
+    }
   });
 
   it.each(["runtime", "refreshable", "static"] as const)(
@@ -281,7 +366,7 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
-  it("reads prepared native rows without discovering a harness catalog", async () => {
+  it("reads prepared native rows without discovering a harness catalog", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -293,15 +378,55 @@ describe("prepared native catalog readiness", () => {
     const registry = nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" }));
     const loadModelCatalog = vi.fn(async () => [nativeEntry]);
     registry.agentHarnesses[0]!.harness.loadModelCatalog = loadModelCatalog;
-    const result = await loadPreparedModelCatalogView({
-      kind: "prepared",
+    const result = prepareModelCatalogView({
       ...facts(cfg),
       snapshot: snapshot([nativeEntry]),
       pluginRegistry: registry,
-      refreshNative: false,
     });
     expect(result.catalog).toEqual([nativeEntry]);
     expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "matching native observation", variants: [nativeEntry], available: true },
+    { name: "cold catalog", variants: [], available: undefined },
+    {
+      name: "another model",
+      variants: [{ ...nativeEntry, id: "other-model" }],
+      available: undefined,
+    },
+    {
+      name: "another runtime",
+      variants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
+      available: undefined,
+    },
+  ])("evaluates configured rows using $name", ({ variants, available }) => {
+    const logical = row("custom", "native-model");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: { "custom/native-model": { agentRuntime: { id: "native-test" } } },
+        },
+      },
+    };
+    const registry = nativeRegistry(() => undefined);
+    delete registry.agentHarnesses[0]!.harness.readModelCatalogReadiness;
+    registry.agentHarnesses[0]!.harness.loadModelCatalog = () => {
+      throw new Error("Projection must not discover native models");
+    };
+    const view = prepareModelCatalogView({
+      ...facts(cfg),
+      snapshot: { entries: [logical], routeVariants: variants },
+      pluginRegistry: registry,
+    });
+    const decision = view.evaluateNative(logical, {
+      ...host,
+      unavailableReason: "missing-auth",
+    });
+    expect(decision.availability).toBe(available);
+    expect(decision.runtimeAuth).toEqual({ id: "native-test", source: "native" });
+    expect(decision.unavailableReason).toBeUndefined();
+    expect(decision.availabilityAuthoritative).toBe(true);
   });
 
   it("observes revoked login and generation without retaining prior readiness", () => {
@@ -372,4 +497,39 @@ describe("prepared native catalog readiness", () => {
     });
     expect(view.evaluateNative(nativeEntry, host, "native-test")).toEqual(host);
   });
+});
+
+describe("runtime capability donors", () => {
+  it.each(["empty", "unrelated", "native-without-window"])(
+    "preserves logical fallback without borrowing native windows (%s)",
+    (scenario) => {
+      const base: ModelCatalogEntry = {
+        provider: "fixture",
+        id: "model",
+        name: "Model",
+        contextWindows: [{ id: "32k", label: "32K", contextWindow: 32_000 }],
+      };
+      const routeVariants: ModelCatalogEntry[] =
+        scenario === "empty"
+          ? []
+          : scenario === "unrelated"
+            ? [{ provider: "fixture", id: "other", name: "Other" }]
+            : [
+                {
+                  provider: "fixture",
+                  id: "model",
+                  name: "Model",
+                  nativeRuntime: "native-fixture",
+                },
+              ];
+      const selected = selectModelCatalogRuntimeEntry({
+        entry: base,
+        routeVariants,
+        runtimeId: scenario === "native-without-window" ? "native-fixture" : "openclaw",
+      });
+      expect(selected.entry.contextWindows).toEqual(
+        scenario === "native-without-window" ? undefined : base.contextWindows,
+      );
+    },
+  );
 });

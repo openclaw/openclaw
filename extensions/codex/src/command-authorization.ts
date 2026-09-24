@@ -19,3 +19,9 @@ export function hasCodexAdminScope(ctx: CodexHostMutationAuthContext): boolean {
 export function canMutateCodexHost(ctx: CodexHostMutationAuthContext): boolean {
   return ctx.senderIsOwner === true || hasCodexAdminScope(ctx);
 }
+
+export function assertCodexHostOwnerCurrent(ctx: PluginCommandContext): void {
+  if (!hasCodexAdminScope(ctx)) {
+    ctx.assertOwnerCurrent?.();
+  }
+}

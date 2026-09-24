@@ -13,6 +13,13 @@ import {
 const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
   vi.fn<(pid: number) => number | null>(() => null),
 );
+const readFreeBsdProcessStartTimeMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("./freebsd-process-identity.ts", () => ({
+  readFreeBsdProcessStartTime: readFreeBsdProcessStartTimeMock,
+}));
 
 vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
@@ -22,6 +29,7 @@ vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
 afterEach(() => {
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
+  readFreeBsdProcessStartTimeMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -229,7 +237,7 @@ describe("process start times", () => {
     });
   });
 
-  it.each(["darwin", "linux", "win32"] as const)(
+  it.each(["darwin", "linux", "win32", "freebsd"] as const)(
     "retries failed self probes and keeps foreign %s identities fresh",
     async (platform) => {
       const identity = platform === "linux" ? 0 : 1_752_000_000;
@@ -241,6 +249,7 @@ describe("process start times", () => {
         .mockReturnValueOnce(111)
         .mockReturnValueOnce(222);
       readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
+      readFreeBsdProcessStartTimeMock.mockImplementation(probe);
       vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
         const value = probe(Number(args?.[3]));
         if (value === null) {
@@ -285,7 +294,7 @@ describe("process start times", () => {
   });
 
   it("returns null on unsupported platforms", () => {
-    return withMockedPlatform("freebsd", async () => {
+    return withMockedPlatform("aix", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
       expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });

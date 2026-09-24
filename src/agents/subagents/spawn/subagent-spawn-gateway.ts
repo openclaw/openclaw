@@ -1,5 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
@@ -14,11 +19,12 @@ import { callGatewayTool } from "../../tools/gateway.js";
 import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
 import {
   ADMIN_SCOPE,
   callGateway,
+  dispatchGatewayMethodInProcess,
+  hasInProcessGatewayContext,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 
@@ -50,24 +56,21 @@ async function callSubagentGatewayWithDispatchMode(
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope. Apply the trusted
   // launch authorization before resolving the request's required scope.
-  const authorizedParams =
-    params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
-      ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
-      : params.params;
+  const authorizedParams = isRecord(params.params)
+    ? applySubagentLaunchAuthorization(params.params, authorization)
+    : params.params;
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     authorizedParams,
   );
   const allowModelOverride = authorization !== undefined;
-  const deps = getSubagentSpawnDeps();
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayContextResolver =
     options?.gatewayContextResolver ??
     gatewayCaller?.gatewayContextResolver ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   // A closed owner still requires in-process rejection, never a new socket route.
-  const hasInProcessGateway =
-    gatewayContextResolver !== undefined || deps.hasInProcessGatewayContext();
+  const hasInProcessGateway = gatewayContextResolver !== undefined || hasInProcessGatewayContext();
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -79,12 +82,8 @@ async function callSubagentGatewayWithDispatchMode(
     params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
-  if (
-    hasInProcessGateway &&
-    request.params != null &&
-    typeof request.params === "object" &&
-    !Array.isArray(request.params)
-  ) {
+  if (hasInProcessGateway && isRecord(request.params)) {
+    const requestParams = request.params;
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     // Agent launches are host-owned even when the parent request came from CLI/HTTP.
@@ -123,9 +122,9 @@ async function callSubagentGatewayWithDispatchMode(
               sessionSpawnContext,
             }
           : undefined;
-      return await deps.dispatchGatewayMethodInProcess(
+      return await dispatchGatewayMethodInProcess(
         request.method,
-        request.params as Record<string, unknown>,
+        requestParams,
         withInProcessAgentRuntimeIdentity(
           {
             expectFinal: request.expectFinal,
@@ -185,7 +184,7 @@ async function callSubagentGatewayWithDispatchMode(
             ),
           ),
         )
-      : deps.callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
+      : callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
   };
   // Only agent launches have an idempotency key backed by authoritative Gateway state.
   // Other methods must not repeat after a transport-ambiguous failure.
@@ -267,11 +266,7 @@ export async function callNativeSubagentGateway(
 export function readGatewayRunId(
   response: Awaited<ReturnType<typeof callGateway>>,
 ): string | undefined {
-  if (!response || typeof response !== "object") {
-    return undefined;
-  }
-  const { runId } = response as { runId?: unknown };
-  return typeof runId === "string" && runId.trim() ? runId.trim() : undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(response)?.runId);
 }
 
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {

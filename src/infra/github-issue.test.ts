@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareGithubIssue,
   reconcileGithubIssue,
@@ -389,10 +390,7 @@ describe("GitHub issue transport", () => {
 
   it("deduplicates concurrent submissions with the same marker", async () => {
     const issue = prepare("concurrent");
-    let releaseAuth: ((value: ReturnType<typeof cliResult>) => void) | undefined;
-    const auth = new Promise<ReturnType<typeof cliResult>>((resolve) => {
-      releaseAuth = resolve;
-    });
+    const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
     const runGh = vi
       .fn<RunGithubCli>()
       .mockReturnValueOnce(auth)

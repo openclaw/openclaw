@@ -3,14 +3,15 @@ import { memoryCpuProcessEntrypoints } from "../../extensions/memory-core/src/me
 import { vectorKnnProcessEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts";
 import {
   createRuntimeProcessBuildEntries,
-  runtimeProcessCoreBuildEntries,
+  runtimeProcessCoreEntrypoints,
 } from "./runtime-process-core-build-entries.mts";
 
-export const runtimeProcessBuildEntries = {
-  ...runtimeProcessCoreBuildEntries,
-  ...createRuntimeProcessBuildEntries([
-    vectorKnnProcessEntrypoint,
-    documentExtractorWorkerEntrypoint,
-    ...Object.values(memoryCpuProcessEntrypoints),
-  ]),
-};
+export const runtimeProcessBuildEntrypoints = [
+  ...runtimeProcessCoreEntrypoints,
+  vectorKnnProcessEntrypoint,
+  documentExtractorWorkerEntrypoint,
+  ...Object.values(memoryCpuProcessEntrypoints),
+];
+export const runtimeProcessBuildEntries = createRuntimeProcessBuildEntries(
+  runtimeProcessBuildEntrypoints,
+);

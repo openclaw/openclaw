@@ -3,6 +3,8 @@ export * from "../providers/simple-options.js";
 export * from "../providers/tool-result-text.js";
 export * from "../providers/transform-messages.js";
 export * from "../replay-turn-classification.js";
+export { createDiagnosticRecord } from "../utils/credential-redaction.js";
+export { projectProviderError } from "../utils/provider-error.js";
 export * from "../utils/prompt-cache-stability.js";
 export * from "../utils/sanitize-unicode.js";
 export * from "../utils/system-prompt-cache-boundary.js";

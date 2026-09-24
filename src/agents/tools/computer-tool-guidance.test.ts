@@ -43,6 +43,7 @@ describe("computer tool guidance", () => {
     expect(description).toContain("`query`, `depth`, and `maxElements` filters");
     expect(description).toContain('`effect:"confirmed"` > `unverifiable` > `suspected_noop`');
     expect(description).toContain("never blind-retry a mutation");
+    expect(description).toContain("without another observation call");
     expect(description).toContain("For window input");
     expect(description).toContain("untrusted input");
     expect(description).not.toMatch(
@@ -63,7 +64,7 @@ describe("computer tool guidance", () => {
     expect(desktopOnly).toContain("stale frameId");
     expect(desktopOnly).toContain("unchanged screen returns metadata only and reuses its frameId");
     expect(desktopOnly).not.toMatch(
-      /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable/,
+      /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable|without another observation call/,
     );
 
     const windowBackground = buildComputerToolDescription(

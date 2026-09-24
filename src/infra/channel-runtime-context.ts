@@ -103,29 +103,21 @@ export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(
   const runtimeContexts = resolveScopedRuntimeContextRegistry({ channelRuntime: baseRuntime });
 
   const trackedLeases = new Set<{ dispose: () => void }>();
-  const trackLease = (lease: { dispose: () => void }) => {
-    trackedLeases.add(lease);
-    let disposed = false;
-    return {
-      dispose: () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        // Lease disposal is idempotent so task cleanup and explicit caller cleanup can race.
-        trackedLeases.delete(lease);
-        lease.dispose();
-      },
-    };
-  };
-
   const scopedRuntime = {
     ...baseRuntime,
     runtimeContexts: {
       ...runtimeContexts,
       register: (registerParams) => {
         const lease = runtimeContexts.register(registerParams);
-        return trackLease(lease);
+        const trackedLease = {
+          dispose: () => {
+            if (trackedLeases.delete(trackedLease)) {
+              lease.dispose();
+            }
+          },
+        };
+        trackedLeases.add(trackedLease);
+        return trackedLease;
       },
     },
   } as T;

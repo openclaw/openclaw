@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import uuid
+from xml.etree import ElementTree
 
 
 DASHBOARD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -143,10 +144,16 @@ aria-label="Dashboard pointer control">Dashboard pointer control</button>
         'Dashboard reload retained browser tab and conversation');
       await present();
       await snapshot('dashboard-reload-snapshot');
-      document.getElementById('status').textContent = 'Ready for dashboard replacement';
-      await report('replacement-ready');
+      document.getElementById('status').textContent = 'Ready for Open Dashboard';
+      await report('dashboard-ready');
     } else if (phase === 3) {
-      assert(state().tabs.length === 0, 'Native dashboard replacement cleared previous Gateway tabs');
+      assert(state().tabs.length === 1 && state().tabs[0].id === tabId
+        && state().tabs[0].sessionKey === sessionKey && state().tabs[0].url === url('two'),
+        'Passive Open Dashboard retained browser tab and conversation');
+      document.getElementById('status').textContent = 'Ready for explicit Gateway reconnect';
+      await report('explicit-reconnect-ready');
+    } else if (phase === 4) {
+      assert(state().tabs.length === 0, 'Explicit Gateway reconnect cleared previous Gateway tabs');
       await report('replacement-cleared-tabs');
       const opened = await post({type:'open',tabId,url:url('reopened'),sessionKey});
       assert(opened.tabId === tabId, 'Reopen after native replacement');
@@ -223,7 +230,8 @@ class GatewayFixture(ThreadingHTTPServer):
         self.passed = False
         self.download_bytes_match = False
         self.signals = {name: threading.Event() for name in (
-            "click-ready", "dashboard-pointer-click", "replacement-ready", "complete", "failure",
+            "click-ready", "dashboard-pointer-click", "dashboard-ready", "explicit-reconnect-ready",
+            "complete", "failure",
             "download-save-ready", "download-saved", "download-cancel-ready", "download-cancelled",
         )}
         self.server_thread = threading.Thread(target=self.serve_forever, daemon=True)
@@ -237,8 +245,8 @@ class GatewayFixture(ThreadingHTTPServer):
             "transport": "direct", "url": f"ws://127.0.0.1:{self.server_port}/fixture/",
         }}}))
         config.chmod(0o600)
-        # Open Dashboard selects the local Gateway. Its read-only fixture CLI
-        # returns this server through the real CLI integration after remote use.
+        # The read-only fixture CLI describes the same isolated Gateway.
+        # Unexpected service or installation commands remain failures.
         cli = config.parent / "bin/openclaw"
         cli.parent.mkdir(mode=0o700)
         dashboard_url = f"http://127.0.0.1:{self.server_port}/fixture/"
@@ -268,6 +276,101 @@ class GatewayFixture(ThreadingHTTPServer):
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"Native inline fixture timed out waiting for {name}")
 
+    def open_native_menu(self, app, label):
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        deadline = time.monotonic() + 5
+
+        def call(service, path, interface, method, arguments=None):
+            remaining = int((deadline - time.monotonic()) * 1000)
+            if remaining <= 0 or app.poll() is not None:
+                raise RuntimeError("Native menu lookup expired or its app exited")
+            try:
+                return bus.call_sync(
+                    service, path, interface, method, arguments, None,
+                    Gio.DBusCallFlags.NONE, min(1000, remaining), None,
+                ).unpack()
+            except GLib.Error as error:
+                try:
+                    remote_error = Gio.DBusError.get_remote_error(error)
+                    context = {
+                        "stage": "connection-settings-menu",
+                        "service": service[:128],
+                        "path": path[:128],
+                        "interface": interface[:128],
+                        "method": method[:128],
+                        "errorType": "GLib.Error",
+                        "remoteError": remote_error[:128] if isinstance(remote_error, str) else None,
+                    }
+                    message = "NATIVE_MENU_DBUS_ERROR " + json.dumps(context, ensure_ascii=True)
+                    if len(message.encode("ascii")) < 4096:
+                        print(message, flush=True)
+                except Exception:
+                    pass
+                raise
+
+        def owner(service):
+            return call(
+                "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                "GetConnectionUnixProcessID", GLib.Variant("(s)", (service,)),
+            )[0]
+
+        names = call(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus",
+            "org.freedesktop.DBus", "ListNames",
+        )[0]
+        if len(names) > 128:
+            raise RuntimeError("Private session bus exceeded the native menu lookup bound")
+        pending = [(name, "/") for name in names if name.startswith(":") and owner(name) == app.pid]
+        visited = set()
+        while pending:
+            service, path = pending.pop()
+            if (service, path) in visited:
+                continue
+            visited.add((service, path))
+            if len(visited) > 64:
+                raise RuntimeError("Native menu object tree exceeded 64 paths")
+            try:
+                xml = call(service, path, "org.freedesktop.DBus.Introspectable", "Introspect")[0]
+            except GLib.Error as error:
+                # Client-only connections, including Secret Service clients, may
+                # not export an object tree. They are not native menu owners.
+                if Gio.DBusError.get_remote_error(error) in (
+                    "org.freedesktop.DBus.Error.UnknownMethod",
+                    "org.freedesktop.DBus.Error.UnknownObject",
+                ) or (path == "/" and error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.TIMED_OUT)):
+                    continue
+                raise
+            if len(xml.encode()) > 65536:
+                raise RuntimeError("Native menu introspection exceeded its byte bound")
+            node = ElementTree.fromstring(xml)
+            if any(item.get("name") == "com.canonical.dbusmenu" for item in node.findall("interface")):
+                _, layout = call(
+                    service, path, "com.canonical.dbusmenu", "GetLayout",
+                    GLib.Variant("(iias)", (0, -1, ["label", "enabled", "visible"])),
+                )
+                items, count = [layout], 0
+                while items:
+                    item_id, properties, children = items.pop()
+                    count += 1
+                    if count > 200:
+                        raise RuntimeError("Native menu exceeded 200 entries")
+                    if properties.get("label", "").replace("_", "") == label:
+                        if not properties.get("enabled", True) or not properties.get("visible", True):
+                            raise RuntimeError(f"{label} menu item is unavailable")
+                        if owner(service) != app.pid:
+                            raise RuntimeError(f"{label} menu owner changed")
+                        call(
+                            service, path, "com.canonical.dbusmenu", "Event",
+                            GLib.Variant("(isvu)", (item_id, "clicked", GLib.Variant("i", 0), 0)),
+                        )
+                        return
+                    items.extend(children)
+            pending.extend((service, path.rstrip("/") + "/" + child.attrib["name"])
+                           for child in node.findall("node"))
+        raise RuntimeError(f"Task app did not export the {label} menu")
+
     def exercise(self, app, binary, wait, Atspi):
         self.wait_for("click-ready", app)
 
@@ -275,6 +378,7 @@ class GatewayFixture(ThreadingHTTPServer):
             # WebKit 2.52 exposes "button"; older supported WebKit uses "push button".
             button = wait(label, ("button", "push button"))
             component = button.get_component_iface()
+            component.scroll_to(Atspi.ScrollType.ANYWHERE)
             rect = component.get_extents(Atspi.CoordType.SCREEN)
             if rect.width <= 0 or rect.height <= 0:
                 raise RuntimeError("Native fixture button has no screen bounds")
@@ -291,14 +395,23 @@ class GatewayFixture(ThreadingHTTPServer):
         pointer_click("Dashboard pointer control")
         self.wait_for("dashboard-pointer-click", app)
         pointer_click("Synthetic inspect target")
-        self.wait_for("replacement-ready", app)
-        wait("Ready for dashboard replacement", "heading")
-        # Existing single-instance/deep-link handling selects the local fixture
-        # through tray::open_dashboard and replaces main in the same app process.
+        self.wait_for("dashboard-ready", app)
+        wait("Ready for Open Dashboard", "heading")
+        # Passive presentation keeps the current Gateway and its browser tabs.
         subprocess.run(
             [str(binary), "openclaw://dashboard"], check=True, timeout=15,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        self.wait_for("explicit-reconnect-ready", app)
+        wait("Ready for explicit Gateway reconnect", "heading")
+        self.open_native_menu(app, "Connection Settings")
+        wait("Connection Settings", "heading")
+        entry = wait("Gateway URL", ("entry", "text"))
+        text = entry.get_text_iface()
+        if text is None or Atspi.Text.get_text(text, 0, -1) != f"ws://127.0.0.1:{self.server_port}/fixture/":
+            raise RuntimeError("Connection Settings did not retain the synthetic saved Gateway URL")
+        # Saving even the same URL is explicit replacement, unlike Open Dashboard.
+        pointer_click("Connect to Gateway")
         self.wait_for("download-save-ready", app)
 
         def filename_entry(node):
@@ -336,10 +449,10 @@ class GatewayFixture(ThreadingHTTPServer):
             raise RuntimeError("Cancelled native download changed the saved fixture or left staging files")
         self.wait_for("complete", app)
         wait("PASS: native inline browser and dashboard replacement", "heading")
-        if self.phase != 3:
-            raise RuntimeError("Expected initial dashboard, reload, and native replacement")
+        if self.phase != 4:
+            raise RuntimeError("Expected initial dashboard, reload, passive presentation, and explicit replacement")
         self.passed = True
-        print("PASS: native inline browser pointer input, history, snapshots, reload, replacement and save/cancel", flush=True)
+        print("PASS: native inline browser pointer input, history, snapshots, reload, passive presentation, explicit replacement and save/cancel", flush=True)
 
     def close(self):
         self.shutdown()

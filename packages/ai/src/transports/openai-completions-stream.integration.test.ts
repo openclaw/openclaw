@@ -212,23 +212,6 @@ describe("openai completions stream", () => {
     ).toBe(false);
   });
 
-  it("emits Z.ai thinking streams when enabled without reasoning_effort support", () => {
-    const model = makeCompletionsModel({
-      id: "glm-4.7",
-      name: "GLM 4.7",
-      provider: "zai",
-      baseUrl: "",
-      contextWindow: 128_000,
-    });
-
-    expect(
-      shouldEmitOpenAICompletionsReasoning(model, {
-        apiKey: "test-key",
-        reasoning: "medium",
-      } as never),
-    ).toBe(true);
-  });
-
   it.each([
     { finishReason: "tool_call", emitsTool: true, stopReason: "toolUse" },
     { finishReason: "tool_call", emitsTool: false, stopReason: "stop" },

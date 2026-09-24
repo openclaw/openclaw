@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
-import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
@@ -157,15 +160,12 @@ describe("models-config provider auth provenance", () => {
           : { type, provider, tokenRef: ref, token: "stale-inline-token" };
       const store: AuthProfileStore = { version: 1, profiles: { [profileId]: profile } };
       const runtimeKey = "runtime-discovery-key";
-      const published: AuthProfileStore = {
-        version: 1,
-        profiles: {
-          [profileId]:
-            profile.type === "api_key"
-              ? { ...profile, key: runtimeKey }
-              : { ...profile, token: runtimeKey },
-        },
-      };
+      const published: AuthProfileStore = createAuthProfileStoreFixture({
+        [profileId]:
+          profile.type === "api_key"
+            ? { ...profile, key: runtimeKey }
+            : { ...profile, token: runtimeKey },
+      });
       const authorization: Array<string | null> = [];
       const authResults: Array<{ apiKey?: string; discoveryApiKey?: string }> = [];
       const outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome> =
@@ -587,7 +587,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "keeps a profile with a one-model cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
         cooldownModel: "gpt-5.5",
       },
@@ -597,7 +596,6 @@ describe("models-config provider auth provenance", () => {
     {
       name: "demotes a profile-wide cooldown",
       usage: {
-        cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
       },
       expectedProfile: "backup",
@@ -612,7 +610,7 @@ describe("models-config provider auth provenance", () => {
         key: "cooldown-backup-key",
       };
       fixture.store.usageStats = {
-        [fixture.profileId]: usage,
+        [fixture.profileId]: { ...usage, cooldownUntil: Date.now() + 60_000 },
       };
       fixture.emitOutcome();
 
@@ -751,16 +749,13 @@ describe("models-config provider auth provenance", () => {
       {
         OPENAI_API_KEY: "env-openai-key",
       } as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
-          },
+      createAuthProfileStoreFixture({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_PROFILE_KEY" },
         },
-      },
+      }),
     );
 
     expect(auth("openai")).toEqual({
@@ -782,10 +777,7 @@ describe("models-config provider auth provenance", () => {
     });
     const auth = createProviderAuthResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         plugins: {
           entries: {
@@ -812,10 +804,7 @@ describe("models-config provider auth provenance", () => {
   it("uses literal configured provider api keys for catalog discovery", () => {
     const auth = createProviderApiKeyResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
@@ -842,10 +831,7 @@ describe("models-config provider auth provenance", () => {
       {
         MY_VLLM_KEY: "resolved-vllm-key",
       } as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
@@ -870,10 +856,7 @@ describe("models-config provider auth provenance", () => {
   it("does not send missing custom env markers as catalog discovery keys", () => {
     const auth = createProviderApiKeyResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
@@ -897,10 +880,7 @@ describe("models-config provider auth provenance", () => {
   it("does not send missing known provider env markers as catalog discovery keys", () => {
     const auth = createProviderApiKeyResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
@@ -924,10 +904,7 @@ describe("models-config provider auth provenance", () => {
   it("preserves bare all-caps configured api keys as literal catalog discovery keys", () => {
     const auth = createProviderApiKeyResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         models: {
           providers: {
@@ -957,10 +934,7 @@ describe("models-config provider auth provenance", () => {
     });
     const auth = createProviderAuthResolver(
       {} as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {},
-      },
+      createAuthProfileStoreFixture({}),
       {
         plugins: {
           entries: {

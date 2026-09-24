@@ -12,7 +12,7 @@ use std::os::fd::OwnedFd as StdOwnedFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -20,6 +20,8 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedFd;
 
 const LOGIN1_PATH: &str = "/org/freedesktop/login1";
+static SYSTEM_BUS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static WAKE_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 #[derive(Debug, Eq, PartialEq)]
 enum MockEvent {
@@ -166,7 +168,83 @@ async fn next_event(events: &mut mpsc::UnboundedReceiver<MockEvent>) -> MockEven
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
 async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
-    let Some((_daemon, address)) = spawn_dbus_daemon() else {
+    exercise_logind_listener(None, WakeProgress::None).await;
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TerminalLoss {
+    StreamEnded,
+    InvalidSignal,
+    Cancelled,
+    CancelledPreparing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WakeProgress {
+    None,
+    BeforePoll,
+    RefreshPending,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
+async fn logind_stream_end_retires_cycle_without_wake() {
+    exercise_logind_listener(Some(TerminalLoss::StreamEnded), WakeProgress::None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
+async fn logind_invalid_signal_retires_cycle_without_wake() {
+    exercise_logind_listener(Some(TerminalLoss::InvalidSignal), WakeProgress::None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
+async fn logind_cancellation_retires_cycle_without_wake() {
+    for loss in [TerminalLoss::Cancelled, TerminalLoss::CancelledPreparing] {
+        exercise_logind_listener(Some(loss), WakeProgress::None).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
+async fn logind_terminal_loss_preserves_unpolled_wake() {
+    for loss in [
+        TerminalLoss::StreamEnded,
+        TerminalLoss::InvalidSignal,
+        TerminalLoss::Cancelled,
+    ] {
+        exercise_logind_listener(Some(loss), WakeProgress::BeforePoll).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Linux and dbus-daemon; run with cargo test -- --ignored logind"]
+async fn logind_terminal_loss_preserves_refreshing_wake() {
+    for loss in [
+        TerminalLoss::StreamEnded,
+        TerminalLoss::InvalidSignal,
+        TerminalLoss::Cancelled,
+    ] {
+        exercise_logind_listener(Some(loss), WakeProgress::RefreshPending).await;
+    }
+}
+
+async fn exercise_logind_listener(terminal_loss: Option<TerminalLoss>, wake: WakeProgress) {
+    // DBUS_SYSTEM_BUS_ADDRESS is process-global, including under default-parallel Cargo.
+    let _serial = SYSTEM_BUS_TEST_LOCK.lock().await;
+    // The listener runs on the test runtime; one distinct wake worker lets the
+    // fixture hold recovery before its first poll without changing production hooks.
+    WAKE_RUNTIME.get_or_init(|| {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create fixture wake runtime");
+        tauri::async_runtime::set(runtime.handle().clone());
+        runtime
+    });
+    let Some((mut daemon, address)) = spawn_dbus_daemon() else {
         return;
     };
     let _system_bus = SystemBusAddress::set(&address);
@@ -190,6 +268,9 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
     let prepare_events = event_tx.clone();
     let refresh_events = event_tx.clone();
     let resume_events = event_tx.clone();
+    let block_prepare = matches!(terminal_loss, Some(TerminalLoss::CancelledPreparing));
+    let release_refresh = Arc::new(tokio::sync::Notify::new());
+    let refresh_barrier = Arc::clone(&release_refresh);
     let controller = Arc::new(GatewaySleepCycleController::new(
         "logind-proof".into(),
         || {
@@ -202,6 +283,9 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
             let events = prepare_events.clone();
             async move {
                 let _ = events.send(MockEvent::Prepare);
+                if block_prepare {
+                    std::future::pending::<()>().await;
+                }
                 Ok(SleepPrepareOutcome::Ready {
                     suspension_id: "mock-suspension".into(),
                 })
@@ -216,8 +300,12 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
         },
         move || {
             let events = refresh_events.clone();
+            let barrier = Arc::clone(&refresh_barrier);
             async move {
                 let _ = events.send(MockEvent::Refresh);
+                if wake == WakeProgress::RefreshPending {
+                    barrier.notified().await;
+                }
             }
         },
         |_| std::future::ready(()),
@@ -232,7 +320,11 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
     let end_sleep_cycle: EndSleepCycleHook = Arc::new(move || {
         let _ = end_events.send(MockEvent::DriverDeactivated);
     });
-    let listener = tokio::spawn(run_listener(controller, begin_sleep_cycle, end_sleep_cycle));
+    let listener = tokio::spawn(run_listener(
+        Arc::clone(&controller),
+        begin_sleep_cycle,
+        end_sleep_cycle,
+    ));
 
     assert_eq!(
         next_event(&mut events).await,
@@ -248,10 +340,110 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
         .expect("emit sleep signal");
     assert_eq!(next_event(&mut events).await, MockEvent::DriverActivated);
     assert_eq!(next_event(&mut events).await, MockEvent::Prepare);
-    assert_eq!(
-        next_event(&mut events).await,
-        MockEvent::InhibitorReleased(1)
-    );
+    if !block_prepare {
+        assert_eq!(
+            next_event(&mut events).await,
+            MockEvent::InhibitorReleased(1)
+        );
+    }
+
+    if let Some(loss) = terminal_loss {
+        let mut wake_gate = None;
+        if wake == WakeProgress::BeforePoll {
+            let (entered, waiting) = tokio::sync::oneshot::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            let gate = tauri::async_runtime::spawn(async move {
+                entered.send(()).expect("announce blocked wake worker");
+                blocked
+                    .recv_timeout(Duration::from_secs(3))
+                    .expect("wake worker was not released");
+            });
+            tokio::time::timeout(Duration::from_secs(3), waiting)
+                .await
+                .expect("wake worker did not reach gate")
+                .expect("wake worker gate dropped");
+            wake_gate = Some((release, gate));
+        }
+        if wake != WakeProgress::None {
+            MockLogin1::prepare_for_sleep(interface.signal_emitter(), false)
+                .await
+                .expect("emit real wake before terminal loss");
+            if wake == WakeProgress::BeforePoll {
+                assert_eq!(
+                    next_event(&mut events).await,
+                    MockEvent::InhibitorAcquired(2)
+                );
+            } else {
+                let waking = [next_event(&mut events).await, next_event(&mut events).await];
+                assert!(waking.contains(&MockEvent::Refresh));
+                assert!(waking.contains(&MockEvent::InhibitorAcquired(2)));
+            }
+        }
+        match loss {
+            TerminalLoss::StreamEnded => {
+                daemon.child.kill().expect("stop private system bus");
+                daemon.child.wait().expect("reap private system bus");
+            }
+            TerminalLoss::InvalidSignal => {
+                service
+                    .emit_signal(
+                        None::<&str>,
+                        LOGIN1_PATH,
+                        "org.freedesktop.login1.Manager",
+                        "PrepareForSleep",
+                        &("not a boolean",),
+                    )
+                    .await
+                    .expect("emit malformed sleep signal");
+            }
+            TerminalLoss::Cancelled | TerminalLoss::CancelledPreparing => listener.abort(),
+        }
+        let stopped = tokio::time::timeout(Duration::from_secs(3), listener)
+            .await
+            .expect("terminal listener did not stop");
+        match loss {
+            TerminalLoss::Cancelled | TerminalLoss::CancelledPreparing => {
+                assert!(stopped.unwrap_err().is_cancelled());
+            }
+            _ => assert!(stopped.unwrap().is_err(), "{loss:?}"),
+        }
+        if wake != WakeProgress::None {
+            // Recovery is still pending when the listener exits. Its cycle must
+            // remain owned by the wake task, not abandoned or ended by the listener.
+            assert_eq!(
+                next_event(&mut events).await,
+                MockEvent::InhibitorReleased(2)
+            );
+            if let Some((release, gate)) = wake_gate {
+                release.send(()).expect("release unpolled wake");
+                gate.await.expect("reap wake worker gate");
+                assert_eq!(next_event(&mut events).await, MockEvent::Refresh);
+            } else {
+                release_refresh.notify_one();
+            }
+            assert_eq!(next_event(&mut events).await, MockEvent::Resume);
+            assert_eq!(next_event(&mut events).await, MockEvent::DriverDeactivated);
+            assert!(
+                events.try_recv().is_err(),
+                "duplicate wake cleanup: {loss:?}"
+            );
+            return;
+        }
+        if block_prepare {
+            let cleanup = [next_event(&mut events).await, next_event(&mut events).await];
+            assert!(cleanup.contains(&MockEvent::DriverDeactivated));
+            assert!(cleanup.contains(&MockEvent::InhibitorReleased(1)));
+        } else {
+            assert_eq!(next_event(&mut events).await, MockEvent::DriverDeactivated);
+        }
+        // A terminal controller cannot turn a stale notification into wake recovery.
+        controller.did_wake().await;
+        assert!(
+            events.try_recv().is_err(),
+            "terminal loss must not refresh, resume, or release the driver twice: {loss:?}"
+        );
+        return;
+    }
 
     MockLogin1::prepare_for_sleep(interface.signal_emitter(), false)
         .await
@@ -278,4 +470,5 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
     );
 
     listener.abort();
+    assert!(listener.await.unwrap_err().is_cancelled());
 }

@@ -18,6 +18,84 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("captures a restore baseline before native storage yields to a new edit", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}settings`);
+      const storeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const persistenceHandle = await page.evaluateHandle<
+        typeof import("../pages/chat/durable-composer-persistence.ts")
+      >('import("/src/pages/chat/durable-composer-persistence.ts")');
+      const result = await page.evaluate(
+        async ({ store, composer }) => {
+          const scope = {
+            gatewayOwner: "restore-order-gateway",
+            recoveryScope: "restore-order-owner",
+            scopeKey: "restore-order-draft",
+          };
+          const written = await store.writeDurableComposerDraft(
+            scope,
+            { revision: 10, text: "Older saved draft", attachments: [] },
+            { expectedRevision: 0, writeId: "stored-draft" },
+          );
+          if (written.status !== "persisted") {
+            throw new Error("failed to seed restore-order draft");
+          }
+          const current = { text: "Before restore", revision: 1 };
+          let prepared = 0;
+          let appliedText: string | null = null;
+          let storageFailed = false;
+          let currentWins = false;
+          let observeRestore!: () => void;
+          const observed = new Promise<void>((resolve) => {
+            observeRestore = resolve;
+          });
+          const persistence = new composer.DurableChatComposerPersistence(
+            () => {
+              storageFailed = true;
+              observeRestore();
+            },
+            () => {},
+          );
+          persistence.restore(
+            scope,
+            () => {
+              prepared++;
+              return {
+                latestRevision: current.revision,
+                signature: current.text,
+                onCurrentWins: () => {
+                  currentWins = true;
+                },
+              };
+            },
+            () => {
+              observeRestore();
+              return { scope, signature: current.text, revision: current.revision };
+            },
+            (draft) => {
+              appliedText = draft.text;
+            },
+          );
+          current.text = "New edit during restore";
+          current.revision = 2;
+          await observed;
+          return { prepared, appliedText, storageFailed, currentWins, text: current.text };
+        },
+        { store: storeHandle, composer: persistenceHandle },
+      );
+      expect(result).toEqual({
+        prepared: 1,
+        appliedText: null,
+        storageFailed: false,
+        currentWins: false,
+        text: "New edit during restore",
+      });
+    });
+  });
+
   it("reopens composer storage after the browser forcibly closes its database", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       await page.route("**/composer-storage-reopen", (route) =>

@@ -48,9 +48,11 @@ including local development plugins. The equivalent config is:
 }
 ```
 
-Restart the Gateway and reload connected browser tabs after changing this
-setting. Disabling it prevents custom native UI from loading; it does not
-uninstall plugins or disable their backend operations, tools, or services.
+Changes apply without restarting the Gateway, and connected Control UI pages
+refresh their plugin views automatically. Disabling it prevents custom native UI
+from loading and removes its views. Reload browser tabs to clear plugin
+JavaScript that already ran. This does not uninstall plugins or disable their
+backend operations, tools, or services.
 Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,
@@ -77,6 +79,11 @@ and a composer replacement. Open Draft Review from the Control UI sidebar, or
 open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
+
+Customization controls live on the Plugins page. There is no floating
+customization button. If a workspace replacement hides navigation, open
+`/plugins` under your Control UI base URL to choose Built-in; the Plugins page
+always uses the built-in workspace.
 
 The project has three public SDK imports:
 
@@ -212,10 +219,13 @@ when the roster changes, and actions check the current row again when invoked.
 Actions can inspect `session.hasActiveRun`; an absent value means activity is
 not yet known.
 `host.components`
-mounts host-owned dialogs, agent pickers, and session dashboards from plain
-props and DOM content. Each component returns `update` and `dispose` methods;
+mounts host-owned dialogs, agent pickers, searchable select pickers, and session
+dashboards from plain props and DOM content. Each component returns `update` and `dispose` methods;
 the host retains permission checks, focus handling, and dashboard provider
-ownership.
+ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }`
+options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
+With `searchable: true`, lists longer than eight options show a search field.
+The picker matches option labels, values, and descriptions.
 
 ## Build and reload
 

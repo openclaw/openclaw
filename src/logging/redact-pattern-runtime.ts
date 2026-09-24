@@ -36,9 +36,90 @@ export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: s
 type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
+  readonly createContext?: () => {
+    pattern: ResolvedRedactPattern;
+    /** Prepend one complete, newline-bounded source block; true means older input cannot matter. */
+    prepend: () => { consume: (text: string) => void; finish: () => boolean };
+  };
 };
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
+
+function getIndexedCaptureStart(
+  pattern: ResolvedRedactPattern,
+  input: string,
+  match: string,
+  matchOffset: number,
+  captureIndex: number,
+): number | null {
+  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
+    return null;
+  }
+  try {
+    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
+    const indexedPattern = new RegExp(pattern.source, flags);
+    indexedPattern.lastIndex = matchOffset;
+    const indexedMatch = indexedPattern.exec(input);
+    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
+    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
+      return null;
+    }
+    if (!captureIndices) {
+      return null;
+    }
+    return captureIndices[0] - matchOffset;
+  } catch {
+    return null;
+  }
+}
+
+function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
+  return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
+}
+
+type SecretCaptureSelection = {
+  captureCount: number;
+  index: number;
+  value: string;
+};
+
+export function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
+  const selected = { index: -1, value: match, captureCount: 0 };
+  for (let index = 0; index < groups.length; index++) {
+    const value = groups[index];
+    if (typeof value === "string" && value.length > 0) {
+      selected.index = index;
+      selected.value = value;
+      selected.captureCount++;
+    }
+  }
+  return selected;
+}
+
+export function getSecretCaptureStart(
+  pattern: ResolvedRedactPattern,
+  input: string,
+  match: string,
+  matchOffset: number,
+  selected: SecretCaptureSelection,
+): number {
+  const indexedTokenStart = getIndexedCaptureStart(
+    pattern,
+    input,
+    match,
+    matchOffset,
+    selected.index,
+  );
+  if (indexedTokenStart !== null) {
+    return indexedTokenStart;
+  }
+  const preferFirstCapture =
+    pattern instanceof RegExp &&
+    selected.captureCount === 1 &&
+    selected.index >= 0 &&
+    hasBackreferenceToGroup(pattern, selected.index + 1);
+  return preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value);
+}
 
 const globalPatterns = new WeakMap<RegExp, RegExp>();
 

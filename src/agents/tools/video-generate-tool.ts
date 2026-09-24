@@ -1,16 +1,16 @@
 /** Runs capability-aware video generation and persistence. */
 import { Type, type TSchema } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../plugins/installed-plugin-index.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
-import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
@@ -23,6 +23,7 @@ import {
 import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
 import {
   prepareMediaGenerationTask,
+  resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
   videoGenerationTaskLifecycle,
   type VideoGenerationTaskHandle,
@@ -30,9 +31,8 @@ import {
 import { acquireVideoGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
-  hasGenerationToolAvailability,
+  normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  resolveMediaToolSandboxConfig,
   resolveGenerateAction,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
@@ -51,9 +51,7 @@ import {
 import {
   executeVideoGenerationJob,
   loadReferenceAssets,
-  normalizeReferenceInputs,
   normalizeResolution,
-  normalizeAspectRatio,
   parseRoleArray,
 } from "./video-generate-tool.execution.js";
 
@@ -82,7 +80,7 @@ const VideoGenerateToolProperties = {
   imageRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`image` + `images` roles by index after de-dupe. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
+        "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
     }),
   ),
   video: Type.Optional(
@@ -98,7 +96,7 @@ const VideoGenerateToolProperties = {
   videoRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`video` + `videos` roles by index after de-dupe. Value: reference_video; empty string leaves unset.",
+        "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
     }),
   ),
   audioRef: Type.Optional(
@@ -114,7 +112,7 @@ const VideoGenerateToolProperties = {
   audioRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`audioRef` + `audioRefs` roles by index after de-dupe. Value: reference_audio; empty string leaves unset.",
+        "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
     }),
   ),
   model: Type.Optional(
@@ -246,6 +244,10 @@ function shouldExposeVideoReferenceAudioParams(params: {
     modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
+  let normalizedConfig: ReturnType<typeof normalizePluginsConfig> | undefined;
+  let isInstalledPluginEnabled:
+    | ReturnType<typeof createInstalledPluginEnabledPredicate>
+    | undefined;
 
   for (const plugin of snapshot.plugins) {
     if (
@@ -254,6 +256,11 @@ function shouldExposeVideoReferenceAudioParams(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        normalizedConfig: params.cfg.plugins
+          ? (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins))
+          : undefined,
+        isInstalledPluginEnabled: (isInstalledPluginEnabled ??=
+          createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg)),
       })
     ) {
       continue;
@@ -297,49 +304,17 @@ function shouldExposeVideoReferenceAudioParams(params: {
   return false;
 }
 
-function resolveSelectedVideoGenerationProvider(params: {
-  config?: OpenClawConfig;
-  providers?: VideoGenerationProvider[];
-  videoGenerationModelConfig: ToolModelConfig;
-  modelOverride?: string;
-}): VideoGenerationProvider | undefined {
-  return resolveSelectedCapabilityProvider({
-    providers: params.providers ?? listRuntimeVideoGenerationProviders({ config: params.config }),
-    modelConfig: params.videoGenerationModelConfig,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseVideoGenerationModelRef,
-  });
-}
-
 const defaultScheduleVideoGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "video_generate",
   onCrash: (message, meta) => log.error(message, meta),
 });
 
 export function createVideoGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
-  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
-    ?.videoGenerationProviders
-    ? [...options.preparedModelRuntime.mediaCapabilityProviders.videoGenerationProviders]
-    : undefined;
-  if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.video,
-      providerKey: "videoGenerationProviders",
-      providers: preparedProviders,
-    })
-  ) {
+  const context = resolveMediaGenerateToolContext("videoGenerationProviders", options);
+  if (!context) {
     return null;
   }
-
-  const sandboxConfig = resolveMediaToolSandboxConfig(
-    options?.sandbox,
-    options?.fsPolicy?.workspaceOnly,
-  );
+  const { cfg, preparedProviders, sandboxConfig } = context;
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleVideoGenerateBackgroundWork;
   const includeAudioReferences = shouldExposeVideoReferenceAudioParams({
@@ -407,7 +382,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
 
           const filename = readToolStringParam(args, "filename");
           const size = readToolStringParam(args, "size");
-          const aspectRatio = normalizeAspectRatio(readToolStringParam(args, "aspectRatio"));
+          const aspectRatio = readToolStringParam(args, "aspectRatio");
           const resolution = normalizeResolution(readToolStringParam(args, "resolution"));
           const durationSeconds = readNumberParam(args, "durationSeconds", {
             positiveInteger: true,
@@ -439,11 +414,13 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             providerOptionsRaw != null
               ? (providerOptionsRaw as Record<string, unknown>)
               : undefined;
-          const imageInputs = normalizeReferenceInputs({
+          const imageInputs = normalizeMediaReferenceInputs({
             args,
             singularKey: "image",
             pluralKey: "images",
             maxCount: MAX_INPUT_IMAGES,
+            label: "reference images",
+            dedupe: false,
           });
           // *Roles: parallel string arrays giving each asset a semantic role hint.
           // Use readSnakeCaseParamRaw so both camelCase and snake_case keys are accepted.
@@ -452,22 +429,26 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             kind: "imageRoles",
             assetCount: imageInputs.length,
           });
-          const videoInputs = normalizeReferenceInputs({
+          const videoInputs = normalizeMediaReferenceInputs({
             args,
             singularKey: "video",
             pluralKey: "videos",
             maxCount: MAX_INPUT_VIDEOS,
+            label: "reference videos",
+            dedupe: false,
           });
           const videoRoles = parseRoleArray({
             raw: readSnakeCaseParamRaw(args, "videoRoles"),
             kind: "videoRoles",
             assetCount: videoInputs.length,
           });
-          const audioInputs = normalizeReferenceInputs({
+          const audioInputs = normalizeMediaReferenceInputs({
             args,
             singularKey: "audioRef",
             pluralKey: "audioRefs",
             maxCount: MAX_INPUT_AUDIOS,
+            label: "reference audioRefs",
+            dedupe: false,
           });
           const audioRoles = parseRoleArray({
             raw: readSnakeCaseParamRaw(args, "audioRoles"),
@@ -475,11 +456,11 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
             assetCount: audioInputs.length,
           });
 
-          const selectedProvider = resolveSelectedVideoGenerationProvider({
-            config: effectiveCfg,
-            providers,
-            videoGenerationModelConfig,
+          const selectedProvider = resolveSelectedCapabilityProvider({
+            providers: providers ?? listRuntimeVideoGenerationProviders({ config: effectiveCfg }),
+            modelConfig: videoGenerationModelConfig,
             modelOverride: model,
+            parseModelRef: parseVideoGenerationModelRef,
           });
           const explicitModelRef = parseVideoGenerationModelRef(model);
           const primaryModelRef = parseVideoGenerationModelRef(videoGenerationModelConfig.primary);
@@ -518,35 +499,34 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
           }
           signal?.throwIfAborted();
           acquired?.assertOpen();
+          const referenceOptions = {
+            workspaceDir: options?.workspaceDir,
+            cwd: options?.cwd,
+            fsPolicy: options?.fsPolicy,
+            sandboxConfig,
+            ssrfPolicy: remoteMediaSsrfPolicy,
+            signal,
+          };
           const loadedReferenceImages = await loadReferenceAssets({
+            ...referenceOptions,
             inputs: imageInputs,
             roles: imageRoles,
             expectedKind: "image",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
-            workspaceDir: options?.workspaceDir,
-            sandboxConfig,
-            ssrfPolicy: remoteMediaSsrfPolicy,
-            signal,
           });
           const loadedReferenceVideos = await loadReferenceAssets({
+            ...referenceOptions,
             inputs: videoInputs,
             roles: videoRoles,
             expectedKind: "video",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "video"),
-            workspaceDir: options?.workspaceDir,
-            sandboxConfig,
-            ssrfPolicy: remoteMediaSsrfPolicy,
-            signal,
           });
           const loadedReferenceAudios = await loadReferenceAssets({
+            ...referenceOptions,
             inputs: audioInputs,
             roles: audioRoles,
             expectedKind: "audio",
             maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "audio"),
-            workspaceDir: options?.workspaceDir,
-            sandboxConfig,
-            ssrfPolicy: remoteMediaSsrfPolicy,
-            signal,
           });
           return {
             kind: "task" as const,

@@ -1,6 +1,5 @@
 import {
   resolveMemorySearchStaleness,
-  stripMemoryAnnotationCarriers,
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -12,7 +11,6 @@ import {
   readStringParam,
   resolveMemoryDreamingPluginConfig,
   resolveRuntimeConfigCacheKey,
-  type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -41,11 +39,11 @@ import {
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
-  decorateCitations,
+  buildMemorySearchPresentation,
   resolveMemoryCitationsMode,
   shouldIncludeCitations,
+  type MemorySearchToolResult,
 } from "./tools.citations.js";
 import {
   buildMemorySearchUnavailableResult,
@@ -54,7 +52,6 @@ import {
   loadMemoryToolRuntime,
 } from "./tools.shared.js";
 
-type MemorySearchToolResult = MemorySearchResult | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
 type MemorySearchToolQueryDebug = NonNullable<
@@ -68,6 +65,7 @@ type PrimaryMemorySearchValue = {
   fallback?: unknown;
   mode?: string;
   staleness?: Exclude<ReturnType<typeof resolveMemorySearchStaleness>, null>;
+  automaticRebuildWarning?: string;
   debug?: MemorySearchToolQueryDebug & { toolMs?: number; outsideSearchMs?: number };
   unavailableResult?: ReturnType<typeof buildPausedMemoryIndexUnavailableResult>;
 };
@@ -263,7 +261,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
               warning: "Session transcript search is unavailable for this agent.",
               action:
-                'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+                'If an exact session-history capability is available for this run, use it. Otherwise, ask the operator to enable semantic session search by enabling memory.search.experimental.sessionMemory and adding "sessions" to memory.search.sources.',
             }),
           );
         }
@@ -276,6 +274,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
         let cleanupStarted = false;
         let searchSignal: AbortSignal | undefined;
+        const rebuildNotices: Array<() => string | undefined> = [];
+        const readRebuildWarning = () =>
+          [...new Set(rebuildNotices.map((read) => read()).filter(Boolean))].join(" ") || undefined;
         const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
           if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
             if (cleanupStarted) {
@@ -323,6 +324,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     ? ["memory"]
                     : undefined;
               return await executeMemorySearchToolQuery({
+                onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
                 refreshManager: async () => {
                   const refreshed = trackMemoryManager(
@@ -374,7 +376,12 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   }
                 : { error: "memory search unavailable", deadline: false };
             recordMemorySearchToolCooldown(agentId, cfg, failure);
-            return { corpus: "memory", outcome: "unavailable", value: null, ...failure };
+            return {
+              corpus: "memory",
+              outcome: "unavailable",
+              value: { results: [], automaticRebuildWarning: readRebuildWarning() },
+              ...failure,
+            };
           }
           const executed = attempted.value!;
           if (executed.pausedIndexIdentity) {
@@ -382,6 +389,12 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               executed.pausedIndexIdentity,
               { agentId, status: executed.status },
             );
+            const rebuildWarning = readRebuildWarning();
+            if (rebuildWarning) {
+              unavailableResult.warning = [unavailableResult.warning, rebuildWarning]
+                .filter(Boolean)
+                .join(" ");
+            }
             return unavailableMemoryCorpus(
               "memory",
               {
@@ -402,6 +415,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               fallback: status.fallback,
               mode: executed.searchMode,
               staleness: resolveMemorySearchStaleness(status, agentId) ?? undefined,
+              automaticRebuildWarning: readRebuildWarning(),
               debug:
                 attempted.outcome === "partial" && executed.debug
                   ? {
@@ -443,6 +457,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 return jsonResult(
                   memoryValue?.unavailableResult ??
                     buildMemorySearchUnavailableResult(memory.error, {
+                      warning: readRebuildWarning(),
                       agentId,
                       deadline: memory.deadline,
                       code: memory.code,
@@ -466,33 +481,30 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 surfaced.has(result),
               );
               const citationsMode = resolveMemoryCitationsMode(cfg);
-              const decorated = decorateCitations(
-                recalled.map((result) => ({
-                  ...result,
-                  corpus: result.source,
-                  snippet: stripMemoryAnnotationCarriers(result.snippet),
-                })),
+              const presentation = buildMemorySearchPresentation(
+                recalled,
                 shouldIncludeCitations({
                   mode: citationsMode,
                   sessionKey: options.agentSessionKey,
                 }),
-              );
-              const presentation = new Map<MemorySearchToolResult, MemorySearchResult>(
-                recalled.map((result, index) => [result, decorated[index]!]),
               );
               const dreaming = resolveMemoryDreamingConfig({
                 pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
                 cfg,
               });
               if ((memory?.outcome === "ok" || memory?.outcome === "partial") && dreaming.enabled) {
-                void recordShortTermRecalls({
+                const recall = {
                   workspaceDir: memoryValue?.workspaceDir,
                   query,
                   results: recalled,
+                  nowMs: Date.now(),
                   timezone: dreaming.timezone,
-                }).catch(() => {
-                  // Gateway recall persistence stays off the reply latency path.
-                });
+                };
+                void import("./short-term-promotion-record.js")
+                  .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
+                  .catch(() => {
+                    // Gateway recall persistence stays off the reply latency path.
+                  });
               }
               const attempts = [
                 ...((requestedCorpus === "all" || memory?.outcome === "partial") && memory
@@ -503,6 +515,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               const staleness = memoryValue?.staleness;
               const recovery = memoryValue?.unavailableResult;
               const metadata = composeMemoryCorpusMetadata(attempts, [
+                ...(memoryValue?.automaticRebuildWarning
+                  ? [memoryValue.automaticRebuildWarning]
+                  : []),
                 ...(staleness?.warning ? [staleness.warning] : []),
                 ...(recovery?.warning ? [recovery.warning] : []),
                 ...(memory?.outcome === "partial"
@@ -527,7 +542,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 citations: citationsMode,
                 mode: memoryValue?.mode,
                 ...staleness,
-                ...(attempts.length > 0 ? metadata : {}),
+                ...(attempts.length > 0 || memoryValue?.automaticRebuildWarning ? metadata : {}),
                 ...(memory?.outcome === "partial" ? { partial: true } : {}),
                 // Another corpus can succeed while primary memory still needs repair.
                 ...(recovery?.action ? { action: recovery.action } : {}),
@@ -545,6 +560,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           }
           return jsonResult(
             buildMemorySearchUnavailableResult(failed.error, {
+              warning: readRebuildWarning(),
               agentId,
               deadline: failed.deadline,
               code: failed.code,

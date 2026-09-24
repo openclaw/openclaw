@@ -67,3 +67,36 @@ export default defineToolPlugin({
 - Runtime loading stays strict: installed plugins still need
   `openclaw.plugin.json` and `package.json` `openclaw.extensions`. OpenClaw
   never executes plugin code to infer missing manifest data.
+
+## Input-dependent output schemas
+
+The existing `outputSchema` field supports action-specific Code Mode results
+through the versioned `x-openclaw-input-discriminator` JSON Schema annotation.
+Construct the union and mapping from the same local variants using standard
+TypeBox APIs:
+
+```typescript
+const variants = Object.entries({
+  list: Type.Object({ items: Type.Array(Type.String()) }),
+  status: Type.Object({ ready: Type.Boolean() }),
+});
+const outputSchema = Type.Union(
+  variants.map(([, schema]) => schema),
+  {
+    "x-openclaw-input-discriminator": {
+      version: 1,
+      inputProperty: "action",
+      mapping: Object.fromEntries(variants.map(([value], index) => [value, index])),
+    },
+  },
+);
+```
+
+Use the result as `outputSchema` in `defineToolPlugin` or `api.registerTool`.
+Include success and non-throwing failure outcomes in each variant. Static metadata
+preserves the annotation. Code Mode infers the selected return type; Tool Search
+validates the actual and originally advertised operation results. Missing or
+broad selectors retain a sound union. Reference-bearing schemas and declarations
+that exceed existing bounds use the conservative umbrella contract. See
+[Input-dependent outputs](/tools/code-mode/output#input-dependent-outputs) for
+version, hook, and validation behavior.

@@ -2,6 +2,11 @@ import type {
   GitWorktreeEffects,
   GitWorktreeOperations,
 } from "../agents/worktrees/git-worktree-operations.js";
+import type {
+  WorkspaceInventoryComputationOperations,
+  WorkspaceInventoryHostEffects,
+} from "../gateway/worker-environments/workspace-inventory-computation.js";
+import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
 import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
@@ -9,19 +14,26 @@ import type { GitReadOperations } from "./git-read-operations.js";
 
 export type GitWorkerOperations = GitReadOperations &
   GitWorktreeOperations &
-  WorkspaceArtifactReadOperations;
+  WorkspaceArtifactReadOperations &
+  WorkspaceInventoryComputationOperations &
+  WorkspaceManifestComputationOperations;
 export type GitWorkerCommand = {
-  [K in keyof GitWorkerOperations]: { type: K; input: GitWorkerOperations[K]["input"] };
+  [K in keyof GitWorkerOperations]: {
+    type: K;
+    input: GitWorkerOperations[K]["input"];
+    filesystemRefs?: boolean;
+  };
 }[keyof GitWorkerOperations];
 export type GitWorkerResult = GitWorkerOperations[keyof GitWorkerOperations]["output"];
 
-export type GitWorkerEffects = GitWorktreeEffects & {
-  "git.temporary-directory": { input: Record<string, never>; output: string };
-};
+export type GitWorkerEffects = GitWorktreeEffects &
+  WorkspaceInventoryHostEffects & {
+    "git.temporary-directory": { input: Record<string, never>; output: string };
+  };
 export type GitWorkerEffect = {
   [K in keyof GitWorkerEffects]: { type: K; input: GitWorkerEffects[K]["input"] };
 }[keyof GitWorkerEffects];
-type GitWorkerTextOptions = Omit<GitCommandOptions, "signal">;
+type GitWorkerTextOptions = Omit<GitCommandOptions, "signal" | "beforeRun">;
 type GitWorkerBufferOptions = Omit<BufferedCommandOptions, "signal">;
 export type GitWorkerGitCommands = {
   "git.text": {

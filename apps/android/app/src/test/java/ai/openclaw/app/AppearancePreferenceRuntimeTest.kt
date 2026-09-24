@@ -62,6 +62,23 @@ private const val APPEARANCE_CONNECTION_TIMEOUT_MS = 8_000L
 @Config(sdk = [34])
 class AppearancePreferenceRuntimeTest {
   @Test
+  fun textSizeNeverSyncsToProfilesAndSurvivesRuntimeReconstruction() =
+    runBlocking {
+      withAppearanceGateway {
+        connect()
+        viewModel().setAppearanceTextScale(AppearanceTextScale.ExtraLarge)
+        refresh()
+        connect(profileId = "profile-b")
+        assertEquals(125, prefs.appearanceTextScale.value.percent)
+        recreateOffline()
+        assertEquals(125, viewModel().appearanceTextScale.value.percent)
+        connect()
+        assertTrue(writes.isEmpty())
+        assertEquals(125, prefs.appearanceTextScale.value.percent)
+      }
+    }
+
+  @Test
   fun concurrentWritesForOneKeyFinishWithTheLatestValue() =
     runBlocking {
       withAppearanceGateway {

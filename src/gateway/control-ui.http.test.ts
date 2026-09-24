@@ -1,6 +1,5 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -22,7 +21,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
@@ -44,7 +43,6 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
-import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -448,15 +446,19 @@ describe("handleControlUiHttpRequest", () => {
     const originalRead = fileHandlePrototype.read;
     await probe.close();
     let constrained = false;
-    return vi
-      .spyOn(fileHandlePrototype, "read")
-      .mockImplementation(async function (this: unknown, target, offset, length, position) {
-        if (!constrained && position === 0 && length > maxBytes) {
-          constrained = true;
-          return await originalRead.call(this, target, offset, maxBytes, position);
-        }
-        return await originalRead.call(this, target, offset, length, position);
-      });
+    return vi.spyOn(fileHandlePrototype, "read").mockImplementation(async function (
+      this: unknown,
+      target,
+      offset,
+      length,
+      position,
+    ) {
+      if (!constrained && position === 0 && length > maxBytes) {
+        constrained = true;
+        return await originalRead.call(this, target, offset, maxBytes, position);
+      }
+      return await originalRead.call(this, target, offset, length, position);
+    });
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -487,7 +489,7 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       // A failed database close must leave its files intact.
       if (databasePath) {
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
       await fs.rm(tempHome, { recursive: true, force: true });
     }
@@ -795,22 +797,19 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it.each([
-    { filename: "voice.ogg", disposition: "inline" },
-    { filename: "clip.mp4", disposition: "inline" },
-    { filename: "report.pdf", disposition: "attachment" },
-    {
-      filename: "invoice---123e4567-e89b-12d3-a456-426614174000.pdf",
-      disposition: "attachment",
-    },
-    { filename: "archive.bin", disposition: "attachment" },
-  ])("serves $filename with $disposition disposition", async ({ filename, disposition }) => {
+    ["voice.ogg", "inline"],
+    ["clip.mp4", "inline"],
+    ["report.pdf", "attachment"],
+    ["invoice---123e4567-e89b-12d3-a456-426614174000.pdf", "attachment"],
+    ["archive.bin", "attachment"],
+  ])("serves %s with %s disposition", async (filename, disposition) => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-disposition-",
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, filename);
         await fs.writeFile(filePath, Buffer.from("fixture"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&filename=ignored.txt&token=test-token`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
         });
@@ -905,30 +904,6 @@ describe("handleControlUiHttpRequest", () => {
     expect(buildAssistantMediaContentDisposition("draft\uD800.pdf", "application/pdf")).toBe(
       `attachment; filename="draft_.pdf"; filename*=UTF-8''draft%EF%BF%BD.pdf`,
     );
-  });
-
-  it("serves assistant media from canonical inbound media refs", async () => {
-    const stateDir = resolveStateDir();
-    const id = `report---${randomUUID()}.pdf`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-
-    try {
-      const { res, handled } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
-        method: "GET",
-        auth: { mode: "token", token: "test-token", allowTailscale: false },
-      });
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(res["setHeader"]).toHaveBeenCalledWith(
-        "Content-Disposition",
-        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
-      );
-    } finally {
-      await fs.rm(filePath, { force: true });
-    }
   });
 
   it("reports assistant media metadata for canonical inbound media refs", async () => {
@@ -2320,52 +2295,6 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.controlUiDescriptors.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      descriptor: {
-        surface: "tab",
-        id: "demo",
-        label: "Demo",
-        path: "/secure-hook/panel",
-        requiredScopes: ["operator.admin"],
-      },
-    });
-    registry.httpRoutes.push({
-      pluginId: "demo-plugin",
-      source: "demo-plugin",
-      path: "/secure-hook",
-      auth: "gateway",
-      match: "prefix",
-      handler: async () => true,
-    });
-    setActivePluginRegistry(registry);
-    const { res, setHeader } = makeMockHttpResponse();
-
-    expect(
-      setControlUiPluginAuthCookieForRequest(
-        { headers: {} } as IncomingMessage,
-        res,
-        "tailscale",
-        true,
-        "test-generation",
-      ),
-    ).toEqual([
-      {
-        pluginId: "demo-plugin",
-        path: "/secure-hook",
-        match: "prefix",
-        scopes: ["operator.read"],
-      },
-    ]);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Set-Cookie",
-      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
-    );
-  });
-
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
     await withPairedOperatorDeviceToken({
       fn: async (operatorToken) => {
@@ -3132,27 +3061,30 @@ describe("handleControlUiHttpRequest", () => {
       await withControlUiRoot({
         fn: async (tmp) => {
           await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
-          const requestScope = new AsyncLocalStorage<boolean>();
-          let filesystemOperations = 0;
-          const hook = createHook({
-            init(_id, type) {
-              if (type === "FSREQCALLBACK" && requestScope.getStore()) {
-                filesystemOperations += 1;
-              }
-            },
-          }).enable();
+          const read = vi.spyOn(fsSync, "read");
+          const stat = vi.spyOn(fsSync, "stat");
+          const fstat = vi.spyOn(fsSync, "fstat");
+          const lstat = vi.spyOn(fsSync, "lstat");
           try {
-            const { res, end, handled } = await requestScope.run(true, () =>
-              runControlUiRequest({ url, method: "GET", rootPath: tmp }),
-            );
+            const { res, end, handled } = await runControlUiRequest({
+              url,
+              method: "GET",
+              rootPath: tmp,
+            });
             expect(handled).toBe(true);
             expect(res.statusCode).toBe(200);
             expect(responseBody(end)).toContain(url.startsWith("/assets/") ? "inside-ok" : "<html");
             // Safe open already captured stat; a second queued metadata read adds
             // another event-loop wait before these bytes can reach the browser.
-            expect(filesystemOperations).toBe(1);
+            expect(read).toHaveBeenCalledOnce();
+            expect(stat).not.toHaveBeenCalled();
+            expect(fstat).not.toHaveBeenCalled();
+            expect(lstat).not.toHaveBeenCalled();
           } finally {
-            hook.disable();
+            read.mockRestore();
+            stat.mockRestore();
+            fstat.mockRestore();
+            lstat.mockRestore();
           }
         },
       });

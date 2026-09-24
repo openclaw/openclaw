@@ -455,10 +455,9 @@ struct DashboardManagerGatewayTargetTests {
         defer { currentServer.stop() }
         let firstID = "first-\(UUID().uuidString)"
         let secondID = "second-\(UUID().uuidString)"
-        let gate = DashboardSwitchEndpointGate(
-            firstID: firstID,
-            firstURL: replacementServer.websocketURL(),
-            secondURL: currentServer.websocketURL())
+        let firstURL = replacementServer.websocketURL()
+        let secondURL = currentServer.websocketURL()
+        let gate = DashboardWindowOwnershipPresentationGate()
         let sourceURL = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: sourceURL,
@@ -474,7 +473,13 @@ struct DashboardManagerGatewayTargetTests {
         let entries = DashboardGatewayTestEntries.withProfiles([firstID, secondID])
         let manager = DashboardManager._testMake(
             profileEndpointProvider: { profileID in
-                try await gate.endpoint(profileID)
+                if profileID == firstID {
+                    await gate.waitForRelease()
+                }
+                let url = profileID == firstID ? firstURL : secondURL
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: profileID, password: nil),
+                    routeAuthority: nil)
             },
             gatewayEntriesProvider: { entries })
         manager._testSetController(controller)
@@ -483,12 +488,12 @@ struct DashboardManagerGatewayTargetTests {
         let first = Task { @MainActor in
             await manager._testSwitchTarget(.profile(firstID), in: controller)
         }
-        await gate.waitUntilFirstRequested()
+        await gate.waitUntilRequested()
         let second = Task { @MainActor in
             await manager._testSwitchTarget(.profile(secondID), in: controller)
         }
         await second.value
-        await gate.releaseFirst()
+        await gate.release()
         await first.value
 
         #expect(manager._testMainTarget() == .profile(secondID))
@@ -1382,45 +1387,6 @@ private enum DashboardGatewayTestEntries {
     }
 }
 
-private actor DashboardSwitchEndpointGate {
-    private let firstID: String
-    private let firstURL: URL
-    private let secondURL: URL
-
-    init(firstID: String, firstURL: URL, secondURL: URL) {
-        self.firstID = firstID
-        self.firstURL = firstURL
-        self.secondURL = secondURL
-    }
-
-    private var firstRequested = false
-    private var firstContinuation: CheckedContinuation<Void, Never>?
-
-    func endpoint(_ profileID: String) async throws -> GatewayConnection.EndpointSnapshot {
-        if profileID == self.firstID {
-            self.firstRequested = true
-            await withCheckedContinuation { continuation in
-                self.firstContinuation = continuation
-            }
-        }
-        let url = profileID == self.firstID ? self.firstURL : self.secondURL
-        return GatewayConnection.EndpointSnapshot(
-            config: (url: url, token: profileID, password: nil),
-            routeAuthority: nil)
-    }
-
-    func waitUntilFirstRequested() async {
-        while !self.firstRequested {
-            await Task.yield()
-        }
-    }
-
-    func releaseFirst() {
-        self.firstContinuation?.resume()
-        self.firstContinuation = nil
-    }
-}
-
 @MainActor
 private final class DashboardGatewayTestUpdater: UpdaterProviding {
     var automaticallyChecksForUpdates = false
@@ -1663,6 +1629,12 @@ struct DashboardGatewaysRequestTests {
             from: ["type": "reconnect", "id": "profile:studio"]) == .reconnect(.profile("studio")))
         #expect(DashboardWindowController.gatewaysRequest(
             from: ["type": "reconnect-cancel", "id": "profile:studio"]) == .reconnectCancel(.profile("studio")))
+        let attempt = UUID()
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-browser", "id": "profile:studio", "attempt": attempt.uuidString])
+            == .reconnectBrowser(.profile("studio"), attempt))
+        #expect(DashboardWindowController.gatewaysRequest(
+            from: ["type": "reconnect-browser", "id": "profile:studio"]) == nil)
         #expect(DashboardWindowController.gatewaysRequest(
             from: ["type": "reconnect"]) == nil)
         #expect(DashboardWindowController.gatewaysRequest(

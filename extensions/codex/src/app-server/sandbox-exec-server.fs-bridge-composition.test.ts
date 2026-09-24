@@ -29,6 +29,30 @@ const SANDBOX_MOUNT = "/workspace";
 
 type RemoteShellCommand = SandboxBackendCommandParams;
 
+function rewritePortableStatScript(script: string): string {
+  if (process.platform !== "darwin") {
+    return script;
+  }
+  return script
+    .replace(
+      'LC_ALL=C stat -c "%F|%s|%y" -- "$1"',
+      [
+        'kind=$(LC_ALL=C stat -f "%HT" -- "$1" | tr "[:upper:]" "[:lower:]")',
+        'size=$(LC_ALL=C stat -f "%z" -- "$1")',
+        'mtime=$(LC_ALL=C stat -f "%m" -- "$1")',
+        'printf "%s|%s|%s\\n" "$kind" "$size" "$mtime"',
+      ].join("\n"),
+    )
+    .replace(
+      'stats=$(LC_ALL=C stat -c "%F|%h" -- "$1")',
+      [
+        'kind=$(LC_ALL=C stat -f "%HT" -- "$1" | tr "[:upper:]" "[:lower:]")',
+        'links=$(LC_ALL=C stat -f "%l" -- "$1")',
+        'stats="$kind|$links"',
+      ].join("\n"),
+    );
+}
+
 /** Rewrites container paths under SANDBOX_MOUNT onto the real temp workspace. */
 function rewriteMountArgs(args: string[] | undefined, mountDir: string): string[] {
   return (args ?? []).map((arg) =>
@@ -46,7 +70,12 @@ function runLocalShellScript(
   return new Promise((resolve, reject) => {
     const child = spawn(
       "sh",
-      ["-c", command.script, "composition-shell", ...rewriteMountArgs(command.args, mountDir)],
+      [
+        "-c",
+        rewritePortableStatScript(command.script),
+        "composition-shell",
+        ...rewriteMountArgs(command.args, mountDir),
+      ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     const stdout: Buffer[] = [];

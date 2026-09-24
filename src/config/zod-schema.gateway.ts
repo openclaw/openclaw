@@ -8,10 +8,16 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  SESSION_READ_SCOPE,
+  SESSION_WRITE_SCOPE,
   TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
+import {
+  isValidPortalIngressDomain,
+  portalIngressConflictsWithOrigin,
+} from "./gateway-portal-ingress.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -24,6 +30,8 @@ const OperatorScopeSchema = z.enum([
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  SESSION_READ_SCOPE,
+  SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
   PAIRING_SCOPE,
@@ -44,8 +52,24 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
+  modelPolicy: z
+    .strictObject({
+      sourceAgent: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(isValidAgentId, "Invalid agent id")
+        .transform(normalizeAgentId)
+        .optional(),
+      allow: z.array(z.string().trim().min(1)).optional(),
+      deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
   scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
+  /** Required access-policy plugin; availability is checked at admission, not config parsing. */
+  accessPolicyPlugin: z.string().trim().min(1).max(128).optional(),
 });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -96,6 +120,22 @@ export const GatewayConfigSchema = z
         validateGatewayPublicOrigin,
         "gateway.publicOrigin must be a bare HTTPS origin; HTTP is allowed only for localhost, 127.0.0.1, or [::1]",
       )
+      .optional(),
+    /** Private HTTPS wildcard proxy forwarding to a dedicated loopback listener. */
+    portals: z
+      .strictObject({
+        ingress: z
+          .strictObject({
+            domain: z
+              .string()
+              .refine(
+                isValidPortalIngressDomain,
+                "Portal ingress domain must be a bare DNS domain",
+              ),
+            port: z.number().int().min(1).max(65_535),
+          })
+          .optional(),
+      })
       .optional(),
     controlUi: z
       .strictObject({
@@ -245,6 +285,22 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
+            cloudflareAccessOidc: z
+              .strictObject({
+                /** Exact Cloudflare Access issuer origin, including https://. */
+                issuer: z
+                  .string()
+                  .regex(
+                    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
+                    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
+                  ),
+                /** Access identity-provider ID, not its display name or the OIDC subject. */
+                providerId: z.string().trim().min(1),
+                /** Forwarded claim containing a verified numeric GitHub account ID as a decimal string. */
+                githubAccountIdClaim: z.string().trim().min(1),
+              })
+              .optional(),
             /**
              * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
              * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
@@ -479,5 +535,28 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+  })
+  .superRefine((gateway, ctx) => {
+    const ingress = gateway.portals?.ingress;
+    if (!ingress) {
+      return;
+    }
+    const origins = [gateway.publicOrigin, ...(gateway.controlUi?.allowedOrigins ?? [])];
+    if (
+      origins.some((origin) => origin && portalIngressConflictsWithOrigin(ingress.domain, origin))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["portals", "ingress", "domain"],
+        message: "Portal ingress must use a separate domain from Gateway and Control UI origins",
+      });
+    }
+    if (ingress.port === (gateway.port ?? 18789)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["portals", "ingress", "port"],
+        message: "Portal ingress port must differ from the Gateway port",
+      });
+    }
   })
   .optional();

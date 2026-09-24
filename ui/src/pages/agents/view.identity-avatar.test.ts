@@ -166,6 +166,7 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
 
   await changeAvatarRevision(view, 2);
   await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
+  await waitForFast(() => expect(avatarImage(view)).toBeNull());
   view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
   view.requestUpdate();
   await view.updateComplete;

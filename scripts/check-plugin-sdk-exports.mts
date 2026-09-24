@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import {
   MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
@@ -41,6 +42,7 @@ const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchem
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
   "diagnostic-flags": ["isDiagnosticFlagEnabled"],
+  "diagnostic-runtime": ["areDiagnosticsEnabledForProcess", "createSubsystemLogger"],
   "secret-input-runtime": [
     "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",
@@ -52,10 +54,15 @@ const requiredSubpathExports: Record<string, string[]> = {
   ],
 };
 
-// This private runtime facade has declarations only in the private-QA profile.
-// Do not require its types from ordinary public-package builds.
-const privateSessionManagerConsumer = isPrivateQaPluginSdkBuild(process.env)
+// These private runtime facades have declarations only in the private-QA profile.
+// Do not require their types from ordinary public-package builds.
+const privateRuntimeConsumers = isPrivateQaPluginSdkBuild(process.env)
   ? `import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+import type { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+
+type RecoveryDeliver = NonNullable<Parameters<typeof drainPendingDeliveries>[0]["deliver"]>;
+type RecoveryParams = Parameters<RecoveryDeliver>[0];
+type RecoveryContextIsPrivate = RequireNever<Extract<keyof RecoveryParams, PrivateQueueContextKeys>>;
 
 // Private facade declarations must preserve callable access to persist.
 declare const sessionManager: SessionManager;
@@ -77,6 +84,7 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   EmbeddingBatchChunk,
   EmbeddingBatchOptions,
@@ -98,7 +106,38 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
-${privateSessionManagerConsumer}
+${privateRuntimeConsumers}
+
+type RequireNever<T extends never> = T;
+type RequireTrue<T extends true> = T;
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false;
+type PrivateQueueContextKeys =
+  | "conversationDeliveryTarget"
+  | "deliveryQueueStateContext"
+  | "databaseAgentId"
+  | "supervisorMode"
+  | "env";
+type SendParams = Parameters<typeof sendDurableMessageBatch>[0];
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+// Database context stays private even when public aliases derive from core types.
+type SendContextIsPrivate = RequireNever<Extract<keyof SendParams, PrivateQueueContextKeys>>;
+type CompletionContextIsPrivate = RequireNever<
+  Extract<KeysOfUnion<NonNullable<SendParams["deliveryCompletion"]>>, PrivateQueueContextKeys>
+>;
+type QueueOwner = NonNullable<SendParams["deliveryQueueOwner"]>;
+type FailureRecorder = Parameters<QueueOwner["fail"]>[0];
+type FailureRecorderArgsUnchanged = RequireTrue<Equal<Parameters<FailureRecorder>, [
+  id: string,
+  error: string,
+  stateDir?: string,
+  expectedPlatformSendAttemptId?: string | null,
+]>>;
+type AckOptionsUnchanged = RequireTrue<Equal<NonNullable<Parameters<QueueOwner["ack"]>[0]>, {
+  retainSpoolArtifacts?: boolean;
+  suppressCompletionReceipt?: boolean;
+  expectedPlatformSendAttemptId?: string | null;
+}>>;
 
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {
@@ -315,14 +354,17 @@ if (declarationBudget.shouldFail) {
     declarationBudget.budgetKind === "private-qa-public-entry"
       ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
       : "PLUGIN SDK";
-  console.error(
-    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
-  );
-  console.error(
-    `Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance.`,
-  );
-  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
-  missing += 1;
+  if (
+    reportLimitViolations([
+      {
+        file: "scripts/lib/plugin-sdk-declaration-budget.mts",
+        title: "Plugin SDK declaration size budget",
+        message: `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes. Budget: ${declarationBudget.ratchetBytes}-byte ratchet + ${declarationBudget.varianceBytes}-byte Rolldown output variance. Keep plugin SDK declarations in the canonical unified tsdown graph.`,
+      },
+    ])
+  ) {
+    missing += 1;
+  }
 } else if (declarationBudget.budgetKind === "private-qa-public-entry") {
   console.log(
     `Private QA build public-entry declaration graph: ${declarationBytes}/${declarationBudget.budgetBytes} bytes (${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES}-byte ratchet + ${PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES}-byte output variance); publication ratchet ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,

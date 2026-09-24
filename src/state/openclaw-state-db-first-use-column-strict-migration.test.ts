@@ -57,6 +57,8 @@ function makePreStrictDatabaseWithoutColumns(params: {
   expect(legacyCreateSql).not.toBe(strictCreateSql);
 
   const dropIndexes = params.indexNames.map((name) => `DROP INDEX ${name};`).join("\n");
+  // The synthetic pre-STRICT database predates this placement index.
+  legacy.exec("DROP INDEX idx_worker_session_placements_environment;");
   legacy.exec(`
     ${dropIndexes}
     ALTER TABLE ${params.tableName} RENAME TO ${params.tableName}_strict;

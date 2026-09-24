@@ -11,7 +11,12 @@ type ModelReferenceInspection = {
   ref: string;
   provider: string;
   model: string;
-  status: "known" | "unknown-model" | "unknown-provider";
+  /**
+   * `uncatalogued-provider`: the provider is installed or configured but
+   * contributes no catalog rows to compare against (no manifest seed rows and
+   * no `models.providers.<id>.models`), so membership cannot be judged offline.
+   */
+  status: "known" | "unknown-model" | "uncatalogued-provider" | "unknown-provider";
 };
 
 type ModelReferenceInspectionParams = {
@@ -39,15 +44,19 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
       .map(normalizeProviderId)
       .filter(Boolean),
   );
-  const knownModels = new Set(
-    planEffectiveModelCatalogRows({
-      registry: snapshot.manifestRegistry,
-      config: params.cfg,
-    }).rows.map((row) => row.mergeKey),
-  );
+  const knownModels = new Set<string>();
+  const cataloguedProviders = new Set<string>();
+  for (const row of planEffectiveModelCatalogRows({
+    registry: snapshot.manifestRegistry,
+    config: params.cfg,
+  }).rows) {
+    knownModels.add(row.mergeKey);
+    cataloguedProviders.add(normalizeProviderId(row.provider));
+  }
   for (const [provider, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
     for (const model of providerConfig.models ?? []) {
       knownModels.add(buildModelCatalogMergeKey(provider, model.id));
+      cataloguedProviders.add(normalizeProviderId(provider));
     }
   }
   const inspect = (candidate: { provider: string; model: string }): ModelReferenceInspection => {
@@ -57,9 +66,13 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     if (!knownProviders.has(provider)) {
       return { ref, provider, model, status: "unknown-provider" };
     }
-    const status = knownModels.has(buildModelCatalogMergeKey(provider, model))
-      ? "known"
-      : "unknown-model";
+    if (knownModels.has(buildModelCatalogMergeKey(provider, model))) {
+      return { ref, provider, model, status: "known" };
+    }
+    // A provider with zero catalog rows (runtime-discovered catalogs such as
+    // OpenRouter) gives the membership check nothing to compare against, so an
+    // unlisted id there is not evidence of a typo.
+    const status = cataloguedProviders.has(provider) ? "unknown-model" : "uncatalogued-provider";
     return { ref, provider, model, status };
   };
   return { inspect, snapshot };

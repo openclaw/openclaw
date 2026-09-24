@@ -5,6 +5,8 @@ export type VitestHostInfo = {
   loadAverage1m?: number;
   totalMemoryBytes?: number;
   freeMemoryBytes?: number;
+  constrainedMemoryBytes?: number;
+  availableMemoryBytes?: number;
 };
 export type LocalVitestScheduling = {
   maxWorkers: number;
@@ -67,6 +69,8 @@ export function detectVitestHostInfo() {
     loadAverage1m: os.loadavg()[0] ?? 0,
     totalMemoryBytes: os.totalmem(),
     freeMemoryBytes: os.freemem(),
+    constrainedMemoryBytes: process.constrainedMemory(),
+    availableMemoryBytes: process.availableMemory(),
   };
 }
 
@@ -90,8 +94,21 @@ function schedulingHostInfo(): ReturnType<typeof detectVitestHostInfo> {
 }
 
 function resolveMemoryPressureWorkerLimit(system: VitestHostInfo) {
-  const freeMemoryGb = (system.freeMemoryBytes ?? 0) / 1024 ** 3;
-  if (!Number.isFinite(freeMemoryGb) || freeMemoryGb <= 0) {
+  let freeMemoryBytes = system.freeMemoryBytes;
+  if (freeMemoryBytes === undefined || !Number.isFinite(freeMemoryBytes) || freeMemoryBytes <= 0) {
+    freeMemoryBytes = Infinity;
+  }
+  const availableMemoryBytes = system.availableMemoryBytes;
+  // Zero host free memory is unknown; zero process headroom is exhausted.
+  if (
+    availableMemoryBytes !== undefined &&
+    Number.isFinite(availableMemoryBytes) &&
+    availableMemoryBytes >= 0
+  ) {
+    freeMemoryBytes = Math.min(freeMemoryBytes, availableMemoryBytes);
+  }
+  const freeMemoryGb = freeMemoryBytes / 1024 ** 3;
+  if (!Number.isFinite(freeMemoryGb)) {
     return null;
   }
   if (freeMemoryGb <= 4) {
@@ -128,7 +145,19 @@ export function resolveLocalVitestScheduling(
 
   const cpuCount = Math.max(1, system.cpuCount ?? 1);
   const loadAverage1m = Math.max(0, system.loadAverage1m ?? 0);
-  const totalMemoryGb = (system.totalMemoryBytes ?? 0) / 1024 ** 3;
+  let totalMemoryBytes = system.totalMemoryBytes ?? 0;
+  const constrainedMemoryBytes = system.constrainedMemoryBytes;
+  if (
+    constrainedMemoryBytes !== undefined &&
+    Number.isFinite(constrainedMemoryBytes) &&
+    constrainedMemoryBytes > 0
+  ) {
+    totalMemoryBytes = Number.isFinite(totalMemoryBytes)
+      ? Math.min(totalMemoryBytes, constrainedMemoryBytes)
+      : constrainedMemoryBytes;
+  }
+  const totalMemoryGb = totalMemoryBytes / 1024 ** 3;
+  const ci = isCiLikeEnv(env);
 
   let inferred =
     cpuCount <= 2
@@ -138,9 +167,18 @@ export function resolveLocalVitestScheduling(
         : cpuCount <= 8
           ? 4
           : Math.max(1, Math.floor(cpuCount * 0.75));
+  if (ci && cpuCount >= 8) {
+    inferred = Math.max(inferred, 8);
+  }
 
   if (totalMemoryGb <= 16) {
     inferred = Math.min(inferred, 2);
+  } else if (ci && totalMemoryGb >= 28 && totalMemoryGb <= 128) {
+    // Two measured 8-worker Gateway envelopes need 20.16 GiB; reserve 25%.
+    inferred = Math.min(inferred, 8);
+  } else if (ci && totalMemoryGb >= 24 && totalMemoryGb < 28) {
+    // Two measured 6-worker envelopes need 16.97 GiB, fitting 75% of 24 GiB.
+    inferred = Math.min(inferred, 6);
   } else if (totalMemoryGb <= 32) {
     inferred = Math.min(inferred, 4);
   } else if (totalMemoryGb <= 64) {
@@ -196,11 +234,13 @@ export function resolveLocalVitestScheduling(
   }
 
   if (loadRatio >= 0.75) {
-    const maxWorkers = Math.max(2, Math.ceil(inferred * 0.75));
+    const loadWorkers = Math.ceil(inferred * 0.75);
+    const maxWorkers =
+      memoryPressureLimit === null ? loadWorkers : Math.min(loadWorkers, memoryPressureLimit);
     return {
       maxWorkers,
-      fileParallelism: true,
-      throttledBySystem: maxWorkers < inferred,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: maxWorkers < inferred || memoryPressureLimit === 1,
     };
   }
 

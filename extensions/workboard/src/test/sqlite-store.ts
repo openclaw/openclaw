@@ -1,15 +1,29 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach } from "vitest";
-import type { PersistedWorkboardCard, WorkboardCardStore } from "../persistence-types.js";
+import type {
+  PersistedWorkboardCard,
+  WorkboardCardStore,
+  WorkboardWriteAuthority,
+} from "../persistence-types.js";
+import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "../sqlite-store.js";
 import { WorkboardStore } from "../store.js";
 
+const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
+
+type WorkboardSqliteTestStores = Omit<
+  ReturnType<typeof createWorkboardSqliteStores>,
+  "runWithWriteAuthority"
+> & { runWithWriteAuthority?: WorkboardWriteAuthority };
+
 type WorkboardSqliteTestOptions = {
+  createStores?: (dbPath: string) => WorkboardSqliteTestStores;
   beforeCardWrite?: (key: string, value: PersistedWorkboardCard) => void | Promise<void>;
   beforeCardLookup?: (key: string) => void | Promise<void>;
-  onStoreClose?: () => void;
+  onStoreClose?: () => void | Promise<void>;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -49,7 +63,8 @@ function withCardHooks(
     },
     delete: (key) => cards.delete(key),
     deleteIfUpdatedAt: (key, expectedUpdatedAt) => cards.deleteIfUpdatedAt(key, expectedUpdatedAt),
-    entries: (boardId) => cards.entries(boardId),
+    entries: (scope) => cards.entries(scope),
+    listCardStatuses: (ids) => cards.listCardStatuses(ids),
     listBoardAggregates: () => cards.listBoardAggregates(),
     listStatsAggregates: (boardId) => cards.listStatsAggregates(boardId),
     hasCards: (boardId) => cards.hasCards(boardId),
@@ -60,20 +75,16 @@ export function createWorkboardSqliteTestHarness(options: WorkboardSqliteTestOpt
   // openclaw-temp-dir: allow closes the SQLite owner before removing database files.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-test-"));
   const dbPath = path.join(dir, "workboard.sqlite");
-  let sqlite: ReturnType<typeof createWorkboardSqliteStores>;
+  let sqlite: WorkboardSqliteTestStores;
   try {
-    sqlite = createWorkboardSqliteStores({ dbPath });
+    sqlite = options.createStores
+      ? options.createStores(dbPath)
+      : createWorkboardSqliteStores({ dbPath, workerModuleUrl });
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw error;
   }
-  let databaseClosed = false;
-  const closeDatabase = () => {
-    if (!databaseClosed) {
-      databaseClosed = true;
-      sqlite.close();
-    }
-  };
+  const closeDatabase = () => sqlite.close();
   const stores = {
     ...sqlite,
     cards:
@@ -85,9 +96,9 @@ export function createWorkboardSqliteTestHarness(options: WorkboardSqliteTestOpt
   let storeCloseObserved = false;
   const store = new WorkboardStore(stores.cards, {
     ...stores,
-    close: () => {
+    close: async () => {
       storeCloseObserved = true;
-      (options.onStoreClose ?? closeDatabase)();
+      await (options.onStoreClose ?? closeDatabase)();
     },
   });
   cleanups.push(async () => {
@@ -97,7 +108,7 @@ export function createWorkboardSqliteTestHarness(options: WorkboardSqliteTestOpt
       }
     } finally {
       try {
-        closeDatabase();
+        await closeDatabase();
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -110,7 +121,7 @@ export function createWorkboardSqliteTestStore(options: WorkboardSqliteTestOptio
   return createWorkboardSqliteTestHarness(options).store;
 }
 
-export function sqliteTestAuxStores(stores: ReturnType<typeof createWorkboardSqliteStores>) {
-  const { boards, subscriptions, attachments } = stores;
-  return { boards, subscriptions, attachments };
+export function sqliteTestAuxStores(stores: WorkboardSqliteTestStores) {
+  const { boards, subscriptions, attachments, ready } = stores;
+  return { boards, subscriptions, attachments, ready };
 }

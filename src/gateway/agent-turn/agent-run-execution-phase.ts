@@ -4,7 +4,10 @@ import {
   attachAgentCommandAdmissionFacts,
   attachAgentCommandRecoveryAdmissionFacts,
 } from "../../agents/agent-command-admission-facts.js";
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -22,6 +25,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -46,17 +50,19 @@ import {
   yieldAfterAgentAcceptedAck,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
+import { captureAgentJobSession } from "./agent-job.js";
 import {
   resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
 } from "./agent-restart-recovery-context.js";
-import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
+import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { settleUnstartedGatewayAgentTask } from "./agent-run-task-tracking.js";
 import {
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
@@ -110,23 +116,65 @@ export async function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): Promise<void> {
   const { prepared } = params;
+  const jobSessionBinding = prepared.activeRunAbort.entry ?? {
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.resolvedSessionId,
+    agentId: params.activeSessionAgentId,
+    lifecycleGeneration: params.lifecycleGeneration,
+  };
   let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   try {
     await using preparedModelRuntimeLease = prepared.preparedModelRuntimeLease;
     let leaseActive = true;
+    const abortRegistration = prepared.activeRunAbort;
+    const abortEntry = abortRegistration.entry;
+    const abortController = abortRegistration.controller;
+    const operationalRunInstance = prepared.operationalRunInstance;
+    const sessionKey = abortEntry?.sessionKey;
+    const assertTaskSettlementCurrent = () => {
+      params.assertContextCurrent?.();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      // Cancellation closes execution, but its retained producer still records the outcome.
+      if (
+        !leaseActive ||
+        (abortRegistration.registered && !prepared.activeGatewayWorkAdmission.isActive())
+      ) {
+        throw new Error("Agent task settlement no longer owns this Gateway run");
+      }
+    };
+    const assertDispatchCurrent = () => {
+      params.assertContextCurrent?.();
+      prepared.operatorAuthority?.assertCurrent();
+      abortController.signal.throwIfAborted();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      if (
+        !leaseActive ||
+        (abortRegistration.registered &&
+          (!prepared.activeGatewayWorkAdmission.isActive() ||
+            !abortEntry ||
+            params.context.chatAbortControllers.get(params.runId) !== abortEntry ||
+            abortEntry.controller !== abortController ||
+            abortEntry.operationalRunInstance !== operationalRunInstance ||
+            abortEntry.lifecycleGeneration !== params.lifecycleGeneration ||
+            abortEntry.sessionKey !== sessionKey ||
+            abortEntry.registrationCleanupRequested))
+      ) {
+        throw new Error("agent task creation no longer owns this Gateway run");
+      }
+    };
     let mediaCleanup: Promise<void> | undefined;
     const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
-        releasePreparedAgentRunUserTurn(
-          prepared.userTurn,
+        const stopReason = prepared.activeRunAbort.entry?.abortStopReason;
+        const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
+        const cancelled =
           prepared.activeRunAbort.controller.signal.aborted &&
-            prepared.activeRunAbort.entry?.abortStopReason !== "restart"
-            ? "cancelled"
-            : "interrupted",
-        );
+          stopReason !== "restart" &&
+          (!prepared.userTurn.privateCompletion || outcome.reason === "cancelled");
+        releasePreparedAgentRunUserTurn(prepared.userTurn, cancelled ? "cancelled" : "interrupted");
       } catch (error) {
         params.context.logGateway.warn(
           `failed to settle pending agent input: ${formatForLog(error)}`,
@@ -137,11 +185,15 @@ export async function startAgentRunExecution(params: {
       leaseActive = false;
       mediaCleanup ??= discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
       if (prepared.userTurn.recorder && params.resolvedSessionKey) {
-        emitSessionsChanged(params.context, {
-          sessionKey: params.resolvedSessionKey,
-          agentId: params.activeSessionAgentId,
-          reason: "agent.input.settled",
-        });
+        emitSessionsChanged(
+          params.context,
+          {
+            sessionKey: params.resolvedSessionKey,
+            agentId: params.activeSessionAgentId,
+            reason: "agent.input.settled",
+          },
+          { accessChanged: false },
+        );
       }
     };
     const dispatchAdmittedAgentRun = (
@@ -160,12 +212,61 @@ export async function startAgentRunExecution(params: {
       await yieldAfterAgentAcceptedAck();
       let dispatched = false;
       let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
+      const settleUnstartedTask = (outcome: AgentRunTerminalOutcome) =>
+        !dispatched
+          ? settleUnstartedGatewayAgentTask({
+              tracking: prepared.dispatchTaskTrackingMode,
+              runId: params.runId,
+              admittedRunEntry: abortEntry,
+              context: params.context,
+              outcome,
+            })
+          : undefined;
+      const finishFailure = async (err: unknown, recordCompletion = true) => {
+        const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+        const renderedErr = error.message;
+        const outcome = buildAgentRunTerminalOutcome({ status: "error", error: renderedErr });
+        if (recordCompletion) {
+          try {
+            prepared.userTurn.recorder?.completeProcessing?.(outcome);
+          } catch (completionError) {
+            params.context.logGateway.warn(
+              `input completion persistence failed: ${formatForLog(completionError)}`,
+            );
+          }
+        }
+        await settleUnstartedTask(outcome);
+        const payload = { runId: params.runId, status: "error" as const, summary: renderedErr };
+        setGatewayDedupeEntries({
+          dedupe: params.context.dedupe,
+          keys: params.agentDedupeKeys,
+          session: captureAgentJobSession(jobSessionBinding),
+          entry: { ts: Date.now(), ok: false, payload, error },
+        });
+        params.io.emitFinal([false, payload, error], { runId: params.runId, error: renderedErr });
+      };
       const finishUndispatchedAbort = async () => {
-        pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
+        const outcome = buildAgentRunTerminalOutcome({
+          status: "timeout",
+          stopReason,
+          timeoutPhase: "queue",
+          providerStarted: false,
+        });
+        try {
+          pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
+          prepared.userTurn.recorder?.completeProcessing?.(outcome);
+        } catch (error) {
+          // This helper also runs from the outer abort catch. A failed required
+          // write must still publish a final error and release the admitted turn.
+          await finishFailure(error, false);
+          return;
+        }
+        await settleUnstartedTask(outcome);
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
+          session: captureAgentJobSession(jobSessionBinding),
           agentId: params.activeSessionAgentId,
           runId: params.runId,
           stopReason,
@@ -221,11 +322,15 @@ export async function startAgentRunExecution(params: {
           });
         }
         if (!params.suppressVisibleSessionEffects && params.resolvedSessionKey) {
-          emitSessionsChanged(params.context, {
-            sessionKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-            reason: "send",
-          });
+          emitSessionsChanged(
+            params.context,
+            {
+              sessionKey: params.resolvedSessionKey,
+              agentId: params.activeSessionAgentId,
+              reason: "send",
+            },
+            { accessChanged: false },
+          );
         }
 
         if (!params.isRawModelRun) {
@@ -285,7 +390,7 @@ export async function startAgentRunExecution(params: {
         const restartRecoveryChannelContext = restartRecoveryContext?.channel;
         const runContext = {
           messageChannel:
-            restartRecoveryChannelContext?.channel ?? params.delivery.originMessageChannel,
+            restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
           accountId:
             restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
           senderId: restartRecoveryChannelContext?.requesterSenderId,
@@ -339,6 +444,9 @@ export async function startAgentRunExecution(params: {
         const execution = dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
+              assertCurrent: assertDispatchCurrent,
+              assertSettlementCurrent: assertTaskSettlementCurrent,
+              admittedRunEntry: abortEntry,
               commandRuntimeContext: {
                 config: prepared.replyDispatchRuntime.config,
                 pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
@@ -359,7 +467,10 @@ export async function startAgentRunExecution(params: {
                 thinking: prepared.effectiveThinking,
                 deliver: params.delivery.deliver,
                 deliveryTargetMode: params.delivery.deliveryTargetMode,
-                channel: params.delivery.resolvedChannel,
+                // An unbound CLI turn must not acquire a provider from the internal delivery fallback.
+                channel: params.delivery.originMessageChannel
+                  ? params.delivery.resolvedChannel
+                  : undefined,
                 accountId: params.delivery.resolvedAccountId,
                 threadId: prepared.resolvedThreadId,
                 runContext,
@@ -422,6 +533,7 @@ export async function startAgentRunExecution(params: {
                 forceCodeModeTools: params.request.forceCodeModeTools,
                 ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
                 operationalRunInstance: prepared.operationalRunInstance,
+                operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
                   skillLibraryAuthoring?.bind(admittedRunContext);
                   bindGatewayContextResolver(
@@ -451,11 +563,15 @@ export async function startAgentRunExecution(params: {
                   }
                   params.io.emitExecutionStarted?.();
                   if (params.resolvedSessionKey) {
-                    emitSessionsChanged(params.context, {
-                      sessionKey: params.resolvedSessionKey,
-                      agentId: params.agentId,
-                      reason: "agent.run.started",
-                    });
+                    emitSessionsChanged(
+                      params.context,
+                      {
+                        sessionKey: params.resolvedSessionKey,
+                        agentId: params.agentId,
+                        reason: "agent.run.started",
+                      },
+                      { accessChanged: false },
+                    );
                   }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
@@ -520,22 +636,7 @@ export async function startAgentRunExecution(params: {
           await finishUndispatchedAbort();
           return;
         }
-        const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
-        const renderedErr = error.message;
-        const payload = {
-          runId: params.runId,
-          status: "error" as const,
-          summary: renderedErr,
-        };
-        setGatewayDedupeEntries({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-          entry: { ts: Date.now(), ok: false, payload, error },
-        });
-        params.io.emitFinal([false, payload, error], {
-          runId: params.runId,
-          error: renderedErr,
-        });
+        await finishFailure(err);
       } finally {
         try {
           if (!dispatched) {
@@ -580,6 +681,7 @@ export async function startAgentRunExecution(params: {
     });
   } finally {
     // Shutdown joins the execution through asynchronous runtime disposal, not just bookkeeping.
+    prepared.releaseCallerAuthority?.();
     releaseGatewayRootContinuation?.();
   }
 }

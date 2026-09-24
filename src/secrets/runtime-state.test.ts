@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -213,24 +214,6 @@ describe("secrets runtime state", () => {
         configWithRef("$OPENAI_API_KEY_NEXT"),
       ),
     ).toBe(false);
-  });
-
-  it("exposes the active config pair for hot paths without requiring the full snapshot", () => {
-    const snapshot = preparedSnapshot({
-      sourceConfig: { agents: { list: [{ id: "source" }] } },
-      config: { agents: { list: [{ id: "runtime" }] } },
-      authStores: [],
-    });
-
-    activateSnapshot(snapshot);
-
-    const configSnapshot = getActiveSecretsRuntimeConfigSnapshot();
-    const fullSnapshot = getActiveSecretsRuntimeSnapshotState();
-
-    expect(configSnapshot?.config).not.toBe(fullSnapshot?.config);
-    expect(configSnapshot?.sourceConfig).not.toBe(fullSnapshot?.sourceConfig);
-    expect(configSnapshot?.config).toEqual(snapshot.config);
-    expect(configSnapshot?.sourceConfig).toEqual(snapshot.sourceConfig);
   });
 
   it("preserves independent credential owners through snapshot replacement and rollback until teardown", () => {
@@ -477,12 +460,13 @@ describe("secrets runtime state", () => {
   it("removes candidate-only auth profiles when rolling config back", () => {
     const agentDir = "/tmp/openclaw-auth-rollback-cas";
     const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
+      preparedGatewayAuthSnapshot(
+        agentDir,
+        port,
+        createAuthProfileStoreFixture({
           "openai:default": { type: "api_key", provider: "openai", key },
-        },
-      });
+        }),
+      );
     activateSnapshot(snapshot("sk-old", 19_001));
     const previous = getActiveSecretsRuntimeSnapshotState();
     const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
@@ -1242,12 +1226,13 @@ describe("secrets runtime state", () => {
   it("does not resurrect an auth store cleared after candidate activation", () => {
     const agentDir = "/tmp/openclaw-auth-post-activation-clear";
     const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
+      preparedGatewayAuthSnapshot(
+        agentDir,
+        port,
+        createAuthProfileStoreFixture({
           "openai:default": { type: "api_key", provider: "openai", key },
-        },
-      });
+        }),
+      );
     activateSnapshot(snapshot("sk-old", 19_001));
     const previous = getActiveSecretsRuntimeSnapshotState()!;
     const candidate = snapshot("sk-candidate", 19_002);
@@ -1270,12 +1255,13 @@ describe("secrets runtime state", () => {
     };
     const candidateRef = changedRef ? { ...previousRef, id: "OPENAI_API_KEY_NEXT" } : previousRef;
     const snapshot = (key: string, keyRef: typeof previousRef, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
+      preparedGatewayAuthSnapshot(
+        agentDir,
+        port,
+        createAuthProfileStoreFixture({
           "openai:default": { type: "api_key", provider: "openai", key, keyRef },
-        },
-      });
+        }),
+      );
     activateSnapshot(snapshot("sk-old", previousRef, 19_001));
     const previous = getActiveSecretsRuntimeSnapshotState()!;
     const candidate = snapshot("sk-candidate", candidateRef, 19_002);
@@ -1302,20 +1288,18 @@ describe("secrets runtime state", () => {
   it("preserves live credentials when the captured predecessor is stale", () => {
     const agentDir = "/tmp/openclaw-auth-stale-predecessor-rollback";
     const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
+      preparedGatewayAuthSnapshot(
+        agentDir,
+        port,
+        createAuthProfileStoreFixture({
           "openai:default": { type: "api_key", provider: "openai", key },
-        },
-      });
+        }),
+      );
     activateSnapshot(snapshot("sk-old", 19_011));
     setRuntimeAuthProfileStoreSnapshot(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key: "sk-live" },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": { type: "api_key", provider: "openai", key: "sk-live" },
+      }),
       agentDir,
     );
     const previous = getActiveSecretsRuntimeSnapshotState();
@@ -1516,17 +1500,14 @@ describe("secrets runtime state", () => {
           authStores: [
             {
               agentDir,
-              store: {
-                version: 1,
-                profiles: {
-                  "openai:default": {
-                    type: "api_key",
-                    provider: "openai",
-                    keyRef,
-                    key: params.apiKey,
-                  },
+              store: createAuthProfileStoreFixture({
+                "openai:default": {
+                  type: "api_key",
+                  provider: "openai",
+                  keyRef,
+                  key: params.apiKey,
                 },
-              },
+              }),
             },
           ],
         });

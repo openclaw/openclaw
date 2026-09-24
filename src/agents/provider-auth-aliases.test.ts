@@ -3,7 +3,9 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
+import { resolveProviderAuthLookupMaps } from "../secrets/provider-env-vars.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -14,17 +16,12 @@ const pluginRegistryMocks = vi.hoisted(() => {
     resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
-      return {
-        index: {
-          plugins: registry.plugins.map((plugin: { id: string; origin?: string }) => ({
-            pluginId: plugin.id,
-            origin: plugin.origin ?? "global",
-            enabled: true,
-            enabledByDefault: true,
-          })),
-        },
-        plugins: registry.plugins,
-      };
+      return createPluginMetadataSnapshot({
+        plugins: registry.plugins.map(
+          (plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">) =>
+            createPluginManifestRecord({ ...plugin, origin: plugin.origin ?? "global" }),
+        ),
+      });
     }),
   };
 });
@@ -135,7 +132,10 @@ function createPluginMetadataSnapshot(params: {
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
-    owners: makeEmptyPluginMetadataOwners(),
+    owners: {
+      ...makeEmptyPluginMetadataOwners(),
+      ...buildPluginMetadataProviderFacts(params.plugins),
+    },
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -457,12 +457,13 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("added", { metadataSnapshot })).toBe("added-provider");
   });
 
-  it("retains alias ownership through worker cloning, projection and metadata replacement", async () => {
+  it("retains auth contributions through worker cloning, projection and metadata replacement", async () => {
     const { metadata, snapshot } = await prepareAliasSnapshot([
       createPluginManifestRecord({
         id: "first",
         origin: "bundled",
         providerAuthAliases: { fixture: "first-provider" },
+        setup: { providers: [{ id: "first-provider", envVars: ["FIRST_API_KEY"] }] },
       }),
       createPluginManifestRecord({
         id: "second",
@@ -476,7 +477,14 @@ describe("provider auth aliases", () => {
       fixture: "first-provider",
       second: "second-provider",
     });
+    expect(
+      resolveProviderAuthLookupMaps({ metadataSnapshot: restored }).envCandidateMap.fixture,
+    ).toEqual(["FIRST_API_KEY"]);
+    expect(Object.isFrozen(restored.owners.providerAuthContributions)).toBe(true);
     const projected = metadata.projectPluginMetadataSnapshot(restored, ["second"]);
+    expect(
+      resolveProviderAuthLookupMaps({ metadataSnapshot: projected }).envCandidateMap.fixture,
+    ).toBeUndefined();
     expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: projected })).toBe("fixture");
     expect(resolveProviderIdForAuth("second", { metadataSnapshot: projected })).toBe(
       "second-provider",
@@ -487,6 +495,7 @@ describe("provider auth aliases", () => {
           id: "first",
           origin: "bundled",
           providerAuthAliases: { fixture: "replacement-provider" },
+          setup: { providers: [{ id: "replacement-provider", envVars: ["REPLACED_API_KEY"] }] },
         }),
       ],
       diagnostics: [],
@@ -494,6 +503,12 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: replacement })).toBe(
       "replacement-provider",
     );
+    expect(
+      resolveProviderAuthLookupMaps({ metadataSnapshot: replacement }).envCandidateMap.fixture,
+    ).toEqual(["REPLACED_API_KEY"]);
+    expect(
+      resolveProviderAuthLookupMaps({ metadataSnapshot: restored }).envCandidateMap.fixture,
+    ).toEqual(["FIRST_API_KEY"]);
     expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: restored })).toBe(
       "first-provider",
     );

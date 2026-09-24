@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -291,7 +292,7 @@ suite.define(() => {
         }
         await openaiCard.getByLabel("API key").fill("synthetic-main-provider-key");
 
-        const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+        const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await agentPicker.locator(".agent-select__trigger").click();
         await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Writer");
@@ -307,16 +308,19 @@ suite.define(() => {
           });
         }
 
-        const addSection = page.locator(".settings-section", {
-          has: page.getByRole("heading", { name: "Add provider" }),
-        });
-        await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
-        await addSection.getByLabel("Provider").selectOption("google");
+        await page.locator("[data-models-connect]").click();
+        await page.locator('[data-models-login-provider="google"]').click();
+        const addSection = page.locator("[data-models-key-dialog]");
         await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
-        await agentPicker.locator(".agent-select__trigger").click();
-        await agentPicker.locator('wa-dropdown-item[aria-label="Main"]').click();
+        // The modal makes the picker inert. Use its selection owner without
+        // closing the dialog so this still proves open-draft scope retirement.
+        await page.locator("openclaw-app").evaluate((element) => {
+          // SAFETY: This selector is the initialized app root that owns the runtime.
+          const app = element as HTMLElement & { runtime: ApplicationRuntime };
+          app.runtime.context.settingsAgentSelection.set("main");
+        });
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
-        await expect.poll(async () => page.locator(".model-providers__add-form").count()).toBe(0);
+        await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);
         await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         if (recordVisuals) {

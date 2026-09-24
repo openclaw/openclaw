@@ -3,6 +3,17 @@ import { theme } from "./theme.js";
 
 // Styles the status word in health output lines.
 
+const HEALTH_STATUS_COLORS = [
+  ["failed", "error"],
+  ["degraded", "warn"],
+  ["ok", "success"],
+  ["linked", "success"],
+  ["configured", "success"],
+  ["not linked", "warn"],
+  ["not configured", "muted"],
+  ["unknown", "warn"],
+] as const;
+
 /** Highlight known health status prefixes in a "label: detail" line. */
 export function styleHealthChannelLine(line: string, rich: boolean): string {
   if (!rich) {
@@ -21,29 +32,10 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
   const applyPrefix = (prefix: string, color: (value: string) => string) =>
     `${line.slice(0, colon + 1)} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
 
-  if (normalized.startsWith("failed")) {
-    return applyPrefix("failed", theme.error);
-  }
-  if (normalized.startsWith("degraded")) {
-    return applyPrefix("degraded", theme.warn);
-  }
-  if (normalized.startsWith("ok")) {
-    return applyPrefix("ok", theme.success);
-  }
-  if (normalized.startsWith("linked")) {
-    return applyPrefix("linked", theme.success);
-  }
-  if (normalized.startsWith("configured")) {
-    return applyPrefix("configured", theme.success);
-  }
-  if (normalized.startsWith("not linked")) {
-    return applyPrefix("not linked", theme.warn);
-  }
-  if (normalized.startsWith("not configured")) {
-    return applyPrefix("not configured", theme.muted);
-  }
-  if (normalized.startsWith("unknown")) {
-    return applyPrefix("unknown", theme.warn);
+  for (const [prefix, color] of HEALTH_STATUS_COLORS) {
+    if (normalized.startsWith(prefix)) {
+      return applyPrefix(prefix, theme[color]);
+    }
   }
 
   return line;

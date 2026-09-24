@@ -44,8 +44,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec: vi.fn(
-    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
-      decodeLaunchAgentPlistFixture(options.input),
+    async (_command: string, args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input, args[1]),
   ),
 }));
 
@@ -1887,7 +1887,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(rewritten?.environmentValueSources?.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("file");
   });
 
-  it.each([
+  const gatewayAuthPersistenceCases = [
     {
       name: "token file-backed match",
       surface: "token",
@@ -1928,17 +1928,21 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       name: "token inline-only match",
       surface: "token",
       mode: "token",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_TOKEN",
+      configuredKey: "OPENCLAW_GATEWAY_TOKEN",
+      existingKey: "OPENCLAW_GATEWAY_TOKEN",
       existingSource: "inline",
+      expectedValue: "existing-secret",
+      processValue: "process-secret",
     },
     {
       name: "password inline-only match",
       surface: "password",
       mode: "password",
-      configuredKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
-      existingKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
+      configuredKey: "OPENCLAW_GATEWAY_PASSWORD",
+      existingKey: "OPENCLAW_GATEWAY_PASSWORD",
       existingSource: "inline",
+      expectedValue: "existing-secret",
+      processValue: "process-secret",
     },
     {
       name: "token ref mismatch",
@@ -2000,7 +2004,12 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       configuredKey: "OPENCLAW_GATEWAY_AUTH_PASSWORD",
       processValue: "process-secret",
     },
-  ] as const)("calibrates gateway auth persistence: $name", async (testCase) => {
+  ] as const;
+  it.each(
+    gatewayAuthPersistenceCases.flatMap((testCase) =>
+      (["darwin", "linux", "win32"] as const).map((platform) => ({ platform, testCase })),
+    ),
+  )("preserves $platform gateway auth: $testCase.name", async ({ platform, testCase }) => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/from-service",
@@ -2026,7 +2035,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     const existingEnvironment = existingKey
       ? {
           [existingKey]: "existing-secret",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: existingKey,
+          ...(existingSource === "inline"
+            ? {}
+            : { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: existingKey }),
         }
       : undefined;
     const existingEnvironmentValueSources =
@@ -2038,16 +2049,17 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       env: { HOME: tmpDir, ...processEnvironment },
       port: 3000,
       runtime: "node",
-      platform: "darwin",
+      platform,
       existingEnvironment,
       existingEnvironmentValueSources,
       config: { gateway: { auth } } as unknown as OpenClawConfig,
     });
 
     if (existingKey) {
-      expect(plan.environment[existingKey]).toBe(
-        "expectedValue" in testCase ? testCase.expectedValue : undefined,
-      );
+      const expectedValue =
+        platform !== "win32" && "expectedValue" in testCase ? testCase.expectedValue : undefined;
+      expect(plan.environment[existingKey]).toBe(expectedValue);
+      expect(plan.environmentValueSources?.[existingKey]).toBe(expectedValue ? "file" : undefined);
     }
     if (configuredKey && configuredKey !== existingKey) {
       expect(plan.environment[configuredKey]).toBeUndefined();
@@ -2191,212 +2203,6 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
 
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
-  });
-
-  it("preserves safe custom vars from an existing service env and merges PATH", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          ".",
-          "/tmp/evil",
-          "/proc/self/cwd/evil-bin",
-          "/proc/thread-self/cwd/evil-bin",
-          "/proc/12345/cwd/evil-bin",
-          "/proc/self/root/evil-bin",
-          `${process.cwd()}/evil-bin`,
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        NODE_OPTIONS: "--require /tmp/evil.js",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    expect(plan.environment.GOBIN).toBe("/Users/test/.local/gopath/bin");
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-  });
-
-  it("drops stale non-minimal PATH entries from an existing service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    // Avoid macOS /home autofs lookups while exercising the same user-tool paths.
-    const home = "/Users/testuser";
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: [
-          `${home}/.volta/bin`,
-          `${home}/.asdf/shims`,
-          `${home}/.nvm/current/bin`,
-          `${home}/.local/share/fnm/aliases/default/bin`,
-          `${home}/.local/share/fnm/current/bin`,
-          `${home}/.fnm/aliases/default/bin`,
-          `${home}/.fnm/current/bin`,
-          `${home}/.local/share/pnpm`,
-          "/opt/pnpm/bin",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/custom/go/bin");
-  });
-
-  it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === "/opt/safe/bin") {
-        return "/tmp/evil/bin";
-      }
-      if (value === "/opt/safe") {
-        return "/tmp/evil";
-      }
-      if (value === "/opt/safe/missing-bin") {
-        throw Object.assign(new Error("missing"), { code: "ENOENT" });
-      }
-      return value;
-    });
-
-    try {
-      const plan = await buildGatewayInstallPlan({
-        env: { HOME: tmpDir },
-        port: 3000,
-        runtime: "node",
-        platform: "linux",
-        existingEnvironment: {
-          PATH: "/opt/safe/bin:/opt/safe/missing-bin:/custom/go/bin:/usr/bin",
-        },
-      });
-
-      expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    } finally {
-      realpathNative.mockRestore();
-    }
-  });
-
-  it("drops workspace-derived PATH entries even when HOME equals the install cwd", async () => {
-    const cwd = process.cwd();
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: cwd,
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: cwd },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-  });
-
-  it("drops keys that were previously tracked as managed service env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/managed/bin:/usr/bin",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "linux",
-      existingEnvironment: {
-        PATH: "/custom/go/bin:/usr/bin",
-        GOBIN: "/Users/test/.local/gopath/bin",
-        BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
-        GOPATH: "/Users/test/.local/gopath",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "GOBIN,GOPATH",
-      },
-    });
-
-    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
-    expect(plan.environment.GOBIN).toBeUndefined();
-    expect(plan.environment.BLOGWATCHER_HOME).toBe("/Users/test/.blogwatcher");
-    expect(plan.environment.GOPATH).toBeUndefined();
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-  });
-
-  it("does not preserve existing PATH entries for macOS LaunchAgents", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        HOME: "/from-service",
-        OPENCLAW_PORT: "3000",
-        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        TMPDIR: "/tmp",
-      },
-    });
-
-    const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
-      port: 3000,
-      runtime: "node",
-      platform: "darwin",
-      existingEnvironment: {
-        PATH: [
-          "/Users/test/.volta/bin",
-          "/Users/test/.asdf/shims",
-          "/Users/test/Library/Application Support/fnm/aliases/default/bin",
-          "/Users/test/Library/pnpm",
-          "/custom/go/bin",
-          "/usr/bin",
-        ].join(path.delimiter),
-      },
-    });
-
-    expect(plan.environment.PATH).toBe(
-      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-    );
   });
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {

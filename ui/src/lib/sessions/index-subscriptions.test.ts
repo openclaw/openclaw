@@ -293,8 +293,7 @@ describe("createSessionCapability message subscriptions", () => {
         capture: () => ({ client, epoch: 0 }),
         isCurrent: () => current,
       },
-      agentId: () => null,
-      refreshReplacement: async () => null,
+      reconcileMutation: async () => ({ status: "stale" }),
     });
     const failure = operations.subscribeMessages("main").catch((error: unknown) => error);
 

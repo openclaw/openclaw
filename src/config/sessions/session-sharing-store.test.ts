@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
@@ -12,17 +14,84 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import {
-  addSessionMember,
-  isSessionMember,
-  listSessionMembershipKeys,
-  listSessionMembers,
-  removeSessionMember,
-} from "./session-sharing-store.js";
+import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
+import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("session sharing store", () => {
+  it("publishes membership changes only after their containing transaction commits", async () => {
+    await withTestDir({ prefix: "openclaw-session-sharing-publication-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
+      const changes: SessionRowChange[] = [];
+      const members: string[][] = [];
+      const stopFacts = sessionChanges.subscribeFacts((change) => changes.push(change));
+      const stop = sessionChanges.subscribe(() => {
+        members.push(listSessionMembers(scope).map((member) => member.identityId));
+      });
+      try {
+        runOpenClawAgentWriteTransaction(
+          () => {
+            addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
+            expect(changes).toEqual([]);
+          },
+          { agentId: scope.agentId, env },
+        );
+        expect(changes).toEqual([
+          expect.objectContaining({
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            storePath: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env }),
+            facts: {
+              kind: "member",
+              sessionId: "session-main",
+              identityId: "guest",
+              present: true,
+            },
+          }),
+        ]);
+        expect(members).toEqual([["guest"]]);
+        changes.length = 0;
+        members.length = 0;
+        expect(() =>
+          runOpenClawAgentWriteTransaction(
+            () => {
+              removeSessionMember(scope, "guest");
+              expect(changes).toEqual([]);
+              throw new Error("rollback");
+            },
+            { agentId: scope.agentId, env },
+          ),
+        ).toThrow("rollback");
+        expect(changes).toEqual([]);
+        removeSessionMember(scope, "guest");
+        expect(members).toEqual([[]]);
+        changes.length = 0;
+        members.length = 0;
+        runOpenClawAgentWriteTransaction(
+          () => {
+            addSessionMember(scope, { identityId: "transient", addedBy: "owner" });
+            removeSessionMember(scope, "transient");
+            expect(changes).toEqual([]);
+          },
+          { agentId: scope.agentId, env },
+        );
+        expect(members).toEqual([[], []]);
+        expect(
+          changes.map((change) => ("sessionKey" in change ? change.facts : undefined)),
+        ).toEqual([
+          { kind: "member", sessionId: "session-main", identityId: "transient", present: true },
+          { kind: "member", sessionId: "session-main", identityId: "transient", present: false },
+        ]);
+      } finally {
+        stop();
+        stopFacts();
+      }
+    });
+  });
+
   it("reads existing and missing memberships without opening or creating writable databases", async () => {
     await withTestDir({ prefix: "openclaw-session-sharing-readonly-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
@@ -37,15 +106,9 @@ describe("session sharing store", () => {
       expect(listSessionMembers(scope)).toEqual([
         { identityId: "guest", addedBy: "owner", addedAt: 2 },
       ]);
-      expect(listSessionMembershipKeys(scope, [scope.sessionKey], "guest")).toEqual(
-        new Set([scope.sessionKey]),
-      );
       expect(isSessionMember(scope, "guest")).toBe(true);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
       expect(listSessionMembers(missingScope)).toEqual([]);
-      expect(listSessionMembershipKeys(missingScope, [missingScope.sessionKey], "guest")).toEqual(
-        new Set(),
-      );
       expect(isSessionMember(missingScope, "guest")).toBe(false);
       expect(fs.existsSync(missingPath)).toBe(false);
     });
@@ -75,13 +138,6 @@ describe("session sharing store", () => {
         { identityId: "zoe", addedBy: "owner", addedAt: 2 },
       ]);
       expect(isSessionMember(scope, "alice")).toBe(true);
-      expect(
-        listSessionMembershipKeys(
-          scope,
-          [scope.sessionKey, ...Array.from({ length: 450 }, (_, index) => `session-${index}`)],
-          "zoe",
-        ),
-      ).toEqual(new Set([scope.sessionKey]));
       expect(removeSessionMember(scope, "alice")).toEqual({
         identityId: "alice",
         addedBy: "owner",
@@ -99,7 +155,16 @@ describe("session sharing store", () => {
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       database.db.exec("DROP TABLE session_members;");
 
-      expect(() => listSessionMembers(scope)).toThrow(/no such table: session_members/);
+      expect(() => listSessionMembers(scope)).toThrow(
+        expect.objectContaining({
+          name: "SessionMetadataUnavailableError",
+          reason: "table-missing",
+          missingTables: ["session_members"],
+          cause: expect.objectContaining({
+            message: expect.stringMatching(/no such table: session_members/),
+          }),
+        }),
+      );
       expect(
         database.db
           .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")

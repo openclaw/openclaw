@@ -1,21 +1,22 @@
-// Agent database cache tests cover bounded process-local SQLite handle ownership.
+// Agent database cache tests cover idle process-local SQLite handle ownership.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
+  clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  listOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
+  resolveIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
@@ -24,90 +25,84 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
-const EXPECTED_OPEN_HANDLE_CAP = 64;
-
-const BASE_AGENT_IDS = Array.from(
-  { length: EXPECTED_OPEN_HANDLE_CAP },
-  (_, index) => `fixture-${index}`,
-);
-const BASE_AGENT_ID_SET = new Set(BASE_AGENT_IDS);
-
-let fixtureEnv: NodeJS.ProcessEnv | undefined;
-let fixtureStateDir: string | undefined;
-let baseDatabases: ReturnType<typeof openOpenClawAgentDatabase>[] = [];
-
-function requireFixtureEnv(): NodeJS.ProcessEnv {
-  if (!fixtureEnv) {
-    throw new Error("agent database cache fixture was not initialized");
-  }
-  return fixtureEnv;
-}
-
-function restoreBaseCache(): void {
-  const env = requireFixtureEnv();
-  for (const database of listOpenClawAgentDatabasesForTest()) {
-    if (!BASE_AGENT_ID_SET.has(database.agentId)) {
-      closeOpenClawAgentDatabaseByPath(database.path);
-    }
-  }
-  baseDatabases = BASE_AGENT_IDS.map((agentId) => openOpenClawAgentDatabase({ agentId, env }));
-}
-
-function closeFirstBaseHandle(): void {
-  const first = baseDatabases[0];
-  if (!first || !closeOpenClawAgentDatabaseByPath(first.path)) {
-    throw new Error("first base agent database was not open");
-  }
-}
-
-function evictAfterRefreshingBaseHandles(evictorAgentId: string, env: NodeJS.ProcessEnv): void {
-  for (const database of baseDatabases.slice(1)) {
-    openOpenClawAgentDatabase({ agentId: database.agentId, env });
-  }
-  openOpenClawAgentDatabase({ agentId: evictorAgentId, env });
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let env: NodeJS.ProcessEnv;
 
 beforeAll(() => {
-  closeOpenClawAgentDatabasesForTest();
-  fixtureStateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-cache-")),
-  );
-  fixtureEnv = { OPENCLAW_STATE_DIR: fixtureStateDir };
-  restoreBaseCache();
+  env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("openclaw-agent-db-cache-")) };
 });
 
 beforeEach(() => {
-  // Reopen only the base handle evicted by the previous case, then refresh cache order by hits.
-  restoreBaseCache();
+  closeOpenClawAgentDatabasesForTest();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
 
-afterAll(() => {
+afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  if (fixtureStateDir) {
-    fs.rmSync(fixtureStateDir, { force: true, recursive: true });
-  }
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("openclaw agent database handle cache", () => {
-  it("rechecks idle cache capacity after concurrent native admissions", async () => {
-    const env = requireFixtureEnv();
-    closeFirstBaseHandle();
-    const opened = await Promise.all(
-      ["async-first", "async-second"].map((agentId) =>
-        withOpenClawAgentDatabaseAsync({ agentId, env }, (database) => database),
-      ),
-    );
-    expect(opened.every((database) => database.db.isOpen)).toBe(true);
-    expect(listOpenClawAgentDatabasesForTest()).toHaveLength(EXPECTED_OPEN_HANDLE_CAP);
+  it("opens each agent once across repeated operations with more than 64 active stores", () => {
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    const agents = Array.from({ length: 65 }, (_, index) => `fixture-${index}`);
+    for (let round = 0; round < 3; round++) {
+      for (const agentId of agents) {
+        expect(
+          openOpenClawAgentDatabase({ agentId, env }).db.prepare("SELECT 1 AS value").get(),
+        ).toEqual({ value: 1 });
+      }
+    }
+    expect(
+      open.mock.calls.filter(([pathname]) => pathname.endsWith("openclaw-agent.sqlite")),
+    ).toHaveLength(agents.length);
+    const first = openOpenClawAgentDatabase({ agentId: agents[0]!, env });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(first.db.isOpen).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(first.db.isOpen).toBe(false);
+    expect(isOpenClawAgentDatabaseOpen(first.path)).toBe(false);
   });
 
-  it("retains concurrent admissions through adoption and the transaction's borrower handoff", async () => {
-    const env = requireFixtureEnv();
-    closeFirstBaseHandle();
-    const baseBorrows = baseDatabases
-      .slice(1)
-      .map(({ agentId }) => borrowOpenClawAgentDatabase({ agentId, env }));
+  it("starts another complete idle window when an existing handle is used", () => {
+    const options = { agentId: "activity", env };
+    const database = openOpenClawAgentDatabase(options);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(openOpenClawAgentDatabase(options)).toBe(database);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(database.db.isOpen).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(database.db.isOpen).toBe(false);
+  });
+
+  it("does not count periodic WAL maintenance as database activity", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const database = openOpenClawAgentDatabase({ agentId: "idle-maintenance", env });
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(database.db.isOpen).toBe(false);
+  });
+
+  it("keeps incognito state until explicit close because its connection owns the data", () => {
+    const options = { agentId: "incognito-idle", env };
+    const incognito = { ...options, path: resolveIncognitoOpenClawAgentSqlitePath(options) };
+    const database = openOpenClawAgentDatabase(incognito);
+    database.db
+      .prepare(
+        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("retained", "{}", 42);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
+    expect(openOpenClawAgentDatabase(incognito)).toBe(database);
+    expect(
+      database.db
+        .prepare("SELECT updated_at FROM auth_profile_state WHERE state_key = ?")
+        .get("retained"),
+    ).toEqual({ updated_at: 42 });
+  });
+
+  it("retains concurrent admissions through the transaction's borrower handoff", async () => {
     const entered = createDeferredCore();
     const proceed = createDeferredCore();
     const transferred: ReturnType<typeof borrowOpenClawAgentDatabase>[] = [];
@@ -118,8 +113,7 @@ describe("openclaw agent database handle cache", () => {
         if (++operations === 2) {
           entered.resolve();
         }
-        await (async () => await proceed.promise)();
-        expect(database.db.isOpen).toBe(true);
+        await proceed.promise;
         return runOpenClawAgentWriteTransaction((current) => {
           expect(current.db).toBe(database.db);
           transferred.push(borrowOpenClawAgentDatabase(options));
@@ -130,72 +124,66 @@ describe("openclaw agent database handle cache", () => {
     const finished = Promise.all(admitted);
     try {
       await Promise.race([entered.promise, finished]);
-      openOpenClawAgentDatabase({ agentId: "adoption-pressure", env });
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
       proceed.resolve();
       const databases = await finished;
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
       expect(databases.every((database) => database.db.isOpen)).toBe(true);
-      expect(listOpenClawAgentDatabasesForTest()).toHaveLength(EXPECTED_OPEN_HANDLE_CAP + 2);
       for (const borrowed of transferred) {
         borrowed.release();
       }
-      openOpenClawAgentDatabase({ agentId: "after-adoption", env });
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(databases.every((database) => database.db.isOpen)).toBe(true);
+      vi.advanceTimersByTime(1);
       expect(databases.every((database) => !database.db.isOpen)).toBe(true);
     } finally {
       proceed.resolve();
       await Promise.allSettled(admitted);
-      for (const borrowed of [...transferred, ...baseBorrows]) {
+      for (const borrowed of transferred) {
         borrowed.release();
       }
     }
   });
 
   it.each([false, true])(
-    "releases a cached operation's borrow after settlement (throws=%s)",
+    "starts the idle window after a cached operation settles (throws=%s)",
     async (throws) => {
-      const env = requireFixtureEnv();
-      const target = baseDatabases[0]!;
-      const retained = baseDatabases
-        .slice(1)
-        .map(({ agentId }) => borrowOpenClawAgentDatabase({ agentId, env }));
+      const options = { agentId: "cached-operation", env };
+      const target = openOpenClawAgentDatabase(options);
       const entered = createDeferredCore();
       const proceed = createDeferredCore();
-      const result = withOpenClawAgentDatabaseAsync(
-        { agentId: target.agentId, env },
-        async (database) => {
-          entered.resolve();
-          await (async () => await proceed.promise)();
-          expect(database).toBe(target);
-          expect(database.db.isOpen).toBe(true);
-          if (throws) {
-            throw new Error("synthetic operation failure");
-          }
-          return database.agentId;
-        },
-      );
+      const result = withOpenClawAgentDatabaseAsync(options, async (database) => {
+        entered.resolve();
+        await proceed.promise;
+        expect(database).toBe(target);
+        expect(database.db.isOpen).toBe(true);
+        if (throws) {
+          throw new Error("synthetic operation failure");
+        }
+        return database.agentId;
+      });
       const settled = throws
         ? expect(result).rejects.toThrow("synthetic operation failure")
         : expect(result).resolves.toBe(target.agentId);
       try {
         await entered.promise;
-        openOpenClawAgentDatabase({ agentId: "cached-operation-pressure", env });
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
         expect(target.db.isOpen).toBe(true);
         proceed.resolve();
         await settled;
-        openOpenClawAgentDatabase({ agentId: "after-cached-operation", env });
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+        expect(target.db.isOpen).toBe(true);
+        vi.advanceTimersByTime(1);
         expect(target.db.isOpen).toBe(false);
       } finally {
         proceed.resolve();
         await Promise.allSettled([result]);
-        for (const borrowed of retained) {
-          borrowed.release();
-        }
       }
     },
   );
 
   it("does not invoke an admitted operation after explicit disposal revokes its handle", async () => {
-    const env = requireFixtureEnv();
-    const target = baseDatabases[0]!;
+    const target = openOpenClawAgentDatabase({ agentId: "revoked-operation", env });
     const operation = vi.fn();
     const result = withOpenClawAgentDatabaseAsync({ agentId: target.agentId, env }, operation);
     closeOpenClawAgentDatabaseByPath(target.path);
@@ -203,231 +191,164 @@ describe("openclaw agent database handle cache", () => {
     expect(operation).not.toHaveBeenCalled();
   });
 
-  it("keeps only the capped number of open handles", () => {
-    const env = requireFixtureEnv();
-    const databases = [
-      ...baseDatabases,
-      openOpenClawAgentDatabase({ agentId: "cap-overflow", env }),
-    ];
-    const leastRecentlyUsed = databases[0]!;
-
-    expect(databases.filter((database) => database.db.isOpen)).toHaveLength(
-      EXPECTED_OPEN_HANDLE_CAP,
-    );
-    expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
-    expect(leastRecentlyUsed.db.isOpen).toBe(false);
-  });
-
-  it("refreshes cache-hit recency before evicting the true LRU handle", () => {
-    const env = requireFixtureEnv();
-    const recentlyUsed = baseDatabases[0]!;
-    const leastRecentlyUsed = baseDatabases[1]!;
-
-    expect(openOpenClawAgentDatabase({ agentId: recentlyUsed.agentId, env })).toBe(recentlyUsed);
-    openOpenClawAgentDatabase({ agentId: "recency-newest", env });
-
-    expect(recentlyUsed.db.isOpen).toBe(true);
-    expect(isOpenClawAgentDatabaseOpen(recentlyUsed.path)).toBe(true);
-    expect(leastRecentlyUsed.db.isOpen).toBe(false);
-    expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
-  });
-
   it("releases an evicted lease in its acquisition store after its environment changes", () => {
-    const env = requireFixtureEnv();
-    const stateDir = env.OPENCLAW_STATE_DIR;
-    const nextStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lease-eviction-"));
-    const evicted = baseDatabases[0]!;
-    const { db: state } = openOpenClawStateDatabase({ env });
-    const leases = () =>
-      state.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(evicted.path);
-    const acquiredLeases = leases();
-    expect(acquiredLeases).toHaveLength(1);
-    try {
-      env.OPENCLAW_STATE_DIR = nextStateDir;
-      openOpenClawAgentDatabase({
-        agentId: "lease-owner-evictor",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      expect(evicted.db.isOpen).toBe(false);
-      expect(leases()).toEqual([]);
-      expect(fs.readdirSync(nextStateDir)).toEqual([]);
-    } finally {
-      env.OPENCLAW_STATE_DIR = stateDir;
-      // A failing regression must not leave its original UUID in the shared fixture.
-      for (const lease of acquiredLeases) {
-        releaseOpenClawAgentDatabaseLease(String(lease.lease_id), { env });
-      }
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(nextStateDir, { recursive: true, force: true });
-    }
+    const mutableEnv = { ...env };
+    const nextStateDir = tempDirs.make("agent-lease-eviction-");
+    const database = openOpenClawAgentDatabase({ agentId: "lease-environment", env: mutableEnv });
+    mutableEnv.OPENCLAW_STATE_DIR = nextStateDir;
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(database.db.isOpen).toBe(false);
+    const { db } = openOpenClawStateDatabase({ env });
+    expect(
+      db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(database.path),
+    ).toEqual([]);
+    expect(fs.readdirSync(nextStateDir)).toEqual([]);
   });
 
-  it("never evicts an LRU handle with an open transaction", () => {
-    const env = requireFixtureEnv();
-    const transactionOwner = baseDatabases[0]!;
-    transactionOwner.db.exec("BEGIN IMMEDIATE");
+  it("keeps an open transaction through expiry and evicts after it finishes", () => {
+    const database = openOpenClawAgentDatabase({ agentId: "transaction", env });
+    database.db.exec("BEGIN IMMEDIATE");
     try {
-      const leastRecentlyUsed = baseDatabases[1]!;
-      openOpenClawAgentDatabase({ agentId: "transaction-newest", env });
-
-      expect(transactionOwner.db.isOpen).toBe(true);
-      expect(transactionOwner.db.isTransaction).toBe(true);
-      expect(isOpenClawAgentDatabaseOpen(transactionOwner.path)).toBe(true);
-      expect(leastRecentlyUsed.db.isOpen).toBe(false);
-      expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(database.db.isOpen).toBe(true);
+      expect(database.db.isTransaction).toBe(true);
     } finally {
-      transactionOwner.db.exec("ROLLBACK");
+      database.db.exec("ROLLBACK");
     }
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(database.db.isOpen).toBe(false);
   });
 
-  it("pins a completion's exact database until its claim is released", () => {
-    const env = requireFixtureEnv();
-    const first = baseDatabases[0]!;
-    const retained = retainOpenClawAgentDatabaseReadOnly({ agentId: first.agentId, env });
+  it("pins a completion's exact database until its final claim is released", () => {
+    const options = { agentId: "completion", env };
+    const database = openOpenClawAgentDatabase(options);
+    const retained = retainOpenClawAgentDatabaseReadOnly(options);
     if (!retained.found) {
       throw new Error("expected the cached database");
     }
-    const { claim } = retained;
     try {
-      evictAfterRefreshingBaseHandles("completion-pinned", env);
-      expect(claim.isCurrent()).toBe(true);
-      expect(first.db.isOpen).toBe(true);
-      claim.release();
-      evictAfterRefreshingBaseHandles("completion-released", env);
-      expect(first.db.isOpen).toBe(false);
-      expect(claim.isCurrent()).toBe(false);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(retained.claim.isCurrent()).toBe(true);
+      expect(database.db.isOpen).toBe(true);
+      retained.claim.release();
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(database.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(database.db.isOpen).toBe(false);
+      expect(retained.claim.isCurrent()).toBe(false);
     } finally {
-      claim.release();
+      retained.claim.release();
     }
   });
 
-  it("retries lease cleanup for a closed retained handle before evicting unrelated agents", () => {
-    const env = requireFixtureEnv();
-    const first = baseDatabases[0]!;
-    const borrowed = borrowOpenClawAgentDatabase({ agentId: first.agentId, env });
+  it("retries failed lease cleanup without retaining a closed handle forever", () => {
+    const database = openOpenClawAgentDatabase({ agentId: "lease-retry", env });
     const { db: state } = openOpenClawStateDatabase({ env });
     state.exec(`CREATE TEMP TRIGGER fail_agent_lease_release BEFORE DELETE ON agent_database_leases
       BEGIN SELECT RAISE(ABORT, 'blocked lease release'); END`);
     try {
-      expect(() => closeOpenClawAgentDatabaseByPath(first.path)).toThrow("blocked lease release");
-      expect(borrowed.db.isOpen).toBe(false);
+      expect(() => closeOpenClawAgentDatabaseByPath(database.path)).toThrow(
+        "blocked lease release",
+      );
+      expect(database.db.isOpen).toBe(false);
       state.exec("DROP TRIGGER fail_agent_lease_release");
-
-      evictAfterRefreshingBaseHandles("lease-recovery", env);
-      expect(listOpenClawAgentDatabasesForTest()).toHaveLength(EXPECTED_OPEN_HANDLE_CAP);
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      const current = openOpenClawStateDatabase({ env });
       expect(
-        state
+        current.db
           .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
-          .all(first.agentId),
+          .all(database.agentId),
       ).toEqual([]);
     } finally {
-      state.exec("DROP TRIGGER IF EXISTS fail_agent_lease_release");
-      borrowed.release();
-      closeOpenClawAgentDatabaseByPath(first.path);
+      if (state.isOpen) {
+        state.exec("DROP TRIGGER IF EXISTS fail_agent_lease_release");
+      }
+      closeOpenClawAgentDatabaseByPath(database.path);
     }
   });
 
-  it("reopens an evicted database without losing durable rows", () => {
-    const env = requireFixtureEnv();
-    const evicted = baseDatabases[0]!;
+  it("reopens an evicted database, revalidates schema, and preserves durable rows and discovery", () => {
+    const options = { agentId: "durability", env };
+    const evicted = openOpenClawAgentDatabase(options);
     evicted.db
       .prepare(
         "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
       )
       .run("cache-eviction", JSON.stringify({ preserved: true }), 42);
-
-    openOpenClawAgentDatabase({ agentId: "durability-evictor", env });
+    const registration = listOpenClawRegisteredAgentDatabases({ env }).find(
+      (entry) => entry.path === evicted.path,
+    );
+    expect(registration).toBeDefined();
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(evicted.db.isOpen).toBe(false);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const divergent = new DatabaseSync(evicted.path);
+    const cachedReopen = openOpenClawAgentDatabase(options);
+    expect(cachedReopen).not.toBe(evicted);
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === evicted.path),
+    ).toEqual(registration);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(cachedReopen.db.isOpen).toBe(false);
+    const divergent = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(evicted.path);
     try {
       divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");
     } finally {
       divergent.close();
     }
-
-    const reopened = openOpenClawAgentDatabase({ agentId: evicted.agentId, env });
-    expect(reopened).not.toBe(evicted);
+    const reopened = openOpenClawAgentDatabase(options);
+    expect(reopened).not.toBe(cachedReopen);
     expect(
       reopened.db
         .prepare("PRAGMA table_info(session_nodes)")
         .all()
-        .some((row) => (row as { name?: unknown }).name === "project_id"),
+        .some((row) => row.name === "project_id"),
     ).toBe(true);
     expect(
       reopened.db
         .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = ?")
         .get("cache-eviction"),
     ).toEqual({ state_json: JSON.stringify({ preserved: true }), updated_at: 42 });
-  });
-
-  it("registers a first open without refreshing registry metadata after eviction", () => {
-    const env = requireFixtureEnv();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    try {
-      closeFirstBaseHandle();
-      const evicted = openOpenClawAgentDatabase({ agentId: "evicted", env });
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env }).find(
-          (entry) => entry.agentId === "evicted" && entry.path === evicted.path,
-        ),
-      ).toMatchObject({ lastSeenAt: 1_000 });
-
-      nowSpy.mockReturnValue(2_000);
-      evictAfterRefreshingBaseHandles("registry-evictor", env);
-      expect(evicted.db.isOpen).toBe(false);
-
-      openOpenClawAgentDatabase({ agentId: "evicted", env });
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env }).find(
-          (entry) => entry.agentId === "evicted" && entry.path === evicted.path,
-        ),
-      ).toMatchObject({ lastSeenAt: 1_000 });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === evicted.path),
+    ).toMatchObject({
+      agentId: options.agentId,
+      path: evicted.path,
+      schemaVersion: registration!.schemaVersion,
+    });
   });
 
   it("validates ownership when an evicted path is requested for another agent", () => {
-    const env = requireFixtureEnv();
-    closeFirstBaseHandle();
     const evicted = openOpenClawAgentDatabase({ agentId: "worker-a", env });
-    evictAfterRefreshingBaseHandles("ownership-evictor", env);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(evicted.db.isOpen).toBe(false);
-
     expect(() =>
       openOpenClawAgentDatabase({ agentId: "worker-b", env, path: evicted.path }),
     ).toThrow(/belongs to agent worker-a/);
   });
 
-  it("revalidates and registers a database after explicit disposal", () => {
-    const env = requireFixtureEnv();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    try {
-      const disposed = openOpenClawAgentDatabase({ agentId: "disposed", env });
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env }).find(
-          (entry) => entry.agentId === "disposed" && entry.path === disposed.path,
-        ),
-      ).toMatchObject({ lastSeenAt: 1_000 });
+  it("revokes on quarantine and opens a new native handle after quarantine is cleared", () => {
+    const options = { agentId: "quarantine", env };
+    const database = openOpenClawAgentDatabase(options);
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    const error = new Error("synthetic quarantine");
+    expect(recordOpenClawAgentDatabaseOpenFailure(database.path, error)).toBe(true);
+    expect(database.db.isOpen).toBe(false);
+    expect(() => openOpenClawAgentDatabase(options)).toThrow(error);
+    clearOpenClawAgentDatabaseOpenFailure(database.path, { env });
+    expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
+    expect(open.mock.calls.filter(([pathname]) => pathname === database.path)).toHaveLength(1);
+  });
 
-      expect(disposeOpenClawAgentDatabaseByPath(disposed.path, { env })).toBe(true);
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env }).some(
-          (entry) => entry.agentId === "disposed" && entry.path === disposed.path,
-        ),
-      ).toBe(false);
-
-      nowSpy.mockReturnValue(2_000);
-      openOpenClawAgentDatabase({ agentId: "disposed", env, path: disposed.path });
-      expect(
-        listOpenClawRegisteredAgentDatabases({ env }).find(
-          (entry) => entry.agentId === "disposed" && entry.path === disposed.path,
-        ),
-      ).toMatchObject({ lastSeenAt: 2_000 });
-    } finally {
-      nowSpy.mockRestore();
-    }
+  it("removes discovery on explicit disposal and registers a new admission", () => {
+    const options = { agentId: "disposed", env };
+    const database = openOpenClawAgentDatabase(options);
+    expect(disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
+    expect(database.db.isOpen).toBe(false);
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).some((entry) => entry.path === database.path),
+    ).toBe(false);
+    expect(openOpenClawAgentDatabase(options)).not.toBe(database);
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).some((entry) => entry.path === database.path),
+    ).toBe(true);
   });
 });

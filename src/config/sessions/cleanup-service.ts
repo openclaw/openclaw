@@ -1,7 +1,5 @@
-// Session cleanup service for store entries and transcript/artifact files.
-// Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
-
 import fs from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
@@ -343,7 +341,7 @@ async function previewStoreCleanup(params: {
     initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
     // Cleanup previews apply the same immediate cap as the apply path.
     forceMaintenance: true,
-    preserveKeys: preserveSessionKeys,
+    readPreserveKeys: () => preserveSessionKeys,
     log: false,
     readAgeCandidates: () => previewStore,
     readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),
@@ -493,42 +491,46 @@ export async function runSessionsCleanup(params: {
       for (const target of targets) {
         failingTarget = target;
         failingTargetLifecycleCommitted = false;
-        const applyStore = loadCleanupSessionStore(target, { createIfMissing: true });
         const missingRemovals: SessionEntryLifecycleRemoval[] = [];
         const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
-        if (opts.fixMissing) {
-          pruneMissingTranscriptEntries({
-            store: applyStore,
-            target,
-            onPruned: (sessionKey, entry, inspection) => {
-              missingRemovals.push({
-                sessionKey,
-                expectedEntry: structuredClone(entry),
-                archiveRemovedTranscript: true,
-                ...(inspection ? { expectedTranscriptSnapshot: inspection.snapshot } : {}),
-              });
-            },
-          });
-        }
-        if (opts.fixDmScope) {
-          retireMainScopeDirectSessionEntries({
-            cfg,
-            store: applyStore,
-            targetAgentId: target.agentId,
-            activeKey: opts.activeKey,
-            onRetired: (sessionKey, entry) => {
-              dmScopeRetiredRemovals.push({
-                sessionKey,
-                expectedEntry: structuredClone(entry),
-                archiveRemovedTranscript: true,
-              });
-            },
-          });
+        if (opts.fixMissing || opts.fixDmScope) {
+          const applyStore = loadCleanupSessionStore(target, { createIfMissing: true });
+          if (opts.fixMissing) {
+            pruneMissingTranscriptEntries({
+              store: applyStore,
+              target,
+              onPruned: (sessionKey, entry, inspection) => {
+                missingRemovals.push({
+                  sessionKey,
+                  expectedEntry: structuredClone(entry),
+                  archiveRemovedTranscript: true,
+                  ...(inspection ? { expectedTranscriptSnapshot: inspection.snapshot } : {}),
+                });
+              },
+            });
+          }
+          if (opts.fixDmScope) {
+            retireMainScopeDirectSessionEntries({
+              cfg,
+              store: applyStore,
+              targetAgentId: target.agentId,
+              activeKey: opts.activeKey,
+              onRetired: (sessionKey, entry) => {
+                dmScopeRetiredRemovals.push({
+                  sessionKey,
+                  expectedEntry: structuredClone(entry),
+                  archiveRemovedTranscript: true,
+                });
+              },
+            });
+          }
         }
         const removals: SessionEntryLifecycleRemoval[] = [
           ...missingRemovals,
           ...dmScopeRetiredRemovals,
         ];
+        // Let queued I/O run between preview/repair work and the synchronous commit.
+        await yieldToEventLoop();
         const lifecycleResult = await applySessionEntryLifecycleMutation({
           agentId: target.agentId,
           storePath: target.storePath,
@@ -542,6 +544,7 @@ export async function runSessionsCleanup(params: {
             failingTargetLifecycleCommitted = true;
           },
         });
+        await yieldToEventLoop();
         const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
         const appliedUnreferencedArtifacts =
           mode === "warn"

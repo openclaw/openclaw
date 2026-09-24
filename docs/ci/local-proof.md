@@ -17,7 +17,31 @@ wrappers can predate this policy.
 On serial hosts with less than 24 GiB of memory, full lint runs core targets in
 five disjoint batches and plugins in smaller chunks. These runs retain the same
 type-aware rules and TypeScript configuration while bounding checker caches.
-Explicit split-core and parallel execution selections remain unchanged.
+Automatic Linux CI on at least four CPUs and 15 GiB of verified memory capacity
+uses sixteen-directory plugin chunks to amortize type-graph startup. Capacity
+includes physical RAM and ancestor cgroup limits. Smaller or unknown capacity,
+local runs, Windows, explicit plugin stripes, and explicit serial selections keep
+eight-directory chunks. Explicit split-core and parallel execution selections
+remain unchanged.
+
+Oxlint's type-aware backend discovers `src/tsconfig.json` and `ui/tsconfig.json`
+separately. Both inherit the root compiler options, include shared ambient
+declarations, and follow imported dependencies. Every existing lint target and
+rule still runs, including source CommonJS test preloads. The CLI `--tsconfig`
+option controls import resolution; it does not replace these discovery projects.
+
+Current CI core-test rows combine their paired stripes into one queue of fresh
+compiler processes, with the same two-child limit. Each independent graph runs
+in incremental project mode: solution-build mode can miss an added root whose
+timestamp predates restored build information. Frozen targets keep their
+original stripe invocations. Per-graph elapsed times appear in the job log.
+
+The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
+Cache keys separate compiler/dependency/configuration versions and CI rows;
+the compiler still validates every selected graph after a hit. Pull requests
+only restore state, while the existing trusted cache writer policy controls
+publication after successful checks. Cache-off and frozen-target runs retain
+their original behavior. Lint programs do not share these compiler caches.
 
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
@@ -67,6 +91,16 @@ pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/moc
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
 
+The Gateway watch regression check starts its idle CPU window only after readiness
+and the settle period. Startup and early-exit failures still fail the check. Missing
+CPU samples from an otherwise valid window fail measurement; whole-run CPU is
+reported separately and never compared with the idle thresholds.
+
+The check joins the timed watch process and its output before taking the post-run
+snapshot or removing its private HOME. If cleanup cannot be confirmed, the check
+fails and retains that HOME for inspection; `watch.home.txt` in the output
+directory records its path.
+
 The native source gate covers catalog-owned macOS, iOS, and shared Apple source
 roots. Linux-runnable source extraction requires explicit typed localized formats
 (for example, `String(format: String(localized: "Expires in %lld minutes"), minutes)`
@@ -74,21 +108,64 @@ for an `Int`) instead of arbitrary Swift interpolation. Constrained inflected
 count resources are supported on both platforms. Use explicit verbatim text for
 user, system, or already-localized data.
 
+For staged checks, `pnpm check:changed --staged` compares the index with `HEAD`.
+Use `pnpm check:changed --staged --base <commit>` to compare the index with an
+explicit commit, including during a pending merge. Path selection, package
+classification, and the staged ratchets use that same base. Without `--staged`,
+the default comparison base remains `origin/main`.
+
+Delegated staged checks carry the selected paths and comparison base to the
+remote checker. Crabbox synchronizes working-tree files, not the local Git
+index, so remote results describe those materialized files rather than an exact
+copy of the staged snapshot. Keep the intended proof files consistent before
+using that route.
+
 ## Surface ratchets
 
-Two shrink-only budgets guard the configuration surface. Both fail CI on growth
-until the budget file is consciously updated in the same PR, and both demand a
-ratchet-down when cleanup lowers the real count.
+Size, length, count, and measured performance limits are errors locally and
+warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
+using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
+local test runners and delegated local checks also set it. Each CI violation
+emits a file-associated GitHub warning at column zero and a job-summary entry.
+Docker proof wrappers carry the signal and relay their summaries to the runner.
 
-- `config/env-var-count-budget.txt` caps the number of distinct `OPENCLAW_*`
-  names in production source under `src/`, `packages/`, and `extensions/`
-  (tests and QA Lab excluded). Checked by `node --import tsx scripts/check-env-var-count.mts`.
-  Removing env vars: lower the number in the same PR. Adding one is a
-  config-surface decision — justify it in the PR body.
-- `docs/.generated/config-baseline.counts.json` caps the per-kind
-  (core/channel/plugin) `openclaw.json` schema entry counts. Checked by
-  `pnpm config:docs:check`; regenerate with `pnpm config:docs:gen` after any
-  schema change.
+Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
+TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
+explicit overrides. Local lint reports errors. CI uses a temporary configuration
+that changes only enabled size-rule severity to warning. SwiftLint likewise
+reports native length, nesting, complexity, and count limits as CI warnings;
+semantic lint errors remain blocking.
+
+`pnpm check`, `pnpm check:changed`, and `pnpm check:line-cap-ratchet --base <commit>`
+reject new over-cap files and growth above inherited over-cap debt locally. The
+PR `checks-fast-baseline-ratchets` job reports this growth as warnings. Renames
+compare against the old path; unchanged or shrinking over-cap files pass the
+ratchet. Measurement uses oxlint's actual caps and comment/blank-line exclusions
+and neutralizes suppression directives only in temporary measurement copies.
+Main-push CI does not run the PR growth comparison; ordinary lint still reports
+all unsuppressed over-cap files.
+
+The max-lines suppression inventory and environment-variable count budget use
+the same severity policy. After removing a suppression, remove its stale entry
+from `config/max-lines-baseline.txt`, or run
+`pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking; warning
+status does not authorize new suppressions or higher caps. The environment
+budget counts distinct `OPENCLAW_*` names in production `src/`, `packages/`, and
+`extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` when cleanup reduces that count.
+
+The policy also covers numeric bundle, declaration, package, startup memory,
+CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+When a file or artifact exceeds a cap, extract a coherent module or investigate
+the added cost. Do not trim coverage, disable rules, or raise thresholds just
+to silence a warning.
+
+Correctness checks stay blocking, including types, semantic lint, blanket lint
+disables, assertion safety, missing or malformed evidence, failed commands,
+forbidden eager imports, and exactly-once ownership. Public SDK inventories and
+generated configuration-schema baselines remain contract guards. Runner matrix
+caps protect shared runner-registration capacity and remain blocking. Explicit
+benchmark qualification verdicts retain their requested acceptance criteria.
 
 ## Local check gates and changed routing
 
@@ -144,6 +221,10 @@ binary untouched. Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
+Its outer GitHub job defaults to 240 minutes, matching the native full-test
+gate's four-hour Testbox lease envelope. Manual dispatches can override
+`timeout_minutes`; the lease TTL and individual test deadlines remain separate
+limits.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
@@ -171,8 +252,10 @@ and its digest anchors when advancing the toolchain.
 
 Trusted Linux hydration uses the shared Node compatibility selector and can
 seed a job-private Corepack home from the same authenticated pnpm archives.
-These runtime archives do not replace the frozen-lockfile dependency install
-or change the dependency-store cache keys.
+The shared setup action also carries authenticated pnpm archives in its warmed
+store, so hosted and Blacksmith jobs can bootstrap before dependency installation
+without downloading pnpm again. These archives do not replace the frozen-lockfile
+dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
 Bun 1.4.0 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
@@ -390,6 +473,24 @@ pnpm crabbox:stop -- --provider aws <cbx_id-or-slug>
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
+
+Linux hydration keeps physical workspace `node_modules` directories and pnpm's
+default `.pnpm` virtual store. Only the package-content store uses the persistent
+`/var/cache/crabbox/pnpm/store` volume; its fallback lives at
+`.cache/openclaw-pnpm-store` beside the workspace dependencies. Ordinary POSIX
+sync preserves these ignored directories, so frozen reinstalls and later build
+commands use the same owned install. Hydration checks the tooling loader before
+marking the lease ready. When rehydrating an older lease, the workflow retires
+only its former root links to `/var/tmp/openclaw-pnpm/node_modules` or
+`${XDG_CACHE_HOME:-$RUNNER_TEMP/cache}/openclaw/pnpm/install/node_modules` before
+installing physical workspace dependencies, including links whose runner cache
+was already cleared. It preserves external package caches and unrelated
+dependency links.
+
+Native Windows daemon hydration retains its external dependency junction because
+released Crabbox native Windows delete-sync replaces workspace contents. Move
+that route to physical workspace dependencies only with a Crabbox sync version
+that preserves generated dependency directories.
 
 ## Related
 

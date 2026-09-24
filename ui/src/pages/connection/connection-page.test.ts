@@ -9,7 +9,6 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import type { GatewayStatusSnapshot } from "../../components/gateway-vitals.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -17,34 +16,41 @@ import {
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
+import "../debug/debug-overlay-content.ts";
+import { DebugOverlay } from "../debug/debug-overlay.ts";
 import { ConnectionPage } from "./connection-page.ts";
 import { supportsSystemInfo } from "./system-info.ts";
 
-const gatewayActivity: GatewayStatusSnapshot = {
-  eventLoop: { utilization: 0.42, cpuCoreRatio: 0.24, delayP99Ms: 12, delayMaxMs: 87 },
+const gatewayActivity = {
+  eventLoop: {
+    utilization: 0.42,
+    cpuCoreRatio: 0.24,
+    delayP99Ms: 12,
+    delayMaxMs: 87,
+    degraded: false,
+    degradedSinceMs: null,
+    reasons: [],
+    intervalMs: 1_000,
+  },
   processMemory: {
     rssBytes: 432 * 1_048_576,
     heapUsedBytes: 210 * 1_048_576,
     heapTotalBytes: 256 * 1_048_576,
   },
-};
+} satisfies Pick<SystemInfoResult, "eventLoop" | "processMemory">;
+const gatewaySystemInfo = { ...deviceSystemInfo, ...gatewayActivity } satisfies SystemInfoResult;
 
 function source(
   client: GatewayBrowserClient,
   pingRequest: (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown> = vi
     .fn()
     .mockResolvedValue(null),
-  statusRequest: (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown> = vi
-    .fn()
-    .mockResolvedValue(gatewayActivity),
 ) {
   const request = client.request.bind(client);
   client.request = ((method, ...args) =>
     method === "last-heartbeat"
       ? pingRequest(method, ...args)
-      : method === "status"
-        ? statusRequest(method, ...args)
-        : request(method, ...args)) as GatewayBrowserClient["request"];
+      : request(method, ...args)) as GatewayBrowserClient["request"];
   return createApplicationGateway({
     client,
     phase: "connected",
@@ -76,11 +82,124 @@ function control(page: ConnectionPage, selector: string) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
+describe("ConnectionPage browser sign-in", () => {
+  it.each(["offline", "stopped", "connected"] as const)(
+    "requires confirmation and clears only after accepting while %s",
+    async (phase) => {
+      const { gateway } = createApplicationGateway({
+        phase,
+        sessionKey: "main",
+      } as ApplicationGatewaySnapshot);
+      let stored = true;
+      gateway.hasStoredDeviceToken = () => stored;
+      gateway.forgetDeviceToken = vi.fn(() => {
+        stored = false;
+        return true;
+      });
+      const { page } = await mount(gateway);
+      const forget = () =>
+        [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Forget this browser",
+        );
+      expect(forget()).toBeDefined();
+      forget()?.click();
+      await vi.waitFor(() =>
+        expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      );
+      document
+        .querySelector<HTMLButtonElement>(".exec-approval-actions button:not(.danger)")
+        ?.click();
+      await settleLitElement(page);
+      expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
+      forget()?.click();
+      await vi.waitFor(() =>
+        expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      );
+      document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")?.click();
+      await vi.waitFor(() => expect(gateway.forgetDeviceToken).toHaveBeenCalledOnce());
+      await settleLitElement(page);
+      expect(forget()).toBeUndefined();
+    },
+  );
+
+  it("does not apply an old confirmation to a newly selected Gateway", async () => {
+    const { gateway } = createApplicationGateway({
+      phase: "offline",
+      sessionKey: "main",
+    } as ApplicationGatewaySnapshot);
+    gateway.hasStoredDeviceToken = () => true;
+    gateway.forgetDeviceToken = vi.fn(() => true);
+    const { page } = await mount(gateway);
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Forget this browser")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+    );
+    expect(document.querySelector(".exec-approval-sub")?.textContent).toContain(
+      "gateway.example.test",
+    );
+    gateway.connection.gatewayUrl = "wss://other.example.test";
+    document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")?.click();
+    await settleLitElement(page);
+    expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("ConnectionPage ping", () => {
+  it("shares six status reads per minute with a tray mounted between page polls", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+    }));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
+    const current = source({ request } as unknown as GatewayBrowserClient);
+    Object.assign(current.gateway, {
+      eventLog: [],
+      subscribeEventLog: () => () => undefined,
+    });
+    const { provider } = await mount(current.gateway);
+    const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
+    expect(statusReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const overlay = new DebugOverlay();
+    provider.append(overlay);
+    overlay.open("minimized");
+    await settleLitElement(overlay);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(55_000);
+    expect(statusReads()).toHaveLength(7);
+
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(statusReads()).toHaveLength(7);
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    globalThis.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusReads()).toHaveLength(8);
+    provider.remove();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(statusReads()).toHaveLength(8);
+  });
+
   function pingStat(page: ConnectionPage, label: string) {
     const term = [...page.querySelectorAll(".connection-ping__stats dt")].find(
       (element) => element.textContent?.trim() === label,
@@ -107,7 +226,7 @@ describe("ConnectionPage ping", () => {
     const { page } = await mount(source(pingClient(), pingRequest).gateway);
     expect(pingStat(page, "Avg ping")).toBe("9999.0 ms");
 
-    await vi.advanceTimersByTimeAsync(500_000);
+    await vi.advanceTimersByTimeAsync(1_000_000);
     await settleLitElement(page);
     expect(pingRequest).toHaveBeenCalledTimes(101);
     expect(pingStat(page, "Avg ping")).toBe("50.5 ms");
@@ -136,14 +255,14 @@ describe("ConnectionPage ping", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(pingRequest).toHaveBeenCalledTimes(2);
     expect(pingRequest.mock.calls[1]?.[2]).toEqual({
-      timeoutMs: 5_000,
+      timeoutMs: 10_000,
       signal: expect.any(AbortSignal),
     });
     responses[1]!.reject(new Error("Gateway request timed out"));
     await settleLitElement(page);
     expect(page.querySelector(".connection-ping")?.textContent).toContain("Last ping failed.");
     expect(pingStat(page, "Avg ping")).toBe("20.0 ms");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(pingRequest).toHaveBeenCalledTimes(3);
 
     visibility = "hidden";
@@ -163,7 +282,7 @@ describe("ConnectionPage ping", () => {
     await settleLitElement(page);
     expect(pingStat(page, "Avg ping")).toBe("30.0 ms");
     expect(page.querySelector(".connection-ping")?.textContent).not.toContain("Last ping failed.");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     provider.remove();
     expect(pingRequest.mock.calls[4]?.[2].signal.aborted).toBe(true);
     responses[4]!.resolve(null);
@@ -180,11 +299,11 @@ describe("ConnectionPage ping", () => {
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const stale = deferred<null>();
       const fresh = deferred<null>();
-      const staleStatus = deferred<GatewayStatusSnapshot>();
-      const freshStatus = deferred<GatewayStatusSnapshot>();
-      const statusRequest = vi
+      const staleStatus = deferred<SystemInfoResult>();
+      const freshStatus = deferred<SystemInfoResult>();
+      const systemInfoRequest = vi
         .fn()
-        .mockResolvedValueOnce(gatewayActivity)
+        .mockResolvedValueOnce(gatewaySystemInfo)
         .mockReturnValueOnce(staleStatus.promise)
         .mockReturnValueOnce(freshStatus.promise);
       const pingRequest = vi
@@ -195,42 +314,53 @@ describe("ConnectionPage ping", () => {
         })
         .mockReturnValueOnce(stale.promise)
         .mockReturnValueOnce(fresh.promise);
-      const client = pingClient();
-      const first = source(client, pingRequest, statusRequest);
+      const client = { request: systemInfoRequest } as unknown as GatewayBrowserClient;
+      const first = source(client, pingRequest);
       const { page, context, provider } = await mount(first.gateway);
       expect(pingStat(page, "Avg ping")).toBe("20.0 ms");
       const activity = () => page.querySelector(".connection-activity")?.textContent;
       expect(activity()).toContain("432 MB");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
 
       if (change === "reconnect") {
         first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
         await settleLitElement(page);
         expect(page.querySelector(".connection-ping")).toBeNull();
-        first.publish({ ...first.gateway.snapshot, phase: "connected" });
+        first.publish({
+          ...first.gateway.snapshot,
+          phase: "connected",
+          hello: gatewayHelloForMethods(["system.info"]),
+        });
       } else if (change === "source") {
         provider.setContext({
           ...context,
-          gateway: source(client, pingRequest, statusRequest).gateway,
+          gateway: source(client, pingRequest).gateway,
         });
       } else {
         first.publish({
           ...first.gateway.snapshot,
-          client: source(pingClient(), pingRequest, statusRequest).gateway.snapshot.client,
+          client: source(
+            { request: systemInfoRequest } as unknown as GatewayBrowserClient,
+            pingRequest,
+          ).gateway.snapshot.client,
         });
       }
       await settleLitElement(page);
       expect(pingRequest.mock.calls[1]?.[2].signal.aborted).toBe(true);
+      expect(systemInfoRequest.mock.calls[1]?.[2].signal.aborted).toBe(true);
       now += 500;
       stale.resolve(null);
-      staleStatus.resolve(gatewayActivity);
+      staleStatus.resolve(gatewaySystemInfo);
       await settleLitElement(page);
       expect(pingStat(page, "Avg ping")).toBe("—");
       expect(activity()).not.toContain("432 MB");
       expect(page.querySelector(".connection-ping")?.textContent).toContain("Measuring ping…");
       now += 10;
       fresh.resolve(null);
-      freshStatus.resolve({ eventLoop: { cpuCoreRatio: 0.7, delayP99Ms: 5 } });
+      freshStatus.resolve({
+        ...deviceSystemInfo,
+        eventLoop: { ...gatewayActivity.eventLoop, cpuCoreRatio: 0.7, delayP99Ms: 5 },
+      });
       await settleLitElement(page);
       expect(pingStat(page, "Avg ping")).toBe("510.0 ms");
       expect(page.querySelector(".connection-ping")?.textContent).toContain("Samples: 1/100");
@@ -238,42 +368,77 @@ describe("ConnectionPage ping", () => {
     },
   );
 
-  it("refreshes shared activity graphs independently of ping and reports failed refreshes", async () => {
+  it("shares one host and activity poll independently of ping and reports failed refreshes", async () => {
     vi.useFakeTimers();
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const next = deferred<GatewayStatusSnapshot>();
-    const statusRequest = vi
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const next = deferred<SystemInfoResult>();
+    const systemInfoRequest = vi
       .fn()
-      .mockResolvedValueOnce(gatewayActivity)
+      .mockResolvedValueOnce(gatewaySystemInfo)
       .mockReturnValueOnce(next.promise)
       .mockRejectedValueOnce(new Error("unavailable"))
-      .mockResolvedValue(gatewayActivity);
-    const { page, provider } = await mount(source(pingClient(), undefined, statusRequest).gateway);
+      .mockResolvedValue(gatewaySystemInfo);
+    const { page, provider } = await mount(
+      source({ request: systemInfoRequest } as unknown as GatewayBrowserClient).gateway,
+    );
     const activity = () => page.querySelector(".connection-activity");
     expect(activity()?.textContent).toContain("432 MB");
     expect(activity()?.textContent).toContain("42%");
+    expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual([
+      "system.info",
+      "system.info",
+    ]);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(statusRequest).toHaveBeenCalledTimes(2);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(2);
     next.resolve({
-      ...gatewayActivity,
-      eventLoop: { cpuCoreRatio: 0.6, delayP99Ms: 50, reasons: ["cpu"] },
+      ...gatewaySystemInfo,
+      machineName: "Fresh host",
+      eventLoop: {
+        ...gatewayActivity.eventLoop,
+        cpuCoreRatio: 0.6,
+        delayP99Ms: 50,
+        reasons: ["cpu"],
+      },
     });
     await settleLitElement(page);
     expect(activity()?.textContent).toContain("60%");
+    expect(page.querySelector(".config-host__name")?.textContent).toContain("Fresh host");
     expect(activity()?.querySelectorAll("polyline")).toHaveLength(3);
     expect(activity()?.querySelector(".gateway-vital--cpu")?.hasAttribute("data-degraded")).toBe(
       true,
     );
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await settleLitElement(page);
     expect(activity()?.textContent).toContain("Activity refresh failed.");
     expect(activity()?.textContent).toContain("60%");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await settleLitElement(page);
     expect(activity()?.textContent).not.toContain("Activity refresh failed.");
+    const hidden = deferred<SystemInfoResult>();
+    systemInfoRequest.mockReturnValueOnce(hidden.promise);
+    await vi.advanceTimersByTimeAsync(10_000);
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(systemInfoRequest.mock.calls[4]?.[2].signal.aborted).toBe(true);
+    hidden.resolve({ ...gatewaySystemInfo, machineName: "Hidden stale host" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settleLitElement(page);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(5);
+    expect(page.querySelector(".config-host__name")?.textContent).not.toContain(
+      "Hidden stale host",
+    );
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settleLitElement(page);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(6);
     provider.remove();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(statusRequest).toHaveBeenCalledTimes(4);
+    expect(systemInfoRequest).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -487,7 +652,12 @@ describe("ConnectionPage Gateway lifecycle", () => {
     await settleLitElement(page);
     expect(input("Gateway secret").type).toBe("password");
     expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
-    first.publish({ ...first.gateway.snapshot, phase: "connected", sessionKey: "remote-session" });
+    first.publish({
+      ...first.gateway.snapshot,
+      phase: "connected",
+      sessionKey: "remote-session",
+      hello: gatewayHelloForMethods(["system.info"]),
+    });
     await settleLitElement(page);
     expect(input("Gateway secret").value).toBe("draft-secret");
     expect(input("Default session").value).toBe("draft-session");

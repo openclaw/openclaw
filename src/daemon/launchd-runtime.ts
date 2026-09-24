@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -30,6 +31,7 @@ import {
   inspectSystemLaunchDaemonOwnership,
 } from "./launchd-system.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
   ServiceInspectionError,
   type ServiceInspectionReason,
@@ -82,15 +84,17 @@ export async function readLaunchAgentProgramArguments(
 const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS = (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000;
 const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS = 500;
 export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): Promise<{
+  env: GatewayServiceEnv;
   port: number | null;
   probeHosts: readonly string[];
 }> {
   const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
-    return { port: null, probeHosts: [] };
+    return { env, port: null, probeHosts: [] };
   }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   return {
+    env: mergeGatewayServiceEnv(env, command),
     port:
       parseTcpPortFromArgs(command?.programArguments) ??
       parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "") ??
@@ -128,12 +132,64 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   actionHint: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
   skipEnable?: boolean;
+  preserveAutoStart?: boolean;
+  preservedEnabled?: boolean;
   assertCurrent?: () => void;
   // Opt-in for callers that just issued `bootout` on this label. Only those can
   // race a pending teardown, so start/install/recovery paths keep failing fast
   // on an unrelated EIO instead of waiting out the teardown deadline.
   retryPendingTeardown?: boolean;
 }) {
+  if (params.preserveAutoStart) {
+    params.assertCurrent?.();
+    const label = params.serviceTarget.slice(params.domain.length + 1);
+    let enabled = params.preservedEnabled;
+    if (enabled === undefined) {
+      const state = await execLaunchctl(["print-disabled", params.domain]);
+      if (state.code !== 0) {
+        throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(state)}`);
+      }
+      enabled = parseLaunchAgentEnabled(state.stdout || state.stderr || "", label);
+    }
+    params.assertCurrent?.();
+    if (!enabled) {
+      const enable = await execLaunchctl(["enable", params.serviceTarget]);
+      if (enable.code !== 0) {
+        throw new Error(`launchctl enable failed: ${formatLaunchctlResultDetail(enable)}`);
+      }
+    }
+    const [boot] = await Promise.allSettled([
+      bootstrapLaunchAgentOrThrow({ ...params, preserveAutoStart: false, skipEnable: true }),
+    ]);
+    if (boot.status === "rejected" && hasCommandProcessCleanupError(boot.reason)) {
+      throw boot.reason;
+    }
+    const failures: unknown[] = boot.status === "rejected" ? [boot.reason] : [];
+    if (!enabled) {
+      try {
+        params.assertCurrent?.();
+        const disable = await execLaunchctl(["disable", params.serviceTarget]);
+        if (disable.code !== 0) {
+          throw new Error(
+            `LaunchAgent disabled policy could not be restored: ${formatLaunchctlResultDetail(disable)}`,
+          );
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) {
+      throw failures[0];
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "LaunchAgent bootstrap and disabled-policy restoration failed.",
+      );
+    }
+    return;
+  }
+
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
   if (!params.skipEnable) {
@@ -388,19 +444,4 @@ export async function probeLaunchAgentState(
     return { state: "running", runtime };
   }
   return { state: "stopped", runtime };
-}
-
-export async function waitForLaunchAgentStopped(
-  serviceTarget: string,
-): Promise<LaunchAgentProbeResult> {
-  let lastProbe: LaunchAgentProbeResult = { state: "unknown" };
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const probe = await probeLaunchAgentState(serviceTarget);
-    lastProbe = probe;
-    if (probe.state === "stopped" || probe.state === "not-loaded") {
-      return probe;
-    }
-    await sleep(100);
-  }
-  return lastProbe;
 }

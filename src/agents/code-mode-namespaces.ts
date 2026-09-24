@@ -109,10 +109,19 @@ type CodeModeNamespaceCatalogEntry = {
   mcp?: PluginToolMcpMeta;
 };
 
+/** Discovery routes derive from the same model that installs namespace functions. */
+type CodeModeMcpCatalogBinding = {
+  callableName: string;
+  namespaceId: "mcp";
+  path: string[];
+  apiPath: string;
+};
+
 /** Runtime dispatcher for invoking callable namespace paths. */
 export type CodeModeNamespaceRuntime = {
   descriptors: CodeModeNamespaceDescriptor[];
   apiFiles: CodeModeApiVirtualFile[];
+  mcpBindings: ReadonlyMap<string, CodeModeMcpCatalogBinding>;
   invoke(
     namespaceId: string,
     path: string[],
@@ -120,7 +129,7 @@ export type CodeModeNamespaceRuntime = {
     executeTool: (params: {
       pluginId: string;
       toolName: string;
-      catalogId?: string;
+      catalogId: string;
       input: unknown;
       namespaceId: string;
       path: string[];
@@ -276,6 +285,7 @@ function toolIdentifiersForServer(
 type McpNamespaceModel = {
   root: CodeModeNamespaceScope;
   docs: McpApiServerDoc[];
+  bindings: Map<string, CodeModeMcpCatalogBinding>;
 };
 
 type McpNamespaceServer = {
@@ -381,6 +391,7 @@ function createMcpNamespaceModel(
   const usedToolIdentifiers = new Map<string, Set<string>>();
   const root = Object.create(null) as CodeModeNamespaceScope;
   const serverDocs = new Map<string, McpApiServerDoc>();
+  const bindings = new Map<string, CodeModeMcpCatalogBinding>();
   for (const entry of plan.entries) {
     const mcp = entry.mcp;
     if (!mcp || !entry.id) {
@@ -417,6 +428,12 @@ function createMcpNamespaceModel(
                     toolIdentifiersForServer(usedToolIdentifiers, serverIdentifier),
                   ),
                 ];
+    bindings.set(entry.id, {
+      callableName: ["MCP", serverIdentifier, ...path].join("."),
+      namespaceId: "mcp",
+      path: [serverIdentifier, ...path],
+      apiPath: `mcp/${serverIdentifier}.d.ts`,
+    });
     const parent = scopeAtPath(serverScope, path.slice(0, -1));
     parent[path.at(-1) ?? "tool"] = createCodeModeNamespaceCatalogTool(
       entry.id,
@@ -445,7 +462,7 @@ function createMcpNamespaceModel(
       buildMcpApiResponse({ servers: docs, server, args }),
     );
   }
-  return { root, docs };
+  return { root, docs, bindings };
 }
 
 const SWARM_AGENTS_API_CONTENT = `type AgentJsonSchema = Record<string, unknown>;
@@ -518,7 +535,7 @@ function describeMcpNamespaceForPrompt(
   return [
     "- MCP: MCP server tools grouped by server.",
     `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}. Node-backed name collisions use a sanitized node-id fragment prefix.`,
-    "Call MCP tools as MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
+    "Search native and MCP tools by task with catalog.search(query). MCP handles expose callableName, apiPath, and describe() for the exact header and schema. Call the handle or MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
   ];
 }
 
@@ -619,6 +636,7 @@ export function createCodeModeNamespaceRuntime(
   const registeredId = entry?.descriptor.id;
   return {
     descriptors: entry ? [entry.descriptor] : [],
+    mcpBindings: model?.bindings ?? new Map(),
     apiFiles: [
       {
         path: "agents.d.ts",

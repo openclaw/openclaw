@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
 type SkipInventoryReason =
@@ -311,52 +313,11 @@ export function collectTestSkipInventoryReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestSkipInventoryFinding[],
-): Map<string, TestSkipInventoryFinding[]> {
-  const grouped = new Map<string, TestSkipInventoryFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
 function renderReasonCounts(reasonCounts: Record<SkipInventoryReason, number>): string {
   return Object.entries(reasonCounts)
     .filter(([, count]) => count > 0)
     .map(([reason, count]) => `${reason}: ${count}`)
     .join(", ");
-}
-
-function renderFindingGroups(findings: TestSkipInventoryFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      lines.push(
-        `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
-      );
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
 }
 
 export function renderTestSkipInventoryReport(
@@ -377,65 +338,17 @@ export function renderTestSkipInventoryReport(
     lines.push("Findings: none");
   } else {
     lines.push("Findings:");
-    lines.push(...renderFindingGroups(report.findings, limit));
+    lines.push(
+      ...renderFindingGroups(
+        report.findings,
+        limit,
+        (finding) =>
+          `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
+      ),
+    );
   }
 
   return `${lines.join("\n")}\n`;
-}
-
-function readNonNegativeIntArg(raw: string | undefined): number {
-  if (!raw || raw.startsWith("--") || !/^\d+$/u.test(raw)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error("--limit expects a non-negative integer");
-  }
-  return value;
-}
-
-function parseArgs(argv: string[]): {
-  help: boolean;
-  json: boolean;
-  limit: number;
-  repoRoot: string;
-} {
-  let help = false;
-  let json = false;
-  let limit = 120;
-  let repoRoot = process.cwd();
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--limit") {
-      limit = readNonNegativeIntArg(argv[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (arg === "--repo-root") {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error("--repo-root expects a path");
-      }
-      repoRoot = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return { help, json, limit, repoRoot };
 }
 
 function printHelp(): void {
@@ -453,7 +366,7 @@ Options:
 }
 
 export function main(argv = process.argv.slice(2)): number {
-  const args = parseArgs(argv);
+  const args = parseInventoryReportCliArgs(argv);
   if (args.help) {
     printHelp();
     return 0;

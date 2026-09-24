@@ -51,6 +51,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  decisionModel?: string;
   models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
   skills?: string[];
@@ -68,6 +69,7 @@ type ConfigSnapshot = {
     defaults?: {
       workspace?: string;
       model?: unknown;
+      decisionModel?: string;
       models?: Record<string, { alias?: unknown }>;
       skills?: string[];
     };
@@ -128,10 +130,6 @@ export function resolveAgentTextAvatar(
     }
   }
   return null;
-}
-
-export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
 type FormatBytesOptions = {

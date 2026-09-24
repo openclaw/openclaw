@@ -5,7 +5,7 @@ import net, { type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { openProviderWebSocket } from "./provider-websocket.js";

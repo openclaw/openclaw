@@ -139,7 +139,9 @@ User turns are attributed to the verified publisher of the current snapshot, usi
 ### Delete
 
 Any operator with `operator.write` can delete a Beam from its sidebar row menu.
-Deletion is permanent and immediate. Re-uploading the same `beamId` recreates the
+After confirmation, the sidebar hides the row while deletion finishes. If deletion
+fails, the row returns and an error appears. Successful deletion is permanent.
+Re-uploading the same `beamId` recreates the
 row, whether through the manual skill or a still-active mirror's next upload.
 Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
 the next poll. Deleting a Beam does not affect continuations already created from it.

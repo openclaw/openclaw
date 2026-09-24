@@ -6,12 +6,12 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalAndroidVersionCode,
   checkAndroidVersioning,
-  extractChangelogSection,
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
   resolveAndroidVersion,
   resolveGatewayVersionForAndroidRelease,
 } from "../../scripts/lib/android-version.ts";
+import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
 import {
   parseVersionQueryArgs,
   parseVersionSyncArgs,

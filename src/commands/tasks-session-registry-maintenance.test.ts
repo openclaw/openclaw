@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -19,6 +18,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 import { tasksMaintenanceCommand } from "./tasks.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const mocks = vi.hoisted(() => ({
@@ -29,11 +29,11 @@ vi.mock("../cron/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cron/store.js")>();
   return {
     ...actual,
-    loadCronJobsStoreSync: (storePath: string) => {
+    loadCronJobsStore: async (storePath: string) => {
       if (mocks.cronStoreLoadError) {
         throw mocks.cronStoreLoadError;
       }
-      return actual.loadCronJobsStoreSync(storePath);
+      return actual.loadCronJobsStore(storePath);
     },
   };
 });
@@ -77,19 +77,11 @@ async function withMaintenanceState(run: (state: OpenClawTestState) => Promise<v
   );
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
 describe("runSessionRegistryMaintenance", () => {
-  afterEach(() => {
+  afterEach(async () => {
     mocks.cronStoreLoadError = undefined;
-    taskRegistryMaintenance.stopTaskRegistryMaintenance();
-    taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+    await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+    taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetConfigRuntimeState();
     closeOpenClawAgentDatabasesForTest();
   });
@@ -102,7 +94,7 @@ describe("runSessionRegistryMaintenance", () => {
         { sessionKey: staleCronKey, storePath },
         { sessionId: "maybe-running", updatedAt: Date.now() - 8 * DAY_MS },
       );
-      mocks.cronStoreLoadError = new Error("SQLITE_CORRUPT: database disk image is malformed");
+      mocks.cronStoreLoadError = new Error("cron store load unavailable");
 
       const summary = await runSessionRegistryMaintenance({ apply: true });
 
@@ -175,7 +167,7 @@ describe("runSessionRegistryMaintenance", () => {
           loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
         ).toBe(mainEntrySurvives);
         if (!apply) {
-          const jsonRuntime = createRuntime();
+          const jsonRuntime = createTestRuntime();
           await tasksMaintenanceCommand({ json: true }, jsonRuntime);
           expect(JSON.parse(String(vi.mocked(jsonRuntime.log).mock.calls[0]?.[0]))).toMatchObject({
             maintenance: {
@@ -191,7 +183,7 @@ describe("runSessionRegistryMaintenance", () => {
               },
             },
           });
-          const textRuntime = createRuntime();
+          const textRuntime = createTestRuntime();
           await tasksMaintenanceCommand({}, textRuntime);
           expect(vi.mocked(textRuntime.log).mock.calls.flat().join("\n")).toContain(
             "1 skipped store",

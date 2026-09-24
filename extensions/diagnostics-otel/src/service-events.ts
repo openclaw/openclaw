@@ -60,6 +60,7 @@ export function createDiagnosticsEventHandler(params: {
     recordRunStarted,
     recordRunCompleted,
     recordHarnessRunStarted,
+    recordAgentCommentary,
     recordHarnessRunCompleted,
     recordHarnessRunError,
     recordContextAssembled,
@@ -85,6 +86,9 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "diagnostic.child_process.spawn":
+          // Child-launch counts currently export through Prometheus.
+          return;
         case "diagnostic.gc":
           recordGcDuration(evt, metadata);
           return;
@@ -171,7 +175,7 @@ export function createDiagnosticsEventHandler(params: {
           recordLivenessWarning(evt);
           return;
         case "diagnostic.phase.completed":
-          recordDiagnosticPhaseCompleted(evt);
+          recordDiagnosticPhaseCompleted(evt, metadata);
           return;
         case "run.started":
           recordRunStarted(evt, metadata);
@@ -181,6 +185,9 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "harness.run.started":
           recordHarnessRunStarted(evt, metadata);
+          return;
+        case "agent.commentary":
+          recordAgentCommentary(evt, metadata, privateData);
           return;
         case "harness.run.completed":
           recordHarnessRunCompleted(evt, metadata, privateData);

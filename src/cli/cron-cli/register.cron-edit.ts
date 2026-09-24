@@ -27,6 +27,7 @@ import {
   getCronChannelOptions,
   handleCronCliError,
   parseCronIntegerOption,
+  parseCronStringOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
 } from "./shared.js";
@@ -112,10 +113,10 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new CronCliError("Use --tools or --clear-tools, not both");
           }
-          const commandCwd = normalizeOptionalString(opts.commandCwd);
-          if (typeof opts.commandCwd === "string" && !commandCwd) {
-            throw new CronCliError("--command-cwd must not be blank");
+          if (typeof opts.script === "string" && !readNonBlankString(opts.script)) {
+            throw new CronCliError("--script must not be blank");
           }
+          const commandCwd = parseCronStringOption(opts.commandCwd, "--command-cwd");
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
@@ -199,10 +200,7 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.name === "string") {
             patch.name = opts.name;
           }
-          const displayName = normalizeOptionalString(opts.displayName);
-          if (typeof opts.displayName === "string" && !displayName) {
-            throw new CronCliError("--display-name must not be blank");
-          }
+          const displayName = parseCronStringOption(opts.displayName, "--display-name");
           if (displayName && opts.clearDisplayName) {
             throw new CronCliError("Use --display-name or --clear-display-name, not both");
           }
@@ -243,10 +241,7 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.wakeMode = wakeMode;
           }
-          const agentId = normalizeOptionalString(opts.agent);
-          if (typeof opts.agent === "string" && !agentId) {
-            throw new CronCliError("--agent must not be blank");
-          }
+          const agentId = parseCronStringOption(opts.agent, "--agent");
           if (agentId && opts.clearAgent) {
             throw new CronCliError("Use --agent or --clear-agent, not both");
           }
@@ -256,10 +251,7 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearAgent) {
             patch.agentId = null;
           }
-          const sessionKey = normalizeOptionalString(opts.sessionKey);
-          if (typeof opts.sessionKey === "string" && !sessionKey) {
-            throw new CronCliError("--session-key must not be blank");
-          }
+          const sessionKey = parseCronStringOption(opts.sessionKey, "--session-key");
           if (sessionKey && opts.clearSessionKey) {
             throw new CronCliError("Use --session-key or --clear-session-key, not both");
           }
@@ -270,16 +262,10 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionKey = null;
           }
 
-          const pacingMin = normalizeOptionalString(opts.pacingMin);
-          const pacingMax = normalizeOptionalString(opts.pacingMax);
+          const pacingMin = parseCronStringOption(opts.pacingMin, "--pacing-min");
+          const pacingMax = parseCronStringOption(opts.pacingMax, "--pacing-max");
           const hasPacingMin = typeof opts.pacingMin === "string";
           const hasPacingMax = typeof opts.pacingMax === "string";
-          if (hasPacingMin && !pacingMin) {
-            throw new CronCliError("--pacing-min must not be blank");
-          }
-          if (hasPacingMax && !pacingMax) {
-            throw new CronCliError("--pacing-max must not be blank");
-          }
           if (opts.clearPacing && (hasPacingMin || hasPacingMax)) {
             throw new CronCliError("Use --clear-pacing or pacing bounds, not both");
           }

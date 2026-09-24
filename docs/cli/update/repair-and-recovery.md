@@ -16,6 +16,11 @@ After a failed interactive update or repair, OpenClaw finishes cleanup and offer
 **Diagnose update failure**, **Report update failure**, or **Exit**. Reporting
 previews the sanitized issue body and requires separate confirmation.
 
+Unexpected exceptions retain the known update mode, resolved target, failed step,
+and any recorded recovery outcome. Reports include a bounded, redacted error code
+or name and first message line through the same diagnostics as failed commands;
+unrecognized private text and stack traces are excluded from the public preview.
+
 Choosing **Diagnose update failure** opens [Triage](/cli/triage), which starts the
 first directly launchable coding agent on `PATH`, in this order: Claude Code,
 Codex, OpenCode, then Pi. It passes the captured update failure directly and leaves
@@ -34,10 +39,9 @@ and managed-service handoff runs do not prompt or collect automatic diagnostics.
 
 For failures without a verified rollback, updates using `--yes`, `--json`, or a
 non-interactive session (including piped input or output) collect diagnostics
-and print handoff commands without starting an external coding agent. The updater's
-earlier
-[unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
-can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
+and print handoff commands without starting an external coding agent. Eligible
+failures can start [post-failure triage](/install/updating#unattended-repair-on-your-own-inference)
+on configured inference after update ownership and service compensation settle. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
 failure.
 
@@ -88,6 +92,14 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
+If an older updater publishes the new core but then reports
+`update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,
+wait for that updater to exit and run `openclaw update repair --yes --json` from
+the updated installation, preserving its profile and state/config overrides.
+This finishes Doctor and post-core convergence through a fresh owner. Check the
+repair result before restarting an already stopped Gateway through its service
+owner. Updating the candidate cannot change the older updater already in memory.
+
 | Flag                                             | Description                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm and trusted official ClawHub plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |
@@ -95,7 +107,7 @@ openclaw update repair --accept-capabilities
 | `--timeout <seconds>`                            | Override each repair phase deadline in seconds. Defaults vary by phase (see below).                                                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
-| `--no-restart`                                   | Accepted for parity; repair does not request update activation. Doctor can restore a Gateway it stopped for maintenance during a verified owning-run continuation.                                                                                                                               |
+| `--no-restart`                                   | Accepted for parity; repair does not request update activation. The repair parent restores a Gateway it stopped for maintenance.                                                                                                                                                                 |
 
 Untouched, identityless 2026.9.2-era update admissions heal automatically after
 more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
@@ -108,9 +120,13 @@ pending recovery remain protected. No explicit repair is needed for this shape.
 `update repair` first inspects stale update history. When the installed Gateway
 generation is healthy and the only remaining problem is an inactive ledger row,
 repair records `failed` / `abandoned` and exits successfully without Doctor,
-maintenance, or a service stop. It also acknowledges a Gateway-reconciled row
+maintenance, or a service stop. `openclaw status` and the Control UI then report the abandoned run as reconciled, without a failure warning or retry prompt; its historical failure record remains intact. It also acknowledges a Gateway-reconciled row
 once within 30 minutes of reconciliation. Later repair invocations use full
 finalization, so historical recovery cannot suppress plugin convergence.
+Successful repair acknowledges every outstanding abandoned run in Doctor's
+latest 100 history records, regardless of age or whether a newer update exists.
+The original failed outcome remains recorded, including when its target build
+is unknown; Doctor stops repeating the repair instruction after acknowledgement.
 Explicit recovery does not wait 30 minutes when every recorded updater process
 is provably dead (its PID is gone or its process-start identity has changed).
 Identityless rows and runs with an unrecorded adopter still require more than
@@ -119,20 +135,44 @@ abandonment recovery.
 JSON output identifies reconciled run IDs in
 `reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
 
+Repair also acknowledges an untouched package installation whose update was
+refused because its package-manager owner was unknown, once the installed
+version meets or exceeds the resolved target. This includes older updaters that
+incorrectly recorded that refusal as a failed update. The original refusal
+detail stays in history; repair clears the failure prompt without Doctor
+maintenance or a service restart. Runs that reached installation or finalization
+still require normal repair.
+
+Fresh Doctor children run with the existing external service-repair policy
+because the updater owns service changes. They preserve an operator's
+`OPENCLAW_SERVICE_REPAIR_POLICY=external` selection and retain Gateway/state
+coordinators and agent-database lease checks. An external deployment owner still
+owns stopping and restarting its Gateway.
+
 Repair invoked within the owning update can continue when its inherited run ID
-and live process identity match that owner. The run records the continuation,
-and Doctor can use its normal maintenance lifecycle: stop the owned Gateway,
-repair state, then restore and verify the same service. Doctor only restarts a
-service that it stopped; an already stopped service stays stopped. The owning
-run remains active while its driver is alive. If that driver exits during
-maintenance, Doctor records an activation takeover under abandonment admission
-and restores the service, even if the driver already terminalized its ledger
-row. A restoration failure reports the cause and the commands to inspect and
-restart the Gateway. Normal update finalization without this explicit repair
-continuation still leaves activation to its parent.
+and live process identity match that owner. Standalone repair records the same
+continuation for its new run and passes that run ID to its Doctor children.
+The repair parent uses Doctor's maintenance lifecycle to stop the owned Gateway,
+then releases its database locks before running the Doctor children. The children
+repair state without stopping or restarting the service. The parent restores and
+verifies the same service after convergence, including when a Doctor child fails.
+An already stopped service stays stopped. Service ownership and the invoking
+run are revalidated before every native operation. A restoration failure names
+the cause and the commands to inspect and restart the Gateway. Normal update
+finalization continues to leave activation with its outer updater.
+
+If Doctor reports that the update parent must stop the managed Gateway, wait
+for that update to exit, then run `openclaw gateway stop` and retry
+`openclaw update repair` from an independent shell with the same profile and
+state/config overrides. On macOS, stop unloads the LaunchAgent and verifies that
+its process exited. A still-loaded service or surviving PID after a successful
+stop is a service shutdown failure. If stop cannot unload the service, use the
+exact `launchctl bootout` command printed in the refusal from the owning user's
+logged-in macOS GUI session.
 
 An unrelated update whose driver is live or cannot be inspected still blocks
-repair, even after a long period without activity. The refusal identifies the
+repair, even after a long period without activity. Manual `doctor --fix` also
+refuses to stop a service while that update is active. The refusal identifies the
 owning run, phase, driver PID, host, start and last-activity times and ages, and observed liveness (`alive` or
 `not observed`). Wait for that update to finish, or stop the named driver on its
 host and rerun `openclaw update repair` after it exits. Elapsed inactivity alone
@@ -141,17 +181,27 @@ does not authorize taking over a live updater.
 Explicit channel or capability changes and known incomplete post-core work use
 full finalization. Recorded activation, restart, verification, or finalization steps require
 that convergence even if the Gateway has already reconciled the run. Repair
-checks newer abandoned history as well as active rows; an older stale row cannot
+checks newer failed post-core history as well as active rows, including older
+finalization attempts with an empty failure reason; an older stale row cannot
 hide unfinished work from a newer update. If the bounded history inspection is
-incomplete, repair also uses full finalization. Outside a verified owning-run
-continuation, if that work needs maintenance while the managed service is
-running, stop the service through its owner before retrying. Doctor cannot stop
-or restart the service on an unrelated update parent's behalf.
-Successful full finalization then reconciles the selected stale rows before
-reporting completion. Failed convergence leaves the selected rows intact. If any
-selected run resumes before reconciliation, the whole selection is preserved.
-Full finalization JSON includes `reconciledRuns` when stale rows were selected
-for recovery, listing the IDs reconciled by that invocation.
+incomplete, repair also uses full finalization. The parent parks its owned service
+before Doctor enters maintenance; a Doctor child cannot take service activation
+from an update parent.
+Successful full finalization then reconciles the selected stale rows and acknowledges
+unacknowledged abandoned outcomes from the 100 most recent history rows captured
+at repair admission. Those outcomes need not be the latest run or less than
+30 minutes old; the time limit applies only to skipping full finalization.
+Additional historical outcomes require full finalization, even when the latest
+row qualifies for the lightweight repair. Historical failures and their details
+remain intact; acknowledgment clears their Doctor repair prompts, not their failed
+status. Rows outside the captured history window and new runs admitted during
+repair are not acknowledged by that invocation.
+Failed convergence leaves the selected rows intact. If any selected run resumes
+before reconciliation, the whole selection is preserved. Full finalization JSON
+includes `reconciledRuns` when rows were selected for recovery, listing the IDs
+newly acknowledged by that invocation, including already-terminal abandoned rows.
+Successful convergence with nonfatal warnings also acknowledges those rows.
+Deferred maintenance preserves the selected history and pending migration obligations.
 
 For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
@@ -160,9 +210,8 @@ refreshes the plugin registry, and writes converged install-record metadata.
 Configured runtime plugins whose versions follow OpenClaw are checked against
 the newly installed core during post-update repair, even when the updater process
 started on the previous version.
-It does not install a new core package or request update activation. Standalone
-repair does not restart the Gateway; a verified owning-run continuation can
-restore the service after Doctor maintenance as described above.
+It does not install a new core package or request update activation. The repair
+parent restores a service it stopped for maintenance, as described above.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
@@ -189,9 +238,26 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Plugin-only
 availability, installation, or load failures appear in
 `postUpdate.plugins.warnings`; finalization reports `status: "warning"` and exits
-successfully when required checks pass. Failed required Doctor execution,
-invalid configuration or state, ownership errors, and failed required readiness
-checks still exit nonzero.
+successfully when required checks pass. Doctor maintenance admission refusals
+also finish with a warning when no data is at risk. Repair restores any service
+it stopped, leaves migrations pending, and names the next repair action. Errors
+after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
+cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
+
+Recorded pending-migration warnings stop appearing after the migration owner
+records completion. Unrelated warnings and later or reintroduced obligations
+remain visible; the original update history is preserved.
+
+After post-update or finalization work fails and its child processes settle,
+OpenClaw probes the installed Gateway using the normal startup and readiness
+budget. Update history and failure reports record the observed serving version
+and readiness, including for a foreground Gateway. A failed finalization step
+can therefore report **verified serving** while retaining its original failure
+and repair guidance. The observation does not restart the Gateway or grant
+maintenance authority. Failed probes retain their specific diagnostic; a
+Gateway that is still starting keeps that outcome instead of being restarted.
+If command cleanup remains uncertain, the run stays open and retains its recovery
+artifacts instead of publishing completion or starting another repair.
 
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
@@ -206,14 +272,24 @@ step fails. Codex runtime readiness remains owned by its plugin after restart.
 
 Finalization (including the supervisor-facing `update finalize` command) records
 phase starts and finishes immediately on stderr and in the update run ledger.
-The defaults are 30 seconds for preflight admission, config validation, config backup, and completion
-cache work; 120 seconds for Doctor migrations; 600 seconds for plugin registry
-and installation work; and 180 seconds for post-plugin Doctor and validation.
-`--timeout` overrides each phase budget.
+Preflight admission, config validation, config backup, and core completion-cache
+budgets scale with the shared SQLite database and its sidecars, with a five-minute
+startup allowance and conservative disk throughput. Repair Doctor and its enclosing
+convergence phase have no automatic wall-clock deadline. Post-plugin config and
+readiness checks share a budget derived from the existing shared and discovered
+agent database families after Doctor finishes, including WAL growth. Plugin
+updates retain the command owner's 20-minute allowance; missing-plugin repairs
+retain their installer defaults. The serial plugin phase and
+outer finalizer process add no competing default deadline. An explicit `--timeout`
+still overrides each phase and its child commands.
 
 A phase deadline produces exit code 1 and JSON with `status: "failed"`,
 `stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. The
-finalizer requests termination of its owned command trees before exiting.
+finalizer cancels the phase, fences further writes, and waits up to the same
+budget for its work to settle. Repair restores and verifies the Gateway it
+stopped before reporting the failure and exiting. Service custody acquisition
+and restoration retain their own native-operation budgets outside phase
+cancellation. The ledger records a warning naming the timed-out phase and budget.
 Preserve the phase diagnostic when reporting a stalled update.
 
 When a fresh Doctor ran in the timed-out phase, `doctorOutput` includes its
@@ -266,9 +342,19 @@ it does not approve future capability additions.
 
 ### Skipped legacy audit recovery
 
-Doctor can leave a legacy audit source in place when its raw archive has no
-checkpoint and begins with ambiguous whitespace, changed other than by append,
-or cannot obtain another durable raw-archive checkpoint. These conditions produce
+When a legacy audit raw archive changed other than by append, Doctor preserves it
+beside itself with a `.quarantined-<date>-<id>` suffix. The warning names the
+quarantined path and explains the expected append-only growth and observed change.
+An empty raw archive without a checkpoint is also quarantined when its sanitized
+companion still contains history. Doctor keeps the sanitized records and existing
+SQLite rows, continues later repairs, and does not repeat the warning on subsequent
+runs. Quarantine does not import the changed bytes or delete the archive or backups.
+Quarantined raw archives remain local and are excluded from portable backups;
+sanitized companions and retained SQLite audit history are backed up normally.
+
+Doctor can leave other legacy audit sources in place when a raw archive has no
+checkpoint and begins with ambiguous whitespace, or cannot obtain another durable
+raw-archive checkpoint. These conditions produce
 a `skipped` migration receipt with a warning. Other repairs continue, and update
 finalization can complete with warnings. An unsafe recovery failure, such as an
 interrupted archive that cannot be restored, still stops Doctor.
@@ -280,8 +366,8 @@ before attempting recovery, and include the warning and archive filenames when
 requesting help. Do not delete or rewrite archives or checkpoints to suppress
 the warning.
 
-The warning repeats on later Doctor or `openclaw update repair` runs until the
-archive is resolved. Successful finalization does not mean this historical audit
+Warnings for sources left in place repeat on later Doctor or `openclaw update repair`
+runs until the archive is resolved. Successful finalization does not mean this historical audit
 data was imported. There is currently no supported sanitized-only import when
 the raw archive is unusable: accepting the companion as a recovery source needs
 an explicit reconciliation procedure that preserves duplicate events, retained

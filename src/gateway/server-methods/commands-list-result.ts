@@ -32,7 +32,7 @@ import {
   getPluginCommandEntrySpecsFromRegistrations,
 } from "../../plugins/command-specs.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
-import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
+import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
@@ -174,9 +174,11 @@ function buildPluginCommandEntries(params: {
         config: params.cfg,
       })
     : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
+  const eligibleSpecs =
+    params.nameSurface === "native" ? pluginSpecs.filter((spec) => spec.nativeName) : pluginSpecs;
   const entries: CommandEntry[] = [];
 
-  for (const spec of pluginSpecs) {
+  for (const spec of eligibleSpecs) {
     entries.push({
       name: clampString(
         params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
@@ -194,14 +196,11 @@ function buildPluginCommandEntries(params: {
     });
   }
 
-  if (params.nameSurface === "native") {
-    return entries.filter((entry) => entry.nativeName);
-  }
   return entries;
 }
 
 /** Builds the public commands.list payload for an agent/provider/scope view. */
-export function buildCommandsListResult(params: {
+export async function buildCommandsListResult(params: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   cfg: OpenClawConfig;
@@ -209,13 +208,13 @@ export function buildCommandsListResult(params: {
   provider?: string;
   scope?: "native" | "text" | "both";
   includeArgs?: boolean;
-}): CommandsListResult {
+}): Promise<CommandsListResult> {
   const includeArgs = params.includeArgs !== false;
   const scopeFilter = params.scope ?? "both";
   const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
-  const skillCommands = listSkillCommandsForAgents({
+  const skillCommands = await prepareSkillCommandsForAgents({
     cfg: params.cfg,
     agentIds: [params.agentId],
     sessionEntry: params.sessionEntry,

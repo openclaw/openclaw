@@ -3,7 +3,7 @@
  */
 
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
-import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { getDocsPath, getExamplesPath, getReadmePath } from "../package-metadata.js";
 import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
 
 export interface BuildSystemPromptOptions {

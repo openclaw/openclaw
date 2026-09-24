@@ -22,6 +22,8 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   buildProjectedAgentRunIndex,
+  claimAgentRunContext,
+  releaseAgentRunContext,
   getAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
@@ -81,8 +83,22 @@ it("projects direct subagent activity only for its own current-lifecycle session
     startedAt: 2,
   });
   registerAgentRunContext("run-attachment-fix", { sessionKey: childKey, agentId: "main" });
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context: {},
+      requestedKey: childKey,
+      canonicalKey: childKey,
+      agentId: "main",
+    }),
+  ).toEqual({ active: false, runIds: [] });
+  const claim = claimAgentRunContext(
+    "run-attachment-fix",
+    { sessionKey: childKey, agentId: "main" },
+    { trackOwner: true, ownsContext: true },
+  );
 
   try {
+    expect(claim).toBeDefined();
     expect(
       resolveVisibleActiveSessionRunState({
         context: {},
@@ -125,6 +141,7 @@ it("projects direct subagent activity only for its own current-lifecycle session
       }),
     ).toEqual({ active: false, runIds: [] });
   } finally {
+    releaseAgentRunContext("run-attachment-fix", claim);
     clearAgentRunContext("run-attachment-fix");
     resetSubagentRegistryForTests({ persist: false });
   }

@@ -137,7 +137,7 @@ struct GatewaySettings: View {
                     HStack(spacing: 8) {
                         Button("Open Window") {
                             guard !self.isRemoving else { return }
-                            WebChatManager.shared.openGatewayWindow(profile: profile)
+                            AppNavigationActions.openGateway(.profile(profile.id), newWindow: true)
                         }
                         .disabled(self.isRemoving)
                         Button("Reconnect") {
@@ -197,6 +197,7 @@ struct GatewayProfileEditor: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var connectionTask: Task<Void, Never>?
+    @State private var signInProgress = GatewayBrowserSignInProgress()
 
     let onSaved: (MacGatewayProfile) -> Void
     let onCancel: (() -> Void)?
@@ -261,11 +262,7 @@ struct GatewayProfileEditor: View {
                 .foregroundStyle(.secondary)
 
             if self.isSaving {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Connecting… Complete sign-in in your browser if it opens.")
-                        .font(.callout)
-                }
+                GatewayBrowserSignInProgressView(progress: self.signInProgress)
             }
 
             if let errorMessage {
@@ -306,10 +303,11 @@ struct GatewayProfileEditor: View {
                 name: self.name,
                 address: self.url,
                 token: self.token,
-                password: self.password)
+                password: self.password,
+                progress: self.signInProgress)
             WebChatManager.shared.gatewayProfileDidSave(profileID: profile.id)
             self.onSaved(profile)
-            DashboardManager.shared.openOrFocusDashboard(for: .profile(profile.id))
+            AppNavigationActions.openGateway(.profile(profile.id))
             self.dismiss()
         } catch is CancellationError {
             return

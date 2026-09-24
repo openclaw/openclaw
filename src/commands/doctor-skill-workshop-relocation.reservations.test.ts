@@ -331,6 +331,10 @@ describe("doctor Workshop relocation reservations", () => {
       ? [ancestor, secondClaim, connected, childSource, child, untouchedCreate]
       : [ancestor, childSource, child, untouchedCreate];
     await seedSources([...blocked, healthy, draftOnly]);
+    await testState.writeText(
+      `skill-workshop/proposals/${draftOnly.record.id}/${draftOnly.record.draftFile}`,
+      "# Proposed update\n",
+    );
     const proposalDir = path.join(
       testState.stateDir,
       "skill-workshop",

@@ -139,6 +139,11 @@ effective agent must pass `allowedAgentIds`; global session-store ownership is
 also enforced. Agent-prefixed keys are re-scoped to the selected agent and
 prefix-checked again.
 
+For a fixed global session store, an omitted target uses its persisted
+`agents.defaults.sessionStore.agentId` owner ahead of the runtime default.
+Explicit targets that conflict with that owner are rejected. The persisted owner
+must still pass `allowedAgentIds`.
+
 Keys resolve from the request/mapping, then `hooks.defaultSessionKey`, then a
 generated `hook:<uuid>`. A configured default must match the prefix allowlist.
 Without a default, the allowlist must admit generated `hook:` keys.

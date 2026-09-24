@@ -6,22 +6,53 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
-const DEFAULT_SCAN_MS = 30_000;
-const MAX_BASELINE_SCAN_MS = 5 * 60_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
 
+export type PackageLauncherFingerprint = {
+  type: "symlink" | "file";
+  mode: string;
+  uid: string;
+  gid: string;
+  contents: string;
+};
+
+export function packageLauncherDifferences(
+  expected: PackageLauncherFingerprint,
+  actual: PackageLauncherFingerprint,
+  ownershipPreserved = true,
+): string[] {
+  const symlink = expected.type === "symlink" && actual.type === "symlink";
+  return (["type", "mode", "uid", "gid", "contents"] as const)
+    .filter(
+      (field) =>
+        !(
+          symlink &&
+          (field === "mode" || (!ownershipPreserved && (field === "uid" || field === "gid")))
+        ) && expected[field] !== actual[field],
+    )
+    .map((field) => (field === "contents" && symlink ? "target" : field));
+}
+
 export class PackageIntegrityTimeoutError extends Error {
   constructor(readonly budgetMs: number) {
     super("Package rollback verification timed out");
+  }
+}
+
+/** Resource exhaustion is distinct from a filesystem-integrity failure. */
+export class PackageIntegrityLimitError extends Error {
+  constructor(readonly resource: "entry" | "byte") {
+    super(`Package rollback verification ${resource} limit exceeded`);
   }
 }
 
@@ -57,17 +88,9 @@ function unchanged(left: BigIntStats, right: BigIntStats): boolean {
 }
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
-export function createPackageIntegrityReader(
-  timeoutMs = DEFAULT_SCAN_MS,
-  purpose: "baseline" | "recovery" = "recovery",
-) {
+export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
   const startedAtMonotonicMs = performance.now();
-  // Only full baseline hashing runs while the old Gateway is still serving.
-  // Recovery and other observations keep their bound to avoid extending downtime.
-  const ceiling = purpose === "baseline" ? MAX_BASELINE_SCAN_MS : DEFAULT_SCAN_MS;
-  const budget = Number.isFinite(timeoutMs)
-    ? Math.min(ceiling, Math.max(1, timeoutMs))
-    : DEFAULT_SCAN_MS;
+  const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
   const deadline = Date.now() + budget;
   const timing = {
     readerId: `${process.pid}:${++readerSequence}`,
@@ -160,7 +183,7 @@ export function createPackageIntegrityReader(
           break;
         }
         if (children.length >= limit) {
-          throw new Error("Package rollback verification entry limit exceeded");
+          throw new PackageIntegrityLimitError("entry");
         }
         children.push(child.name);
       }
@@ -171,8 +194,11 @@ export function createPackageIntegrityReader(
   }
 
   async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
-    if (!stat.isFile() || stat.size > BigInt(remainingBytes)) {
+    if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
+    }
+    if (stat.size > BigInt(remainingBytes)) {
+      throw new PackageIntegrityLimitError("byte");
     }
     const handle = await read(
       () => fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
@@ -334,7 +360,7 @@ export function createPackageIntegrityReader(
     return { identity: identity(stat), version };
   }
 
-  async function launcher(file: string): Promise<string> {
+  async function launcher(file: string): Promise<PackageLauncherFingerprint> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
     const contents = stat.isSymbolicLink()
       ? await read(() => fs.readlink(file))
@@ -342,15 +368,13 @@ export function createPackageIntegrityReader(
     if (!unchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
       throw new Error("Package rollback launcher changed during verification");
     }
-    // Launchers are copied, unlike the package tree. Their copy is compared
-    // with the captured contents/target and permissions, not the new inode.
-    return JSON.stringify([
-      stat.isSymbolicLink() ? "symlink" : "file",
-      stat.mode.toString(),
-      stat.uid.toString(),
-      stat.gid.toString(),
+    return {
+      type: stat.isSymbolicLink() ? "symlink" : "file",
+      mode: stat.mode.toString(),
+      uid: stat.uid.toString(),
+      gid: stat.gid.toString(),
       contents,
-    ]);
+    };
   }
 
   async function exists(file: string): Promise<boolean> {

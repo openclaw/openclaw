@@ -12,6 +12,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
+import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -50,6 +51,7 @@ export function createLazyExecTool(
     name: "exec",
     label: "exec",
     displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
+    getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     get description() {
       return (
         presentation?.description ??

@@ -379,26 +379,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads images", async () => {
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
-      .mockResolvedValueOnce(
-        fetchGuardJson({
-          "local-prompt-1": {
-            outputs: {
-              "9": {
-                images: [{ filename: "generated.png", subfolder: "", type: "output" }],
-              },
-            },
-          },
-        }),
-      )
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("png-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockLocalImageResponses();
 
     const provider = buildComfyImageGenerationProvider();
     const result = await provider.generateImage({
@@ -923,26 +904,10 @@ describe("comfy image-generation provider", () => {
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "local-prompt-1" }))
-      .mockResolvedValueOnce(
-        fetchGuardJson({
-          "local-prompt-1": {
-            outputs: {
-              "9": {
-                images: [{ filename: "generated.png", subfolder: "", type: "output" }],
-              },
-            },
-          },
-        }),
-      )
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("too-large"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockLocalImageResponses("local-prompt-1", {
+      body: Buffer.from("too-large"),
+      contentType: "image/png",
+    });
 
     const provider = buildComfyImageGenerationProvider();
     await expect(

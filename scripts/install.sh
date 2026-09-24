@@ -21,6 +21,11 @@ fi
 
 set -euo pipefail
 
+# BEGIN GENERATED UPDATE NETWORK BUDGET
+# Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
+UPDATE_NETWORK_TIMEOUT_SECONDS=300
+# END GENERATED UPDATE NETWORK BUDGET
+
 # The re-executed shell has the script open, so unlink its private copy now.
 if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
   rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
@@ -153,23 +158,25 @@ download_file() {
     if [[ "$DOWNLOADER" == "curl" ]]; then
         if [[ "$redirect_mode" == "deny" ]]; then
             curl -fsSL --max-redirs 0 --proto '=https' --tlsv1.2 \
-                --speed-limit 1 --speed-time 30 \
+                --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+                --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
                 --retry 3 --retry-delay 1 --retry-connrefused \
                 -o "$output" "$url"
             return
         fi
-        # Bound post-connect stalls without imposing a total download duration.
+        # Bound connection and transfer stalls without a total download duration.
         curl -fsSL --proto '=https' --tlsv1.2 \
-            --speed-limit 1 --speed-time 30 \
+            --connect-timeout "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
+            --speed-limit 1 --speed-time "$UPDATE_NETWORK_TIMEOUT_SECONDS" \
             --retry 3 --retry-delay 1 --retry-connrefused \
             -o "$output" "$url"
         return
     fi
     if [[ "$redirect_mode" == "deny" ]]; then
-        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+        wget -q --max-redirect=0 --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
         return
     fi
-    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
+    wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
 }
 
 # Managed setup endpoints must return a non-empty script with a raw shebang.
@@ -2648,7 +2655,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.3.4"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.4.2"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

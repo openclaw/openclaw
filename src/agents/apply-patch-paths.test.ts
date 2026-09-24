@@ -7,7 +7,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import {
+  extractApplyPatchTargetPaths,
+  extractResolvedApplyPatchTargetPaths,
+} from "./apply-patch-paths.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
@@ -254,6 +257,15 @@ describe("extractApplyPatchTargetPaths", () => {
           path.join(literalParent, "existing.md"),
           path.join(literalParent, "new.md"),
         ]);
+        const mentionedPatch = patch.replaceAll("File: @notes/", "File: @@notes/");
+        const expected = [
+          path.join(literalParent, "existing.md"),
+          path.join(literalParent, "new.md"),
+        ];
+        expect(extractApplyPatchTargetPaths(mentionedPatch, options)).toEqual(expected);
+        await expect(
+          extractResolvedApplyPatchTargetPaths(mentionedPatch, options),
+        ).resolves.toEqual(expected);
       } finally {
         await fs.rm(cwd, { recursive: true, force: true });
       }

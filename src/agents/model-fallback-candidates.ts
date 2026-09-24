@@ -6,6 +6,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasUtilityModelSeparationMigrationMarker } from "../config/utility-model-separation-migration.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -17,7 +18,7 @@ import {
 } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
@@ -43,6 +44,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
+import { readUtilityModelSetting } from "./utility-model-setting.js";
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
@@ -214,7 +216,7 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   const cacheKey = JSON.stringify({
     agentId: params.agentId,
-    agentModel: agentConfig?.model,
+    agentModel: resolveAgentModelConfigForRuntime(agentConfig),
     agentModels: agentConfig?.models,
     provider: params.provider,
     model: params.model,
@@ -223,6 +225,8 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     fallbacksOverride: params.fallbacksOverride,
     agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
     agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
+    utilityModel: params.cfg ? readUtilityModelSetting(params.cfg, params.agentId) : undefined,
+    utilityModelSeparation: hasUtilityModelSeparationMigrationMarker(params.cfg),
     modelProviders: resolveFallbackCandidateModelProviderCacheParts(params.cfg),
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.cfg,

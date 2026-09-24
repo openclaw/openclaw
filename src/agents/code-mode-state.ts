@@ -3,15 +3,23 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
-import type { Snapshot } from "quickjs-wasi";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
+import type {
+  CodeModeExecutorContinuation,
+  CodeModeWorkerResult,
+} from "./code-mode-executor-types.js";
 import type { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CodeModeProgramDataInbox, type CodeModeReplyLease } from "./code-mode-program-data.js";
+import { createCodeModeResultsAccess, type CodeModeResultsAccess } from "./code-mode-results.js";
 import type {
   CodeModeConfig,
   CodeModeSettlementMode,
@@ -42,7 +50,7 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshot: Snapshot;
+  continuation: CodeModeExecutorContinuation;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
@@ -62,6 +70,7 @@ export type CodeModeRunOwner = ReturnType<typeof createCodeModeRunOwner>;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
 const BRIDGE_CLOSED_MESSAGE = "Code Mode tool canceled, expired, or owner lost; start a new run.";
+const log = createSubsystemLogger("agents/code-mode");
 
 export const activeRuns = new Map<string, CodeModeRunState>();
 export const resumingRunIds = new Set<string>();
@@ -70,7 +79,7 @@ let activeRunReservations = 0;
 let nextPendingBridgeSettlementSequence = 0;
 let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** Catalog ownership spans worker legs and snapshots; parking never closes the cell. */
+/** Catalog ownership spans worker legs and continuations; parking never closes the cell. */
 export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeModeConfig) {
   const inbox = new CodeModeProgramDataInbox(config);
   // A parked cell still owns pending calls and their output. Re-admission waits
@@ -87,31 +96,136 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     ? (ctx.catalogRef.onDispose ??= new Set<() => void>())
     : undefined;
   let releaseCall = () => {};
-  const close = (reason?: unknown) => {
-    if (closed.signal.aborted) {
-      return;
+  let continuation: CodeModeExecutorContinuation | undefined;
+  let closing: Promise<void> | undefined;
+  const executions = new Set<Promise<CodeModeWorkerResult>>();
+  const disposals = new Map<CodeModeExecutorContinuation, Promise<void>>();
+  const cleanupFailures = new Map<CodeModeExecutorContinuation, unknown>();
+  const disposeContinuation = (value: CodeModeExecutorContinuation): Promise<void> => {
+    const current = disposals.get(value);
+    if (current) {
+      return current;
     }
-    inbox.close();
-    releaseRuntimeRefresh();
-    releaseCall();
-    approvalWait.dispose();
-    signal.removeEventListener("abort", onLifetimeAbort);
-    disposers?.delete(close);
-    liveRunOwners.delete(owner);
-    const parked = activeRuns.get(runId);
-    if (parked?.owner === owner) {
-      activeRuns.delete(runId);
-      cancelPendingBridgeStates(parked.pending);
-    }
-    closed.abort(reason);
-    scheduleActiveRunExpiry();
+    const disposal = Promise.resolve().then(() => value.dispose());
+    disposals.set(value, disposal);
+    void disposal.then(
+      () => {
+        disposals.delete(value);
+        cleanupFailures.delete(value);
+      },
+      (error: unknown) => {
+        cleanupFailures.set(value, error);
+        disposals.delete(value);
+      },
+    );
+    return disposal;
   };
-  const onLifetimeAbort = () => close(signal.reason);
+  const retainContinuation = async (next?: CodeModeExecutorContinuation): Promise<void> => {
+    const previous = continuation;
+    continuation = signal.aborted ? undefined : next;
+    const retired: Promise<void>[] = [];
+    if (previous && previous !== continuation) {
+      retired.push(disposeContinuation(previous));
+    }
+    if (signal.aborted && next && next !== previous) {
+      retired.push(disposeContinuation(next));
+    }
+    const results = await Promise.allSettled(retired);
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Code Mode continuation cleanup failed");
+    }
+  };
+  const close = (reason?: unknown): Promise<void> => {
+    if (closing) {
+      return closing;
+    }
+    const completion = createDeferredCore();
+    closing = completion.promise;
+    // Event callbacks cannot await close; keep failures visible and owned for shutdown.
+    void closing.catch((error: unknown) => {
+      log.error("Code Mode cleanup failed", {
+        runId,
+        error: formatErrorMessage(error),
+        failures: [...cleanupFailures.values()].map(formatErrorMessage),
+      });
+    });
+    if (!closed.signal.aborted) {
+      releaseCall();
+      approvalWait.dispose();
+      signal.removeEventListener("abort", onLifetimeAbort);
+      disposers?.delete(onCatalogDispose);
+      closed.abort(reason);
+      inbox.close();
+      const parked = activeRuns.get(runId);
+      if (parked?.owner === owner) {
+        activeRuns.delete(runId);
+        cancelPendingBridgeStates(parked.pending);
+      }
+      scheduleActiveRunExpiry();
+    }
+    // Retry only already failed resources; a failure in this attempt stays owned for the next close.
+    for (const failed of cleanupFailures.keys()) {
+      void disposeContinuation(failed);
+    }
+    const retained = continuation;
+    continuation = undefined;
+    if (retained) {
+      void disposeContinuation(retained);
+    }
+    void Promise.resolve()
+      .then(async () => {
+        // Abort revokes dispatch immediately, but a worker can return its parked handle later.
+        await Promise.allSettled(executions);
+        while (disposals.size) {
+          await Promise.allSettled(disposals.values());
+        }
+        if (cleanupFailures.size) {
+          throw new PluginRuntimeCloseRetainedError(
+            new AggregateError(cleanupFailures.values(), "Code Mode continuation cleanup failed"),
+          );
+        }
+        releaseRuntimeRefresh();
+        liveRunOwners.delete(owner);
+      })
+      .then(completion.resolve, (error: unknown) => {
+        closing = undefined;
+        completion.reject(error);
+      });
+    return closing;
+  };
+  const onLifetimeAbort = () => {
+    void close(signal.reason);
+  };
+  const onCatalogDispose = () => {
+    void close();
+  };
   const owner = {
     runId,
     signal,
     inbox,
+    results: createCodeModeResultsAccess(ctx, config),
     close,
+    retainContinuation,
+    runExecution(operation: () => Promise<CodeModeWorkerResult>): Promise<CodeModeWorkerResult> {
+      const execution = Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return operation();
+        })
+        .then(async (result) => {
+          await retainContinuation(result.status === "waiting" ? result.continuation : undefined);
+          return result;
+        });
+      executions.add(execution);
+      void execution.then(
+        () => executions.delete(execution),
+        () => executions.delete(execution),
+      );
+      return execution;
+    },
     approvalWait,
     bindCall(callSignal?: AbortSignal): AbortSignal {
       releaseCall();
@@ -123,7 +237,7 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
       const onAbort = () => {
         // A completed observer cannot cancel a later wait on this same cell.
         if (releaseCall === release) {
-          close(combined.reason);
+          void close(combined.reason);
         }
       };
       releaseCall = release;
@@ -136,10 +250,10 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     },
   };
   liveRunOwners.add(owner);
-  disposers?.add(close);
+  disposers?.add(onCatalogDispose);
   signal.addEventListener("abort", onLifetimeAbort, { once: true });
   if (!ctx.catalogRef?.current || signal.aborted) {
-    close(signal.reason);
+    void close(signal.reason);
   }
   return owner;
 }
@@ -148,7 +262,7 @@ export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState
   return { started: false };
 }
 
-// One unreferenced timer owns parked snapshots even when no later exec or wait
+// One unreferenced timer owns parked continuations even when no later exec or wait
 // arrives; otherwise expired runs keep their VM bytes and live tool calls.
 function scheduleActiveRunExpiry(): void {
   if (activeRunExpiryTimer) {
@@ -193,21 +307,28 @@ export function removeExpiredRuns(now = Date.now()): void {
   }
 }
 
-export function disposeCodeModeRun(runId: string): void {
+function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
   activeRuns.delete(runId);
-  state?.owner.close();
+  void state?.owner.close();
   cancelPendingBridgeStates(state?.pending ?? []);
   resumingRunIds.delete(runId);
   scheduleActiveRunExpiry();
 }
 
 /** Cancel every cell before its Gateway-owned runtimes disappear. */
-export function disposeAllCodeModeRuns(): void {
-  liveRunOwners.forEach((owner) => owner.close());
+export async function disposeAllCodeModeRuns(): Promise<void> {
+  const closing = [...liveRunOwners].map((owner) => owner.close());
   activeRuns.clear();
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
+  const results = await Promise.allSettled(closing);
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Code Mode runs failed to close");
+  }
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -364,6 +485,8 @@ function isPendingBridgeRequestReplaySafe(
   if (request.method === "nodes") {
     return request.args[0] === "list" || request.args[0] === "get";
   }
+  // Saved references are transient, and deletion cannot be replayed safely.
+  // Result operations intentionally stay outside restart-safe execution.
   if (request.method !== "callValue") {
     return false;
   }
@@ -380,6 +503,7 @@ export function createPendingBridgeStates(
   params: {
     config: CodeModeConfig;
     inbox: CodeModeProgramDataInbox;
+    results: CodeModeResultsAccess;
     runtime: ToolSearchRuntime;
     catalogProjection: CodeModeCatalogProjection;
     namespaceRuntime: CodeModeNamespaceRuntime;
@@ -395,8 +519,8 @@ export function createPendingBridgeStates(
 ): PendingBridgeState[] {
   // Pending siblings retain dispatch context, never the original request batch.
   return pendingRequests.map((request) => {
-    // Bridge calls start immediately while the VM snapshot is stored. Their
-    // settled values are later replayed into QuickJS by the wait tool.
+    // Bridge calls start while the guest is parked. The wait tool delivers
+    // settled values to the same continuation without replaying host actions.
     const reply = params.inbox.createReply(request.id);
     const abortController = new AbortController();
     const signal = abortController.signal;
@@ -415,6 +539,7 @@ export function createPendingBridgeStates(
     }
     const bridgeCall = runBridgeRequest({
       runtime: params.runtime,
+      results: params.results,
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       parentToolCallId: params.parentToolCallId,
@@ -464,13 +589,13 @@ export function createPendingBridgeStates(
   });
 }
 
-export function storeSnapshotState(params: {
+export function storeSuspendedRun(params: {
   owner: CodeModeRunOwner;
   replayId: string;
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshot: Snapshot;
+  continuation: CodeModeExecutorContinuation;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -505,7 +630,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshot: params.snapshot,
+    continuation: params.continuation,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
@@ -556,16 +681,14 @@ export function codeModeAbortedResult(params: {
   );
 }
 
-export function codeModeWaitingReason(
-  pending: readonly PendingBridgeState[],
-): "pending_tools" | "yield" {
+function codeModeWaitingReason(pending: readonly PendingBridgeState[]): "pending_tools" | "yield" {
   return pending.length > 0 && pending.every((entry) => entry.method === "yield")
     ? "yield"
     : "pending_tools";
 }
 
-export function pendingToolCalls(pending: readonly PendingBridgeState[]) {
-  // Settled calls remain in snapshots until QuickJS consumes their response,
+function pendingToolCalls(pending: readonly PendingBridgeState[]) {
+  // Settled calls remain in continuations until the guest consumes their response,
   // but they must not be advertised as outstanding work to exec or wait.
   return pending
     .filter((entry) => !entry.settled)

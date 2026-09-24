@@ -20,7 +20,12 @@ import {
   adoptProcessPluginCache,
   getPluginMetadataSnapshotCache,
 } from "../../plugins/plugin-cache.js";
-import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
+import {
+  getExistingOpenClawStateSchemaPath,
+  isExistingOpenClawStateSchema,
+} from "../../state/openclaw-state-db-schema-policy.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -45,14 +50,6 @@ let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnaps
 function resetConfigGuardStateForTests() {
   didRunDoctorConfigFlow = false;
   configSnapshotPromise = null;
-}
-
-function fileOrDirExists(pathname: string): boolean {
-  try {
-    return fs.existsSync(pathname);
-  } catch {
-    return false;
-  }
 }
 
 function dirHasFile(dir: string, predicate: (name: string) => boolean): boolean {
@@ -83,16 +80,16 @@ function isLegacyTelegramStateFile(name: string): boolean {
 
 function hasLegacyIMessageStateFiles(stateDir: string): boolean {
   return (
-    fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
-    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
+    fs.existsSync(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
+    fs.existsSync(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
     dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
   );
 }
 
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
   if (
-    fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
-    fileOrDirExists(path.join(stateDir, "discord", "thread-bindings.json"))
+    fs.existsSync(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
+    fs.existsSync(path.join(stateDir, "discord", "thread-bindings.json"))
   ) {
     return true;
   }
@@ -100,19 +97,12 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
     return true;
   }
   if (
-    fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
+    fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json")) ||
     dirHasFile(path.join(stateDir, "telegram"), isLegacyTelegramStateFile)
   ) {
     return true;
   }
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
-}
-
-function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
-  return (
-    fileOrDirExists(`${sourcePath}.migrated`) &&
-    ["-shm", "-wal", "-journal"].some((suffix) => fileOrDirExists(`${sourcePath}${suffix}`))
-  );
 }
 
 function hasLegacyStateMigrationInputs(): boolean {
@@ -122,16 +112,11 @@ function hasLegacyStateMigrationInputs(): boolean {
   if (
     !process.env.OPENCLAW_STATE_DIR?.trim() &&
     resolveLegacyStateDirs(() => resolveRequiredHomeDir(process.env, os.homedir)).some(
-      fileOrDirExists,
+      fs.existsSync,
     )
   ) {
     return true;
   }
-  const sqliteSidecarPaths = [
-    path.join(stateDir, "flows", "registry.sqlite"),
-    path.join(stateDir, "plugin-state", "state.sqlite"),
-    path.join(stateDir, "tasks", "runs.sqlite"),
-  ];
   const legacyExecApprovalsPath = resolveExecApprovalsPath(process.env);
   return (
     [
@@ -144,11 +129,7 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "restart-sentinel.json.doctor-importing"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "state", "openclaw.sqlite"),
-    ].some(fileOrDirExists) ||
-    sqliteSidecarPaths.some(
-      (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
-    ) ||
-    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    ].some(fs.existsSync) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 
@@ -233,11 +214,24 @@ export async function ensureConfigReady(
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  const existingStatePath = getExistingOpenClawStateSchemaPath();
+  const isManagedNodeRuntime =
+    existingStatePath !== undefined &&
+    ((commandName === "node" && subcommandName === "run") || commandName === "connect");
+  if (existingStatePath !== undefined) {
+    if (!isManagedNodeRuntime) {
+      throw new Error("The managed node runtime cannot run shared-state maintenance commands.");
+    }
+    if (!isExistingOpenClawStateSchema(resolveOpenClawStateSqlitePath())) {
+      throw new Error("The managed node runtime state directory changed after launcher admission.");
+    }
+  }
   const isRestartController =
     (commandName === "gateway" || commandName === "daemon") && subcommandName === "restart";
   let preflightResult: DoctorConfigPreflightResult | null = null;
   const shouldConsiderStateMigration =
     !params.validateConfigOnly &&
+    !isManagedNodeRuntime &&
     commandName !== "config" &&
     commandName !== "health" &&
     commandName !== "logs" &&
@@ -312,11 +306,11 @@ export async function ensureConfigReady(
 
   // Read-only diagnostics must not record config health. Core-only validation
   // also skips plugin metadata discovery, whose state reads create SQLite sidecars.
-  const configSnapshotOptions = params.validateConfigOnly
-    ? ({ observe: false, pluginValidation: "core-only" } as const)
-    : commandName === "logs"
+  const configSnapshotOptions =
+    params.validateConfigOnly || commandName === "logs"
       ? ({ observe: false, pluginValidation: "core-only" } as const)
-      : commandName === "status" ||
+      : isManagedNodeRuntime ||
+          commandName === "status" ||
           (commandName === "gateway" && subcommandName === "call") ||
           isRestartController
         ? ({ observe: false } as const)
@@ -348,11 +342,10 @@ export async function ensureConfigReady(
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const [{ formatConfigIssueLines, normalizeConfigIssues }, { renderConfigValidationIssueLines }] =
-    await Promise.all([
-      import("../../config/issue-format.js"),
-      import("../../config/issue-location.js"),
-    ]);
+  const [{ formatConfigIssueLines }, { renderConfigValidationIssueLines }] = await Promise.all([
+    import("../../config/issue-format.js"),
+    import("../../config/issue-location.js"),
+  ]);
   const issues =
     snapshot.exists && !snapshot.valid ? renderConfigValidationIssueLines(snapshot) : [];
   const legacyIssues =
@@ -407,7 +400,8 @@ export async function ensureConfigReady(
   const isReadOnlyConfig = resolveIsConfigReadOnly();
   const isGatewayStartup = isGatewayStartupCommand(commandPath);
   const mustBlockInvalid = !allowInvalid || (isGatewayStartup && params.allowInvalid !== true);
-  const shouldOfferRecovery = mustBlockInvalid && !params.suppressDoctorStdout && !isReadOnlyConfig;
+  const shouldOfferRecovery =
+    mustBlockInvalid && !params.suppressDoctorStdout && !isReadOnlyConfig && !isManagedNodeRuntime;
   if (isPluginPackagingFailure || isReadOnlyConfig || !shouldOfferRecovery) {
     const fixHint = isPluginPackagingFailure
       ? formatPluginPackagingRuntimeOutputRecoveryHint()
@@ -430,11 +424,8 @@ export async function ensureConfigReady(
     mustBlockInvalid &&
     (await import("../json-output-mode.js")).isJsonOutputModeActive(process.argv)
   ) {
-    const { formatCliJsonFailure } = await import("../failure-output.js");
-    writeRuntimeJson(params.runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
+    const { writeInvalidConfigCliJson } = await import("../config-validation-output.js");
+    writeInvalidConfigCliJson(params.runtime, snapshot);
   }
   if (isPluginPackagingFailure && isGatewayStartup) {
     params.runtime.exit(78);

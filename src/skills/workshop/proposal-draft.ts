@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -182,11 +183,10 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
 }
 
 function decodeProposalTextFile(buffer: Buffer, label: string): string {
-  const content = buffer.toString("utf8");
-  if (!Buffer.from(content, "utf8").equals(buffer) || content.includes("\0")) {
+  if (!isUtf8(buffer) || buffer.includes(0)) {
     throw new Error(`Proposal files must be UTF-8 text: ${label}`);
   }
-  return content;
+  return buffer.toString("utf8");
 }
 
 function assertProposalDescriptionWithinLimit(description: string): void {

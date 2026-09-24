@@ -322,17 +322,24 @@ try {
   }
   const manager = read("src/agents/agent-bundle-mcp-manager-api.ts");
   const ownerName = manager === null ? "runtime" : "manager-api";
-  const acquire = manager === null ? "getOrCreateSessionMcpRuntime" : "acquireSessionMcpRuntime";
   const owner = parse(`src/agents/agent-bundle-mcp-${ownerName}.ts`,
     manager ?? required("src/agents/agent-bundle-mcp-runtime.ts"));
-  if (!hasExport(owner, acquire) || !hasExport(owner, "disposeAllSessionMcpRuntimes") ||
-      !hasImport(clientModule, `${client.dist}/agents/agent-bundle-mcp-${ownerName}.js`,
-        [acquire, "disposeAllSessionMcpRuntimes"]) ||
+  const contracts = manager === null
+    ? [{ acquire: "getOrCreateSessionMcpRuntime", mode: "legacy" }]
+    : [
+        { acquire: "getOrCreateSessionMcpRuntime", mode: "legacy" },
+        { acquire: "acquireSessionMcpRuntime", mode: "current" },
+      ];
+  const matches = contracts.filter(({ acquire }) =>
+    hasExport(owner, acquire) &&
+    hasImport(clientModule, `${client.dist}/agents/agent-bundle-mcp-${ownerName}.js`,
+      [acquire, "disposeAllSessionMcpRuntimes"]));
+  if (matches.length !== 1 || !hasExport(owner, "disposeAllSessionMcpRuntimes") ||
       (manager !== null && client.path !== layouts[1].path) ||
       importsOwner(clientModule, manager === null ? "manager-api" : "runtime")) {
     fail("unrecognized selected bundle client/API contract");
   }
-  process.stdout.write(`${manager === null ? "legacy" : "current"}:${client.path}`);
+  process.stdout.write(`${matches[0].mode}:${client.path}`);
 } catch (error) {
   console.error(`frozen bundle contract: unable to read selected bundle source: ${error.message}`);
   process.exitCode = 2;
@@ -366,11 +373,12 @@ openclaw_resolve_frozen_onboard_contract() {
 
 openclaw_resolve_frozen_typed_onboarding_contract() {
   local source_root="${1:?missing selected source root}" harness_root="${2:?missing trusted harness root}" authorization_status=0
-  local has_hooks has_setup has_default_hooks scenario assertions mock_config
+  local has_hooks has_setup has_default_hooks scenario assertions assertion_files mock_config
 
   export OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$harness_root/scripts/e2e/lib/release-typed-onboarding/scenario.sh" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$harness_root/scripts/e2e/lib/release-scenarios/assertions.mjs" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH="$harness_root/scripts/e2e/lib/release-assertion-files.mjs" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$harness_root/scripts/e2e/lib/fixtures/mock-openai-config.mjs"
 
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
@@ -398,11 +406,15 @@ openclaw_resolve_frozen_typed_onboarding_contract() {
   assertions="$(openclaw_resolve_frozen_target_file "$source_root" \
     scripts/e2e/lib/release-scenarios/assertions.mjs \
     "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH")" || return 2
+  assertion_files="$(openclaw_resolve_frozen_target_file "$source_root" \
+    scripts/e2e/lib/release-assertion-files.mjs \
+    "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH")" || return 2
   mock_config="$(openclaw_resolve_frozen_target_file "$source_root" \
     scripts/e2e/lib/fixtures/mock-openai-config.mjs \
     "$OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH")" || return 2
   export OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_SCENARIO_PATH="$scenario" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTIONS_PATH="$assertions" \
+    OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_ASSERTION_FILES_PATH="$assertion_files" \
     OPENCLAW_FROZEN_TARGET_TYPED_ONBOARDING_MOCK_CONFIG_PATH="$mock_config"
 }
 

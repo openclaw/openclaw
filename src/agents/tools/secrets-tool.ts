@@ -1,5 +1,6 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   validateSecretsStoreListResult,
   type QuestionRequestQuestion,
@@ -21,6 +22,7 @@ import {
   awaitGatewayQuestionAnswer,
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
+  readQuestionRejection,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
@@ -387,8 +389,16 @@ export function createSecretsTool(params: {
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {
-        if (registered || signal?.aborted) {
-          await cancelPendingQuestion(signal?.aborted ? "run-abort" : "tool-error");
+        const reason = readQuestionRejection(error)?.reason;
+        const registrationRefused =
+          (error instanceof GatewayClientRequestError && error.gatewayCode === "INVALID_REQUEST") ||
+          reason === "QUESTION_ID_IN_USE" ||
+          reason === "QUESTION_REQUESTER_INACTIVE";
+        // A lost reply can leave a pending request, but a refused ID is not ours to cancel.
+        if (registered || !registrationRefused) {
+          await cancelPendingQuestion(
+            signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
+          );
         }
         throw error;
       } finally {

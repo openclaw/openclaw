@@ -12,6 +12,7 @@ import type { ComputerToolTransport } from "./computer-tool.js";
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
 const sleepMock = vi.hoisted(() => vi.fn());
+const gatewayComputerStatusMock = vi.hoisted(() => vi.fn());
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
@@ -26,6 +27,10 @@ vi.mock("./gateway.js", async (importOriginal) => {
 });
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./computer-tool-gateway.js", () => ({
+  loadGatewayComputerStatus: gatewayComputerStatusMock,
+  bindGatewayComputerCleanup: async () => undefined,
+}));
 
 const { createComputerTool } = await import("./computer-tool.js");
 
@@ -57,6 +62,8 @@ describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
     callGatewayToolMock.mockReset();
+    gatewayComputerStatusMock.mockReset();
+    gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
@@ -104,7 +111,7 @@ describe("createComputerTool node resolution", () => {
     });
     expect(tool.description).toContain("this session's desktop");
     expect(tool.description).toContain("get_window_state");
-    const selectors = ["node", "gatewayUrl", "gatewayToken", "timeoutMs"];
+    const selectors = ["target", "node", "gatewayUrl", "gatewayToken", "timeoutMs"];
     const schema = tool.parameters as { properties: Record<string, unknown> };
     expect(schema.properties.action).toMatchObject({ enum: [...computerUse.actions, "wait"] });
     for (const selector of selectors) {
@@ -119,6 +126,10 @@ describe("createComputerTool node resolution", () => {
     await expect(
       tool.execute("wrong-desktop", { action: "screenshot", node: "mac-1" }),
     ).rejects.toThrow("bound to this session desktop");
+    await expect(
+      tool.execute("wrong-host", { action: "screenshot", target: "gateway" }),
+    ).rejects.toThrow("bound to this session's desktop");
+    expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
     await cleanup?.("completion");
 
     expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([

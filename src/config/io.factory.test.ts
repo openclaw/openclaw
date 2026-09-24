@@ -66,8 +66,34 @@ describe("config factory writer boundary", () => {
         config: { sessionCatalog: { enabled: false } },
       });
       expect(saved.plugins?.installs).toBeUndefined();
+      if (enabled !== true) {
+        const snapshot = await io.readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.warnings).not.toContainEqual(
+          expect.objectContaining({ path: "plugins.entries.codex" }),
+        );
+      }
     },
   );
+
+  it("reads existing first-write catalog opt-outs without disabled-plugin warnings", async () => {
+    const { io, configPath } = await fixture();
+    const config = {
+      gateway: { mode: "local" },
+      plugins: {
+        entries: { codex: { config: { sessionCatalog: { enabled: false } } } },
+      },
+    };
+    const raw = JSON.stringify(config);
+    await fs.writeFile(configPath, raw);
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.warnings).not.toContainEqual(
+      expect.objectContaining({ path: "plugins.entries.codex" }),
+    );
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+  });
 
   it("preserves an existing unversioned configuration's omitted catalog preferences", async () => {
     const { io, configPath } = await fixture();
@@ -107,7 +133,9 @@ describe("config factory writer boundary", () => {
 
   it("loads the real writer on first use and reads back the persisted config", async () => {
     const loadWriter = vi.fn(() =>
-      vi.importActual<typeof import("./io.write.js")>("./io.write.js"),
+      vi.importActual<typeof import("./io.write.js")>(
+        new URL("./io.write.js", import.meta.url).href,
+      ),
     );
     vi.doMock("./io.write.js", loadWriter);
     const { io, configPath } = await fixture();
@@ -186,7 +214,9 @@ describe("config factory writer boundary", () => {
       vi.doMock("./io.write.js", async () => {
         entered.resolve();
         await release.promise;
-        return vi.importActual<typeof import("./io.write.js")>("./io.write.js");
+        return vi.importActual<typeof import("./io.write.js")>(
+          new URL("./io.write.js", import.meta.url).href,
+        );
       });
       const { io, env, home, configPath, raw } = await fixture();
       const secondPath = path.join(home, "second.json");

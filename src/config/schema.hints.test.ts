@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import { buildBaseHints, mapSensitivePaths, testApi } from "./schema.hints.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -273,5 +274,51 @@ describe("mapSensitivePaths", () => {
     ]) {
       expect(hints[path]?.tags, path).toContain(SENSITIVE_URL_HINT_TAG);
     }
+  });
+});
+
+describe("authored schema hints", () => {
+  it("preserves authored metadata without deriving tags from field names or tiers", () => {
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "authored-metadata",
+          configSchema: {
+            type: "object",
+            properties: {
+              maxTokens: { type: "integer" },
+              storagePath: { type: "string" },
+              apiKey: { type: "string" },
+            },
+          },
+          configUiHints: {
+            maxTokens: { sensitive: false },
+            storagePath: { tags: ["User-defined"], advanced: true },
+            apiKey: { sensitive: true },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "authored-metadata-channel",
+          configSchema: { type: "object", properties: { retryLimit: { type: "integer" } } },
+          configUiHints: { retryLimit: { tags: ["Tuning"] } },
+        },
+      ],
+    });
+    const hints = result.uiHints;
+    expect(hints["gateway.auth.token"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]).toMatchObject({
+      sensitive: false,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.storagePath"]).toMatchObject({
+      tags: ["User-defined"],
+      advanced: true,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.sensitive).toBe(true);
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.tags).toBeUndefined();
+    expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
+    expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
   });
 });

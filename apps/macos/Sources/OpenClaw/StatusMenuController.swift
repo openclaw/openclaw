@@ -47,7 +47,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.menu.delegate = self
         StatusMenuAppearance.pin(self.menu)
 
-        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state)
+        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state, approvalQueue: self.approvals)
         renderer.onInstallUpdate = { [weak self] in
             self?.updater.checkForUpdates(nil)
         }
@@ -72,7 +72,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.refreshTask = nil
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
-        self.approvals.stop()
         if let clickMonitor = self.clickMonitor {
             NSEvent.removeMonitor(clickMonitor)
             self.clickMonitor = nil
@@ -162,16 +161,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             else { return event }
             let point = button.convert(event.locationInWindow, from: nil)
             guard button.bounds.contains(point) else { return event }
-            switch event.type {
-            case .leftMouseDown:
-                AppNavigationActions.openDashboard()
-                return nil
-            case .rightMouseDown:
+            if event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
                 self.presentMenu()
-                return nil
-            default:
-                return event
+            } else {
+                AppNavigationActions.openDashboard()
             }
+            return nil
         }
     }
 

@@ -2,7 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
-import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-usage.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";

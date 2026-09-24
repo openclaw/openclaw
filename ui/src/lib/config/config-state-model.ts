@@ -10,38 +10,55 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "paused";
-export type RuntimeConfigState = {
+
+type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
-  applySessionKey: string;
-  configLoading: boolean;
-  configRaw: string;
-  configRawOriginal: string;
-  configRawOriginalParsed: Record<string, unknown> | null;
-  configRawOriginalParsePending: Promise<void> | null;
-  configValid: boolean | null;
-  configIssues: unknown[];
-  configSaving: boolean;
-  configApplying: boolean;
-  configAutoSaveStatus: ConfigAutoSaveStatus;
-  /** True when the config file revision differs from the active Gateway runtime. */
-  configNeedsApply: boolean;
-  configSnapshot: ConfigSnapshot | null;
-  configDraftBaseHash?: string | null;
-  configSchema: unknown;
-  configSchemaVersion: string | null;
-  configSchemaLoading: boolean;
-  configUiHints: ConfigUiHints;
-  configForm: Record<string, unknown> | null;
-  configFormOriginal: Record<string, unknown> | null;
-  configFormDirty: boolean;
-  configFormMode: "form" | "raw";
-  configSearchQuery: string;
-  configActiveSection: string | null;
-  configActiveSubsection: string | null;
-  lastError: string | null;
-  chatError?: string | null;
+  phase: ApplicationGatewayPhase;
+  sessionKey: string;
+  hello?: GatewayHelloOk | null;
 };
+
+const initialConfigValue = <T>(value: T): T => value;
+
+export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>) {
+  return {
+    client: snapshot?.client ?? null,
+    connected: snapshot?.phase === "connected",
+    applySessionKey: snapshot?.sessionKey ?? "main",
+    configLoading: false,
+    configRaw: "{\n}\n",
+    configRawOriginal: "",
+    configRawOriginalParsed: initialConfigValue<Record<string, unknown> | null>(null),
+    configRawOriginalParsePending: initialConfigValue<Promise<void> | null>(null),
+    configValid: initialConfigValue<boolean | null>(null),
+    configIssues: initialConfigValue<unknown[]>([]),
+    configSaving: false,
+    configApplying: false,
+    configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
+    configRecoveryError: initialConfigValue<string | null>(null),
+    configNeedsApply: false,
+    configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
+    configDraftBaseHash: initialConfigValue<string | null>(null),
+    configSchema: initialConfigValue<unknown>(null),
+    configSchemaVersion: initialConfigValue<string | null>(null),
+    configSchemaLoading: false,
+    configUiHints: initialConfigValue<ConfigUiHints>({}),
+    configForm: initialConfigValue<Record<string, unknown> | null>(null),
+    configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
+    configFormDirty: false,
+    configFormMode: initialConfigValue<"form" | "raw">("form"),
+    configSearchQuery: "",
+    configActiveSection: initialConfigValue<string | null>(null),
+    configActiveSubsection: initialConfigValue<string | null>(null),
+    lastError: initialConfigValue<string | null>(null),
+  };
+}
+
+type ProducedRuntimeConfigState = ReturnType<typeof createInitialConfigState>;
+export type RuntimeConfigState = Omit<ProducedRuntimeConfigState, "configDraftBaseHash"> &
+  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash">> & {
+    chatError?: string | null;
+  };
 
 const requestVersionsByState = new WeakMap<
   RuntimeConfigState,
@@ -84,13 +101,6 @@ export function beginConfigRead(
   return read;
 }
 
-type RuntimeConfigGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-  sessionKey: string;
-  hello?: GatewayHelloOk | null;
-};
-
 export type RuntimeConfigGateway = {
   readonly snapshot: RuntimeConfigGatewaySnapshot;
   subscribe: (listener: (snapshot: RuntimeConfigGatewaySnapshot) => void) => () => void;
@@ -108,41 +118,6 @@ type ConfigConnectionState = {
   client: ConfigGatewayClient | null;
   connected: boolean;
 };
-
-export function createInitialConfigState(
-  snapshot?: Partial<RuntimeConfigGatewaySnapshot>,
-): RuntimeConfigState {
-  return {
-    client: snapshot?.client ?? null,
-    connected: snapshot?.phase === "connected",
-    applySessionKey: snapshot?.sessionKey ?? "main",
-    configLoading: false,
-    configRaw: "{\n}\n",
-    configRawOriginal: "",
-    configRawOriginalParsed: null,
-    configRawOriginalParsePending: null,
-    configValid: null,
-    configIssues: [],
-    configSaving: false,
-    configApplying: false,
-    configAutoSaveStatus: "idle",
-    configNeedsApply: false,
-    configSnapshot: null,
-    configDraftBaseHash: null,
-    configSchema: null,
-    configSchemaVersion: null,
-    configSchemaLoading: false,
-    configUiHints: {},
-    configForm: null,
-    configFormOriginal: null,
-    configFormDirty: false,
-    configFormMode: "form",
-    configSearchQuery: "",
-    configActiveSection: null,
-    configActiveSubsection: null,
-    lastError: null,
-  };
-}
 
 export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
   if (key === "config") {

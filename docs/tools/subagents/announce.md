@@ -17,7 +17,7 @@ Sub-agents report back via an announce step:
 - For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
 
-Delivery depends on requester depth:
+By default, delivery depends on requester depth:
 
 - Top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`).
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
@@ -36,6 +36,34 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+### Private parent completion
+
+Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
+private turn of the original requester session. The parent can inspect the result,
+start another child, or reply `NO_REPLY`. OpenClaw does not automatically send the
+child result, parent final, or generated media to a channel. The parent can still
+choose to send a message through its permitted tools.
+
+This option supports hidden, native, one-shot runs only. It cannot be combined
+with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
+`expectsCompletionMessage: false`. It does not change the default completion mode.
+
+Finished private results remain in the registry until the spawning parent turn
+settles. A normal parent finish releases each ready result for private review;
+`sessions_yield` hands the results to its existing child batch instead. A reset or
+removed parent does not transfer the result to another session. When a settled
+batch contains a private result, its combined review stays private; ordinary
+siblings retain their individual completion delivery.
+
+Waiting for the spawning parent turn does not consume a private result's delivery
+retry window. A normal parent finish starts that window when it releases the
+result. After `sessions_yield`, the yielded batch owns delivery; individual child
+cleanup cannot expire or suspend that batch's result.
+
+Use a build that supports this option throughout the run. Older builds cannot
+resume private completion handoffs and may discard them after a downgrade;
+existing session transcripts remain separate.
+
 ### Announce context
 
 Announce context is normalized to a stable internal event block:
@@ -49,12 +77,29 @@ Announce context is normalized to a stable internal event block:
 | Result content | Latest visible assistant text from the child                                                             |
 | Follow-up      | Instruction describing when to reply vs stay silent                                                      |
 
+The result is the child's complete visible final answer for the completed run.
+OpenClaw preserves prompt-data escaping and stable order when it delivers several
+results together. It does not shorten an answer to fit the former announce
+projection limits. The bounded lifecycle snapshot remains separate from the
+complete answer sent to the parent.
+
+For nested work, descendant findings help the child form its answer. The child's
+own final answer is what travels onward to its parent. If the child sends its
+final answer through the message tool and then returns `NO_REPLY`, that final
+answer remains authoritative.
+
+Completion delivery can read an existing registered archive when child cleanup
+finishes before the parent resumes. This does not add a post-cleanup retrieval
+feature.
+
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.
 
 ### Stats line
 
-Announce payloads include a stats line at the end (even when wrapped):
+Default announce payloads include a stats line at the end (even when wrapped).
+Private parent completions omit mutable usage statistics so a retried handoff
+keeps the same input:
 
 - Runtime (e.g. `runtime 5m12s`).
 - Token usage (input/output/total).

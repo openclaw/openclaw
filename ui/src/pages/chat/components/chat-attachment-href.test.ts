@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  safeAttachmentHref,
+  safeMediaAttachmentHref,
+  safePlainTextAttachmentHref,
+} from "./chat-attachment-href.ts";
 
 describe("safeAttachmentHref", () => {
   it.each([
@@ -55,5 +59,20 @@ describe("safeMediaAttachmentHref", () => {
       "data:video/mp4;base64,AAAA",
     );
     expect(safeMediaAttachmentHref("data:audio/mp3;base64,AAAA", "video")).toBeUndefined();
+  });
+});
+
+describe("safePlainTextAttachmentHref", () => {
+  it.each([
+    ["data:text/plain;base64,", true],
+    ["data:text/plain;base64,SGVsbG8=", true],
+    ["/notes.txt", true],
+    ["blob:https://control.example/paste", true],
+    ["data:text/html;base64,SGVsbG8=", false],
+    ["data:text/plain,<script>alert(1)</script>", false],
+    ["data:text/plain;base64,SGVsbG8", false],
+    ["javascript:alert(1)", false],
+  ])("restricts inline pasted sources: %s", (href, allowed) => {
+    expect(safePlainTextAttachmentHref(href)).toBe(allowed ? href : undefined);
   });
 });

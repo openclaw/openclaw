@@ -180,13 +180,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "esc"
     },
@@ -194,14 +187,14 @@
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-look.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.ts",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-look.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.ts",
       "text": "Z"
     },
     {
@@ -231,6 +224,48 @@
       "name": "placeholder",
       "path": "ui/src/components/mcp-server-form.ts",
       "text": "https://mcp.example.com/mcp · npx some-mcp-server"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Machine0"
     },
     {
       "count": 1,
@@ -273,6 +308,20 @@
       "name": "text",
       "path": "ui/src/pages/about/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Offline person"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Online person"
     },
     {
       "count": 1,
@@ -452,6 +501,20 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Build runner"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Duplicate runner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
       "text": "Chat with your agent from Telegram groups and direct messages."
@@ -553,6 +616,13 @@
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/search/search-results.ts",
+      "text": "snippet"
     },
     {
       "count": 1,

@@ -1,11 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import {
+  createManagedUpdateRequesterContinuationAuthority,
+  UpdateRequesterRevokedError,
+} from "../../infra/update-requester-authority.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
-import { UpdatePreMutationError } from "./shared.js";
+import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   resolveOwnedManagedUpdateEnv,
@@ -100,4 +106,59 @@ export async function captureOwnedManagedUpdateContext(params: {
     const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords({ env });
     return { env, configSnapshot, pluginInstallRecords };
   });
+}
+
+export async function readUpdateCandidateSource(
+  env: NodeJS.ProcessEnv,
+  legacyConfigPlan?: LegacyConfigUpdatePlan,
+) {
+  if (legacyConfigPlan) {
+    const context = await captureTargetDatabaseSchemaContext(env, {
+      legacyConfigPlan,
+    });
+    if (context.legacyConfigPlan) {
+      return { config: context.config, hash: hashConfigRaw(context.configSnapshot.raw) };
+    }
+  }
+  const snapshot = await withOwnedManagedUpdateEnv(env, () =>
+    readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+  );
+  return { config: snapshot.config, hash: hashConfigRaw(snapshot.raw) };
+}
+
+/** Complete native admission before any execution guard can observe the pending requester. */
+export async function admitUpdateRequesterContinuation(
+  run: NonNullable<UpdateCommandOptions["run"]>,
+  executor: UpdateCommandExecutor,
+  root: string,
+  serviceRoot?: string,
+): Promise<void> {
+  const original = run.requesterAuthority;
+  const requester = original?.requester;
+  if (!requester?.authorizationSource?.startsWith("profile:")) {
+    return;
+  }
+  const runId = run.runId;
+  const previousFence = run.executorFence;
+  const fence = await executor.enter(root, { preflight: true, serviceRoot });
+  const assertRunCurrent = () => {
+    if (
+      run.runId !== runId ||
+      run.requesterAuthority !== original ||
+      run.executorFence !== previousFence ||
+      (previousFence && previousFence !== fence)
+    ) {
+      throw new UpdateRequesterRevokedError();
+    }
+    fence.assertCurrent();
+  };
+  assertRunCurrent();
+  const continued = await createManagedUpdateRequesterContinuationAuthority(
+    requester,
+    { runId, executor: fence },
+    run.env,
+  );
+  assertRunCurrent();
+  run.requesterAuthority = continued;
+  run.executorFence = fence;
 }

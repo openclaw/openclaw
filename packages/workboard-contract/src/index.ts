@@ -81,6 +81,11 @@ export function isValidWorkboardBoardId(value: unknown): value is string {
   return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
 }
 
+export type WorkboardDeleteResult = {
+  deleted: boolean;
+  referenceUpdates?: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }>;
+};
+
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
 export type WorkboardExecutionEngine = string;

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements lab server behavior.
 import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
@@ -796,16 +795,7 @@ export async function startQaLabServer(
             // Keep generated artifacts visible when authenticated verdict validation fails.
             let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
-              const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
-                import("./suite-launch.runtime.js"),
-                selection.channelDriver === "crabline" && selection.channel
-                  ? import("@openclaw/crabline").then((module) =>
-                      module.resolveOpenClawCrablineChannelDriverSelection({
-                        channel: selection.channel!,
-                      }),
-                    )
-                  : Promise.resolve(undefined),
-              ]);
+              const { runQaSuite } = await import("./suite-launch.runtime.js");
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
@@ -814,10 +804,7 @@ export async function startQaLabServer(
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,
                 ...(adapterFactories ? { adapterFactories } : {}),
-                ...(selection.channelDriver === "live" && selection.channel
-                  ? { channelId: selection.channel }
-                  : {}),
-                ...(channelDriverSelection ? { channelDriverSelection } : {}),
+                ...(selection.channel ? { channelId: selection.channel } : {}),
                 evidenceMode: selection.evidenceMode,
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,

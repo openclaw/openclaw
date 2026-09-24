@@ -43,6 +43,9 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
           disableInput() {},
+          setPresented() {
+            return true;
+          },
           sendBackspace() {},
           sendKeyboardEvent() {},
           sendText() {},
@@ -214,6 +217,9 @@ export async function installScriptedRfbServer(
       ...events,
     ];
     (
+      window as typeof window & { desktopRfbConnectionCount?: () => number }
+    ).desktopRfbConnectionCount = () => nextId;
+    (
       window as typeof window & {
         desktopRfbKeyEvents?: () => Array<{ down: boolean; keysym: number }>;
       }
@@ -236,6 +242,13 @@ export async function installScriptedRfbServer(
     };
   }, options);
   return {
+    connectionCount: () =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & { desktopRfbConnectionCount?: () => number }
+          ).desktopRfbConnectionCount?.() ?? 0,
+      ),
     keyEvents: () =>
       page.evaluate(
         () =>

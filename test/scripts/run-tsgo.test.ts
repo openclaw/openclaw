@@ -362,7 +362,11 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     }
   }
 
-  function withSupervisorClock(cwd: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  function withSupervisorClock(
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    preloads: string[] = [],
+  ): NodeJS.ProcessEnv {
     const preloadPath = path.join(cwd, "supervisor-clock.mjs");
     // Scale both cleanup owners so an outer cutoff that races inner reaping still fails.
     // Compiler/watchdog timers, readiness checks, and OS signals retain real time.
@@ -378,9 +382,14 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     realSetTimeout(callback, delay / 5, ...args);
 }\n`,
     );
+    const imports = [...preloads, preloadPath]
+      .map((preload) => `--import=${pathToFileURL(preload).href}`)
+      .join(" ");
+    // Both supervisor processes need the fixtures through their runtime's inherited options.
     return {
       ...env,
-      NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preloadPath).href}`,
+      NODE_OPTIONS: [env.NODE_OPTIONS, imports].filter(Boolean).join(" "),
+      BUN_OPTIONS: [env.BUN_OPTIONS, imports].filter(Boolean).join(" "),
     };
   }
 
@@ -576,10 +585,7 @@ syncBuiltinESMExports();
           {
             cwd,
             stdio: ["ignore", "ignore", "pipe"],
-            env: withSupervisorClock(cwd, {
-              ...process.env,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
-            }),
+            env: withSupervisorClock(cwd, process.env, phase === "spawn" ? [preloadPath] : []),
           },
         );
         retainFixture = true;

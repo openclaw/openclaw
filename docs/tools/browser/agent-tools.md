@@ -25,6 +25,8 @@ How it maps:
   cross-document navigation include the same fresh page state. Navigations
   that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+  When a captured control disappears, its bound ref fails. Take a new snapshot
+  before retrying the action.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
 - If a screenshot times out while the browser is still capturing or restoring
   page settings, further screenshots, resizing, and device changes on that tab
@@ -36,7 +38,7 @@ How it maps:
   - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
   - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
   - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
-  - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
+  - Automatic routing prefers the host browser. If local browser capability is unavailable, it can use a single connected browser node. Explicit `target="node"`, a `node` selector, or a configured node pin overrides that preference; `target="host"` stays local.
 
 This keeps the agent deterministic and avoids brittle selectors.
 

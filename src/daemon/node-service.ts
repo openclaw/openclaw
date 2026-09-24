@@ -25,7 +25,7 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
 
 /** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
-  const base = resolveGatewayService();
+  const base = resolveGatewayService("node");
   const { hasInstalledDefinition, isAbsent } = base;
   return {
     ...base,

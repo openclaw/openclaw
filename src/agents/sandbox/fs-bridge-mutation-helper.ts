@@ -3,8 +3,8 @@
  *
  * Selects the local interpreter and supplies quoted Python source to local and remote transports.
  */
+import { GUEST_FILESYSTEM_PYTHON } from "../../infra/guest-filesystem.js";
 import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-python.js";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
@@ -19,7 +19,15 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
-export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
+export const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
+
+export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 
 export type PinnedSandboxOperation =
   | {

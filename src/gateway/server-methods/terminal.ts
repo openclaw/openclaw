@@ -560,6 +560,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           agentId,
           hostId: catalog.hostId,
           threadId: catalog.threadId,
+          ...(catalog.sourceHomeId ? { sourceHomeId: catalog.sourceHomeId } : {}),
         });
     }
     await openTerminalSession(opts, {

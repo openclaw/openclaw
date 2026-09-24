@@ -7,6 +7,7 @@ import {
   sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { WIDGET_CDN_ORIGINS } from "openclaw/plugin-sdk/widget-html";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import {
@@ -35,8 +36,8 @@ const DOC_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const DISCORD_ACTIVITY_WIDGET_CSP =
   // Discord is an ancestor of the same-origin Activity shell, so every frame ancestor must pass.
   // The one-time document capability and nested sandbox remain the embedding boundary.
-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; " +
-  "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; " +
+  `sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' ${WIDGET_CDN_ORIGINS.join(" ")}; ` +
+  `style-src 'unsafe-inline' ${WIDGET_CDN_ORIGINS.join(" ")}; img-src data: blob:; font-src data: ${WIDGET_CDN_ORIGINS.join(" ")}; ` +
   "connect-src 'none'; frame-ancestors *";
 
 type DiscordActivityHttpDeps = {

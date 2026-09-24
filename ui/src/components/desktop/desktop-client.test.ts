@@ -298,6 +298,12 @@ describe("DesktopClient", () => {
       expect(rfb.resizeSession).toBe(false);
       rfb.dispatchEvent(new Event("connect"));
       expect(rfb.resizeSession).toBe(resizes);
+      handle.setPresented(false);
+      expect([rfb.viewOnly, rfb.resizeSession]).toEqual([true, false]);
+      handle.setSizingMode("match");
+      expect(rfb.resizeSession).toBe(false);
+      handle.setPresented(true);
+      expect([rfb.viewOnly, rfb.resizeSession]).toEqual([viewOnly, resizes]);
       handle.setSizingMode("actual");
       expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([false, false]);
       handle.setSizingMode("match");
@@ -334,6 +340,8 @@ describe("DesktopClient", () => {
         expect(rfb.resizeSession).toBe(false);
       }
       handle.setSizingMode("match");
+      handle.setPresented(false);
+      handle.setPresented(true);
       rfb.dispatchEvent(new Event("connect"));
       expect(rfb.resizeSession).toBe(false);
       handle.disconnect();

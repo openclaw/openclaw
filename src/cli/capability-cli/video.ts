@@ -248,6 +248,7 @@ async function runVideoDescribe(params: { file: string; model?: string; agent?: 
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
     cfg,
+    agentId,
     agentDir,
     activeModel,
   });

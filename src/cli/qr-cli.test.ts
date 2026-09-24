@@ -234,6 +234,35 @@ describe("registerQrCli", () => {
     );
   });
 
+  it.each([
+    { args: [], profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "full" },
+    { args: ["--limited"], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE, access: "limited" },
+    {
+      args: ["--voice-node"],
+      profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      access: "limited",
+    },
+  ])(
+    "issues trusted-proxy QR output with the existing $args grant",
+    async ({ args, profile, access }) => {
+      loadConfig.mockReturnValue(createLocalGatewayConfigWithAuth({ mode: "trusted-proxy" }));
+
+      await runQr(["--json", "--url", "wss://gateway.example.test", ...args]);
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          auth: "trusted-proxy",
+          gatewayUrl: "wss://gateway.example.test",
+          access,
+        }),
+      );
+      expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ profile }),
+      );
+      expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the bounded bootstrap profile with --limited", async () => {
     loadConfig.mockReturnValue({
       gateway: {

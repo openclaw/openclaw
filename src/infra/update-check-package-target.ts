@@ -7,6 +7,7 @@ import {
 } from "../state/openclaw-schema-versions.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { cancelUnreadResponseBody } from "./http-body.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 type NpmPackageTargetStatus = {
   target: string;
@@ -105,7 +106,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
     target: params.target,
   });
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs: Math.max(250, params.timeoutMs),
+    timeoutMs: Math.max(1, params.timeoutMs),
     operation: "npm-registry-update-check",
     url,
   });
@@ -156,7 +157,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   registryUrl?: string;
   packageName?: string;
 }): Promise<NpmPackageTargetStatus> {
-  const timeoutMs = params.timeoutMs ?? 3500;
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const target = params.target;
   if (!params.command && !params.runCommand) {
     return await fetchNpmPackageTargetStatusFromRegistry({
@@ -181,7 +182,7 @@ export async function fetchNpmPackageTargetStatus(params: {
         "--global",
       ],
       {
-        timeoutMs: Math.max(250, timeoutMs),
+        timeoutMs: Math.max(1, timeoutMs),
         cwd: params.cwd,
         env: params.env,
         maxOutputBytes: 1024 * 1024,

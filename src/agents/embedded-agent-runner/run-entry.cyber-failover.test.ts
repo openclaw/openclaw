@@ -145,6 +145,11 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     expect(result.attempts).toContainEqual(
       expect.objectContaining({ code: "OPENAI_CYBER_POLICY_REFUSAL" }),
     );
+    expect(result.result.meta.executionTrace?.providerPolicyRetry).toEqual({
+      category: "cyber",
+      provider: "openai",
+      model: "gpt-daybreak-blue-latest",
+    });
     await result.settleSessionOverride();
     expect(reconciled).toEqual([]);
   });
@@ -466,6 +471,7 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
 
     expect(result.model).toBe("gpt-daybreak-blue-latest");
     expect(result.result.payloads).toEqual([{ text: "Daybreak did not complete", isError: true }]);
+    expect(result.result.meta.executionTrace?.providerPolicyRetry).toBeUndefined();
   });
 
   it("keeps a recovered Daybreak answer alongside a replay-safe tool warning", async () => {

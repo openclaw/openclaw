@@ -43,8 +43,6 @@ import {
 } from "./hooks-cli.format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
-import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
 type HooksUpdateOptions = {
   acknowledgeInstallPolicyWarning?: boolean;
@@ -77,8 +75,6 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   }
   const agentId =
     requestedAgentId ??
-    // Status reporting narrows to one workspace, so it keeps demanding an explicit
-    // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
     resolveDefaultAgentId(config, {
       surface: "hooks status reporting",
@@ -384,6 +380,7 @@ export function registerHooksCli(program: Command): void {
       false,
     )
     .action(async (raw: string, opts: HooksInstallOptions) => {
+      const { runPluginInstallCommand } = await import("./plugins-install-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
@@ -407,10 +404,11 @@ export function registerHooksCli(program: Command): void {
       false,
     )
     .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
+      const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks update` is deprecated; use `openclaw plugins update`."),
       );
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({ ids: id ? [id] : [], opts });
     });
 
   hooks.action(async (opts: HooksListOptions, command: Command) =>

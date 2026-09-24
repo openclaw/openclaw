@@ -153,7 +153,14 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
   }[active];
   const header = page.locator(".plugins-hub-header");
-  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  const title = header.getByRole("heading", { level: 1 });
+  expect(await title.textContent()).toBe(expected.title);
+  const titleBox = (await title.boundingBox())!;
+  const tabsBox = (await header.locator(".plugins-tabs").boundingBox())!;
+  expect(titleBox.height).toBeGreaterThan(1);
+  expect(titleBox.width).toBeGreaterThan(1);
+  expect(tabsBox.y + tabsBox.height).toBeLessThanOrEqual(titleBox.y);
+  expect(Math.abs(tabsBox.x - titleBox.x)).toBeLessThanOrEqual(1);
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
@@ -258,6 +265,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         await page.getByRole("searchbox", { name: "Search plugins", exact: true }).waitFor();
         const pluginsHeader = await headerGeometry(page);
+        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
         expect(pluginsHeader.title).toBe("Plugins");
         await expectHeaderCopy(page, "plugins");
         expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
@@ -271,16 +279,11 @@ suite.define(() => {
         const pluginTabBox = await page
           .getByRole("tab", { name: "Plugins", exact: true })
           .boundingBox();
-        const titleBox = await page.locator(".plugins-hub-header .page-title").boundingBox();
         expect(tabBox).not.toBeNull();
         expect(pluginTabBox).not.toBeNull();
-        expect(titleBox).not.toBeNull();
-        expect((tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBeLessThanOrEqual(titleBox?.y ?? 0);
-        expect(Math.abs((tabBox?.x ?? 0) - (titleBox?.x ?? 0))).toBeLessThanOrEqual(1);
         expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
         await expectActivePanelLabel(page, "plugins-tab-plugins");
         const pluginInstallPresentation = await installButtonPresentation(page);
-        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
 
         await page
           .locator(".plugins-hub-tabs")

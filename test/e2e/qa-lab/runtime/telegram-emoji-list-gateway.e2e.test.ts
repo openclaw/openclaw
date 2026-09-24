@@ -83,6 +83,8 @@ function scriptMessageToolCall(payload: string, args: JsonObject) {
         finishAssistantMessage(item);
       } else if (event.type === "response.function_call_arguments.delta" && scripted) {
         event.delta = argumentsText;
+      } else if (event.type === "response.function_call_arguments.done" && scripted) {
+        event.arguments = argumentsText;
       } else if (event.type === "response.completed") {
         const response = event.response as JsonObject | undefined;
         const output = response?.output;

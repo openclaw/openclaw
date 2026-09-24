@@ -19,7 +19,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 4;
+export const MEMORY_CHUNKING_VERSION = 5;
 
 export type CuratedMarkdownEntry = {
   startLine: number;
@@ -27,6 +27,11 @@ export type CuratedMarkdownEntry = {
   text: string;
   kind: "entry" | "section";
 };
+
+function curatedMarkdownEntryKind(line: string): CuratedMarkdownEntry["kind"] | undefined {
+  return line.startsWith("- ") ? "entry" : /^#{1,6}(?:\s|$)/u.test(line) ? "section" : undefined;
+}
+
 export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
   const lines = content.split("\n");
   const entries: CuratedMarkdownEntry[] = [];
@@ -45,11 +50,7 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
   };
   for (let index = 1; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    const nextKind = line.startsWith("- ")
-      ? "entry"
-      : /^#{1,6}(?:\s|$)/u.test(line)
-        ? "section"
-        : undefined;
+    const nextKind = curatedMarkdownEntryKind(line);
     if (!nextKind) {
       continue;
     }
@@ -89,9 +90,6 @@ export function chunkMarkdown(
   let currentChars = 0;
   let entryStartLine: number | undefined;
   let entryFirstChunk = 0;
-  const curatedEntryStarts = chunking.perEntry
-    ? new Map(splitCuratedMarkdownEntries(content).map((entry) => [entry.startLine, entry]))
-    : undefined;
 
   const flush = () => {
     const firstEntry = current[0];
@@ -172,15 +170,17 @@ export function chunkMarkdown(
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
-    const curatedEntry = curatedEntryStarts?.get(lineNo);
-    if (curatedEntry) {
+    const entryKind = chunking.perEntry
+      ? (curatedMarkdownEntryKind(line) ?? (i === 0 ? "section" : undefined))
+      : undefined;
+    if (entryKind) {
       if (current.length > 0) {
         flush();
       }
       finishEntry(lineNo - 1);
       current = [];
       currentChars = 0;
-      entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
+      entryStartLine = entryKind === "entry" ? lineNo : undefined;
       entryFirstChunk = chunks.length;
     }
     if (line.length === 0) {

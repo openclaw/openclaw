@@ -38,11 +38,8 @@ const mocks = vi.hoisted(() => {
       } | null> => null,
     ),
     startSshPortForward: vi.fn(async (_opts?: unknown) => ({
-      parsedTarget: { user: "me", host: "studio", port: 22 },
       localPort: 18789,
-      remotePort: 18789,
       pid: 123,
-      stderr: [],
       stop: sshStop,
     })),
     inspectGatewayTlsCertificate: vi.fn(
@@ -1016,6 +1013,14 @@ describe("gateway-status command", () => {
     const targets = parsed.targets as Array<Record<string, unknown>>;
     const targetKinds = targets.map((target) => target.kind);
     expect(targetKinds).toContain("sshTunnel");
+    const sshTarget = targets.find((target) => target.kind === "sshTunnel");
+    expect(sshTarget?.tunnel).toEqual({
+      kind: "ssh",
+      target: "me@studio",
+      localPort: 18789,
+      remotePort: 18789,
+      pid: 123,
+    });
   });
 
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {

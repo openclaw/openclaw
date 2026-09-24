@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
-  type ControlUiE2eServer,
+  type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
@@ -46,7 +46,7 @@ type InstallGate = {
 
 let browser: Browser;
 let outDir: string;
-let server: ControlUiE2eServer;
+let server: ControlUiE2eProductionServer;
 let buildBPromise: Promise<void> | undefined;
 
 async function stageBuildB(destination: string): Promise<void> {
@@ -380,8 +380,7 @@ describe("Control UI service-worker production update E2E", () => {
         await editor.fill(draft);
         await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
-        await rename(outDir, previousDir);
-        await rename(nextDir, outDir);
+        await server.replaceBuild(nextDir, previousDir);
         swapped = true;
         await page.evaluate(async () => {
           await (await navigator.serviceWorker.getRegistration())?.update();
@@ -434,8 +433,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         await context.close();
         if (swapped) {
-          await rename(outDir, nextDir);
-          await rename(previousDir, outDir);
+          await server.replaceBuild(previousDir, nextDir);
         }
         await rm(nextDir, { recursive: true, force: true });
       }
@@ -544,8 +542,7 @@ describe("Control UI service-worker production update E2E", () => {
           | null;
         return panel?.available === false;
       });
-      await rename(outDir, previousOutDir);
-      await rename(nextOutDir, outDir);
+      await server.replaceBuild(nextOutDir, previousOutDir);
       await rm(previousOutDir, { force: true, recursive: true });
       // Assets and Gateway identity advance together in a deployment. Publish
       // build B before a stale lazy chunk can reload and reconnect the document.

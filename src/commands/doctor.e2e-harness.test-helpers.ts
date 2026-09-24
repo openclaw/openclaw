@@ -2,6 +2,7 @@
 import { vi } from "vitest";
 import { defineMockFn, type MockFn } from "../test-utils/vitest-mock-fn.js";
 import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
+import { createTestConfigFileStore } from "./test-runtime-config-helpers.js";
 
 export type DoctorConfigSnapshotFixtureParams = {
   config?: Record<string, unknown>;
@@ -20,15 +21,6 @@ export function setDoctorStdinTty(value: boolean | undefined): void {
   } catch {
     // ignore
   }
-}
-
-export function createGatewayUpdateResult() {
-  return {
-    status: "skipped",
-    mode: "unknown",
-    steps: [],
-    durationMs: 0,
-  } as const;
 }
 
 export function createCommandWithTimeoutResult() {
@@ -94,6 +86,54 @@ export function applyMockDoctorConfigSnapshot(
   params: DoctorConfigSnapshotFixtureParams = {},
 ): void {
   readConfigFileSnapshot.mockResolvedValue(createDoctorConfigSnapshot(params));
+}
+
+export function createDoctorConfigTransform(
+  readConfigFileSnapshot: MockFn<typeof import("../config/config.js").readConfigFileSnapshot>,
+) {
+  const committedConfigFiles = createTestConfigFileStore();
+  return async (
+    params: Parameters<typeof import("../config/config.js").transformConfigFile>[0],
+  ) => {
+    const { ConfigMutationConflictError } = await import("../config/config.js");
+    const { hashConfigRaw, resolveConfigSnapshotHash } =
+      await import("../config/io.read-helpers.js");
+    const snapshot = await readConfigFileSnapshot();
+    const previousHash = resolveConfigSnapshotHash(snapshot);
+    if (params.baseHash !== undefined && params.baseHash !== previousHash) {
+      throw new ConfigMutationConflictError("config changed since last load");
+    }
+    if (
+      params.writeOptions?.expectedConfigPath !== undefined &&
+      params.writeOptions.expectedConfigPath !== snapshot.path
+    ) {
+      throw new ConfigMutationConflictError("config path changed since last load");
+    }
+    params.writeOptions?.assertCurrent?.();
+    const transformed = await params.transform(
+      params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig,
+      { snapshot, previousHash, attempt: 0 },
+      {},
+    );
+    await params.writeOptions?.beforeCommit?.();
+    params.writeOptions?.assertCurrent?.();
+    const committed = committedConfigFiles.write(transformed.nextConfig, snapshot.path);
+    const persistedSnapshot = committed.snapshot;
+    persistedSnapshot.raw = JSON.stringify(committed.nextConfig);
+    persistedSnapshot.parsed = structuredClone(committed.nextConfig);
+    persistedSnapshot.hash = hashConfigRaw(persistedSnapshot.raw);
+    readConfigFileSnapshot.mockImplementation(
+      async () => committedConfigFiles.read(snapshot.path).snapshot,
+    );
+    return {
+      ...committed,
+      snapshot,
+      previousHash,
+      persistedHash: persistedSnapshot.hash,
+      persistedSourceConfig: persistedSnapshot.sourceConfig,
+      result: transformed.result,
+    };
+  };
 }
 
 export function createDoctorRuntime() {

@@ -157,6 +157,7 @@ export async function handleAcpStatusAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await getAcpSessionManager().getSessionStatus({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       }),
@@ -227,30 +228,16 @@ export async function handleAcpSetModeAction(
   params: HandleCommandsParams,
   restTokens: string[],
 ): Promise<CommandHandlerResult> {
-  return await withSingleTargetValue({
-    commandParams: params,
-    restTokens,
+  return await handleSingleRuntimeOptionAction(params, restTokens, {
     usage: ACP_SET_MODE_USAGE,
-    run: async ({ target, value }) =>
-      await withAcpCommandErrorBoundary({
-        run: async () => {
-          const runtimeMode = validateRuntimeModeInput(value);
-          const options = await getAcpSessionManager().setSessionRuntimeMode({
-            cfg: params.cfg,
-            ...target,
-            runtimeMode,
-          });
-          return {
-            runtimeMode,
-            options,
-          };
-        },
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "Could not update ACP runtime mode.",
-        onSuccess: ({ runtimeMode, options }) =>
-          commandReply(
-            `✅ Updated ACP runtime mode for ${target.sessionKey}: ${runtimeMode}. Effective options: ${formatRuntimeOptionsText(options)}`,
-          ),
+    optionLabel: "runtime mode",
+    parseValue: validateRuntimeModeInput,
+    update: async (target, value) =>
+      await getAcpSessionManager().setSessionRuntimeMode({
+        assertActive: params.command.assertOwnerCurrent,
+        cfg: params.cfg,
+        ...target,
+        runtimeMode: value,
       }),
   });
 }
@@ -279,6 +266,7 @@ export async function handleAcpSetAction(
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({
+          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           ...target,
           patch: { cwd },
@@ -289,6 +277,7 @@ export async function handleAcpSetAction(
       }
       const validated = validateRuntimeConfigOptionInput(key, value);
       const options = await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: validated.key,
@@ -314,6 +303,7 @@ export async function handleAcpCwdAction(
     parseValue: validateRuntimeCwdInput,
     update: async (target, value) =>
       await getAcpSessionManager().updateSessionRuntimeOptions({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         patch: { cwd: value },
@@ -331,6 +321,7 @@ export async function handleAcpPermissionsAction(
     parseValue: validateRuntimePermissionProfileInput,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "approval_policy",
@@ -350,6 +341,7 @@ export async function handleAcpTimeoutAction(
     formatValue: (value) => `${value}s`,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "timeout",
@@ -368,6 +360,7 @@ export async function handleAcpModelAction(
     parseValue: validateRuntimeModelInput,
     update: async (target, value) =>
       await getAcpSessionManager().setSessionConfigOption({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         key: "model",
@@ -392,6 +385,7 @@ export async function handleAcpResetOptionsAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await getAcpSessionManager().resetSessionRuntimeOptions({
+        assertActive: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
       }),

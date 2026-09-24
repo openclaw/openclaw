@@ -5,17 +5,20 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  collectConfiguredMemoryEmbeddingStartupProviderOwners,
   collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveProviderPolicySurfaceForOwner } from "../plugins/provider-public-artifacts.js";
 import {
   markPluginRegistryActive,
   withPluginRegistryPreparationScope,
@@ -24,7 +27,10 @@ import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-t
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { disposePluginRegistryInstances, getActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import {
+  getPluginRuntimeLoadContext,
+  setPluginRuntimeLoadContext,
+} from "../plugins/runtime/load-context.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -82,6 +88,15 @@ export async function runGatewayStartupMaintenance(params: {
       }),
     ];
     if (!params.minimalTestGateway) {
+      const { migrateLegacyDesktopStreamOptOuts } =
+        await import("../infra/device-pairing-node-desktop-migration.js");
+      const retiredDesktopApprovals =
+        await migrateLegacyDesktopStreamOptOuts(startupMaintenanceConfig);
+      if (retiredDesktopApprovals > 0) {
+        params.log.warn(
+          `Preserved disabled desktop access for ${retiredDesktopApprovals} paired node(s); approve their updated desktop capability to enable sharing.`,
+        );
+      }
       const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
       startupTasks.push(
         runStartupSessionMigration({
@@ -90,25 +105,20 @@ export async function runGatewayStartupMaintenance(params: {
           log: params.log,
         }),
       );
-      const { migrateLegacyDevicePairingStore } =
-        await import("../infra/device-pairing-migration.js");
-      const { migrateLegacyNodePairingStore } = await import("../infra/node-pairing-migration.js");
+      const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
       startupTasks.push(
-        // The device store import must complete before the node-surface fold:
-        // the fold writes onto device records in SQLite and would drop every
-        // legacy node row as an orphan if the devices were not imported yet.
-        migrateLegacyDevicePairingStore({ log: params.log }).then(
-          () =>
-            migrateLegacyNodePairingStore({ log: params.log }).then(
-              () => undefined,
-              (error: unknown) => {
-                // A failed fold must not block gateway startup; the legacy
-                // files stay in place and the next boot retries.
-                params.log.warn(`node pairing store migration failed: ${String(error)}`);
-              },
-            ),
+        listLegacyPairingStoreFiles().then(
+          (files) => {
+            if (files.length > 0) {
+              params.log.warn(
+                `Legacy pairing stores require repair: ${files.join(", ")}. Stop the Gateway and run openclaw doctor --fix.`,
+              );
+            }
+          },
           (error: unknown) => {
-            params.log.warn(`device pairing store migration failed: ${String(error)}`);
+            params.log.warn(
+              `Legacy pairing store inspection failed: ${String(error)}. Stop the Gateway and run openclaw doctor --fix.`,
+            );
           },
         ),
       );
@@ -250,6 +260,61 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   }
 }
 
+async function warnConfiguredMemoryEmbeddingProviderSetup(params: {
+  config: OpenClawConfig;
+  pluginRegistry: PluginRegistry;
+  pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): Promise<void> {
+  const manifestRegistry = getPluginRuntimeLoadContext(params.pluginRegistry)?.manifestRegistry ??
+    params.pluginLookUpTable?.manifestRegistry ?? { plugins: [] };
+  await Promise.all(
+    collectConfiguredMemoryEmbeddingStartupProviderOwners(params.config).flatMap((provider) => {
+      const registered = [...provider.ownerIds]
+        .map((ownerId) => getRegisteredEmbeddingProvider(ownerId))
+        .find((entry) => entry !== undefined);
+      const owner = manifestRegistry.plugins.find(
+        (plugin) => plugin.id === registered?.ownerPluginId,
+      );
+      if (provider.agentIds.size === 0 || !owner) {
+        return [];
+      }
+      let policy: ReturnType<typeof resolveProviderPolicySurfaceForOwner>;
+      try {
+        policy = resolveProviderPolicySurfaceForOwner(owner);
+      } catch (error) {
+        params.log.warn(
+          `Memory embedding provider "${provider.configuredId}" setup could not be checked (${String(error)}). Run "openclaw doctor" to retry.`,
+        );
+        return [];
+      }
+      const inspectSetup = policy?.inspectEmbeddingProviderSetup;
+      if (!inspectSetup) {
+        return [];
+      }
+      return [...provider.agentIds].map(async (agentId) => {
+        try {
+          const setup = await inspectSetup({
+            config: params.config,
+            env: process.env,
+            agentId,
+            provider: provider.configuredId,
+          });
+          if (setup) {
+            params.log.warn(
+              `Agent "${agentId}": semantic memory recall is degraded (${provider.source}="${provider.configuredId}"). ${setup.reason}${setup.fixHint ? ` ${setup.fixHint}` : ""}`,
+            );
+          }
+        } catch (error) {
+          params.log.warn(
+            `Agent "${agentId}": memory embedding setup could not be checked (${String(error)}). Run "openclaw doctor" to retry.`,
+          );
+        }
+      });
+    }),
+  );
+}
+
 /** Loads startup plugin runtimes after the gateway listener binds. */
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
@@ -311,6 +376,17 @@ export async function loadGatewayStartupPluginRuntime(params: {
       config: loaded.resolvedConfig,
       pluginRegistry: loaded.pluginRegistry,
       log: params.log,
+    });
+    // Setup diagnostics may be asynchronous; a stalled provider must not hold startup.
+    void withPluginRuntimeRegistryScope(loaded.pluginRegistry, () =>
+      warnConfiguredMemoryEmbeddingProviderSetup({
+        config: loaded.resolvedConfig,
+        pluginRegistry: loaded.pluginRegistry,
+        pluginLookUpTable: params.pluginLookUpTable,
+        log: params.log,
+      }),
+    ).catch((error: unknown) => {
+      params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
     return loaded;
   } catch (error) {

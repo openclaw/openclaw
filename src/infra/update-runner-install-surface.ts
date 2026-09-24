@@ -1,90 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isContainerEnvironment } from "./container-environment.js";
+import { readPackageName } from "./package-json.js";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
-import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
-import type {
-  CommandRunner,
-  UpdateInstallSurface,
-  UpdateRunnerOptions,
-} from "./update-runner-types.js";
-
-const DEFAULT_PACKAGE_NAME = "openclaw";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
+import { buildUpdateCommandRunner } from "./update-runner-command.js";
+import type { CommandRunner, UpdateInstallSurface } from "./update-runner-types.js";
 
 export function resolveUnmanagedUpdateInstallReason() {
   return isContainerEnvironment() ? "container-image-install" : "unmanaged-package-install";
-}
-
-export function normalizeDir(value?: string | null) {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? path.resolve(trimmed) : null;
-}
-
-function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
-  const normalized = path.resolve(argv1);
-  const parts = normalized.split(path.sep);
-  const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0 || parts[binIndex - 1] !== "node_modules") {
-    return null;
-  }
-  const binName = path.basename(normalized);
-  const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
-  return path.join(nodeModulesDir, binName);
-}
-
-export function buildStartDirs(opts: UpdateRunnerOptions): string[] {
-  const dirs: string[] = [];
-  const argv1 = normalizeDir(opts.argv1);
-  if (argv1) {
-    // The lexical shim identifies its owner; pnpm store realpaths often do not.
-    dirs.push(path.dirname(argv1));
-    const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
-    if (packageRoot) {
-      dirs.push(packageRoot);
-    }
-  }
-  const cwd = normalizeDir(opts.cwd);
-  if (cwd) {
-    dirs.push(cwd);
-  }
-  let processCwd: string | null;
-  try {
-    processCwd = normalizeDir(process.cwd());
-  } catch {
-    processCwd = null;
-  }
-  if (processCwd) {
-    dirs.push(processCwd);
-  }
-  return uniqueStrings(dirs);
-}
-
-export async function findPackageRoot(candidates: string[]) {
-  for (const dir of candidates) {
-    let current = dir;
-    for (let index = 0; index < 12; index += 1) {
-      try {
-        const raw = await fs.readFile(path.join(current, "package.json"), "utf-8");
-        const name = (JSON.parse(raw) as { name?: string }).name?.trim();
-        if (name && CORE_PACKAGE_NAMES.has(name)) {
-          return current;
-        }
-      } catch {
-        // Continue walking toward the filesystem root.
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        break;
-      }
-      current = parent;
-    }
-  }
-  return null;
 }
 
 export async function looksLikeGitCheckout(root: string): Promise<boolean> {
@@ -94,6 +18,19 @@ export async function looksLikeGitCheckout(root: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Evidence for an unresolved owner, not permission to mutate an arbitrary directory. */
+export async function describeUpdateInstallRoot(root: string): Promise<string> {
+  const [git, modules, packageName] = await Promise.all([
+    looksLikeGitCheckout(root),
+    fs.stat(path.join(root, "node_modules")).then(
+      (entry) => entry.isDirectory(),
+      () => false,
+    ),
+    readPackageName(root),
+  ]);
+  return `Root: ${root}; Git metadata: ${git ? "present" : "absent or unreadable"}; node_modules layout: ${root.split(path.sep).includes("node_modules") ? "package under node_modules" : "outside node_modules"}, local node_modules ${modules ? "present" : "absent or unreadable"}; package.json name: ${packageName ?? "missing or unreadable"}.`;
 }
 
 export async function resolveUpdateInstallSurface(opts: {

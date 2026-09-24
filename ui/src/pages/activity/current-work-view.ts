@@ -8,6 +8,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  isSessionKeyAddressable,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
@@ -37,8 +38,7 @@ function renderCurrentSession(props: CurrentWorkProps, row: GatewaySessionRow) {
       >
     </span>
     ${renderSettingsStatus({ kind: "warn", label: row.status === "queued" ? t("activity.currentWork.queued") : t("activity.status.running") })}`;
-  // The Home URL addresses raw global only in global scope; raw unknown has no exact URL.
-  if (row.key === "unknown" || (row.key === "global" && !props.globalScope)) {
+  if (!isSessionKeyAddressable(row.key, props.globalScope)) {
     return html`<div
       class="activity-current-work__row"
       data-session-key=${row.key}

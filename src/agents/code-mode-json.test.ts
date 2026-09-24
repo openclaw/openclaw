@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundCodeModeError,
   captureCodeModeOutput,
@@ -6,8 +6,50 @@ import {
   CodeModeOutputState,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
+import { toolResultFitsBudget } from "./tool-result-limits.js";
 
 describe("Code Mode JSON normalization", () => {
+  it.each(["capacity", "undeliverable reference"])(
+    "preserves successful output when %s guidance exceeds the model budget",
+    (failure) => {
+      const value = captureCodeModeValue({ text: "data".repeat(1_000) }, 4_096);
+      const budget = { maxChars: 160, maxContextChars: 2_048 };
+      const metadata = { status: "completed" };
+      const original = new CodeModeOutputState(1_024, budget).takeResult(metadata, { value });
+      expect(original).toMatchObject({ status: "completed", value: { truncated: true } });
+      const release = vi.fn();
+      const output = new CodeModeOutputState(1_024, budget).takeResult(
+        metadata,
+        { value },
+        false,
+        () =>
+          failure === "capacity"
+            ? {
+                reason:
+                  "Not retained: result-store capacity exceeded. Delete references or return less data.",
+              }
+            : {
+                reference: {
+                  id: "result_00000000-0000-0000-0000-000000000000",
+                  bytes: 4_011,
+                  count: 1,
+                  shape: "object",
+                  preview: "sample",
+                  previewTruncated: true,
+                },
+                release,
+              },
+      );
+      expect(output).toMatchObject({
+        status: "completed",
+        value: { truncated: true, guidance: expect.stringContaining("Not retained") },
+      });
+      expect(output.value).not.toHaveProperty("reference");
+      expect(toolResultFitsBudget(JSON.stringify(output), budget)).toBe(true);
+      expect(release).toHaveBeenCalledTimes(failure === "capacity" ? 0 : 1);
+    },
+  );
+
   it.each([
     { limit: 20, prefix: "" },
     { limit: 24, prefix: 'a"' },

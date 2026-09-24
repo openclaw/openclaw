@@ -27,7 +27,7 @@ enum GatewayLaunchAgentManager {
 
     private static var plistURL: URL {
         self.plistURL(
-            homeDirectory: FileManager().homeDirectoryForCurrentUser,
+            homeDirectory: LaunchAgentPlist.homeDirectoryURL,
             profile: .current)
     }
 
@@ -130,14 +130,25 @@ enum GatewayLaunchAgentManager {
     }
 
     static func reusableLoadedGatewayPID(port: Int, allowUnconfigured: Bool = false) async -> Int32? {
-        await self.loadedGatewayState(port: port, allowUnconfigured: allowUnconfigured).reusablePID
+        try? await self.loadedGatewayState(port: port, allowUnconfigured: allowUnconfigured)?.reusablePID
     }
 
-    static func loadedGatewayState(port: Int, allowUnconfigured: Bool = false) async -> LoadedGatewayState {
-        guard let service = await self.readDaemonService() else {
-            return LoadedGatewayState(runningPID: nil, reusablePID: nil)
-        }
+    static func loadedGatewayState(port: Int, allowUnconfigured: Bool = false) async throws -> LoadedGatewayState? {
+        guard let service = try await self.readDaemonService() else { return nil }
         let runningPID = self.runningGatewayPID(from: service)
+        let runtime = service["runtime"] as? [String: Any]
+        guard let loaded = service["loaded"] as? Bool,
+              !loaded || runtime?["status"] as? String == "stopped" || runningPID != nil
+        else {
+            for state in [service["loadState"] as? [String: Any], runtime] {
+                if let detail = state?["detail"] as? String,
+                   !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    throw ServiceInspectionError(message: detail)
+                }
+            }
+            return nil
+        }
         let configAudit = service["configAudit"] as? [String: Any]
         let command = service["command"] as? [String: Any]
         let arguments = command?["programArguments"] as? [String] ?? []
@@ -163,7 +174,7 @@ enum GatewayLaunchAgentManager {
     }
 
     static func runningGatewayPID() async -> Int32? {
-        guard let service = await self.readDaemonService() else { return nil }
+        guard let service = try? await self.readDaemonService() else { return nil }
         return self.runningGatewayPID(from: service)
     }
 
@@ -252,12 +263,22 @@ enum GatewayLaunchAgentManager {
 }
 
 extension GatewayLaunchAgentManager {
-    private static func readDaemonService() async -> [String: Any]? {
+    private struct ServiceInspectionError: LocalizedError, Sendable {
+        let message: String
+        var errorDescription: String? {
+            self.message
+        }
+    }
+
+    private static func readDaemonService() async throws -> [String: Any]? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
             timeout: 15,
             quiet: true)
-        guard result.success, let payload = result.payload else { return nil }
+        guard result.success else {
+            throw ServiceInspectionError(message: result.message ?? "Gateway service inspection failed")
+        }
+        guard let payload = result.payload else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
             let service = json["service"] as? [String: Any]
@@ -370,11 +391,11 @@ extension GatewayLaunchAgentManager {
             return CommandResult(success: true, payload: payload, message: nil)
         }
 
+        let detail = message ?? self.summarize(response.stderr) ?? self.summarize(response.stdout)
         if quiet {
-            return CommandResult(success: false, payload: payload, message: message)
+            return CommandResult(success: false, payload: payload, message: detail)
         }
 
-        let detail = message ?? self.summarize(response.stderr) ?? self.summarize(response.stdout)
         let exit = response.exitCode.map { "exit \($0)" } ?? (response.errorMessage ?? "failed")
         let fullMessage = detail.map { "Gateway daemon command failed (\(exit)): \($0)" }
             ?? "Gateway daemon command failed (\(exit))"

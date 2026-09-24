@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   PluginOrigin,
@@ -200,14 +201,6 @@ const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
 );
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
-  loadBundledWebFetchProviderEntriesFromDir: (params: { pluginId: string }) => {
-    const provider = COVERAGE_WEB_FETCH_PROVIDERS.get(params.pluginId);
-    return provider ? [provider] : null;
-  },
-  loadBundledWebSearchProviderEntriesFromDir: (params: { pluginId: string }) => {
-    const provider = COVERAGE_WEB_SEARCH_PROVIDERS.get(params.pluginId);
-    return provider ? [provider] : null;
-  },
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: (params: {
     onlyPluginIds: readonly string[];
   }) => {
@@ -968,10 +961,7 @@ describe("secrets runtime target coverage", () => {
       async ({ batch }) => {
         logCoverageBatch("auth-profiles.json", batch);
         const env: Record<string, string> = {};
-        const authStore: AuthProfileStore = {
-          version: 1,
-          profiles: {},
-        };
+        const authStore: AuthProfileStore = createAuthProfileStoreFixture({});
         for (const [index, entry] of batch.entries()) {
           const envId = toCoverageEnvRefId("OPENCLAW_AUTH_SECRET_TARGET", entry.id);
           env[envId] = `resolved-${entry.id}`;

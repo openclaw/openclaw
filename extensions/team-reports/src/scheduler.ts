@@ -110,7 +110,7 @@ export class TeamReportsScheduler {
       nextDue: { ...this.due },
       runs: await this.options.store.listRuns(),
       periods: await this.options.store.listPeriods(),
-      sourceWarnings: await this.sourceWarnings(),
+      sourceWarnings: await this.options.store.latestSourceWarnings(),
     };
   }
 
@@ -134,19 +134,8 @@ export class TeamReportsScheduler {
           }
         : {}),
       ...(due.length ? { nextDueMs: Math.min(...due) } : {}),
-      warnings: (await this.sourceWarnings()).length,
+      warnings: (await this.options.store.latestSourceWarnings()).length,
     };
-  }
-
-  private async sourceWarnings(): Promise<string[]> {
-    const latest = (await this.options.store.listPeriods({ period: "day", limit: 1 }))[0];
-    const stored = latest ? await this.options.store.getPeriod("day", latest.key) : undefined;
-    return stored
-      ? stored.report.sources.github.warnings.concat(
-          stored.report.sources.discord?.warnings ?? [],
-          stored.summary?.warnings ?? [],
-        )
-      : [];
   }
 
   async generate(params: { date?: string; intraday?: boolean } = {}): Promise<string> {

@@ -51,4 +51,5 @@ export type CreateSessionMcpRuntime = (params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

@@ -264,6 +264,49 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test(arguments: ["load-state", "runtime"])
+    func `unknown service inspection preserves structured diagnostics`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let expected = switch scenario {
+            case "load-state": "launchctl inspection failed; run openclaw gateway status --deep"
+            default: "launchd runtime inspection failed; retry from a GUI login"
+            }
+            let payload = switch scenario {
+            case "load-state":
+                """
+                {"ok":true,"service":{"loaded":null,
+                "loadState":{"status":"unknown","detail":"\(expected)"},
+                "runtime":{"status":"unknown","detail":"Runtime status is unavailable."}}}
+                """
+            default:
+                """
+                {"ok":true,"service":{"loaded":true,
+                "loadState":{"status":"loaded"},
+                "runtime":{"status":"unknown","detail":"\(expected)"}}}
+                """
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            do {
+                _ = try await GatewayLaunchAgentManager.loadedGatewayState(port: 18789)
+                Issue.record("Expected the service inspection diagnostic")
+            } catch {
+                #expect(error.localizedDescription == expected)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+        }
+    }
+
     @Test func `launch agent plist snapshot parses args and env`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")

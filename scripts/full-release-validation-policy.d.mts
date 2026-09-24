@@ -6,6 +6,15 @@ export function classifyReleaseChangelogEvidenceComparison(
   identity: { baseSha: string; version?: unknown },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
+export function buildReleaseValidationManifest(input: {
+  plan: ReleaseRecord;
+  drain?: ReleaseRecord;
+  context: ReleaseRecord;
+}): ReleaseRecord;
+export function assertReleasePublicationKnownBudget(
+  plan: ReleaseRecord,
+  context: ReleaseRecord,
+): void;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
@@ -14,6 +23,7 @@ export function validateReleaseCoveragePolicyBinding(
   validationInputs?: ReleaseRecord,
 ): void;
 export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
+export function releaseWaivedIntegrationChannels(input: ReleaseRecord): string[];
 export function validateReleaseTelegramWaiverBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
@@ -28,6 +38,12 @@ export interface ReleaseChild extends ReleaseRecord {
   runId: string;
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
+  sourceAdmissionContract?: "1";
+  sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
+  publicationAdmissionContract?: "1";
+  publicationAdmission?:
+    | import("./full-release-publication-contract.mjs").PublicationAdmission
+    | null;
   children: ReleaseChild[];
   evidenceReuse: ReleaseRecord;
   gates: ReleaseRecord[];
@@ -94,7 +110,25 @@ export function terminalPolicyPass(
   child: ReleaseRecord,
   releaseProfile: string,
   workflowRef: string,
+  laneWaiver?: string,
 ): boolean;
+export function normalizeReleaseLaneWaiver(value: unknown): string;
+export function validateReleaseLaneWaiverBinding(
+  plan: ReleaseRecord | undefined,
+  validationInputs?: ReleaseRecord,
+): void;
+export function releaseJobAdvisoryReason(input: {
+  childKey: string;
+  jobName: string;
+  releaseProfile: string;
+  workflowRef: string;
+  laneWaiver?: string;
+  jobs?: ReleaseRecord[];
+}): "" | "policy" | "lane_waiver";
+export function releaseWaivedJobs(
+  children: ReleaseRecord[],
+  policy: { releaseProfile: string; workflowRef: string; laneWaiver?: string },
+): Array<{ child: string; job: string; conclusion: string }>;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];

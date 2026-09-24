@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
+import { resolveBrewOpenClawPath } from "../infra/brew.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
@@ -216,7 +217,11 @@ async function resolveCliProgramArguments(params: {
 
   const cliEntrypointPath = await resolveCliEntrypointPathForService();
   return {
-    programArguments: [runtimePath, cliEntrypointPath, ...params.args],
+    programArguments: [
+      runtimePath,
+      (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
+      ...params.args,
+    ],
   };
 }
 

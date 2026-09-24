@@ -278,17 +278,21 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   });
 
   let stopRequested = false;
+  // The listen callback, rather than server.listening, owns the point where a
+  // startup-racing stop can safely close without cancelling that callback.
+  let listenerActive = false;
   let closePromise: Promise<void> | undefined;
   const closeIfListening = (): Promise<void> => {
     if (closePromise) {
       return closePromise;
     }
-    if (!server.listening) {
+    if (!listenerActive) {
       return Promise.resolve();
     }
     closePromise = new Promise<void>((resolve) => {
       server.close(() => resolve());
     }).finally(() => {
+      listenerActive = false;
       closePromise = undefined;
     });
     return closePromise;
@@ -307,6 +311,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       const onListenError = (error: Error) => reject(error);
       server.once("error", onListenError);
       server.listen(port, host, () => {
+        listenerActive = true;
         server.off("error", onListenError);
         void (async () => {
           // Abort can land between listen() and its callback. Close after the

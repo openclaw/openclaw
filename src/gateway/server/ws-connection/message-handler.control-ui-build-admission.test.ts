@@ -17,6 +17,7 @@ import {
 import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayClientRegistry } from "../client-registry.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -91,6 +92,7 @@ vi.mock("../../../version.js", async (importOriginal) => {
   return { ...actual, resolveRuntimeServiceBuildId: resolveRuntimeServiceBuildIdMock };
 });
 
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
@@ -186,10 +188,8 @@ describe("Control UI build admission over WebSocket", () => {
     let connectedClient: unknown = null;
     // Hold the injected close until the post-rejection frame reaches the handler;
     // otherwise socket timing can make the no-RPC assertion vacuous.
-    let releasePostRejectionFrame = () => {};
-    const postRejectionFrameObserved = new Promise<void>((resolve) => {
-      releasePostRejectionFrame = resolve;
-    });
+    const { promise: postRejectionFrameObserved, resolve: releasePostRejectionFrame } =
+      createDeferred();
     let closeRequested = false;
 
     wss.on("connection", (socket, request) => {
@@ -198,7 +198,9 @@ describe("Control UI build admission over WebSocket", () => {
         return { kind: "sent" } as const;
       };
       attachGatewayWsMessageHandler({
+        clients: new GatewayClientRegistry(),
         socket,
+        prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
         connectionWork,
         upgradeReq: request as IncomingMessage,
         ingressAttribution: {

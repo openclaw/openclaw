@@ -1,6 +1,13 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runPrivateCodexProbe } from "../../scripts/private-codex-latest-probe.ts";
+import type { ClientOptions } from "ws";
+
+function parseJsonRequestBody(body: unknown): Record<string, unknown> {
+  if (typeof body !== "string") {
+    throw new TypeError("expected a string request body");
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
 
 const harness = vi.hoisted(() => ({
   requests: [] as Array<{ method: string; params: Record<string, unknown> }>,
@@ -16,112 +23,117 @@ const harness = vi.hoisted(() => ({
   native: false,
   wrongRuntime: false,
 }));
-vi.mock("ws", () => ({
-  default: class extends EventEmitter {
-    denied: boolean;
-    constructor(_url: string, options: { headers: Record<string, string> }) {
-      super();
-      harness.connections++;
-      this.denied = options.headers.authorization === "nonowner" && harness.denyNonowner;
-      queueMicrotask(() => {
-        if (this.denied && !harness.rejectAtGateway) {
-          const response = Object.assign(new EventEmitter(), {
-            statusCode: 403,
-            headers: {},
-            destroy() {},
-          });
-          this.emit("unexpected-response", {}, response);
-          const chunks = harness.denialChunks.length
-            ? harness.denialChunks
-            : [Buffer.from(harness.oversizedDenial ? "x".repeat(1_048_577) : "Forbidden")];
-          for (const chunk of chunks) {
-            response.emit("data", Buffer.from(chunk));
-          }
-          response.emit("end");
-        } else {
-          this.emit(
-            "message",
-            Buffer.from(JSON.stringify({ type: "event", event: "connect.challenge" })),
-          );
-        }
-      });
-    }
-    send(raw: string, callback: () => void) {
-      const request = JSON.parse(raw) as {
-        id: string;
-        method: string;
-        params: Record<string, unknown>;
-      };
-      harness.requests.push(request);
-      const { method, params } = request;
-      let payload: unknown = {};
-      if (method === "models.list") {
-        payload = { models: [{ id: "codex-latest", name: "Codex (Latest)" }] };
-      }
-      if (method === "sessions.create") {
-        payload = { key: "probe-session" };
-        harness.native = String(params.model).startsWith("openai/");
-        harness.messages = [];
-      }
-      if (method === "sessions.send") {
-        const message = String(params.message);
-        const nonce = /probe-tool-[a-f0-9-]+/u.exec(message)?.[0];
-        if (nonce) {
-          harness.nonce = nonce;
-          harness.messages.push({
-            role: "assistant",
-            content: [{ type: "toolCall", id: "call-1" }],
-          });
-          if (harness.toolResult) {
-            harness.messages.push({
-              role: "toolResult",
-              toolCallId: "call-1",
-              isError: harness.toolError,
-              content: [{ type: "text", text: nonce }],
-            });
-          }
-        }
-        harness.messages.push({
-          role: "assistant",
-          content: [{ type: "text", text: harness.nonce }],
+class MockWebSocket extends EventEmitter {
+  denied: boolean;
+  constructor(_url: string, options: ClientOptions) {
+    super();
+    harness.connections++;
+    this.denied = options.headers?.authorization === "nonowner" && harness.denyNonowner;
+    queueMicrotask(() => {
+      if (this.denied && !harness.rejectAtGateway) {
+        const response = Object.assign(new EventEmitter(), {
+          statusCode: 403,
+          headers: {},
+          destroy() {},
         });
-        payload = { runId: "probe-run" };
-      }
-      if (method === "agent.wait") {
-        payload = { status: "ok" };
-      }
-      if (method === "chat.history") {
-        payload = {
-          messages: harness.messages,
-          sessionInfo: {
-            model: "codex-latest",
-            modelProvider: harness.native ? "openai" : "clawrouter",
-            agentRuntime: {
-              id: harness.wrongRuntime ? "unexpected" : harness.native ? "codex" : "openclaw",
-            },
-          },
-        };
-      }
-      const denied = method === "connect" && this.denied;
-      queueMicrotask(() =>
+        this.emit("unexpected-response", {}, response);
+        const chunks = harness.denialChunks.length
+          ? harness.denialChunks
+          : [Buffer.from(harness.oversizedDenial ? "x".repeat(1_048_577) : "Forbidden")];
+        for (const chunk of chunks) {
+          response.emit("data", Buffer.from(chunk));
+        }
+        response.emit("end");
+      } else {
         this.emit(
           "message",
-          Buffer.from(
-            JSON.stringify({
-              type: "res",
-              id: request.id,
-              ok: !denied,
-              payload,
-              ...(denied ? { error: { details: { code: "AUTH_UNAUTHORIZED" } } } : {}),
-            }),
-          ),
-        ),
-      );
-      callback();
+          Buffer.from(JSON.stringify({ type: "event", event: "connect.challenge" })),
+        );
+      }
+    });
+  }
+  send(raw: string, callback: () => void) {
+    const request = JSON.parse(raw) as {
+      id: string;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    harness.requests.push(request);
+    const { method, params } = request;
+    let payload: unknown = {};
+    if (method === "models.list") {
+      payload = { models: [{ id: "codex-latest", name: "Codex (Latest)" }] };
     }
-    terminate() {}
-  },
-}));
+    if (method === "sessions.create") {
+      payload = { key: "probe-session" };
+      harness.native = String(params.model).startsWith("openai/");
+      harness.messages = [];
+    }
+    if (method === "sessions.send") {
+      const message = String(params.message);
+      const nonce = /probe-tool-[a-f0-9-]+/u.exec(message)?.[0];
+      if (nonce) {
+        harness.nonce = nonce;
+        harness.messages.push({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1" }],
+        });
+        if (harness.toolResult) {
+          harness.messages.push({
+            role: "toolResult",
+            toolCallId: "call-1",
+            isError: harness.toolError,
+            content: [{ type: "text", text: nonce }],
+          });
+        }
+      }
+      harness.messages.push({
+        role: "assistant",
+        content: [{ type: "text", text: harness.nonce }],
+      });
+      payload = { runId: "probe-run" };
+    }
+    if (method === "agent.wait") {
+      payload = { status: "ok" };
+    }
+    if (method === "chat.history") {
+      payload = {
+        messages: harness.messages,
+        sessionInfo: {
+          model: "codex-latest",
+          modelProvider: harness.native ? "openai" : "clawrouter",
+          agentRuntime: {
+            id: harness.wrongRuntime ? "unexpected" : harness.native ? "codex" : "openclaw",
+          },
+        },
+      };
+    }
+    const denied = method === "connect" && this.denied;
+    queueMicrotask(() =>
+      this.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "res",
+            id: request.id,
+            ok: !denied,
+            payload,
+            ...(denied ? { error: { details: { code: "AUTH_UNAUTHORIZED" } } } : {}),
+          }),
+        ),
+      ),
+    );
+    callback();
+  }
+  terminate() {}
+}
+
+const { runPrivateCodexProbe: runPrivateCodexProbeWithOptions } =
+  await import("../../scripts/private-codex-latest-probe.ts");
+const runPrivateCodexProbe = (raw: unknown) =>
+  runPrivateCodexProbeWithOptions(raw, {
+    createWebSocket: (url, options) => new MockWebSocket(url, options) as never,
+  });
 
 const input = {
   isolatedCellReady: true,
@@ -198,6 +210,7 @@ describe("private alias acceptance client", () => {
   it("uses only new sessions, proves tool results and reconnect continuation, and keeps native blocked", async () => {
     const fetch = mockFacade();
     const report = await runPrivateCodexProbe(input);
+    expect(harness.connections).toBe(4);
     expect(report).toMatchObject({
       owner_admitted: 1,
       nonowner_denied: 1,
@@ -216,7 +229,6 @@ describe("private alias acceptance client", () => {
       persisted_state_scanned: 0,
       native_restart_resume_tested: 0,
     });
-    expect(harness.connections).toBe(4);
     expect(harness.requests.filter((row) => row.method === "sessions.create")).toHaveLength(1);
     expect(harness.requests.find((row) => row.method === "sessions.create")?.params.model).toBe(
       "clawrouter/codex-latest",
@@ -225,8 +237,8 @@ describe("private alias acceptance client", () => {
       harness.requests.filter((row) => row.method === "models.list").map((row) => row.params),
     ).toEqual([{ agentId: "private-pi", preparedOnly: true, view: "configured" }]);
     expect(fetch).toHaveBeenCalledTimes(4);
-    const rejected = JSON.parse(String(fetch.mock.calls[1]?.[1]?.body));
-    const accepted = JSON.parse(String(fetch.mock.calls[3]?.[1]?.body));
+    const rejected = parseJsonRequestBody(fetch.mock.calls[1]?.[1]?.body);
+    const accepted = parseJsonRequestBody(fetch.mock.calls[3]?.[1]?.body);
     expect(rejected).toEqual({ ...accepted, model: "synthetic-private-probe-selector" });
     expect(accepted).toMatchObject({
       model: "codex-latest",

@@ -1,4 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -11,70 +10,19 @@ import {
   loadConfigSchema,
   lookupConfigSchemaPath,
   openConfigFile,
-  type ConfigLoadOptions,
-  type ConfigPatchBuilder,
   type ConfigWriteCoordinator,
   type ConfigMethod,
-  type ConfigPatchOptions,
-  type RuntimeConfigDispatchOptions,
-  type RuntimeConfigExternalMutationOptions,
-  type RuntimeConfigExternalMutationResult,
 } from "./config-gateway-operations.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
   createInitialConfigState,
-  type AgentConfigEntryTarget,
   type RuntimeConfigGateway,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
 import { createConfigWriteCoordinator } from "./config-write-coordinator.ts";
 
-export type RuntimeConfigCapability = {
-  readonly state: RuntimeConfigState;
-  readonly canSet?: boolean;
-  readonly canApply?: boolean;
-  readonly canPatch?: boolean;
-  readonly canOpenFile?: boolean;
-  ensureLoaded: () => Promise<void>;
-  ensureSchemaLoaded: () => Promise<void>;
-  refresh: (options?: ConfigLoadOptions) => Promise<void>;
-  refreshSchema: () => Promise<void>;
-  patchForm: (path: Array<string | number>, value: unknown) => void;
-  removeFormValue: (path: Array<string | number>) => void;
-  setRaw: (value: string) => void;
-  resetDraft: () => void;
-  /** Discards pending edits: reloads from disk when connected, else resets locally. */
-  discardDraft: () => Promise<void>;
-  /** Pauses/resumes all config writes (autosave + manual) while e.g. the app updater runs. */
-  setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
-  /** Resolves once no config write is in flight (used as an updater barrier). */
-  waitForPendingWrites: () => Promise<void>;
-  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
-  retry: () => Promise<boolean>;
-  apply: () => Promise<boolean>;
-  openFile: () => Promise<void>;
-  /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
-  agentEntry: (agentId: string, options?: { ensure?: boolean }) => AgentConfigEntryTarget | null;
-  stageDefaultAgent: (agentId: string) => boolean;
-  patch: (options: ConfigPatchOptions) => Promise<boolean>;
-  patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
-  /**
-   * Serializes a config-writing RPC behind this capability's pending draft,
-   * then refreshes the authoritative snapshot before resolving.
-   */
-  runExternalMutation: <T>(
-    task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions<T>,
-  ) => Promise<RuntimeConfigExternalMutationResult<T>>;
-  lookupSchemaPath: (path: string) => Promise<unknown>;
-  subscribe: (listener: (state: RuntimeConfigState) => void) => () => void;
-  dispose: () => void;
-};
-
-export function createRuntimeConfigCapability(
-  gateway: RuntimeConfigGateway,
-): RuntimeConfigCapability {
+export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
   const state = createInitialConfigState(gateway.snapshot);
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
@@ -83,8 +31,7 @@ export function createRuntimeConfigCapability(
     () => showToast({ message: t("configView.reloadBlocked") }),
   );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
-  let configLoad: Promise<void> | null = null;
-  let schemaLoad: Promise<void> | null = null;
+  const loads = new Map<"config" | "schema", Promise<unknown>>();
   let disposed = false;
 
   const canCallConfigMethod = (
@@ -109,41 +56,37 @@ export function createRuntimeConfigCapability(
       listener(state);
     }
   };
-  const run = async <T>(task: () => Promise<T>): Promise<T> => {
+  const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
+    let result: Promise<T> | undefined;
     try {
-      const result = task();
+      result = task();
+      // Subscribers can ensure missing config even when a load is offline or background.
+      if (loadKey) {
+        loads.set(loadKey, result);
+      }
       // Async config owners mutate their busy flag before the first await.
       // Publish that transition so editors can lock before accepting more input.
       publish();
       return await result;
     } finally {
-      publish();
+      try {
+        publish();
+      } finally {
+        if (loadKey && loads.get(loadKey) === result) {
+          loads.delete(loadKey);
+        }
+      }
     }
   };
   const mutate = (task: () => void) => {
     task();
     publish();
   };
-  const trackLoad = (key: "config" | "schema", promise: Promise<unknown>): Promise<void> => {
-    const next = promise
-      .then(() => undefined)
-      .finally(() => {
-        if (key === "config" && configLoad === next) {
-          configLoad = null;
-        } else if (key === "schema" && schemaLoad === next) {
-          schemaLoad = null;
-        }
-      });
-    if (key === "config") {
-      configLoad = next;
-    } else {
-      schemaLoad = next;
-    }
-    return next;
-  };
-  const loadOnce = (key: "config" | "schema", task: () => Promise<unknown>): Promise<void> => {
-    const current = key === "config" ? configLoad : schemaLoad;
-    return current ?? trackLoad(key, run(task));
+  const loadOnce = async (
+    key: "config" | "schema",
+    task: () => Promise<unknown>,
+  ): Promise<void> => {
+    await (loads.get(key) ?? run(task, key));
   };
 
   const appliedRefresh = createAppliedConfigRefreshController({
@@ -156,13 +99,9 @@ export function createRuntimeConfigCapability(
       loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
   const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
-    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
-    void trackLoad("config", config);
+    const config = run(() => loadConfig(state, { beforeApplySnapshot }), "config");
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
-      void trackLoad(
-        "schema",
-        run(() => loadConfigSchema(state)),
-      );
+      void run(() => loadConfigSchema(state), "schema");
     }
     return config;
   };
@@ -173,13 +112,11 @@ export function createRuntimeConfigCapability(
     publish,
     run,
     mutate,
-    trackLoad,
     resetLoads: () => {
-      configLoad = null;
-      schemaLoad = null;
+      loads.clear();
     },
     resetConfigLoad: () => {
-      configLoad = null;
+      loads.delete("config");
     },
     refreshConnectionState,
     canCallConfigMethod,
@@ -231,32 +168,23 @@ export function createRuntimeConfigCapability(
     },
     ensureLoaded,
     ensureSchemaLoaded,
-    refresh: async (options) => {
-      if (options?.discardPendingChanges) {
-        await writes.prepareDiscard();
-      }
+    refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
       try {
-        await trackLoad(
-          "config",
-          run(() => loadConfig(state, options)),
-        );
+        await run(() => loadConfig(state, options), "config");
       } finally {
         appliedRefresh.reconcile();
       }
     },
-    refreshSchema: () =>
-      trackLoad(
-        "schema",
-        run(() => loadConfigSchema(state)),
-      ),
+    refreshSchema: () => run(() => loadConfigSchema(state), "schema"),
     patchForm: writes.patchForm,
     removeFormValue: writes.removeFormValue,
     setRaw: writes.setRaw,
-    resetDraft: writes.resetDraft,
     discardDraft: writes.discardDraft,
+    discardFormValue: writes.discardFormValue,
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
+    flushFormChanges: writes.flushFormChanges,
     save: writes.save,
     retry: writes.retry,
     apply: writes.apply,
@@ -264,13 +192,14 @@ export function createRuntimeConfigCapability(
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })
         ? run(() => openConfigFile(state))
         : Promise.resolve(),
-    agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
+    agentEntry: (agentId: string, options?: { ensure?: boolean }) =>
+      agentConfigEntry(state, agentId, options),
     stageDefaultAgent: writes.stageDefaultAgent,
     patch: writes.patch,
     patchFromSnapshot: writes.patchFromSnapshot,
     runExternalMutation: writes.runExternalMutation,
-    lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
-    subscribe(listener) {
+    lookupSchemaPath: (path: string) => run(() => lookupConfigSchemaPath(state, path)),
+    subscribe(listener: (state: RuntimeConfigState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -284,3 +213,12 @@ export function createRuntimeConfigCapability(
     },
   };
 }
+
+type ProducedRuntimeConfigCapability = ReturnType<typeof createRuntimeConfigCapability>;
+type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
+
+export type RuntimeConfigCapability = Omit<
+  ProducedRuntimeConfigCapability,
+  OptionalRuntimeConfigCapabilityKey
+> &
+  Partial<Pick<ProducedRuntimeConfigCapability, OptionalRuntimeConfigCapabilityKey>>;

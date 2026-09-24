@@ -156,20 +156,26 @@ describe("Workboard store lifetime", () => {
     }
   });
 
-  it("retains the same cleanup failure without retrying it", async () => {
+  it("coalesces pending close and retries failed cleanup while admission stays sealed", async () => {
+    const firstClose = createDeferred<void>();
     const failure = new Error("native close failed");
-    let closes = 0;
-    const store = createWorkboardSqliteTestStore({
-      onStoreClose: () => {
-        closes += 1;
-        throw failure;
-      },
-    });
+    const closePersistence = vi.fn(async () => {});
+    closePersistence.mockImplementationOnce(() => firstClose.promise);
+    const store = createWorkboardSqliteTestStore({ onStoreClose: closePersistence });
+    await store.ready();
     const closing = store.close();
+    const rejected = expect(closing).rejects.toBe(failure);
     expect(store.close()).toBe(closing);
-    await expect(closing).rejects.toBe(failure);
-    await expect(store.close()).rejects.toBe(failure);
-    expect(closes).toBe(1);
+    firstClose.reject(failure);
+    await rejected;
+    expect(closePersistence).toHaveBeenCalledOnce();
+    await expect(store.list()).rejects.toThrow("workboard store is closed.");
+
+    const retry = store.close();
+    expect(store.close()).toBe(retry);
+    await retry;
+    await store.close();
+    expect(closePersistence).toHaveBeenCalledTimes(2);
     await expect(store.list()).rejects.toThrow("workboard store is closed.");
   });
 });

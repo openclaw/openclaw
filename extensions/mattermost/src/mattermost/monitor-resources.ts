@@ -22,10 +22,12 @@ import {
   buildMattermostApiUrl,
   fetchMattermostChannel,
   fetchMattermostUser,
+  MattermostPostSchema,
   sendMattermostTyping,
   updateMattermostPost,
   type MattermostChannel,
   type MattermostClient,
+  type MattermostPost,
   type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
@@ -48,6 +50,15 @@ export function formatMattermostPendingMediaText(params: {
   return [params.body, formatMediaPlaceholderText(params.media)].filter(Boolean).join("\n").trim();
 }
 
+function sanitizeOptionalAttachmentName(fileName: string): string {
+  const sanitized = sanitizeUntrustedFileName(fileName, "_");
+  // Distinguish an unusable name from a real filename matching the fallback.
+  if (sanitized === "_" && sanitizeUntrustedFileName(fileName, "-") === "-") {
+    return "";
+  }
+  return sanitized;
+}
+
 export function formatMattermostInboundMediaText(params: {
   body: string;
   nativeMedia: readonly MediaPlaceholderTextFact[];
@@ -62,7 +73,7 @@ export function formatMattermostInboundMediaText(params: {
   }
   const unavailableFileNames = params.materializedMedia
     .filter((media) => !media.path && !media.url && media.fileName)
-    .map((media) => sanitizeUntrustedFileName(media.fileName ?? "", ""))
+    .map((media) => sanitizeOptionalAttachmentName(media.fileName ?? ""))
     .filter(Boolean)
     .join(", ");
   const fileNameNotice = unavailableFileNames
@@ -76,6 +87,8 @@ export function formatMattermostInboundMediaText(params: {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+// Reaction side paths read a post's thread root; posts are immutable except for edits.
+const POST_CACHE_TTL_MS = 5 * 60_000;
 const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 // Match Telegram/Tlon inbound media: header wait is independent of body idle.
 const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
@@ -113,6 +126,7 @@ export function createMattermostMonitorResources(params: {
   // for a whole TTL and silently drop reactions, button clicks, and username-allowlisted senders.
   const channelCache = new Map<string, { value: MattermostChannel; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser; expiresAt: number }>();
+  const postCache = new Map<string, { value: MattermostPost; expiresAt: number }>();
 
   const getCachedValue = <T>(
     cache: Map<string, { value: T; expiresAt: number }>,
@@ -247,6 +261,29 @@ export function createMattermostMonitorResources(params: {
     }
   };
 
+  const resolvePostInfo = async (postId: string): Promise<MattermostPost | null> => {
+    const rawNow = Date.now();
+    const cached = getCachedValue(postCache, postId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
+    }
+    try {
+      // Read a single post the same way the post writer does: the API returns the stored
+      // shape, and a different id means the read cannot be trusted for thread placement.
+      const info = MattermostPostSchema.parse(
+        await client.request<unknown>(`/posts/${encodeURIComponent(postId)}`),
+      );
+      if (info.id !== postId) {
+        throw new Error("Mattermost post lookup returned a different post id");
+      }
+      setCachedValue(postCache, postId, info, POST_CACHE_TTL_MS, rawNow);
+      return info;
+    } catch (err) {
+      logger.debug?.(`mattermost: post lookup failed: ${String(err)}`);
+      return null;
+    }
+  };
+
   const buildModelPickerProps = (
     channelId: string,
     buttons: Array<unknown>,
@@ -279,6 +316,7 @@ export function createMattermostMonitorResources(params: {
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
+    resolvePostInfo,
     updateModelPickerPost,
   };
 }

@@ -45,7 +45,7 @@ function projectionInput(
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
-    hideEmptyGroups: false,
+    emptyGroupsMode: "filtering",
     ownerFiltered: false,
     visibleSessionLimits: new Map(),
     sortMode: "created",

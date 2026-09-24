@@ -1,11 +1,45 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
+const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
+
+function freezeCapturedProgress(value: unknown): void {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeCapturedProgress(child);
+  }
+  Object.freeze(value);
+}
+
+function captureProgressEvent(event: AgentEventPayload) {
+  try {
+    const json = JSON.stringify(event);
+    const byteLength = Buffer.byteLength(json, "utf8");
+    if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+      return undefined;
+    }
+    // Own the wire representation; producers and replay readers cannot change
+    // captured content or invalidate its size after this synchronous receipt.
+    const captured: AgentEventPayload = JSON.parse(json);
+    freezeCapturedProgress(captured);
+    if (!asNullableRecord(captured.data)) {
+      return undefined;
+    }
+    retainedEventBytes.set(captured, byteLength);
+    return { event: captured, byteLength };
+  } catch {
+    return undefined;
+  }
+}
 
 export type ChatRunProgressSnapshot = {
   events: AgentEventPayload[];
@@ -26,12 +60,14 @@ export function updateChatRunProgressSnapshot(
   const isStartupStatus =
     event.stream === "run_status" &&
     [
+      "waiting_for_state",
       "preparing_workspace",
       "naming_worktree",
       "creating_worktree",
       "running_setup",
       "provisioning_environment",
       "preparing_context",
+      "memory_flushing",
       "starting_model",
     ].includes(phase);
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
@@ -50,6 +86,14 @@ export function updateChatRunProgressSnapshot(
     ["start", "input_delta", "update", "review", "result"].includes(phase) &&
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
+  const isItem = event.stream === "item" && (Boolean(preambleItemId) || isPreamble);
+  const validItem: boolean =
+    !isItem ||
+    isPreamble ||
+    Value.Check({ ...AgentActivityItemSchema, additionalProperties: true }, data);
+  if (isItem && !isPreamble && !validItem) {
+    return snapshot;
+  }
   const isUsage = event.stream === "usage";
   const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
@@ -70,12 +114,12 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
-  if (mode === "summary" && !isTool && !isPreamble && !isUsage && !isRetryStatus && !isAssistant) {
+  if (mode === "summary" && !isTool && !isItem && !isUsage && !isRetryStatus && !isAssistant) {
     return snapshot;
   }
   if (
     !isTool &&
-    !isPreamble &&
+    !isItem &&
     !isUsage &&
     !isStartupStatus &&
     !isRetryStatus &&
@@ -94,6 +138,22 @@ export function updateChatRunProgressSnapshot(
     return next;
   }
   next.lastSeq = event.seq;
+  if (
+    isPreamble &&
+    !preambleItemId &&
+    !(typeof data.progressText === "string" && data.progressText.trim())
+  ) {
+    return next;
+  }
+  if (
+    isPreamble &&
+    !isCompleteAgentPreamble({
+      phase,
+      progressText: typeof data.progressText === "string" ? data.progressText : undefined,
+    })
+  ) {
+    return next;
+  }
   const matchesPreamble = (candidate: AgentEventPayload) =>
     candidate.stream === "item" &&
     candidate.data?.kind === "preamble" &&
@@ -103,29 +163,14 @@ export function updateChatRunProgressSnapshot(
     ? next.events.find((candidate) => candidate.stream === "usage")
     : undefined;
 
-  let recounted = false;
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    let removedBytes = 0;
     next.events = next.events.filter((candidate) => {
       if (!predicate(candidate)) {
         return true;
       }
-      if (recounted) {
-        removedBytes += jsonUtf8Bytes(candidate);
-      }
+      next.byteLength -= retainedEventBytes.get(candidate)!;
       return false;
     });
-    if (recounted) {
-      next.byteLength -= removedBytes;
-    } else {
-      // Nested producer payloads can change between updates. Recount once,
-      // then charge only evictions during this synchronous update.
-      next.byteLength = next.events.reduce(
-        (total, candidate) => total + jsonUtf8Bytes(candidate),
-        0,
-      );
-      recounted = true;
-    }
   };
 
   if (
@@ -138,7 +183,7 @@ export function updateChatRunProgressSnapshot(
   if (isUsage) {
     // Context-only updates must retain the run total already reported by completed responses.
     removeWhere((candidate) => candidate.stream === "usage");
-  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isPreamble) {
+  } else if (isStartupStatus || isRetryStatus || isAssistant || isTool || isItem) {
     // Progress clears transient statuses; retry waits may begin after tools completed.
     removeWhere((candidate) => {
       if (candidate.stream === "run_status" || candidate.stream === "assistant") {
@@ -146,6 +191,9 @@ export function updateChatRunProgressSnapshot(
       }
       if (isPreamble) {
         return matchesPreamble(candidate);
+      }
+      if (isItem) {
+        return candidate.stream === "item" && candidate.data.itemId === preambleItemId;
       }
       if (!isTool || candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
@@ -208,6 +256,9 @@ export function updateChatRunProgressSnapshot(
       : isPreamble
         ? {
             kind: "preamble",
+            phase: data.phase,
+            title: data.title,
+            status: data.status,
             itemId: preambleItemId || undefined,
             progressText: data.progressText,
           }
@@ -217,7 +268,7 @@ export function updateChatRunProgressSnapshot(
       delete storedData[key];
     }
   }
-  let storedEvent: AgentEventPayload = {
+  const storedEvent: AgentEventPayload = {
     runId: event.runId,
     seq: event.seq,
     stream: event.stream,
@@ -227,20 +278,19 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  let eventBytes = jsonUtf8Bytes(storedEvent);
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES && isTool) {
+  let captured = captureProgressEvent(storedEvent);
+  if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    storedEvent = { ...storedEvent, data: storedData };
-    eventBytes = jsonUtf8Bytes(storedEvent);
+    captured = captureProgressEvent(storedEvent);
   }
-  if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
+  if (!captured) {
     return next;
   }
-  next.events.push(storedEvent);
-  next.byteLength += eventBytes;
+  next.events.push(captured.event);
+  next.byteLength += captured.byteLength;
   if (phase === "review") {
     const reviews = next.events.filter(
       (candidate) =>
@@ -264,13 +314,15 @@ export function updateChatRunProgressSnapshot(
       break;
     }
     const oldestToolCallId =
-      oldest.stream === "tool" && typeof oldest.data?.toolCallId === "string"
+      (oldest.stream === "tool" || oldest.stream === "item") &&
+      typeof oldest.data?.toolCallId === "string"
         ? oldest.data.toolCallId
         : "";
     // Review/update events depend on their start. Evict the complete owner group.
     removeWhere((candidate) =>
       oldestToolCallId
-        ? candidate.stream === "tool" && candidate.data?.toolCallId === oldestToolCallId
+        ? (candidate.stream === "tool" || candidate.stream === "item") &&
+          candidate.data?.toolCallId === oldestToolCallId
         : candidate === oldest,
     );
   }

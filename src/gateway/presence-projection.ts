@@ -9,7 +9,7 @@ import { isGatewayClientProfilePending } from "./server-methods/gateway-client-i
 import type { GatewayClient } from "./server-methods/types.js";
 import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
 import { prepareGatewaySessionStoreTargetsReadOnly } from "./session-utils-store-lookup.js";
-import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 type PresenceTarget = { canonicalKey: string; entry: SessionEntry } | undefined;
 
@@ -23,7 +23,7 @@ export function createPresenceRecipientProjection(params: {
     const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
     const prepared = prepareGatewaySessionStoreTargetsReadOnly({
       cfg: params.cfg,
-      projection: "full",
+      projection: "list",
       targets: keys.map((sessionKey) => {
         const parsed = parseAgentSessionKey(sessionKey);
         // Viewer declarations qualify sentinels; their stored keys remain global/unknown.
@@ -41,10 +41,7 @@ export function createPresenceRecipientProjection(params: {
         }
         try {
           const target = result.value;
-          const match = resolveCanonicalSessionStoreMatchFromStoreKeys(
-            target.store,
-            target.storeKeys,
-          );
+          const match = findCanonicalStoreMatch(target.store, target.storeKeys);
           return [
             sessionKey,
             ok(match ? { canonicalKey: target.canonicalKey, entry: match.entry } : undefined),

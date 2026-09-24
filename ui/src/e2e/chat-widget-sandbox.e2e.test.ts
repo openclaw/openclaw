@@ -57,11 +57,24 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="popup">Try native popup</button>
+    <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
     <div id="extra" class="details" hidden>Additional community details</div>
     <script>
+      (()=>{
+        const nativeOpen=window.open;
+        document.querySelector('#popup').onclick=()=>{
+          document.querySelector('#popup-result').textContent=
+            !navigator.userActivation.isActive?'No user activation':
+              nativeOpen.call(window,'about:blank','_blank')===null?'Popup blocked':'Popup opened';
+        };
+      })();
+    </script>
+    <script>
+      function open(){const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;}
       document.querySelector('#refresh').onclick=()=>window.openclaw.prompt.send('Refresh the synthetic dashboard');
-      document.querySelector('#details').onclick=()=>{const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;};
+      document.querySelector('#details').onclick=open;
       document.querySelector('#data').onclick=async()=>{try{await window.openclaw.data.read('private-dashboard');
         document.querySelector('#result').textContent='Unexpected data access';}
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
@@ -301,6 +314,23 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          for (const widget of [inline, board]) {
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor();
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor({ state: "hidden" });
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Try native popup" }),
+            );
+            await widget.getByText("Popup blocked", { exact: true }).waitFor();
+          }
           await page.screenshot({
             path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
           });

@@ -1,5 +1,9 @@
 // Frontmatter helpers parse skill metadata from SKILL.md files.
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseFrontmatterBlockResult } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
@@ -38,10 +42,7 @@ const GO_MODULE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z
 const UV_PACKAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\-[\]=<>!~+,]*$/;
 
 function normalizeSafeBrewFormula(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const formula = raw.trim();
+  const formula = normalizeOptionalString(raw);
   if (!formula || formula.startsWith("-") || formula.includes("\\") || formula.includes("..")) {
     return undefined;
   }
@@ -52,10 +53,7 @@ function normalizeSafeBrewFormula(raw: unknown): string | undefined {
 }
 
 function normalizeSafeNpmSpec(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const spec = raw.trim();
+  const spec = normalizeOptionalString(raw);
   if (!spec || spec.startsWith("-")) {
     return undefined;
   }
@@ -66,10 +64,7 @@ function normalizeSafeNpmSpec(raw: unknown): string | undefined {
 }
 
 function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const value = raw.trim();
+  const value = normalizeOptionalString(raw);
   if (!value || value.startsWith("-") || value.includes("\\") || value.includes("://")) {
     return undefined;
   }
@@ -80,10 +75,7 @@ function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undef
 }
 
 function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const value = raw.trim();
+  const value = normalizeOptionalString(raw);
   if (!value || /\s/.test(value)) {
     return undefined;
   }
@@ -197,7 +189,7 @@ export function resolveSkillManifestMetadata(
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
-    skillKey: readStringValue(metadataObj.skillKey),
+    skillKey: readNonEmptyStringPreservingWhitespace(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
     requires,

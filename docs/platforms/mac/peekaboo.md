@@ -150,6 +150,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Troubleshooting
 
+- Update OpenClaw.app to pick up embedded automation fixes, including crashes when closing the host's own windows. Updating only the `peekaboo` CLI does not replace the bridge host's window automation code.
 - If `peekaboo` reports "bridge client is not authorized", ensure the client is properly signed. As an alternative, run the host with `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` in **debug** mode only.
 - If no hosts are found, open one of the host apps (Peekaboo.app or OpenClaw.app). Then check that permissions are granted.
 

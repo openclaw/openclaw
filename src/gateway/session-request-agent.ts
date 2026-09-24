@@ -1,13 +1,19 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
 } from "../../packages/gateway-protocol/src/index.js";
-import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  tryResolveSoleAgentId,
+} from "../agents/agent-scope.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  classifySessionKeyShape,
   normalizeAgentId,
   normalizeAgentIdStrict,
   normalizeMainKey,
@@ -100,7 +106,20 @@ export function tryResolveSessionCompatibilityOwnerAgentId(
   }
   return persistedStoreOwner.kind === "retired"
     ? undefined
-    : tryResolveLegacyCompatibilityAgentId(cfg);
+    : (tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSoleAgentId(cfg));
+}
+
+export function resolveRequestedSessionAgentInput(
+  key: string | undefined,
+  explicitAgentId?: string,
+): Result<string | undefined, ErrorShape> {
+  if (classifySessionKeyShape(key) === "malformed_agent") {
+    return err(errorShape(ErrorCodes.INVALID_REQUEST, `malformed session key "${key}"`));
+  }
+  const agent = explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
+  return agent && !agent.ok
+    ? err(errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`))
+    : ok(agent?.value);
 }
 
 // An absent key selects an agent before a session exists; a synthetic main key
@@ -110,17 +129,13 @@ export function resolveRequestedSessionAgentId(
   key: string | undefined,
   explicitAgentId?: string,
 ): RequestedSessionAgentIdResolution {
+  const input = resolveRequestedSessionAgentInput(key, explicitAgentId);
+  if (!input.ok) {
+    return input;
+  }
   const parsed = parseAgentSessionKey(key?.trim());
   const configuredAgentIds = listAgentIds(cfg);
-  const normalizedRequest =
-    explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
-  if (normalizedRequest && !normalizedRequest.ok) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
-    };
-  }
-  const normalizedRequestedAgentId = normalizedRequest?.value;
+  const normalizedRequestedAgentId = input.value;
   if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
     return {
       ok: false,

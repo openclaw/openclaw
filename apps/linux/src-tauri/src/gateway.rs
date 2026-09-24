@@ -19,6 +19,28 @@ pub struct GatewaySnapshot {
 }
 
 impl GatewaySnapshot {
+    pub(crate) fn remote_opening() -> Self {
+        Self {
+            phase: "remoteOpening",
+            installed: false,
+            running: false,
+            reachable: false,
+            status: "Opening remote dashboard".to_string(),
+            detail: Some(
+                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
+            ),
+        }
+    }
+
+    pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
+        Self {
+            phase: "remoteError",
+            status: "Remote connection unavailable".to_string(),
+            detail: Some(detail.into()),
+            ..Self::remote_opening()
+        }
+    }
+
     pub fn unconfigured() -> Self {
         Self {
             phase: "unconfigured",
@@ -160,13 +182,13 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
         .runtime
         .as_ref()
         .and_then(|runtime| runtime.status.as_deref())
-        .unwrap_or("stopped");
+        .unwrap_or("unknown");
     let running = runtime_status == "running";
     let (phase, status) = if reachable {
         ("connected", "Connected")
     } else if !installed {
         ("notInstalled", "Not installed")
-    } else if running {
+    } else if runtime_status != "stopped" {
         ("reconnecting", "Unavailable")
     } else {
         ("stopped", "Stopped")
@@ -210,7 +232,7 @@ pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
         run_service_command(cli, "install")?;
         snapshot = status(cli)?;
     }
-    if !snapshot.running {
+    if snapshot.phase == "stopped" {
         run_service_command(cli, "start")?;
     }
 

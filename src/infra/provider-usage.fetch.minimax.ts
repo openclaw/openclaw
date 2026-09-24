@@ -209,10 +209,6 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
   return undefined;
 }
 
-function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  return readTrimmedStringAlias(record, keys);
-}
-
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     const timestampMs = value < 1e12 ? Math.floor(value * 1000) : Math.floor(value);
@@ -253,49 +249,48 @@ function scoreUsageRecord(record: Record<string, unknown>): number {
   return score;
 }
 
-function collectUsageCandidates(root: Record<string, unknown>): Record<string, unknown>[] {
+function pickUsageRecord(
+  root: Record<string, unknown>,
+): { record: Record<string, unknown>; usedPercent: number } | undefined {
   const MAX_SCAN_DEPTH = 4;
   const MAX_SCAN_NODES = 60;
-  const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const queue: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
+    { value: root, depth: 0 },
+  ];
   const seen = new Set<object>();
-  const candidates: Array<{ record: Record<string, unknown>; score: number; depth: number }> = [];
-  let scanned = 0;
+  let best: { record: Record<string, unknown>; usedPercent: number } | undefined;
+  let bestScore = 0;
 
-  while (queue.length && scanned < MAX_SCAN_NODES) {
-    const next = queue.shift() as { value: unknown; depth: number };
-    scanned += 1;
-    const { value, depth } = next;
-
+  for (const { value, depth } of queue) {
     if (isRecord(value)) {
       if (seen.has(value)) {
         continue;
       }
       seen.add(value);
       const score = scoreUsageRecord(value);
-      if (score > 0) {
-        candidates.push({ record: value, score, depth });
-      }
-      if (depth < MAX_SCAN_DEPTH) {
-        for (const nested of Object.values(value)) {
-          if (isRecord(nested) || Array.isArray(nested)) {
-            queue.push({ value: nested, depth: depth + 1 });
-          }
+      // Breadth-first order already favors shallower records and the first tied record.
+      if (score > bestScore) {
+        const usedPercent = deriveUsedPercent(value);
+        if (usedPercent !== null) {
+          best = { record: value, usedPercent };
+          bestScore = score;
         }
       }
+    }
+    if (depth >= MAX_SCAN_DEPTH || queue.length >= MAX_SCAN_NODES) {
       continue;
     }
-
-    if (Array.isArray(value) && depth < MAX_SCAN_DEPTH) {
-      for (const nested of value) {
-        if (isRecord(nested) || Array.isArray(nested)) {
-          queue.push({ value: nested, depth: depth + 1 });
-        }
+    for (const nested of Array.isArray(value) ? value : Object.values(value)) {
+      if (queue.length >= MAX_SCAN_NODES) {
+        break;
+      }
+      if (isRecord(nested) || Array.isArray(nested)) {
+        queue.push({ value: nested, depth: depth + 1 });
       }
     }
   }
 
-  candidates.sort((a, b) => b.score - a.score || a.depth - b.depth);
-  return candidates.map((candidate) => candidate.record);
+  return best;
 }
 
 function deriveWindowLabelFromTimestamps(record: Record<string, unknown>): string | undefined {
@@ -562,19 +557,11 @@ export async function fetchMinimaxUsage(
   const modelUsage = chatRemains ? deriveMinimaxModelWindows(chatRemains) : undefined;
   let windows = modelUsage?.windows ?? [];
   if (modelUsage?.recognized !== true) {
-    const candidates = collectUsageCandidates(usageSource);
-    let usedPercent: number | null = null;
-    for (const candidate of candidates) {
-      const candidatePercent = deriveUsedPercent(candidate);
-      if (candidatePercent !== null) {
-        usageRecord = candidate;
-        usedPercent = candidatePercent;
-        break;
-      }
+    const selected = pickUsageRecord(usageSource);
+    if (selected) {
+      usageRecord = selected.record;
     }
-    if (usedPercent === null) {
-      usedPercent = deriveUsedPercent(usageSource);
-    }
+    const usedPercent = selected?.usedPercent ?? deriveUsedPercent(usageSource);
     if (usedPercent === null) {
       return buildUsageErrorSnapshot("minimax", "Unsupported response shape");
     }
@@ -592,8 +579,8 @@ export async function fetchMinimaxUsage(
   const modelName =
     chatRemains && typeof chatRemains.model_name === "string" ? chatRemains.model_name : undefined;
   const plan =
-    pickString(usageRecord, PLAN_KEYS) ??
-    pickString(payload, PLAN_KEYS) ??
+    readTrimmedStringAlias(usageRecord, PLAN_KEYS) ??
+    readTrimmedStringAlias(payload, PLAN_KEYS) ??
     (modelName ? `Coding Plan · ${modelName}` : undefined);
 
   return {

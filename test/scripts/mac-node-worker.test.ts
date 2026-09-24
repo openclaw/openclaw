@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerMacWorkerMaterializationTests } from "./mac-node-worker-materialization.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
@@ -17,6 +18,7 @@ import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 registerMacWorkerMaterializationTests();
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app worker publication", () => {
@@ -153,7 +155,7 @@ install_node() {
       mkdirSync(path.join(nodeDir, "bin"), { recursive: true });
       // Only npm/network is replaced. The real install_openclaw implementation
       // must remain a provision-only seam even when a loaded Gateway is reported.
-      symlinkSync(process.execPath, path.join(nodeDir, "bin", "node"));
+      symlinkSync(testNodeExecPath, path.join(nodeDir, "bin", "node"));
       const npm = path.join(nodeDir, "bin", "npm");
       writeFileSync(
         npm,

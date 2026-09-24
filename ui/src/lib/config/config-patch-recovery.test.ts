@@ -15,7 +15,7 @@ const capabilities = new Set<RuntimeConfigCapability>();
 
 afterEach(() => {
   for (const capability of capabilities) {
-    capability.resetDraft();
+    capability.setWritesSuspended(true);
     capability.dispose();
   }
   capabilities.clear();

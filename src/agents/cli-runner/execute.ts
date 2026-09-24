@@ -12,7 +12,6 @@ import {
 } from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -66,12 +65,6 @@ import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-function normalizeCliBackendThinkingLevel(
-  level: PreparedCliRunContext["params"]["thinkLevel"],
-): CliBackendThinkingLevel | undefined {
-  return level === "ultra" ? "max" : level;
-}
 
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
@@ -504,7 +497,8 @@ export async function executePreparedCliRun(
           provider: params.provider,
           modelId: context.modelId,
           authProfileId: context.effectiveAuthProfileId,
-          thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+          thinkingLevel:
+            params.thinkLevel === "ultra" ? context.providerThinkingLevel : params.thinkLevel,
           fastMode:
             params.fastMode === undefined
               ? undefined
@@ -580,9 +574,6 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      if (!useManagedClaudeLiveSession) {
-        toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
-      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,

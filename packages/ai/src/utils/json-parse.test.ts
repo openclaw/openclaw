@@ -41,6 +41,14 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     });
   });
 
+  it.each(Array.from({ length: 32 }, (_, code) => code))(
+    "repairs raw JSON control character %i inside a string",
+    (code) => {
+      const text = `before${String.fromCharCode(code)}after`;
+      expect(parseJsonWithRepair(`{"text":"${text}"}`)).toEqual({ text });
+    },
+  );
+
   it.each([
     ["recent path after long text", `${"x".repeat(1024)} C:/root`, "\\nfile\\ttab"],
     ["path at the lookbehind boundary", `C:/${"x".repeat(157)}`, "\\nfile\ttab"],

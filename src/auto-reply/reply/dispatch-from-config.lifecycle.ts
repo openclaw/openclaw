@@ -35,6 +35,7 @@ import {
 import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -54,14 +55,6 @@ type DispatchReplyOperationAcquisition =
   | { status: "ready" }
   | { status: "busy" }
   | { status: "aborted" };
-
-/** Pre-dispatch session state changed before any user-visible work began. */
-export class DispatchSessionRefreshRequiredError extends Error {
-  constructor(cause: Error) {
-    super(cause.message, { cause });
-    this.name = "DispatchSessionRefreshRequiredError";
-  }
-}
 
 async function restoreArchivedDispatchSession(params: {
   ctx: FinalizedMsgContext;
@@ -178,6 +171,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   routeThreadId?: string | number;
 }) {
   let dispatchReplyOperation: ReplyOperation | undefined;
+  let admittedExpectedSessionId: string | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionWorkAdmissionLease | undefined;
@@ -372,6 +366,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     const admitCurrentReplyTurn = async () => {
       try {
         return await admitReplyTurn({
+          runId: params.replyOptions?.runId,
+          stateAcquisitionDeadline: params.replyOptions?.stateAcquisitionDeadline,
+          assertRequestCurrent: () => params.replyOptions?.operatorAuthority?.assertCurrent(),
+          providerReviewAcknowledgment: params.replyOptions?.providerReviewAcknowledgment,
           agentId: params.agentId,
           sessionKey: dispatchOperationSessionKey,
           resolveGatewayContext:
@@ -381,7 +379,10 @@ export function createDispatchReplyOperationCoordinator(params: {
           expectedSessionId:
             params.replyOptions?.expectedExistingSessionId ??
             params.resolveOperationExpectedSessionId(),
-          expectedActiveOperation: params.initialDispatchReplyOperation,
+          expectedActiveOperations: [
+            params.replyOptions?.expectedActiveReplyOperation,
+            params.initialDispatchReplyOperation,
+          ].filter((operation): operation is ReplyOperation => operation !== undefined),
           storePath: params.operationSessionStoreEntry.storePath,
           kind: replyTurnKind,
           resetTriggered: dispatchResetTriggered,
@@ -442,6 +443,12 @@ export function createDispatchReplyOperationCoordinator(params: {
         admission = await admitCurrentReplyTurn();
       }
     }
+    // Admission has verified the predecessor's lineage in this physical store.
+    // Carry that identity through initialization even when the active run still owns the slot.
+    admittedExpectedSessionId =
+      admission.status === "owned"
+        ? admission.operation.sessionId
+        : admission.sessionEntry?.sessionId;
     const runState = resolveReplyOperationRunState(params.replyOptions);
     if (runState) {
       runState.admission =
@@ -573,6 +580,9 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
   const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
+    const expectedExistingSessionId = params.replyOptions?.expectedExistingSessionId
+      ? (dispatchReplyOperation?.sessionId ?? admittedExpectedSessionId)
+      : undefined;
     const onAgentRunStart: NonNullable<
       NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
     > = (...args) => {
@@ -592,6 +602,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     };
     return {
       ...params.replyOptions,
+      ...(expectedExistingSessionId ? { expectedExistingSessionId } : {}),
       ...(abortSignal
         ? {
             abortSignal,
@@ -652,6 +663,11 @@ export function createDispatchReplyOperationCoordinator(params: {
         sendToolResult: (payload) => turnLedger.sendQueued("tool", payload).queued,
         sendBlockReply: (payload) => turnLedger.sendQueued("block", payload).queued,
         sendFinalReply: (payload) => turnLedger.sendQueued("final", payload).queued,
+        ...(params.dispatcher.sendPreparedReply
+          ? {
+              sendPreparedReply: (kind, plan) => turnLedger.sendPreparedQueued(kind, plan).queued,
+            }
+          : {}),
       },
       isAborted: isPreDispatchOperationAborted,
     }),

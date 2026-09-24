@@ -42,6 +42,9 @@ function createGlobalPane(failMainParent = false) {
   };
   const client = createTestGatewayClient(async (method, raw) => {
     const params = asOptionalRecord(raw);
+    if (method === "models.list") {
+      return { models: [] };
+    }
     if (method === "agents.list") {
       return agents;
     }

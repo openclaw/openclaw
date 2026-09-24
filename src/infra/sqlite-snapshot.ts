@@ -5,13 +5,14 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
   pinDirectory,
   publishFileExclusive,
   requireDirectorySync,
+  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
@@ -22,11 +23,8 @@ import {
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
@@ -111,7 +109,6 @@ async function copyFileExclusive(
     targetIdentity = await target.stat();
     const hash = createHash("sha256");
     const offset = await copyFileHandle(source, target, {
-      noProgressMessage: `SQLite snapshot copy made no progress: ${targetPath}`,
       onChunk: (chunk) => {
         hash.update(chunk);
       },
@@ -206,20 +203,10 @@ async function hashOpenPublishedFile(
 ): Promise<SqliteFileContent> {
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
   const fingerprint = await readMutationFingerprint(handle);
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
-  const hash = createHash("sha256");
-  let offset = 0;
-  while (true) {
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
-    if (bytesRead === 0) {
-      break;
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-    offset += bytesRead;
-  }
+  const { digest, bytes } = await sha256File(handle);
   await assertMutationFingerprintUnchanged(handle, fingerprint, filePath);
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  return { sha256: hash.digest("hex"), sizeBytes: offset };
+  return { sha256: digest, sizeBytes: bytes };
 }
 
 function assertPublishedFileIdentitySync(filePath: string, expectedIdentity: Stats): void {
@@ -582,7 +569,6 @@ export async function createVerifiedSqliteSnapshot(
   );
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = path.join(stagingDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
     await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
@@ -599,7 +585,7 @@ export async function createVerifiedSqliteSnapshot(
           await loadSqliteVecExtension({ db: source });
           assertSqliteIntegrity(source, options.sourcePath);
           options.validate?.(source, options.sourcePath);
-          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+          await backupNodeSqliteDatabase(source, stagedPath);
         } finally {
           source.exec("ROLLBACK;");
         }

@@ -17,7 +17,10 @@ printf '%s\n' "$*" >> "$root/calls"
 case "$*" in
   --version) printf '0.0.0-test\n' ;;
   'gateway status --json')
-    if test -f "$root/started"; then
+    if test -f "$root/recovering"; then
+      cat "$root/status.json"
+      mv "$root/recovering" "$root/started"
+    elif test -f "$root/started"; then
       cat "$root/healthy.json"
     elif test -f "$root/installed"; then
       cat "$root/stopped.json"
@@ -44,8 +47,15 @@ impl Drop for TestDirectory {
 }
 
 enum Expected {
-    Ready { install: bool, start: bool },
-    Unknown { inspection: bool, auth: bool },
+    Ready {
+        install: bool,
+        start: bool,
+        recover: bool,
+    },
+    Unknown {
+        inspection: bool,
+        auth: bool,
+    },
     Invalid,
 }
 
@@ -92,6 +102,11 @@ fn cli_service_status_lifecycle_contract() {
     let mut unknown_with_command = unknown.clone();
     unknown_with_command["service"]["command"] =
         json!({"programArguments": ["openclaw", "gateway"]});
+    let mut unknown_runtime = unknown.clone();
+    unknown_runtime["service"]["loaded"] = json!(true);
+    unknown_runtime["service"]["loadState"] = json!({"status": "loaded"});
+    let mut missing_runtime_status = unknown_runtime.clone();
+    missing_runtime_status["service"]["runtime"] = json!({});
     let mut missing_loaded = status(Value::Null, false, false);
     missing_loaded["service"]
         .as_object_mut()
@@ -105,6 +120,25 @@ fn cli_service_status_lifecycle_contract() {
             Expected::Ready {
                 install: false,
                 start: false,
+                recover: false,
+            },
+        ),
+        (
+            "loaded-runtime-unknown",
+            unknown_runtime.to_string(),
+            Expected::Ready {
+                install: false,
+                start: false,
+                recover: true,
+            },
+        ),
+        (
+            "loaded-runtime-status-omitted",
+            missing_runtime_status.to_string(),
+            Expected::Ready {
+                install: false,
+                start: false,
+                recover: true,
             },
         ),
         (
@@ -129,6 +163,7 @@ fn cli_service_status_lifecycle_contract() {
             Expected::Ready {
                 install: true,
                 start: true,
+                recover: false,
             },
         ),
         (
@@ -137,6 +172,7 @@ fn cli_service_status_lifecycle_contract() {
             Expected::Ready {
                 install: false,
                 start: true,
+                recover: false,
             },
         ),
         (
@@ -145,6 +181,7 @@ fn cli_service_status_lifecycle_contract() {
             Expected::Ready {
                 install: false,
                 start: false,
+                recover: false,
             },
         ),
         (
@@ -153,6 +190,7 @@ fn cli_service_status_lifecycle_contract() {
             Expected::Ready {
                 install: false,
                 start: false,
+                recover: false,
             },
         ),
         (
@@ -187,6 +225,9 @@ fn cli_service_status_lifecycle_contract() {
         fs::write(&executable, CLI).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(root.join("status.json"), initial_status).unwrap();
+        if matches!(&expected, Expected::Ready { recover: true, .. }) {
+            fs::write(root.join("recovering"), "").unwrap();
+        }
         fs::write(
             root.join("healthy.json"),
             status(json!(true), true, true).to_string(),
@@ -232,7 +273,7 @@ fn cli_service_status_lifecycle_contract() {
             .collect();
         let mut expected_calls = Vec::new();
         let valid = match expected {
-            Expected::Ready { install, start } => {
+            Expected::Ready { install, start, .. } => {
                 if install {
                     expected_calls.push("gateway install --json");
                 }

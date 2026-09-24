@@ -222,7 +222,8 @@ export async function withClawAgentConfigRemoval<T>(
           await params.quiesceMonitors(deletion.entry.operationId);
         }
         assertCurrent();
-        prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        assertCurrent();
         return await apply(async () => {
           assertCurrent();
           const result = await withAgentExecApprovalsRemoved(

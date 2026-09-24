@@ -10,7 +10,9 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
@@ -29,16 +31,15 @@ import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
-  readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
-  readSessionTranscriptWatermarkBatch,
   readSessionIdentityEvidenceBatch,
   readSessionStoreSummaryReadOnly,
-  recordSessionParticipant,
   replaceSessionEntrySync,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
@@ -60,9 +61,107 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
+  vi.useRealTimers();
 });
 
 describe("session accessor readonly listing", () => {
+  it.each([false, true])(
+    "closes a shared-store reader and revokes inherited async reuse (throws: %s)",
+    async (throws) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-reader-scope-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+      const options = { agentId: "main", env, path: storePath };
+      const scope = { agentId: "worker-1", env, storePath, projection: "list" as const };
+      const sessionKey = "agent:worker-1:visible";
+      openOpenClawAgentDatabase(options);
+      replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId: "visible", updatedAt: 1 });
+      closeOpenClawAgentDatabasesForTest();
+      const captureDatabase = () => {
+        const result = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        if (!result.found) {
+          throw new Error("Expected existing shared database");
+        }
+        return result.value;
+      };
+      const descendants: Promise<DatabaseSync>[] = [];
+      let retained: DatabaseSync | undefined;
+      const failure = new Error("entry callback failed");
+      const run = () =>
+        withSessionEntryReadOnlyScope(scope, () => {
+          expect(listSessionEntriesReadOnly(scope).map((entry) => entry.sessionKey)).toEqual([
+            sessionKey,
+          ]);
+          retained = captureDatabase();
+          expect(retained.isOpen).toBe(true);
+          expect(captureDatabase()).toBe(retained);
+          descendants.push(Promise.resolve().then(captureDatabase));
+          if (throws) {
+            throw failure;
+          }
+          return "complete";
+        });
+      try {
+        if (throws) {
+          expect(run).toThrow(failure);
+        } else {
+          expect(run()).toBe("complete");
+        }
+        expect(retained?.isOpen).toBe(false);
+        const [descendant] = await Promise.all(descendants);
+        expect(Object.is(descendant, retained)).toBe(false);
+        expect(descendant?.isOpen).toBe(true);
+        expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
+        expect(descendant?.isOpen).toBe(false);
+      } finally {
+        await Promise.allSettled(descendants);
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
+      }
+    },
+  );
+
+  it("reads a committed visibility change through the retained shared-store reader", () => {
+    vi.useFakeTimers({ toFake: ["setImmediate"] });
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-reader-freshness-") };
+    const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+    const options = { agentId: "main", env, path: storePath };
+    const scope = { agentId: "worker-1", env, storePath, projection: "list" as const };
+    const sessionKey = "agent:worker-1:visible";
+    const entry = { sessionId: "visible", updatedAt: 1, visibility: "shared" as const };
+    openOpenClawAgentDatabase(options);
+    replaceSessionEntrySync({ ...scope, sessionKey }, entry);
+    closeOpenClawAgentDatabasesForTest();
+
+    const peer = new DatabaseSync(storePath);
+    try {
+      withSessionEntryReadOnlyScope(scope, () => {
+        expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
+        const retained = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        if (!retained.found) {
+          throw new Error("Expected existing shared database");
+        }
+        expect(retained.value.isOpen).toBe(true);
+        expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+          "shared",
+        );
+        peer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.visibility', ?) WHERE session_key = ?",
+          )
+          .run("draft", sessionKey);
+        expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+          "draft",
+        );
+        vi.runOnlyPendingTimers();
+        expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("draft");
+        withOpenClawAgentDatabaseReadOnly(({ db }) => expect(db).toBe(retained.value), options);
+      });
+    } finally {
+      peer.close();
+    }
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+  });
+
   it("resolves a registered exact store once per batch and observes its next owner", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-target-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "registered.sqlite");
@@ -145,7 +244,7 @@ describe("session accessor readonly listing", () => {
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
   });
 
-  it("returns an empty list without creating or registering a missing agent database", () => {
+  it("keeps missing database probes read-only with empty exact results", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
@@ -158,7 +257,7 @@ describe("session accessor readonly listing", () => {
       loadExactSessionEntryCandidatesReadOnlyBatch([
         { agentId, env, sessionKeys: [`agent:${agentId}:main`] },
       ]),
-    ).toEqual([{ ok: true, value: [] }]);
+    ).toMatchObject([{ ok: true, value: [] }]);
     expect(
       readSessionStoreSummaryReadOnly(
         { agentId, env },
@@ -239,8 +338,8 @@ describe("session accessor readonly listing", () => {
       listed
         .filter(({ sessionKey }) => !["global", "unknown"].includes(sessionKey))
         .map(({ sessionKey }) => sessionKey)
-        .toSorted(),
-    ).toEqual(expectedKeys.toSorted());
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(expectedKeys.toSorted((left, right) => left.localeCompare(right)));
     const summary = readSessionStoreSummaryReadOnly(scope, options);
     expect(summary.count).toBe(7);
     expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(expectedKeys.slice(0, 3));
@@ -421,7 +520,7 @@ describe("session accessor readonly listing", () => {
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow(SyntaxError);
   });
 
-  it("surfaces missing canonical transcript tables through single and batched reads", async () => {
+  it("surfaces missing canonical transcript tables through watermark reads", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-transcript-table-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const scope = {
@@ -435,13 +534,13 @@ describe("session accessor readonly listing", () => {
       "DROP TABLE transcript_events;",
     );
 
-    for (const read of [
-      () => readSessionTranscriptWatermark(scope),
-      () => readSessionTranscriptWatermarkBatch([scope]),
-      () => readSessionTranscriptTitleProbeBatch([scope]),
-    ]) {
-      expect(read).toThrow(/no such table: transcript_events/);
-    }
+    expect(() => readSessionTranscriptWatermark(scope)).toThrow(
+      expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["transcript_events"],
+      }),
+    );
   });
 
   it("probes lifecycle status without creating or registering a missing database", () => {
@@ -479,6 +578,32 @@ describe("session accessor readonly listing", () => {
     expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["done"])).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
   });
+
+  it.each(["interrupted", "failed"] as const)(
+    "probes canonical %s without conflating its shared derived status",
+    async (status) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-readonly-canonical-status-") };
+      const scope = { agentId: "worker-1", env };
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:worker-1:main" },
+        { sessionId: "session-1", status, updatedAt: 10 },
+      );
+      closeOpenClawAgentDatabasesForTest();
+      clearRegisteredAgentDatabases(env);
+
+      expect(hasSessionEntriesByStatusReadOnly(scope, [status])).toBe(true);
+      expect(
+        hasSessionEntriesByStatusReadOnly(scope, [
+          status === "interrupted" ? "failed" : "interrupted",
+        ]),
+      ).toBe(false);
+      expect(hasSessionEntriesByStatusReadOnly(scope, ["interrupted", "failed"])).toBe(true);
+      expect(hasSessionEntriesByStatusReadOnly(scope, ["running", "done"])).toBe(false);
+      expect(hasSessionEntriesByStatusReadOnly(scope, [])).toBe(false);
+      expect(countRegisteredAgentDatabases(env)).toBe(0);
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+    },
+  );
 
   it("resolves a missing session identity without creating or registering a database", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-identity-");
@@ -618,7 +743,7 @@ describe("session accessor readonly listing", () => {
     ]);
   });
 
-  it.each(["identity", "timestamp", "json", "participant"])(
+  it.each(["identity", "timestamp", "json", "nul", "participant", "participant-integer"])(
     "rejects stale valid %s evidence without relying on a fallback read",
     async (corruption) => {
       const stateDir = autoTempDirs.make("openclaw-session-readonly-stale-valid-evidence-");
@@ -634,14 +759,20 @@ describe("session accessor readonly listing", () => {
         { sessionId: readableSessionId, updatedAt: 1 },
       );
       const database = openOpenClawAgentDatabase({ agentId, env });
-      if (corruption === "participant") {
+      if (corruption === "participant" || corruption === "participant-integer") {
         recordSessionParticipant(
           { agentId, env, sessionKey },
           { identity: { type: "agent", id: "peer" }, promptedAt: 1 },
         );
-        database.db
-          .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
-          .run("{}", sessionKey);
+        if (corruption === "participant") {
+          database.db
+            .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
+            .run("{}", sessionKey);
+        } else {
+          database.db
+            .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
+            .run(9007199254740992n, sessionKey);
+        }
       } else {
         const entryJson =
           corruption === "json"
@@ -652,7 +783,7 @@ describe("session accessor readonly listing", () => {
               });
         database.db
           .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run(entryJson, sessionKey);
+          .run(corruption === "nul" ? entryJson + "\0" : entryJson, sessionKey);
       }
       database.db
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
@@ -746,6 +877,37 @@ describe("session accessor readonly listing", () => {
       if (!exact && !fallback) {
         return statement;
       }
+      const afterRead = () => {
+        events.push(exact ? "exact-read" : "fallback-read");
+        if (exact) {
+          // Commit after SQLite finishes the exact read. The identity-only probe
+          // still requires a fallback, whose later row must replace that snapshot.
+          external.exec("BEGIN IMMEDIATE");
+          try {
+            external
+              .prepare(
+                "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
+              )
+              .run(JSON.stringify({ sessionId, updatedAt: 2 }), 3, sessionKey);
+            external
+              .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+              .run(sessionKey);
+            external.exec("COMMIT");
+            events.push("external-commit");
+          } catch (error) {
+            external.exec("ROLLBACK");
+            throw error;
+          }
+        }
+      };
+      const originalAll = statement.all.bind(statement);
+      statement.all = new Proxy(originalAll, {
+        apply(all, _receiver, args) {
+          const rows = all(...args);
+          afterRead();
+          return rows;
+        },
+      });
       const originalIterate = statement.iterate.bind(statement) as (
         ...args: unknown[]
       ) => ReturnType<StatementSync["iterate"]>;
@@ -753,27 +915,7 @@ describe("session accessor readonly listing", () => {
         const rows = originalIterate(...args);
         return (function* () {
           yield* rows;
-          events.push(exact ? "exact-read" : "fallback-read");
-          if (exact) {
-            // Commit after SQLite finishes the exact read. The identity-only probe
-            // still requires a fallback, whose later row must replace that snapshot.
-            external.exec("BEGIN IMMEDIATE");
-            try {
-              external
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
-                )
-                .run(JSON.stringify({ sessionId, updatedAt: 2 }), 3, sessionKey);
-              external
-                .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-                .run(sessionKey);
-              external.exec("COMMIT");
-              events.push("external-commit");
-            } catch (error) {
-              external.exec("ROLLBACK");
-              throw error;
-            }
-          }
+          afterRead();
         })();
       }) as StatementSync["iterate"];
       return statement;

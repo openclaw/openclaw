@@ -298,7 +298,7 @@ describe("hooks cli formatting", () => {
     );
 
     expect(runPluginUpdateCommandMock).toHaveBeenCalledWith({
-      id: "demo-hooks",
+      ids: ["demo-hooks"],
       opts: expect.objectContaining({ acknowledgeInstallPolicyWarning: true }),
     });
   });

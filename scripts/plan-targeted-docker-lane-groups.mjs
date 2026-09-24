@@ -1,6 +1,7 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
 import {
   CUSTOM_PLUGIN_SIBLINGS_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
@@ -59,7 +60,8 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorBaselines = "",
   upgradeSurvivorScenarios = "",
 } = {}) {
-  const selectedLanes = splitTokens(lanes);
+  // Each recorded first-hop source becomes its own job.
+  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }
@@ -196,22 +198,40 @@ export function planTargetedDockerLaneGroups({
   }
 
   flushPending();
+  if (groups.length > 256) {
+    throw new Error(
+      `Targeted Docker coverage requires ${groups.length} jobs, exceeding the GitHub Actions matrix limit of 256. Split the requested baselines or scenarios across workflow runs; no coverage was dropped.`,
+    );
+  }
   return groups;
 }
 
 const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
 
 if (isMain) {
-  process.stdout.write(
-    JSON.stringify(
-      planTargetedDockerLaneGroups({
-        groupSize: process.env.GROUP_SIZE,
-        lanes: process.env.LANES,
-        upgradeSurvivorBaseline: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
-        upgradeSurvivorBaselineScope: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE,
-        upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
-        upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-      }),
-    ),
-  );
+  const options = {
+    groupSize: process.env.GROUP_SIZE,
+    lanes: process.env.LANES,
+    upgradeSurvivorBaseline: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
+    upgradeSurvivorBaselineScope: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE,
+    upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+  };
+  let groups = planTargetedDockerLaneGroups(options);
+  if (process.argv.length > 2) {
+    if (process.argv[2] !== "--check-baselines" || !process.argv[3] || process.argv.length !== 4) {
+      throw new Error(
+        "Usage: plan-targeted-docker-lane-groups.mjs [--check-baselines <evidence-dir>]",
+      );
+    }
+    const { checkUpgradeSurvivorBaselines } =
+      await import("./lib/upgrade-survivor-baseline-check.mjs");
+    groups = checkUpgradeSurvivorBaselines(groups, {
+      evidenceDir: process.argv[3],
+      baseline: options.upgradeSurvivorBaseline,
+      baselines: options.upgradeSurvivorBaselines,
+      scenarios: options.upgradeSurvivorScenarios,
+    });
+  }
+  process.stdout.write(JSON.stringify(groups));
 }

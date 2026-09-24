@@ -1,16 +1,10 @@
-import type {
-  getTaskFlowRegistryStore,
-  TaskFlowRegistryObserverEvent,
-} from "./task-flow-registry.store.js";
+import type { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import "./task-flow-registry.store.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
 type TaskFlowRegistryStoreTestApi = {
-  configureTaskFlowRegistryRuntime(params: {
-    store?: TaskFlowRegistryStore;
-    observers?: { onEvent?: (event: TaskFlowRegistryObserverEvent) => void } | null;
-  }): void;
+  configureTaskFlowRegistryRuntime(params: { store?: TaskFlowRegistryStore }): void;
 };
 
 function getTestApi(): TaskFlowRegistryStoreTestApi {

@@ -1,4 +1,8 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
@@ -6,20 +10,25 @@ import {
 import { findCrabboxBinary } from "./crabbox-binary.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
 import { CRABBOX_WORKER_PROVIDER_ID } from "./crabbox-worker-profile.js";
+import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   isCrabboxWarmImageCaptureUncertain,
-  listCrabboxWarmImages,
+  projectCrabboxWarmImage,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
-type CrabboxDoctorRegistrationHost = {
+export type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
   readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
+  readonly listPluginStateEntries: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Promise<PluginStateEntry<T>[]>;
 };
 
 function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck {
@@ -134,7 +143,14 @@ export function registerCrabboxWorkerProviderDoctorChecks(
       source: "crabbox",
       async detect(ctx) {
         const findings: HealthFinding[] = [];
-        for (const image of listCrabboxWarmImages(ctx.env)) {
+        const entries = await host.listPluginStateEntries<WarmProfileRecord>({
+          namespace: "warm-images",
+          maxEntries: WARM_IMAGE_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+          ...(ctx.env ? { env: ctx.env } : {}),
+        });
+        for (const { key, value } of entries) {
+          const image = projectCrabboxWarmImage(key, value);
           const facts = [
             image.profileId,
             image.backend,

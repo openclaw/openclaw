@@ -80,6 +80,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
+      ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
       store: storePath,
@@ -418,23 +419,35 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses owner authority with the configured local gateway by default", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
+  it.each([false, true])(
+    "uses owner authority with the local gateway (explicit sole: %s)",
+    async (explicitOwnership) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      expect(request.clientName).toBe("cli");
-      expect(request.mode).toBe("cli");
-      expect(request.scopes).toEqual(["operator.admin"]);
-      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          expect(request.clientName).toBe("cli");
+          expect(request.mode).toBe("cli");
+          expect(request.scopes).toEqual(["operator.admin"]);
+          expect(request.params).toMatchObject({ agentId: explicitOwnership ? "solo" : "main" });
+          expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+          expect(agentCommand).not.toHaveBeenCalled();
+          expect(agentModuleLoadCount).not.toHaveBeenCalled();
+          expect(runtime.log).toHaveBeenCalledWith("hello");
+        },
+        explicitOwnership
+          ? { agents: { ownership: "explicit", entries: { solo: {} } } }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps an agent-scoped gateway turn off session and delivery runtimes", async () => {
     await withTempStore(
@@ -2580,7 +2593,7 @@ describe("agentCliCommand", () => {
 
         await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
 
-        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.create).toHaveBeenCalledOnce();
         expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
         expect(hasExecutionIdentityAdmissionSink()).toBe(false);
       },

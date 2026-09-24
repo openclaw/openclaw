@@ -3,6 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseLaneSelection, resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
+import {
+  listRecordedFirstHopSourceVersions,
+  updateFirstHopCompatLaneName,
+} from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
@@ -51,6 +55,30 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
       "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-custom-plugin-siblings",
     ]);
+  });
+
+  it("retains 256 groups and explicitly rejects matrix overflow without dropping coverage", () => {
+    const baselines = Array.from({ length: 256 }, (_, index) => `2026.9.${index + 1}`).join(" ");
+    expect(
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toHaveLength(256);
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration install-smoke",
+        upgradeSurvivorBaselines: baselines,
+      }),
+    ).toThrow("257 jobs, exceeding the GitHub Actions matrix limit of 256");
+    expect(() =>
+      planTargetedDockerLaneGroups({
+        lanes: "update-migration",
+        upgradeSurvivorBaselines: baselines,
+        upgradeSurvivorScenarios:
+          "base plugin-deps-cleanup legacy-operator-state bootstrap-persona",
+      }),
+    ).toThrow("512 jobs, exceeding the GitHub Actions matrix limit of 256");
   });
 
   it.each([
@@ -185,6 +213,25 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
           ).scheduledLanes,
       ),
     ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
+  });
+
+  it("runs each recorded first-hop source as its own job", () => {
+    const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
+    expect(firstHopLanes.length).toBeGreaterThan(1);
+    expect(
+      planTargetedDockerLaneGroups({ lanes: "upgrade-survivor update-first-hop-compat" }),
+    ).toEqual([
+      { docker_lanes: "upgrade-survivor", label: "upgrade-survivor" },
+      ...firstHopLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
+    ]);
+    expect(parseLaneSelection("update-first-hop-compat")).toEqual(firstHopLanes);
+    // A family token beside one of its members must not schedule that hop twice.
+    const mixed = `${firstHopLanes[firstHopLanes.length - 1]} update-first-hop-compat`;
+    expect(planTargetedDockerLaneGroups({ lanes: mixed }).map((group) => group.label)).toEqual([
+      firstHopLanes[firstHopLanes.length - 1],
+      ...firstHopLanes.slice(0, -1),
+    ]);
+    expect(parseLaneSelection(mixed)).toHaveLength(firstHopLanes.length);
   });
 
   it("keeps normal targeted lanes grouped by the configured group size", () => {

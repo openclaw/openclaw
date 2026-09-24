@@ -12,7 +12,6 @@ describe("config draft revision ownership", () => {
     { start: "raw", revert: "raw", next: "form", saved: true },
     { start: "raw", revert: "raw", next: "raw", saved: true },
     { start: "form", revert: "raw", next: "form", saved: true },
-    { start: "raw", revert: "reset", next: "form", saved: true },
     { start: "raw", revert: "discard", next: "form", saved: true },
     { start: "raw", revert: "raw", next: "none", saved: true },
     { start: "raw", revert: "none", next: "form", saved: false },
@@ -61,8 +60,6 @@ describe("config draft revision ownership", () => {
           runtimeConfig.setRaw(originalRaw);
         } else if (revert === "form") {
           runtimeConfig.patchForm(["count"], 1);
-        } else if (revert === "reset") {
-          runtimeConfig.resetDraft();
         } else if (revert === "discard") {
           await runtimeConfig.discardDraft();
         }

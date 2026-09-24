@@ -37,6 +37,22 @@ function pressComposerEnter(
 }
 
 describe("renderChatComposer controls", () => {
+  it.each(["local draft", "/stop"])(
+    "keeps an editable draft without send permission: %s",
+    (draft) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({ canCompose: true, canSend: false, draft, onSend });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      expect(textarea?.disabled).toBe(false);
+      const send = primaryButton(container);
+      expect(send.disabled).toBe(true);
+      send.click();
+      pressComposerEnter(container);
+      expect(onSend).not.toHaveBeenCalled();
+      expect(textarea?.value).toBe(draft);
+    },
+  );
+
   it.each([true, false])(
     "keeps command submission gated while history is pending: %s",
     (pending) => {

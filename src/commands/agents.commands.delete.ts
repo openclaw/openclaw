@@ -307,7 +307,8 @@ export async function agentsDeleteCommand(
       existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
     );
     try {
-      prepareAgentDeleteDatabases(cfg, agentId, agentDir);
+      await prepareAgentDeleteDatabases(cfg, agentId, agentDir);
+      deletion.assertCurrent();
       const commitRoster = async () =>
         await withAgentExecApprovalsRemoved(agentId, async () => {
           deletion.assertCurrent();

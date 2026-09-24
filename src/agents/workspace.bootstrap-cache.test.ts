@@ -50,7 +50,7 @@ describe("workspace bootstrap file caching", () => {
     for (const name of WORKSPACE_BOOTSTRAP_FILENAMES) {
       await writeWorkspaceFile({ dir: workspaceDir, name, content: `contents of ${name}` });
     }
-    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFileFollowingParents");
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
     const readFile = vi.spyOn(workspaceBootstrapRead, "readWorkspaceBootstrapFile");
     try {
       const selected = await loadWorkspaceBootstrapFiles(workspaceDir, [DEFAULT_AGENTS_FILENAME]);

@@ -5,6 +5,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
+import { readChatSelectionAnnotation } from "../../lib/chat/selection-annotation.ts";
 import { generateAttachmentId, getChatAttachmentBlob } from "./attachment-payload-store.ts";
 
 export type DurableChatComposerSnapshot = {
@@ -73,9 +74,11 @@ export function chatAttachmentDraftSignature(
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
+      attachment.origin ?? null,
       attachment.fileName ?? "",
       attachment.sizeBytes ?? -1,
       attachment.browserAnnotation ?? null,
+      attachment.selectionAnnotation ?? null,
     ]),
   ]);
 }
@@ -110,10 +113,14 @@ export function captureDurableChatAttachments(
     stored.push({
       blob,
       mimeType: attachment.mimeType,
+      ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
       ...(attachment.browserAnnotation
         ? { browserAnnotation: { ...attachment.browserAnnotation } }
+        : {}),
+      ...(attachment.selectionAnnotation
+        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
         : {}),
     });
   }
@@ -125,7 +132,8 @@ export async function hydrateDurableComposerAttachments(
 ): Promise<ChatAttachment[]> {
   // No registry or URL ownership until the complete batch reaches a live owner.
   return Promise.all(
-    stored.map(async ({ blob, ...metadata }) => {
+    stored.map(async ({ blob, selectionAnnotation, ...metadata }) => {
+      const annotation = readChatSelectionAnnotation(selectionAnnotation);
       const source =
         blob.type === metadata.mimeType ? blob : blob.slice(0, blob.size, metadata.mimeType);
       return {
@@ -134,6 +142,7 @@ export async function hydrateDurableComposerAttachments(
         ...(metadata.browserAnnotation
           ? { browserAnnotation: { ...metadata.browserAnnotation } }
           : {}),
+        ...(annotation ? { selectionAnnotation: annotation } : {}),
         dataUrl: await readBlobAsDataUrl(source),
       };
     }),
@@ -160,50 +169,6 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
     },
   );
   return { result, payloadUnavailable };
-}
-
-async function blobsEqual(left: Blob, right: Blob): Promise<boolean> {
-  if (left.size !== right.size || left.type !== right.type) {
-    return false;
-  }
-  const [leftBytes, rightBytes] = await Promise.all([left.arrayBuffer(), right.arrayBuffer()]);
-  const leftView = new Uint8Array(leftBytes);
-  const rightView = new Uint8Array(rightBytes);
-  return leftView.every((byte, index) => byte === rightView[index]);
-}
-
-export async function durableComposerDraftMatches(
-  draft: {
-    text: string;
-    mentions?: readonly HumanMention[];
-    attachments: DurableComposerDraftAttachment[];
-  },
-  text: string,
-  attachments: DurableComposerDraftAttachment[] | null,
-  mentions?: readonly HumanMention[],
-): Promise<boolean> {
-  if (
-    attachments === null ||
-    draft.text !== text ||
-    JSON.stringify(draft.mentions ?? []) !== JSON.stringify(mentions ?? []) ||
-    draft.attachments.length !== attachments.length
-  ) {
-    return false;
-  }
-  for (const [index, stored] of draft.attachments.entries()) {
-    const current = attachments[index];
-    if (
-      !current ||
-      stored.mimeType !== current.mimeType ||
-      stored.fileName !== current.fileName ||
-      stored.sizeBytes !== current.sizeBytes ||
-      JSON.stringify(stored.browserAnnotation) !== JSON.stringify(current.browserAnnotation) ||
-      !(await blobsEqual(stored.blob, current.blob))
-    ) {
-      return false;
-    }
-  }
-  return true;
 }
 
 export class DurableChatComposerPersistence {
@@ -251,18 +216,22 @@ export class DurableChatComposerPersistence {
   }
 
   restore(
-    baseline: RestoreBaseline,
+    scope: DurableComposerDraftScope,
+    prepare: () => Omit<RestoreBaseline, "scope"> & {
+      onCurrentWins: (storedRevision: number) => void;
+    },
     current: () => { scope: DurableComposerDraftScope | null; signature: string; revision: number },
     apply: (draft: RestoredDraft) => void,
-    onCurrentWins: (storedRevision: number) => void,
   ) {
-    const scopeIdentity = durableComposerScopeIdentity(baseline.scope);
+    const scopeIdentity = durableComposerScopeIdentity(scope);
     if (this.restoredScopeKey === scopeIdentity) {
       return;
     }
+    // Capture edits before storage yields so a newer edit invalidates this baseline.
+    const { onCurrentWins, ...baseline } = prepare();
     this.restoredScopeKey = scopeIdentity;
     const generation = ++this.restoreGeneration;
-    void this.restoreScope(baseline, generation, current, apply, onCurrentWins);
+    void this.restoreScope({ scope, ...baseline }, generation, current, apply, onCurrentWins);
   }
 
   private async restoreScope(

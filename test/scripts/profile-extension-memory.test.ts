@@ -21,17 +21,19 @@ import {
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
 import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
-const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
+const TSX_PRELOAD = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
 const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
-  return spawnSync(process.execPath, ["--import", TSX_PRELOAD, SCRIPT_PATH, ...args], {
+  return spawnSync(testNodeExecPath, ["--import", TSX_PRELOAD, SCRIPT_PATH, ...args], {
     cwd,
     encoding: "utf8",
     // Fixture cwd controls artifacts; source imports still need the repository's aliases.
@@ -215,7 +217,7 @@ describe("scripts/profile-extension-memory", () => {
       expected: [{ dir: "internal", file: "dist/extensions/internal/index.js" }],
     },
   ])("profiles $name", ({ files, selected, expected }) => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-")));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {
       for (const relativeFile of [
         ...files,
@@ -621,7 +623,7 @@ describe("scripts/profile-extension-memory", () => {
         ].join("\n"),
       );
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           TSX_PRELOAD,
@@ -953,7 +955,7 @@ describe("scripts/profile-extension-memory", () => {
             "setInterval(() => {}, 1000);",
           ].join("\n");
           const child = spawn(
-            process.execPath,
+            testNodeExecPath,
             ["--import", hookPath, "--input-type=module", "--eval", body],
             { cwd: root, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
           );
@@ -1032,7 +1034,7 @@ describe("scripts/profile-extension-memory", () => {
             ].join("\n"),
             "utf8",
           );
-          const runner = spawn(process.execPath, ["--import", TSX_PRELOAD, runnerPath], {
+          const runner = spawn(testNodeExecPath, ["--import", TSX_PRELOAD, runnerPath], {
             stdio: "ignore",
           });
 

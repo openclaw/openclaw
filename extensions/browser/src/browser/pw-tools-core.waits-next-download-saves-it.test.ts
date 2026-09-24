@@ -34,7 +34,7 @@ let mod: Pick<
   "downloadViaPlaywright" | "waitForDownloadViaPlaywright"
 > &
   Pick<typeof import("./pw-tools-core.responses.js"), "responseBodyViaPlaywright">;
-let tmpDirModule: typeof import("../infra/tmp-openclaw-dir.js");
+let tmpDirModule: typeof import("openclaw/plugin-sdk/temp-path");
 
 describe("pw-tools-core", () => {
   installPwToolsCoreTestHooks();
@@ -42,7 +42,7 @@ describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.doMock("./pw-session.js", () => sessionMocks);
     vi.doMock("./chrome.js", () => chromeMocks);
-    tmpDirModule = await import("../infra/tmp-openclaw-dir.js");
+    tmpDirModule = await import("openclaw/plugin-sdk/temp-path");
     vi.spyOn(tmpDirModule, "resolvePreferredOpenClawTmpDir").mockImplementation(
       tmpDirMocks.resolvePreferredOpenClawTmpDir,
     );
@@ -281,7 +281,7 @@ describe("pw-tools-core", () => {
           saveAs,
         });
 
-        await expect(p).rejects.toThrow(/directory changed/u);
+        await expect(p).rejects.toMatchObject({ code: "not-file" });
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
         await expectPathMissing(outsideTargetPath);

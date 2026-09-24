@@ -103,50 +103,34 @@ export function collectPluginManifestCompatCodes(
   return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
 }
 
-function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
+function resolvePackageJsonRecord(params: {
+  candidate: PluginCandidate | undefined;
+  rejectHardlinks: boolean;
+}): InstalledPluginIndexRecord["packageJson"] | undefined {
+  const { candidate } = params;
   if (!candidate?.packageDir) {
     return undefined;
   }
-  const packageDir =
-    pluginCacheRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
-  const packageJsonPath = path.join(packageDir, "package.json");
-  const rootDir =
-    candidate.rootDir === candidate.packageDir
-      ? packageDir
-      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
-  const packageJsonRealPath = pluginCacheRealpathSync(packageJsonPath);
-  return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
-    ? packageJsonPath
-    : undefined;
-}
-
-function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
-  const resolvedRootDir =
-    rootDir === path.dirname(packageJsonPath)
-      ? path.dirname(packageJsonPath)
-      : (pluginCacheRealpathSync(rootDir) ?? path.resolve(rootDir));
-  const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
-  return relativePath.split(path.sep).join("/");
-}
-
-function resolvePackageJsonRecord(params: {
-  candidate: PluginCandidate | undefined;
-  packageJsonPath: string | undefined;
-  rejectHardlinks: boolean;
-}): InstalledPluginIndexRecord["packageJson"] | undefined {
-  if (!params.candidate?.packageDir || !params.packageJsonPath) {
-    return undefined;
-  }
   const file = readPluginCacheFile({
-    rootDir: params.candidate.packageDir,
+    rootDir: candidate.packageDir,
     relativePath: "package.json",
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!file.ok) {
     return undefined;
   }
+  const rootDir =
+    candidate.rootDir === candidate.packageDir
+      ? file.rootRealPath
+      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
+  if (!isPathInside(rootDir, file.path)) {
+    return undefined;
+  }
+  // Persist the package entry path, even when its checked target uses another filename.
+  const packageJsonPath = path.join(file.rootRealPath, "package.json");
+  const relativePath = path.relative(rootDir, packageJsonPath) || "package.json";
   return {
-    path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
+    path: relativePath.split(path.sep).join("/"),
     hash: file.hash,
     fileSignature: file.signature,
   };
@@ -246,7 +230,6 @@ export function buildInstalledPluginIndexRecords(params: {
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateBySource.get(record.source);
-    const packageJsonPath = resolvePackageJsonPath(candidate);
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
       rootDir: record.rootDir,
@@ -290,7 +273,6 @@ export function buildInstalledPluginIndexRecords(params: {
       : undefined;
     const packageJson = resolvePackageJsonRecord({
       candidate,
-      packageJsonPath,
       rejectHardlinks,
     });
     const enabled = resolveEffectiveEnableState({

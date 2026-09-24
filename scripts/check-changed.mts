@@ -293,7 +293,7 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (!args.staged || args.paths.length > 0) {
     return argv;
   }
-  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const stagedPaths = listStagedChangedPaths(options.cwd, args.base);
   const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
@@ -302,7 +302,7 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
     ...timedArgs,
     "--paths-from-git",
     "--base",
-    "HEAD",
+    args.base ?? "HEAD",
     "--head",
     "HEAD",
     "--",
@@ -356,7 +356,7 @@ export function shouldRunWrapperShadowingCheck(paths: string[]) {
 }
 
 export function shouldRunAppcastOwnerTest(paths: string[]) {
-  return paths.includes("appcast.xml");
+  return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
 export function shouldRunTestTempCreationReport(paths: string[]) {
@@ -598,7 +598,7 @@ export function createChangedCheckPlan(
       [
         "scripts/report-test-temp-creations.mjs",
         ...(options.staged
-          ? ["--staged"]
+          ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
           : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
       ],
       baseEnv,
@@ -615,6 +615,16 @@ export function createChangedCheckPlan(
   }
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
+    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
+  ) {
+    add("line-cap growth ratchet", [
+      "check:line-cap-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
     result.paths.some(
       (filePath) =>
         filePath === SHRINK_RATCHET_OWNER_PATH ||
@@ -627,7 +637,7 @@ export function createChangedCheckPlan(
       "check:max-lines-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   if (
@@ -643,7 +653,7 @@ export function createChangedCheckPlan(
       "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -803,7 +813,7 @@ export function createChangedCheckPlan(
     add("release metadata guard", [
       "release-metadata:check",
       ...(options.staged
-        ? ["--staged"]
+        ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
     // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
@@ -1317,8 +1327,16 @@ function parseArgs(argv: string[]) {
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
   const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const preservePathTokens = flagArgv.includes("--paths-from-git");
-  const args = {
-    base: "origin/main",
+  const args: {
+    base?: string;
+    head: string;
+    staged: boolean;
+    dryRun: boolean;
+    timed: boolean;
+    noChanges: boolean;
+    help: boolean;
+    paths: string[];
+  } = {
     head: "HEAD",
     staged: false,
     dryRun: false,
@@ -1363,7 +1381,7 @@ function printUsage() {
       "Usage: node scripts/check-changed.mjs [options] [-- <paths...>]",
       "",
       "Options:",
-      "  --base <ref>     Base ref for changed paths (default: origin/main)",
+      "  --base <ref>     Base ref (default: HEAD with --staged, otherwise origin/main)",
       "  --head <ref>     Head ref for changed paths (default: HEAD)",
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
@@ -1400,8 +1418,8 @@ async function main() {
         : args.paths.length > 0
           ? args.paths
           : args.staged
-            ? listStagedChangedPaths()
-            : listChangedPathsFromGit({ base: args.base, head: args.head });
+            ? listStagedChangedPaths(undefined, args.base)
+            : listChangedPathsFromGit({ base: args.base ?? "origin/main", head: args.head });
     } catch (error) {
       // A sparse/fresh checkout may not have the requested base ref yet. The remote
       // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
@@ -1419,7 +1437,7 @@ async function main() {
     if (paths) {
       const result = detectChangedLanesForPaths({
         paths,
-        base: args.base,
+        base: args.base ?? (args.staged ? "HEAD" : "origin/main"),
         head: args.head,
         staged: args.staged,
       });
@@ -1429,7 +1447,7 @@ async function main() {
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
               changedCheckDiffRefsReady({
-                base: args.base,
+                base: args.base ?? "origin/main",
                 head: args.head,
               })
             : undefined,

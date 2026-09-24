@@ -7,18 +7,23 @@ export function resolvePluginRootArtifactPath(
   rootDir: string,
   artifactPaths: readonly string[],
 ): string | null {
+  let checkedDirectory: string | undefined;
+  let skipDirectory = false;
   for (const artifactPath of artifactPaths) {
     const candidate = path.join(rootDir, artifactPath);
     if (path.dirname(artifactPath) !== ".") {
-      try {
-        if (readPluginCacheDirectory(path.dirname(candidate)).length === 0) {
-          continue;
+      const directory = path.dirname(candidate);
+      if (directory !== checkedDirectory) {
+        try {
+          skipDirectory = readPluginCacheDirectory(directory).length === 0;
+        } catch (error) {
+          // Directory-list permissions do not determine whether a child can be accessed.
+          skipDirectory = isMissingPathError(error);
         }
-      } catch (error) {
-        // Directory-list permissions do not determine whether a child can be accessed.
-        if (isMissingPathError(error)) {
-          continue;
-        }
+        checkedDirectory = directory;
+      }
+      if (skipDirectory) {
+        continue;
       }
     }
     if (pluginCacheExistsSync(candidate)) {

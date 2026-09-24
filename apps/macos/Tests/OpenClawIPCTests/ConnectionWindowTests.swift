@@ -20,5 +20,9 @@ struct ConnectionWindowTests {
         opener.open(tab: .debug, debugEnabled: true)
         #expect(presentedTabs == [.gateways, .connection, .debug])
         #expect(opener.selectedTab == .debug)
+
+        opener.open(tab: .about, debugEnabled: false)
+        #expect(presentedTabs == [.gateways, .connection, .debug, .about])
+        #expect(opener.selectedTab == .about)
     }
 }

@@ -22,7 +22,6 @@ export type PluginSourceFile = {
 
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
 export function buildPluginTypeScriptSource(root: string) {
-  const ts: typeof TypeScript = require("typescript");
   const directory = fs.mkdtempSync(path.join(path.dirname(root), ".source-"));
   const outputs = new Map<string, string>();
   const formats = new Map<string, "module" | "commonjs">();
@@ -68,21 +67,22 @@ export function buildPluginTypeScriptSource(root: string) {
     for (const name of fs.readdirSync(root).toSorted()) {
       include(path.join(root, name));
     }
-    const options: TypeScript.CompilerOptions = {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      experimentalDecorators: true,
-      esModuleInterop: true,
-      jsx: jsx ? ts.JsxEmit.React : ts.JsxEmit.Preserve,
-      allowJs: true,
-      noResolve: true,
-      noLib: true,
-      types: [],
-      outDir: directory,
-      rootDir: root,
-    };
     const compile = (input: string, destination: string, format: string | null | undefined) => {
+      const ts: typeof TypeScript = require("typescript");
+      const options: TypeScript.CompilerOptions = {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.NodeNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        experimentalDecorators: true,
+        esModuleInterop: true,
+        jsx: jsx ? ts.JsxEmit.React : ts.JsxEmit.Preserve,
+        allowJs: true,
+        noResolve: true,
+        noLib: true,
+        types: [],
+        outDir: directory,
+        rootDir: root,
+      };
       // TypeScript uses slash-form filenames; native paths stay with filesystem operations.
       // Map Jiti's .mtsx/.ctsx extensions while retaining their explicit JSX grammar.
       const compilerInput = input.replaceAll("\\", "/").replace(/\.([cm])tsx$/, ".$1ts");

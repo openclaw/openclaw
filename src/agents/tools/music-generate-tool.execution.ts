@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { generateMusic } from "../../music-generation/runtime.js";
 import type {
   MusicGenerationOutputFormat,
@@ -21,9 +21,14 @@ import {
   type MusicGenerationTaskHandle,
 } from "./media-generate-background.js";
 import {
+  describeMediaGenerationResult,
+  type MediaGenerateToolExecutionResult,
+} from "./media-generate-result-shared.js";
+import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
+  type LoadedMediaToolReference,
 } from "./media-tool-shared.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
@@ -70,22 +75,6 @@ export function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined)
   };
 }
 
-type LoadedReferenceImage = {
-  sourceImage: MusicGenerationSourceImage;
-  resolvedInput: string;
-  rewrittenFrom?: string;
-};
-
-type ExecutedMusicGeneration = {
-  provider: string;
-  model: string;
-  count: number;
-  attachments: AgentGeneratedAttachment[];
-  contentText: string;
-  details: Record<string, unknown>;
-  wakeResult: string;
-};
-
 export async function executeMusicGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
@@ -96,13 +85,13 @@ export async function executeMusicGenerationJob(params: {
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
   filename?: string;
-  loadedReferenceImages: LoadedReferenceImage[];
+  loadedReferenceImages: LoadedMediaToolReference<MusicGenerationSourceImage>[];
   taskHandle?: MusicGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
   timeoutMs?: number;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
   providers?: MusicGenerationProvider[];
-}): Promise<ExecutedMusicGeneration> {
+}): Promise<MediaGenerateToolExecutionResult> {
   if (params.taskHandle) {
     musicGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
@@ -119,7 +108,7 @@ export async function executeMusicGenerationJob(params: {
       instrumental: params.instrumental,
       durationSeconds: params.durationSeconds,
       format: params.format,
-      inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
+      inputImages: params.loadedReferenceImages.map((entry) => entry.source),
       autoProviderFallback: params.autoProviderFallback,
       timeoutMs: params.timeoutMs,
     },
@@ -165,17 +154,7 @@ export async function executeMusicGenerationJob(params: {
     (!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
       ? params.durationSeconds
       : undefined);
-  const displayProvider = sanitizeGeneratedMediaDisplayText(result.provider);
-  const displayModel = sanitizeGeneratedMediaDisplayText(result.model);
-  const warning =
-    ignoredOverrides.length > 0
-      ? `Ignored unsupported overrides for ${displayProvider}/${displayModel}: ${ignoredOverrides
-          .map(
-            (entry) =>
-              `${sanitizeGeneratedMediaDisplayText(entry.key)}=${sanitizeGeneratedMediaDisplayText(String(entry.value))}`,
-          )
-          .join(", ")}.`
-      : undefined;
+  const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const savedTrackMetadata = await probeMediaFilesWithinBudget(
     savedTracks.map((track) => ({ filePath: track.path, kind: "audio" })),
     {
@@ -188,7 +167,7 @@ export async function executeMusicGenerationJob(params: {
     type: "audio",
     path: track.path,
     mimeType: track.contentType,
-    name: result.tracks[index]?.fileName,
+    name: extractOriginalFilename(track.path),
     sizeBytes: track.size,
     ...(typeof appliedDurationSeconds === "number"
       ? { durationMs: appliedDurationSeconds * 1000 }

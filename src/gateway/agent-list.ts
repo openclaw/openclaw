@@ -68,7 +68,7 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
   const defaultId = normalizeAgentId(legacyCompatibleId);
   return {
     defaultId,
-    ownership: legacyAgentId ? "legacy" : "explicit",
+    ownership: legacyAgentId && cfg.agents?.ownership !== "explicit" ? "legacy" : "explicit",
     selectionRequired: !legacyAgentId,
   };
 }

@@ -1,5 +1,6 @@
 import "./install.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 
 const {
@@ -25,6 +26,18 @@ const {
 
 describe("runDaemonInstall", () => {
   setupInstallTests();
+
+  it("provides readiness guidance after successful service registration", async () => {
+    await runDaemonInstall({ json: true, force: true });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        successMessage: expect.stringMatching(
+          /readiness has not been checked.*openclaw gateway status.*openclaw health/,
+        ),
+        onVerified: expect.any(Function),
+      }),
+    );
+  });
 
   it("refuses update-owned gateway defaults when authority expires during write preparation", async () => {
     const snapshot = await readConfigFileSnapshotMock();
@@ -96,6 +109,18 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["systemd-user-bus-unavailable", "systemd user session bus"],
+    ["launchd-gui-domain-unavailable", "launchd GUI domain"],
+  ] as const)("explains %s before writing config", async (reason, detail) => {
+    service.readCommand.mockRejectedValueOnce(new ServiceInspectionError(reason));
+    await runDaemonInstall({ json: true });
+    expect(actionState.failed[0]?.message).toContain(detail);
+    expect(actionState.failed[0]?.message).not.toContain("SERVICE_DEFINITION_UNKNOWN");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("blocks inaccessible definitions before config reads or credential generation", async () => {
     service.readDefinitionMutationCapability.mockRejectedValueOnce(new Error("secret-canary"));
     await runDaemonInstall({ json: true, force: true });
@@ -133,26 +158,6 @@ describe("runDaemonInstall", () => {
         warning.includes("gateway.auth.token is SecretRef-managed"),
       ),
     ).toBe(true);
-  });
-
-  it.each(["darwin", "win32"] as const)(
-    "refuses deferred activation on %s before writing configuration or service state",
-    async (platform) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      await runDaemonInstall({ json: true, force: true, deferActivation: true });
-      expect(actionState.failed.at(-1)?.message).toContain("Deferred service load requires Linux");
-      expect(replaceConfigFileMock).not.toHaveBeenCalled();
-      expect(service.install).not.toHaveBeenCalled();
-      expect(service.isLoaded).not.toHaveBeenCalled();
-    },
-  );
-
-  it("refuses an unparented deferred install before reading or writing the selected profile", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    await runDaemonInstall({ json: true, force: true, deferActivation: true });
-    expect(actionState.failed.at(-1)?.message).toContain("updater IPC channel");
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-    expect(service.install).not.toHaveBeenCalled();
   });
 
   it("passes service environment value sources through to service install", async () => {

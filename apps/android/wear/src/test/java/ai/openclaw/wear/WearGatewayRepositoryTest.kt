@@ -226,7 +226,7 @@ class WearGatewayRepositoryTest {
 
             WearRpcMethod.GatewayDisconnect -> {
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio","reply-text"]}""",
               )
             }
 
@@ -298,7 +298,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","model-catalog-search","session-scoped-model-catalog","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","model-catalog-search","session-scoped-model-catalog","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio","reply-text"]}""",
           )
         }
 
@@ -456,6 +456,34 @@ class WearGatewayRepositoryTest {
 
     assertNull(binaryOnly)
   }
+
+  @Test
+  fun sendCompletesOnlyForExplicitRunlessControlAcknowledgments() =
+    runTest {
+      val attempt = WearSendAttempt("session-1", "/stop", "wear-stop", "phone-a")
+      val acknowledgments =
+        listOf(
+          """{"aborted":false}""" to true,
+          """{"aborted":true}""" to true,
+          """{"runId":"wear-stop","status":"started"}""" to false,
+          "{}" to false,
+          """{"status":"started"}""" to false,
+          """{"aborted":"false"}""" to false,
+          """{"runId":"wear-stop","aborted":true}""" to false,
+          """{"status":"started","aborted":true}""" to false,
+        )
+      for ((ack, controlCompleted) in acknowledgments) {
+        val requester = RecordingRequester { _, _ -> json.parseToJsonElement(ack) }
+        assertEquals(ack, controlCompleted, WearGatewayRepository(requester).send(attempt, requirePreferredPhone = true))
+        assertEquals(WearRpcMethod.ChatSend, requester.calls.single().first)
+        assertEquals("phone-a", requester.expectedNodeIds.single())
+        assertTrue(requester.requirePreferredNodes.single())
+      }
+
+      val failure = WearProxyException("unavailable", "Outcome unknown")
+      val requester = RecordingRequester { _, _ -> throw failure }
+      assertEquals(failure, runCatching { WearGatewayRepository(requester).send(attempt) }.exceptionOrNull())
+    }
 
   @Test
   fun ambiguousSendRetryReusesItsIdempotencyKeyUntilSuccess() =

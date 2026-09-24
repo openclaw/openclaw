@@ -39,7 +39,7 @@ class WearViewModelLifecycleTest {
       val app = RuntimeEnvironment.getApplication() as WearApplication
       val owner = TestViewModelStoreOwner()
       val viewModel = ViewModelProvider(owner, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WearViewModel::class.java]
-      val client = viewModel.realtimeTalkClientForTest()
+      val client = viewModel.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
       val fixture = WearTalkTestFixture(app, client)
       try {
         (viewModel.talkTestField("loadJob") as? Job)?.cancel()
@@ -119,7 +119,7 @@ class WearViewModelLifecycleTest {
       val app = RuntimeEnvironment.getApplication() as WearApplication
       val owner = TestViewModelStoreOwner()
       val vm = ViewModelProvider(owner, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[WearViewModel::class.java]
-      val client = vm.realtimeTalkClientForTest()
+      val client = vm.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
       val fixture = WearTalkTestFixture(app, client)
       try {
         (vm.talkTestField("loadJob") as? Job)?.cancel()
@@ -148,7 +148,7 @@ class WearViewModelLifecycleTest {
     val factory = ViewModelProvider.AndroidViewModelFactory.getInstance(app)
     val firstOwner = TestViewModelStoreOwner()
     val firstViewModel = ViewModelProvider(firstOwner, factory)[WearViewModel::class.java]
-    val firstClient = firstViewModel.realtimeTalkClientForTest()
+    val firstClient = firstViewModel.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
     val fixture = WearTalkTestFixture(app, firstClient)
     fixture.activate()
 
@@ -159,11 +159,11 @@ class WearViewModelLifecycleTest {
 
     val reopenedOwner = TestViewModelStoreOwner()
     val reopenedViewModel = ViewModelProvider(reopenedOwner, factory)[WearViewModel::class.java]
-    val reopenedClient = reopenedViewModel.realtimeTalkClientForTest()
+    val reopenedClient = reopenedViewModel.talkTestField("realtimeTalkClient") as WearRealtimeTalkClient
     try {
-      assertFalse(firstClient.scopeForTest().coroutineContext[Job]?.isActive == true)
+      assertFalse((firstClient.talkTestField("scope") as CoroutineScope).coroutineContext[Job]?.isActive == true)
       assertNotSame(firstClient, reopenedClient)
-      assertTrue(reopenedClient.scopeForTest().coroutineContext[Job]?.isActive == true)
+      assertTrue((reopenedClient.talkTestField("scope") as CoroutineScope).coroutineContext[Job]?.isActive == true)
     } finally {
       reopenedOwner.viewModelStore.clear()
     }
@@ -246,12 +246,12 @@ class WearViewModelLifecycleTest {
     val pollJob = Job()
     try {
       viewModel.setAgentPulseVisibleForTest(true)
-      viewModel.setAgentPulsePollJobForTest(pollJob)
+      viewModel.setTalkTestField("agentPulsePollJob", pollJob)
 
       viewModel.setAgentPulseVisible(false)
 
       assertFalse(pollJob.isActive)
-      assertNull(viewModel.agentPulsePollJobForTest())
+      assertNull(viewModel.talkTestField("agentPulsePollJob") as? Job)
       assertFalse(viewModel.state.value.agentPulseLoading)
     } finally {
       owner.viewModelStore.clear()
@@ -265,23 +265,17 @@ class WearViewModelLifecycleTest {
     val owner = TestViewModelStoreOwner()
     val viewModel = ViewModelProvider(owner, factory)[WearViewModel::class.java]
     val pollJob = Job()
-    viewModel.setAgentPulsePollJobForTest(pollJob)
+    viewModel.setTalkTestField("agentPulsePollJob", pollJob)
 
     owner.viewModelStore.clear()
 
     assertFalse(pollJob.isActive)
-    assertNull(viewModel.agentPulsePollJobForTest())
+    assertNull(viewModel.talkTestField("agentPulsePollJob") as? Job)
   }
 
   private class TestViewModelStoreOwner : ViewModelStoreOwner {
     override val viewModelStore = ViewModelStore()
   }
-
-  private fun WearViewModel.realtimeTalkClientForTest(): WearRealtimeTalkClient =
-    javaClass.getDeclaredField("realtimeTalkClient").run {
-      isAccessible = true
-      get(this@realtimeTalkClientForTest) as WearRealtimeTalkClient
-    }
 
   private fun WearViewModel.setAgentPulseVisibleForTest(visible: Boolean) {
     javaClass.getDeclaredField("agentPulseVisible").run {
@@ -289,23 +283,4 @@ class WearViewModelLifecycleTest {
       setBoolean(this@setAgentPulseVisibleForTest, visible)
     }
   }
-
-  private fun WearViewModel.setAgentPulsePollJobForTest(job: Job?) {
-    javaClass.getDeclaredField("agentPulsePollJob").run {
-      isAccessible = true
-      set(this@setAgentPulsePollJobForTest, job)
-    }
-  }
-
-  private fun WearViewModel.agentPulsePollJobForTest(): Job? =
-    javaClass.getDeclaredField("agentPulsePollJob").run {
-      isAccessible = true
-      get(this@agentPulsePollJobForTest) as? Job
-    }
-
-  private fun WearRealtimeTalkClient.scopeForTest(): CoroutineScope =
-    javaClass.getDeclaredField("scope").run {
-      isAccessible = true
-      get(this@scopeForTest) as CoroutineScope
-    }
 }

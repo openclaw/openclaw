@@ -1,5 +1,5 @@
 import type { AgentEventPayload } from "../../src/infra/agent-events.js";
-import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
 // Native live fixture setup and capture shared with its offline boundary regressions.
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
@@ -13,7 +13,9 @@ export function createCodexHarnessLiveInstance(
     state: { layout: "state-only" },
     gatewayToken: token,
     env: {
-      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+      ...Object.fromEntries(
+        listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+      ),
       OPENCLAW_AGENT_RUNTIME: "codex",
       OPENCLAW_GATEWAY_TOKEN: token,
       OPENCLAW_ALLOW_SLOW_REPLY_TESTS: "1",
@@ -71,6 +73,7 @@ export function createCodexHarnessEventCapture(params: {
         return;
       }
       events.push({
+        runId: event.runId,
         stream: event.stream,
         sessionKey: event.sessionKey,
         data: event.data,
@@ -81,6 +84,7 @@ export function createCodexHarnessEventCapture(params: {
 }
 
 export type CapturedAgentEvent = {
+  runId?: string;
   stream: string;
   data?: Record<string, unknown>;
   sessionKey?: string;

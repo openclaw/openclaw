@@ -1,13 +1,18 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { releaseAgentRunContext } from "../../infra/agent-run-registry.js";
-import type { WorkerLiveTrajectoryRecorder } from "./live-event-projection.js";
-import type { LiveEventTarget } from "./live-event-session-binding.js";
-import type { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
+import {
+  isDefinitiveWorkerTerminalEvent,
+  type WorkerLiveTrajectoryRecorder,
+} from "./live-event-projection.js";
+import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
+import type { WorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 export type PendingLiveEvent = {
   request: WorkerLiveEventParams;
   sizeBytes: number;
-  recordDiagnostic?: ReturnType<typeof captureWorkerTurnDiagnosticRecorder>;
+  recordApplied?: (event: WorkerLiveEventParams["event"]) => void;
+  runOwner?: WorkerTurnLiveEventOwner;
+  source: WorkerTurnTranscriptSource;
 };
 
 export type OwnedLiveRun = {
@@ -16,6 +21,7 @@ export type OwnedLiveRun = {
   emissionMode: "exclusive" | "shared";
   lifecycleGeneration: string;
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
+  toolArgsByCallId: Map<string, unknown>;
 };
 
 export type WorkerLiveCredentialRotation = Readonly<
@@ -39,9 +45,53 @@ export type LiveEventWindow = {
   trajectoryWrites: Set<Promise<void>>;
   runEpoch: number;
   sessionId: string;
-  target: LiveEventTarget;
+  source: WorkerTurnTranscriptSource;
   terminalRuns: Map<string, number>;
 };
+
+export function releaseWorkerLiveRun(window: LiveEventWindow, runId: string): void {
+  const owned = window.activeRuns.get(runId);
+  if (!owned) {
+    return;
+  }
+  window.activeRuns.delete(runId);
+  releaseAgentRunContext(runId, owned.claimId);
+}
+
+export function fenceReleasedWorkerLiveRun(window: LiveEventWindow, runId: string): void {
+  if (!window.terminalRuns.has(runId)) {
+    window.terminalRuns.set(runId, window.ackedSeq);
+  }
+  releaseWorkerLiveRun(window, runId);
+}
+
+export function hasReachableBufferedTerminal(
+  window: LiveEventWindow,
+  admittedRunId: string,
+  countedRunIds: ReadonlySet<string>,
+  windowSize: number,
+): boolean {
+  // Borrow one source-ended slot only when this ordered drain can reach that
+  // active run's terminal without claiming another new run first.
+  for (let seq = window.ackedSeq + 2; seq <= window.ackedSeq + windowSize; seq += 1) {
+    const pending = window.pending.get(seq);
+    if (!pending) {
+      return false;
+    }
+    const pendingRunId = pending.request.runId;
+    if (countedRunIds.has(pendingRunId)) {
+      if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
+        return true;
+      }
+      continue;
+    }
+    if (pendingRunId !== admittedRunId) {
+      // Another new run would consume the borrowed slot before the terminal.
+      return false;
+    }
+  }
+  return false;
+}
 
 // Durable credential renewal keeps the same owner epoch and replay cursor.
 export function rotateWorkerLiveEventCredential(

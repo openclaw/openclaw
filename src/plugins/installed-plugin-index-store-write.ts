@@ -434,10 +434,15 @@ function resolveRefreshedPersistedInstalledPluginIndex(
 }
 
 export function refreshPersistedInstalledPluginIndex(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+  params: RefreshInstalledPluginIndexParams &
+    InstalledPluginIndexStoreOptions & {
+      lease?: InstalledPluginIndexWriteLease;
+    },
 ): InstalledPluginIndex {
-  const index = resolveRefreshedPersistedInstalledPluginIndex(params);
-  writePersistedInstalledPluginIndexSync(index, params);
+  const { lease, ...storeParams } = params;
+  const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
+  writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease);
+  clearPersistedInstalledPluginIndexCaches();
   return index;
 }
 

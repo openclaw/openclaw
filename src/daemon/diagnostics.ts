@@ -1,5 +1,6 @@
 /** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs, { type FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 // Error patterns worth surfacing from gateway service logs after failed starts.
@@ -19,14 +20,7 @@ async function readTailWindow(handle: FileHandle, size: number) {
   const length = Math.min(size, GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES);
   const readStart = size - length;
   const buffer = Buffer.alloc(length);
-  let bytesRead = 0;
-  while (bytesRead < length) {
-    const result = await handle.read(buffer, bytesRead, length - bytesRead, readStart + bytesRead);
-    if (result.bytesRead === 0) {
-      break;
-    }
-    bytesRead += result.bytesRead;
-  }
+  const bytesRead = await readFileWindowFully(handle, buffer, readStart);
   return { buffer, bytesRead, readStart };
 }
 

@@ -2,6 +2,7 @@
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   formatAgentModelStartupDetails,
@@ -36,6 +37,55 @@ vi.mock("../agents/model-thinking-default.js", () => ({
 }));
 
 describe("gateway startup log", () => {
+  it.each([false, true])(
+    "logs the concrete owner's primary instead of its utility (ambient owner: %s)",
+    async (ambientOwner) => {
+      const info = vi.fn();
+      await logGatewayStartup({
+        cfg: {
+          meta: { migrations: { utilityModelSeparation: true } },
+          agents: {
+            ownership: "explicit",
+            ...(ambientOwner ? { defaults: { systemAgent: { agentId: "worker" } } } : {}),
+            entries: {
+              worker: {
+                utilityModel: "helper@local:utility",
+                models: { "local-utility/small": { alias: "helper" } },
+              },
+              ...(ambientOwner ? { other: {} } : {}),
+            },
+          },
+          models: {
+            providers: Object.fromEntries(
+              ["local-utility", "ordinary"].map((provider) => [
+                provider,
+                {
+                  baseUrl: "http://127.0.0.1:9/v1",
+                  models: [
+                    makeProviderModelFixture({
+                      id: provider === "local-utility" ? "small" : "large",
+                      provider,
+                      api: "openai-completions",
+                      baseUrl: "http://127.0.0.1:9/v1",
+                    }),
+                  ],
+                },
+              ]),
+            ),
+          },
+        },
+        env: {},
+        manifestRecords: [],
+        bindHost: "127.0.0.1",
+        loadedPluginIds: [],
+        port: 18789,
+        log: { info, warn: vi.fn() },
+        isNixMode: false,
+      });
+      expect(info.mock.calls[0]?.[0]).toContain("agent model: ordinary/large");
+    },
+  );
+
   beforeEach(() => {
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");

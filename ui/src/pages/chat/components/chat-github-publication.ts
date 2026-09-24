@@ -2,6 +2,7 @@ import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
+import { syncPopoverLabel } from "../../../components/web-awesome-popover.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   selectedGitHubPublisher,
@@ -29,7 +30,19 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
       >
         ${t("chat.pullRequests.openPublishedPr")}
       </a>
-      ${renderPublicationButton(publication)}`;
+      ${
+        publication.onNewAction
+          ? html`<button
+              class="chat-pr__dismiss"
+              type="button"
+              aria-label=${t("common.dismiss")}
+              ?disabled=${publication.activity !== null}
+              @click=${publication.onNewAction}
+            >
+              ${icons.x}
+            </button>`
+          : nothing
+      }`;
   }
   if (publication.result || publication.locked) {
     return renderPublicationButton(publication);
@@ -64,6 +77,7 @@ function bindPublicationPopover(element: Element | undefined) {
     element.id ||= `${trigger.id}-popover`;
     element.for = trigger.id;
     trigger.setAttribute("aria-controls", element.id);
+    syncPopoverLabel(element);
   }
 }
 
@@ -75,9 +89,11 @@ function syncPublicationExpanded(event: Event) {
 }
 
 function renderPublicationButton(publication: GitHubPublicationView) {
-  const { result, selection, busy } = publication;
+  const { result, selection, activity } = publication;
+  const busy = activity !== null;
+  const pendingLabel = t(activity === "read" ? "common.loading" : "chat.pullRequests.publishing");
   let action: { click: (() => void) | undefined; label: string; disabled: boolean };
-  if (result?.status === "failed" || result?.status === "published") {
+  if (result?.status === "failed") {
     action = {
       click: publication.onNewAction,
       label: t(publication.canWrite ? "githubPublication.newAction" : "common.dismiss"),
@@ -91,9 +107,8 @@ function renderPublicationButton(publication: GitHubPublicationView) {
     };
   } else if (result?.status === "publishing" || result?.status === "requested") {
     action = {
-      click:
-        result.publisher?.source === "personal" ? publication.onRefresh : publication.onPublish,
-      label: busy ? t("chat.pullRequests.publishing") : t("githubPublication.check"),
+      click: publication.onRefresh,
+      label: busy ? pendingLabel : t("githubPublication.check"),
       disabled: busy,
     };
   } else {
@@ -102,7 +117,7 @@ function renderPublicationButton(publication: GitHubPublicationView) {
       disabled:
         busy || !selection || (selection.source === "personal" && !publication.personalReady),
       label: busy
-        ? t("chat.pullRequests.publishing")
+        ? pendingLabel
         : publication.locked
           ? t("chat.pullRequests.retryPublication")
           : t("chat.pullRequests.publishPr"),
@@ -133,7 +148,8 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
 }
 
 function renderPublicationAccounts(publication: GitHubPublicationView) {
-  const { options, selection, result, busy, locked } = publication;
+  const { options, selection, result, activity, locked } = publication;
+  const busy = activity !== null;
   const personal = options?.personal;
   const personalAccount =
     personal?.state === "connected" && personal.generation ? personal.account : null;
@@ -214,7 +230,11 @@ function renderPublicationRefresh(publication: GitHubPublicationView) {
 }
 
 export function renderGitHubPublicationDetails(publication: GitHubPublicationView) {
-  const { selection, result, confirmation, busy, locked, error } = publication;
+  const { selection, result, confirmation, activity, locked, error } = publication;
+  if (result?.status === "published" && !error) {
+    return nothing;
+  }
+  const busy = activity !== null;
   const personalUnavailable = selection?.source === "personal" && !publication.personalReady;
   if (!result && !confirmation && !error && !locked && !personalUnavailable) {
     return nothing;

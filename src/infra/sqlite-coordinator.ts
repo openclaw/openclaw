@@ -2,20 +2,29 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isPathInside } from "./path-guards.js";
 import { applyPrivateModeSync } from "./private-mode.js";
-import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { isSqliteLockError, withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "./sqlite-handle-lifecycle.js";
+import { sqliteWriteAdmissionServicesForLocation } from "./sqlite-transaction.js";
 
-export class SqliteCoordinatorError extends Error {
-  constructor(
-    message: string,
-    public override readonly cause?: unknown,
-  ) {
-    super(message);
-    this.name = "SqliteCoordinatorError";
-  }
-}
+export const SqliteCoordinatorError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteCoordinatorError"),
+  () =>
+    class CoordinatorError extends Error {
+      constructor(
+        message: string,
+        public override readonly cause?: unknown,
+      ) {
+        super(message);
+        this.name = "SqliteCoordinatorError";
+      }
+    },
+);
+export type SqliteCoordinatorError = InstanceType<typeof SqliteCoordinatorError>;
 
 export type SqliteCoordinatorLease = {
   /** This lease has relinquished custody, either to the pool or by native close. */
@@ -29,6 +38,16 @@ export function createSqliteLifecycleAggregateError(
   cause: unknown,
 ): AggregateError {
   return new AggregateError(errors, message, { cause });
+}
+
+/** Keep the first failure as the cause while retaining independent cleanup errors. */
+export function throwSqliteLifecycleErrors(errors: unknown[], message: string): void {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(errors, message, errors[0]);
+  }
 }
 
 export function runWithSqliteCoordinator<T>(
@@ -101,28 +120,35 @@ export function ensurePrivateSqliteCoordinatorDirectory(
   }
 }
 
-const IDLE_COORDINATOR_TIMEOUT_MS = 30 * 60_000;
-const MAX_IDLE_COORDINATORS = 16;
-// Bootstrap imports this owner before turns. Idle timers must not retain the
-// request context that released a coordinator.
-const runInCoordinatorPoolContext = AsyncLocalStorage.snapshot();
 type IdleCoordinator = {
   database: DatabaseSync;
   identity: fs.BigIntStats;
   timer: ReturnType<typeof setTimeout>;
 };
-const idleCoordinators = new Map<string, IdleCoordinator>();
-const failedIdleCloses = new Set<DatabaseSync>();
-let exitCloseRegistered = false;
+// Bootstrap imports this owner before turns. Idle timers must not retain the
+// request context that released a coordinator.
+const coordinatorPool = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteCoordinatorPool"),
+  () => ({
+    runInCoordinatorPoolContext: AsyncLocalStorage.snapshot(),
+    idleCoordinators: new Map<string, IdleCoordinator>(),
+    failedIdleCloses: new Map<DatabaseSync, string>(),
+    exitCloseRegistered: false,
+    closeOnExit: closeIdleCoordinatorsOnExit,
+  }),
+  () => closeIdleCoordinatorPool(),
+  "close-only",
+);
+const { runInCoordinatorPoolContext, idleCoordinators, failedIdleCloses } = coordinatorPool;
 
 function updateCoordinatorExitClose() {
   const needed = idleCoordinators.size > 0 || failedIdleCloses.size > 0;
-  if (needed && !exitCloseRegistered) {
-    process.once("exit", closeIdleCoordinatorsOnExit);
-  } else if (!needed && exitCloseRegistered) {
-    process.removeListener("exit", closeIdleCoordinatorsOnExit);
+  if (needed && !coordinatorPool.exitCloseRegistered) {
+    process.once("exit", coordinatorPool.closeOnExit);
+  } else if (!needed && coordinatorPool.exitCloseRegistered) {
+    process.removeListener("exit", coordinatorPool.closeOnExit);
   }
-  exitCloseRegistered = needed;
+  coordinatorPool.exitCloseRegistered = needed;
 }
 
 function takeIdleCoordinator(location: string) {
@@ -135,14 +161,14 @@ function takeIdleCoordinator(location: string) {
   return idle;
 }
 
-function closeIdleCoordinatorDatabase(database: DatabaseSync) {
+function closeIdleCoordinatorDatabase(database: DatabaseSync, location: string) {
   try {
     if (database.isOpen) {
       database.close();
     }
   } finally {
     if (database.isOpen) {
-      failedIdleCloses.add(database);
+      failedIdleCloses.set(database, location);
     } else {
       failedIdleCloses.delete(database);
     }
@@ -151,20 +177,48 @@ function closeIdleCoordinatorDatabase(database: DatabaseSync) {
 }
 
 function closeIdleCoordinatorsOnExit() {
-  const databases = new Set(failedIdleCloses);
+  const databases = new Map(failedIdleCloses);
   for (const [location] of idleCoordinators) {
     const idle = takeIdleCoordinator(location);
     if (idle) {
-      databases.add(idle.database);
+      databases.set(idle.database, location);
     }
   }
-  for (const database of databases) {
+  for (const [database, location] of databases) {
     try {
-      closeIdleCoordinatorDatabase(database);
+      closeIdleCoordinatorDatabase(database, location);
     } catch {
       // Process exit is the last cleanup opportunity for a failed native close.
     }
   }
+}
+
+function closeIdleCoordinatorPool(include: (location: string) => boolean = () => true): void {
+  const databases = new Map([...failedIdleCloses].filter(([, location]) => include(location)));
+  for (const [location] of idleCoordinators) {
+    if (!include(location)) {
+      continue;
+    }
+    const idle = takeIdleCoordinator(location);
+    if (idle) {
+      databases.set(idle.database, location);
+    }
+  }
+  const errors: unknown[] = [];
+  for (const [database, location] of databases) {
+    try {
+      closeIdleCoordinatorDatabase(database, location);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  throwSqliteLifecycleErrors(errors, "Idle SQLite coordinator cleanup failed");
+}
+
+/** Dispose a removed runtime's idle connections after its active owners have settled. */
+export function closeIdleSqliteCoordinators(rootPath: string): void {
+  const root = path.resolve(rootPath);
+  closeIdleCoordinatorPool((location) => isPathInside(root, location));
 }
 
 function readCoordinatorIdentity(location: string): fs.BigIntStats | undefined {
@@ -191,19 +245,7 @@ function matchesCoordinatorIdentity(left: fs.BigIntStats, right: fs.BigIntStats 
 function retainIdleCoordinator(location: string, database: DatabaseSync, identity: fs.BigIntStats) {
   const previous = takeIdleCoordinator(location);
   if (previous) {
-    closeIdleCoordinatorDatabase(previous.database);
-  }
-  if (idleCoordinators.size + failedIdleCloses.size >= MAX_IDLE_COORDINATORS) {
-    const oldest = idleCoordinators.keys().next().value;
-    if (oldest !== undefined) {
-      const evicted = takeIdleCoordinator(oldest);
-      if (evicted) {
-        closeIdleCoordinatorDatabase(evicted.database);
-      }
-    }
-  }
-  if (idleCoordinators.size + failedIdleCloses.size >= MAX_IDLE_COORDINATORS) {
-    return false;
+    closeIdleCoordinatorDatabase(previous.database, location);
   }
   const timer = runInCoordinatorPoolContext(() =>
     setTimeout(() => {
@@ -215,13 +257,13 @@ function retainIdleCoordinator(location: string, database: DatabaseSync, identit
         return;
       }
       try {
-        closeIdleCoordinatorDatabase(idle.database);
+        closeIdleCoordinatorDatabase(idle.database, location);
       } catch (error) {
         process.emitWarning(
           new SqliteCoordinatorError("Idle SQLite coordinator close failed", error),
         );
       }
-    }, IDLE_COORDINATOR_TIMEOUT_MS),
+    }, SQLITE_IDLE_HANDLE_TTL_MS),
   );
   timer.unref();
   idleCoordinators.set(location, { database, identity, timer });
@@ -246,22 +288,40 @@ function tryAcquireSqliteCoordinator(
   const before = poolLocation ? readCoordinatorIdentity(poolLocation) : undefined;
   const idle = poolLocation ? takeIdleCoordinator(poolLocation) : undefined;
   const reused = idle && matchesCoordinatorIdentity(idle.identity, before) ? idle : undefined;
-  if (idle && !reused) {
-    closeIdleCoordinatorDatabase(idle.database);
+  if (poolLocation && idle && !reused) {
+    closeIdleCoordinatorDatabase(idle.database, poolLocation);
   }
-  const database = reused?.database ?? openNodeSqliteDatabase(location);
+  const database = reused?.database ?? withSqliteNativeOpen(() => openNodeSqliteDatabase(location));
   let identity: fs.BigIntStats | undefined;
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
     // This handle never writes or commits data. Keep the empty database's initial
     // journal in memory so acquiring a lock does not create filesystem artifacts.
-    database.exec(
-      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; ${
-        mode === "exclusive"
-          ? "BEGIN EXCLUSIVE;"
-          : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1;"
-      }`,
-    );
+    const services =
+      mode === "exclusive" ? sqliteWriteAdmissionServicesForLocation(location) : undefined;
+    const deadline = performance.now() + busyTimeoutMs;
+    for (;;) {
+      const attemptTimeout = services
+        ? Math.min(25, Math.max(0, Math.ceil(deadline - performance.now())))
+        : busyTimeoutMs;
+      try {
+        database.exec(
+          `PRAGMA busy_timeout = ${attemptTimeout}; PRAGMA journal_mode = MEMORY; ${
+            mode === "exclusive"
+              ? "BEGIN EXCLUSIVE;"
+              : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1;"
+          }`,
+        );
+        break;
+      } catch (error) {
+        if (!services || !isSqliteLockError(error) || performance.now() >= deadline) {
+          throw error;
+        }
+        for (const service of services) {
+          service();
+        }
+      }
+    }
     if (poolLocation && before) {
       const current = readCoordinatorIdentity(poolLocation);
       if (matchesCoordinatorIdentity(before, current)) {
@@ -272,7 +332,7 @@ function tryAcquireSqliteCoordinator(
     }
   } catch (error) {
     if (poolLocation) {
-      closeIdleCoordinatorDatabase(database);
+      closeIdleCoordinatorDatabase(database, poolLocation);
     } else {
       database.close();
     }
@@ -321,7 +381,7 @@ function tryAcquireSqliteCoordinator(
       if (!retained && database.isOpen) {
         try {
           if (poolLocation) {
-            closeIdleCoordinatorDatabase(database);
+            closeIdleCoordinatorDatabase(database, poolLocation);
           } else {
             database.close();
           }
@@ -352,7 +412,7 @@ export function tryAcquireExclusiveSqliteCoordinator(
 /** Retain a read lock for a live handle; no rows or journal files are written. */
 export function tryAcquireSharedSqliteCoordinator(
   location: string,
-  options: { busyTimeoutMs?: number } = {},
+  options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
 ): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "shared", options);
 }

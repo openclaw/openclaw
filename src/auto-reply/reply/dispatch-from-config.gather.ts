@@ -169,6 +169,9 @@ export async function gatherDispatchRequest(
     messageId,
     sessionKey,
     sessionId: lifecycleSessionId,
+    // The target agent ingests the prompt for this turn even when a command
+    // retargets execution to another session's agent.
+    agentId: targetAgentId,
     source: "dispatch",
     processingReason: "message_start",
     startedAtMs: startTime,
@@ -270,7 +273,7 @@ export async function gatherDispatchRequest(
   };
 
   const boundAcpDispatchSessionKey = state.allowInboundHandlers
-    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    ? await resolveBoundAcpDispatchSessionKey({ ctx, cfg })
     : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
@@ -410,15 +413,18 @@ export async function gatherDispatchRequest(
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   try {
-    preparedReplyDispatchRuntime = params.usePublishedModelRuntime
-      ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
-          const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
-          return await loadPublishedGatewayReplyDispatchRuntime({
-            agentId: preparedReplyDispatchAgentId,
-            abortSignal: params.replyOptions?.abortSignal,
-          });
-        })
-      : undefined;
+    // Channel monitors can retain an older config across hot reloads. The Gateway
+    // publication owns admission; outside its lifecycle this returns undefined.
+    preparedReplyDispatchRuntime = await traceReplyPhase(
+      "reply.load_prepared_dispatch_runtime",
+      async () => {
+        const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+          abortSignal: params.replyOptions?.abortSignal,
+        });
+      },
+    );
   } catch (error) {
     if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
       return finishReplyOperationAborted();
@@ -442,28 +448,7 @@ export async function gatherDispatchRequest(
     routeThreadId,
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
-  const {
-    completeDispatchReplyOperation,
-    dispatchHookDispatcher,
-    ensureDispatchReplyOperation,
-    failDispatchReplyOperation,
-    getAgentRunId,
-    getAgentRunTerminalOutcome,
-    getDispatchAbortOperation,
-    getDispatchAbortSignal,
-    getDispatchReplyOperation,
-    getObservedReplyDelivery,
-    getPreDispatchAbortSignal,
-    getReplyOptions,
-    isDispatchOperationAborted,
-    isPreDispatchOperationAborted,
-    markObservedReplyDelivery,
-    releasePreDispatchLifecycleAdmission,
-    runWithDispatchLifecycleAdmission,
-    throwIfDispatchOperationAborted,
-    trackDispatchLifecycleWork,
-    turnLedger,
-  } = replyOperationCoordinator;
+  const { getDispatchReplyOperation, getPreDispatchAbortSignal } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
     getReplyOperation: getDispatchReplyOperation,
     hasInboundAudio: () =>
@@ -589,26 +574,7 @@ export async function gatherDispatchRequest(
     preparedReplyDispatchRuntime,
     pluginRegistry,
     replyOperationRunState,
-    completeDispatchReplyOperation,
-    dispatchHookDispatcher,
-    ensureDispatchReplyOperation,
-    failDispatchReplyOperation,
-    getAgentRunId,
-    getAgentRunTerminalOutcome,
-    getDispatchAbortOperation,
-    getDispatchAbortSignal,
-    getDispatchReplyOperation,
-    getObservedReplyDelivery,
-    getPreDispatchAbortSignal,
-    getReplyOptions,
-    isDispatchOperationAborted,
-    isPreDispatchOperationAborted,
-    markObservedReplyDelivery,
-    releasePreDispatchLifecycleAdmission,
-    runWithDispatchLifecycleAdmission,
-    throwIfDispatchOperationAborted,
-    trackDispatchLifecycleWork,
-    turnLedger,
+    ...replyOperationCoordinator,
     maybeApplyTtsWithFinalizationLease,
     hookRunner,
     timestamp,

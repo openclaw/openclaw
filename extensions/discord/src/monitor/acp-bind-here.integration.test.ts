@@ -1,5 +1,8 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover acp bind here.integration plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -30,6 +33,7 @@ import {
   type DiscordConfig,
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const baseCfg = {
   session: {
@@ -134,6 +138,8 @@ describe("Discord ACP bind here end-to-end flow", () => {
   });
 
   it("routes the next Discord DM turn to an existing ACP session binding", async () => {
+    const threadBindings = createNoopThreadBindingManager("default");
+    onTestFinished(() => threadBindings.stop());
     const adapter = createInMemoryDiscordBindingAdapter();
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:test-session",
@@ -203,6 +209,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         } as DiscordMessageEvent,
         client: createDmClient("dm-1"),
         botUserId: "bot-1",
+        threadBindings,
       }),
       allowFrom: ["*"],
     });

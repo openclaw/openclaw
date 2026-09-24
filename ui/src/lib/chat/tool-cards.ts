@@ -21,9 +21,9 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import { redactToolPayloadText } from "../browser-redact.ts";
-import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
-import { extractTextCached } from "./message-extract.ts";
+import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { readPreparedActivity } from "./tool-call-grouping.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
@@ -36,6 +36,20 @@ function resolveTranscriptMessageId(message: Record<string, unknown>): string | 
   const transcriptMeta = asNullableRecord(openClawMeta);
   return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
     ? transcriptMeta.id
+    : undefined;
+}
+
+function readToolOutputMetadata(value: unknown): ToolOutputMetadata | undefined {
+  const metadata = asNullableRecord(asNullableRecord(value)?.["__openclaw"]);
+  const output = asNullableRecord(metadata?.toolOutput);
+  return (output?.source === "provider-response" || output?.source === "execution") &&
+    output.modelInput === "unverified"
+    ? {
+        source: output.source,
+        modelInput: output.modelInput,
+        ...(output.outcome === "unknown" ? { outcome: "unknown" as const } : {}),
+        ...(output.captureTruncated === true ? { captureTruncated: true as const } : {}),
+      }
     : undefined;
 }
 
@@ -111,7 +125,22 @@ function readToolExitCode(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+export function isToolCardSkipped(card: ToolCard): boolean {
+  const details = readRecord(card.details);
+  return (
+    (card.live !== true || card.completed === true) &&
+    details?.status === "skipped" &&
+    details.deniedReason === "steering"
+  );
+}
+
 export function isToolCardError(card: ToolCard): boolean {
+  if (isToolCardSkipped(card)) {
+    return false;
+  }
+  if (card.activity) {
+    return card.activity.status === "failed";
+  }
   // Progress can contain error-shaped text; only a result may imply failure.
   const canInferFailure = card.live !== true || card.completed === true;
   return card.isError ?? (canInferFailure && isToolErrorOutput(card.outputText));
@@ -121,6 +150,27 @@ export function resolveToolCardOutcome(
   card: ToolCard,
   runActive: boolean | undefined,
 ): ToolCardOutcome {
+  if (isToolCardSkipped(card)) {
+    return "skipped";
+  }
+  // A response receipt without a native outcome must not become a success
+  // merely because history grouped it into a completed tool row.
+  if (card.toolOutput?.outcome === "unknown") {
+    return isToolCardError(card) ? "failed" : "unknown";
+  }
+  if (card.activity) {
+    switch (card.activity.status) {
+      case "failed":
+      case "blocked":
+        return card.activity.status;
+      case "completed":
+        return "succeeded";
+      case "running":
+        return runActive === true && card.live === true ? "running" : "unknown";
+      default:
+        return "unknown";
+    }
+  }
   if (isToolCardError(card)) {
     return "failed";
   }
@@ -218,13 +268,7 @@ function serializeToolInput(args: unknown): string | undefined {
   try {
     return JSON.stringify(args, null, 2);
   } catch {
-    if (typeof args === "number" || typeof args === "boolean" || typeof args === "bigint") {
-      return String(args);
-    }
-    if (typeof args === "symbol") {
-      return args.description ? `Symbol(${args.description})` : "Symbol()";
-    }
-    return Object.prototype.toString.call(args);
+    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
   }
 }
 
@@ -387,6 +431,17 @@ function extractToolCards(message: unknown): ToolCard[] {
             !fallbackMatchedCards.has(card),
         );
       const text = extractToolText(item);
+      const resultMetadata = asNullableRecord(item["__openclaw"]);
+      const resultMessageId =
+        resultMetadata && Object.hasOwn(resultMetadata, "id")
+          ? readNonBlankString(resultMetadata.id)
+          : transcriptMessageId;
+      const toolOutput = readToolOutputMetadata(item) ?? readToolOutputMetadata(m);
+      const outputTruncated =
+        (resultMetadata && Object.hasOwn(resultMetadata, "truncated")
+          ? resultMetadata
+          : asNullableRecord(m["__openclaw"])
+        )?.truncated === true;
       const details = item.details ?? m.details;
       // Browser previews trigger I/O. Nested content cannot override its tool
       // envelope, and a paired result cannot override the authoritative call.
@@ -411,6 +466,9 @@ function extractToolCards(message: unknown): ToolCard[] {
           existing.completed = true;
         }
         existing.outputText = text;
+        existing.resultMessageId = resultMessageId;
+        existing.outputTruncated = outputTruncated;
+        existing.toolOutput = toolOutput;
         existing.preview = presentation.preview;
         existing.browserTab = presentation.browserTab;
         if (details !== undefined) {
@@ -432,6 +490,9 @@ function extractToolCards(message: unknown): ToolCard[] {
         name,
         completed: true,
         outputText: text,
+        resultMessageId,
+        outputTruncated,
+        toolOutput,
         ...(details !== undefined ? { details } : {}),
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
@@ -446,7 +507,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
-    const text = extractTextCached(message) ?? undefined;
+    const text = extractToolText(m);
     const callId = resolveToolCallId({}, m);
     const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
@@ -456,6 +517,9 @@ function extractToolCards(message: unknown): ToolCard[] {
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
       outputText: text,
+      resultMessageId: transcriptMessageId,
+      outputTruncated: asNullableRecord(m["__openclaw"])?.truncated === true,
+      toolOutput: readToolOutputMetadata(m),
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
@@ -464,8 +528,17 @@ function extractToolCards(message: unknown): ToolCard[] {
     });
   }
 
+  const activityByCall = new Map(
+    readPreparedActivity(message)
+      .filter((item) => !item.suppressChannelProgress)
+      .map((item) => [item.toolCallId ?? item.itemId, item]),
+  );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    const activity = card.callId ? activityByCall.get(card.callId) : undefined;
+    if (activity) {
+      card.activity = activity;
+    }
     if (!card.browserTab || card.callId || card.messageId) {
       continue;
     }

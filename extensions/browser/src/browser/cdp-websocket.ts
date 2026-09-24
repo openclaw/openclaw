@@ -6,7 +6,7 @@ import net from "node:net";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
 import { getDirectAgentForCdp, withManagedProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -40,6 +40,15 @@ export type CdpSendFn = (
   params?: Record<string, unknown>,
   sessionId?: string,
 ) => Promise<unknown>;
+
+export class CdpSocketError extends Error {
+  constructor(
+    readonly kind: "closed" | "timeout" | "protocol",
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 function withDefaultPlaywrightUserAgent(headers: Record<string, string>): Record<string, string> {
   if (Object.keys(headers).some((key) => key.trim().toLowerCase() === "user-agent")) {
@@ -155,7 +164,7 @@ function createPinnedAgentForCdpUrl(
   return agent;
 }
 
-function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
+function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
@@ -178,7 +187,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
     const msg = { id, method, params, sessionId };
     return new Promise<unknown>((resolve, reject) => {
       if (ws.readyState !== WebSocket.OPEN) {
-        reject(new Error("CDP socket closed"));
+        reject(new CdpSocketError("closed", "CDP socket closed"));
         return;
       }
       const entry: Pending = { resolve, reject };
@@ -186,7 +195,12 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
         // A timed-out command closes the whole socket so pending calls do not
         // hang on a connection whose CDP command stream is no longer reliable.
         entry.timer = setTimeout(() => {
-          closeWithError(new Error(`CDP command ${method} timed out after ${commandTimeoutMs}ms`));
+          closeWithError(
+            new CdpSocketError(
+              "timeout",
+              `CDP command ${method} timed out after ${commandTimeoutMs}ms`,
+            ),
+          );
         }, commandTimeoutMs);
       }
       pending.set(id, entry);
@@ -206,7 +220,15 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       p.reject(err);
     }
     pending.clear();
-    ws.close();
+    if (
+      opts?.abortScope === "operation" &&
+      err instanceof CdpSocketError &&
+      err.kind === "timeout"
+    ) {
+      ws.terminate();
+    } else {
+      ws.close();
+    }
   };
 
   ws.on("error", (err) => {
@@ -231,7 +253,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       pending.delete(parsed.id);
       clearPendingTimer(p);
       if (parsed.error?.message) {
-        p.reject(new Error(parsed.error.message));
+        p.reject(new CdpSocketError("protocol", parsed.error.message));
         return;
       }
       p.resolve(parsed.result);
@@ -241,7 +263,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   });
 
   ws.on("close", () => {
-    closeWithError(new Error("CDP socket closed"));
+    closeWithError(new CdpSocketError("closed", "CDP socket closed"));
   });
 
   return { send, closeWithError };
@@ -301,6 +323,8 @@ type CdpSocketOptions = {
   handshakeMaxRetryDelayMs?: number;
   lookup?: CdpSocketLookup;
   signal?: AbortSignal;
+  /** Read-only probes can cancel commands; write callers retain the socket for compensation. */
+  abortScope?: "operation";
 };
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
@@ -370,49 +394,51 @@ export async function withCdpSocket<T>(
     const openPromise = new Promise<void>((resolve, reject) => {
       ws.once("open", () => resolve());
       ws.once("error", (err) => reject(err));
-      ws.once("close", () => reject(new Error("CDP socket closed")));
+      ws.once("close", () => reject(new CdpSocketError("closed", "CDP socket closed")));
     });
     // A stalled HTTP upgrade must release its TCP socket on cancellation.
-    const abortHandshake = () => ws.terminate();
-    opts?.signal?.addEventListener("abort", abortHandshake, { once: true });
+    const abortSocket = () => {
+      closeWithError(toStringifiedError(opts?.signal?.reason));
+      ws.terminate();
+    };
+    opts?.signal?.addEventListener("abort", abortSocket, { once: true });
     if (opts?.signal?.aborted) {
-      abortHandshake();
+      abortSocket();
     }
 
     try {
-      await openPromise;
-    } catch (err) {
-      // openPromise is only rejected via `ws.once('error', err => reject(err))`
-      // or the close event's `new Error(...)`; the former always carries an
-      // Error from Node's `ws` library, the latter is already an Error. The
-      // non-Error wrap is defensive and structurally unreachable.
-      /* c8 ignore next */
-      closeWithError(toStringifiedError(err));
-      // Cancellation on the final attempt must not become a handshake error.
-      opts?.signal?.throwIfAborted();
-      if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
-        throw err;
+      try {
+        await openPromise;
+      } catch (err) {
+        closeWithError(toStringifiedError(err));
+        opts?.signal?.throwIfAborted();
+        if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
+          throw err;
+        }
+        // Retry only before commands can have side effects.
+        await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
+          (error: unknown) => {
+            opts?.signal?.throwIfAborted();
+            throw error;
+          },
+        );
+        continue;
       }
-      // Retry only handshake failures. Once CDP commands are flowing, callers
-      // own retry semantics because commands may already have side effects.
-      // Cancelled route requests must not keep retrying Chrome handshakes.
-      await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
-        (error: unknown) => {
-          opts?.signal?.throwIfAborted();
-          throw error;
-        },
-      );
-      continue;
-    } finally {
-      opts?.signal?.removeEventListener("abort", abortHandshake);
-    }
-
-    try {
-      return await fn(send);
+      if (opts?.abortScope !== "operation") {
+        opts?.signal?.removeEventListener("abort", abortSocket);
+      } else {
+        opts.signal?.throwIfAborted();
+      }
+      const result = await fn(send);
+      if (opts?.abortScope === "operation") {
+        opts.signal?.throwIfAborted();
+      }
+      return result;
     } catch (err) {
       closeWithError(toStringifiedError(err));
       throw err;
     } finally {
+      opts?.signal?.removeEventListener("abort", abortSocket);
       ws.close();
     }
   }

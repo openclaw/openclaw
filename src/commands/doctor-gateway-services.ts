@@ -2,13 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -21,7 +19,7 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
+import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -29,104 +27,65 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
-import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
-import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
-  normalizeServiceEnvKey,
-  readManagedServiceEnvKeysFromEnvironment,
-} from "../daemon/service-managed-env.js";
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+} from "../daemon/service-layout.js";
+import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
 import {
   assertServiceDefinitionWritable,
-  hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
-  type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
-import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import {
   findSystemdGatewayInstallation,
   isSystemUnitActiveAndEnabled,
   isSystemdUnitActive,
   uninstallLegacySystemdUnits,
   uninstallUserSystemdGatewayUnit,
-  type SystemdUnitScope,
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
-import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
+import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { resolveGatewayDaemonRuntime, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
+import {
+  assertGatewayServiceInstallationRepairAllowed,
+  canRepairRunningGatewayDefinition,
+  installDoctorGatewayService,
+  isExecStartRepairIssue,
+  resolveSystemdScopeFromServicePath,
+  resolveSystemdServiceRewriteBlock,
+  resolveSystemdUnitNameFromServicePath,
+  type DoctorGatewayInstallationMaintenance,
+} from "./doctor-gateway-installation.js";
+import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import { isDoctorUpdateRepairMode } from "./doctor-repair-mode.js";
+import {
+  formatServiceConfigIssues,
+  hasRepairableServiceDefinitionDrift,
+  isOperatorOwnedEnvironmentIssue,
+  isServiceDefinitionOnlyRepair,
+  isServiceInstallationOnlyRepair,
+  reportServiceDefinitionDrift,
+} from "./doctor-service-audit.js";
 import {
   confirmDoctorServiceRepair,
-  EXTERNAL_SERVICE_REPAIR_NOTE,
-  isServiceRepairExternallyManaged,
+  formatServiceRepairDeferredNote,
+  isServiceRepairDeferred,
   resolveServiceRepairPolicy,
-  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
-import {
-  UPDATE_IN_PROGRESS_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
-  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
-  UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
-} from "./doctor/shared/update-phase.js";
 
 type GatewayServiceConfigRepairOptions = {
-  allowConfigSizeDrop?: boolean;
   allowExecSecretRefs?: boolean;
-  lastTouchedVersionOverride?: string;
-  preservedLegacyRootKeys?: readonly string[];
-  skipPluginValidation?: boolean;
+  /** Resolves with the persisted candidate; refusal must reject before service mutation. */
+  writeConfig: (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
+  serviceMaintenance?: DoctorGatewayInstallationMaintenance;
 };
 
-function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolean {
-  return (
-    isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) &&
-    !isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
-  );
-}
-
-function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
-  const activationPolicy = resolveUpdateParentGatewayActivation(env);
-  if (activationPolicy !== undefined) {
-    return activationPolicy;
-  }
-  // Shipped parents predate the marker. Recover their explicit CLI policy from
-  // the direct parent; unreadable ancestry stays staged rather than disrupting it.
-  const parentArgs = readWindowsProcessArgsSync(process.ppid, 1_500);
-  if (parentArgs === null) {
-    return false;
-  }
-  const normalizedParentArgs = parentArgs.map(normalizeLowercaseStringOrEmpty);
-  const updateIndex = Math.max(
-    normalizedParentArgs.lastIndexOf("update"),
-    normalizedParentArgs.lastIndexOf("--update"),
-  );
-  const legacyDoctorUpdateParent = normalizedParentArgs.lastIndexOf("doctor") >= 0;
-  const legacyWizardParent = updateIndex >= 0 && normalizedParentArgs[updateIndex + 1] === "wizard";
-  return (
-    (updateIndex >= 0 || legacyDoctorUpdateParent) &&
-    !legacyWizardParent &&
-    !normalizedParentArgs.includes("--no-restart")
-  );
-}
-
-function updateParentAllowsGatewayServiceRepair(env: NodeJS.ProcessEnv): boolean {
-  const repairPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV];
-  // A legacy parent cannot prove which checkout owns the service. First upgrade fails closed.
-  return repairPolicy !== undefined && isTruthyEnvValue(repairPolicy);
-}
-
-const EXECSTART_REPAIR_CODES = new Set<string>([
-  SERVICE_AUDIT_CODES.gatewayCommandMissing,
-  SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
-]);
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
 async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
@@ -154,151 +113,12 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
 }
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
-function findGatewayEntrypoint(programArguments?: string[]): string | null {
-  if (!programArguments || programArguments.length === 0) {
-    return null;
-  }
-  const gatewayIndex = programArguments.indexOf("gateway");
-  if (gatewayIndex <= 0) {
-    return null;
-  }
-  return programArguments[gatewayIndex - 1] ?? null;
-}
-
-async function buildExpectedGatewayServicePlan(params: {
-  cfg: OpenClawConfig;
-  command: GatewayServiceCommandConfig;
-  serviceInstallEnv: NodeJS.ProcessEnv;
-  port: number;
-  runtime: GatewayDaemonRuntime;
-  runtimePath?: string;
-}) {
-  const managed = resolveManagedGatewayServiceCommand(params.command);
-  return buildGatewayInstallPlan({
-    env: params.serviceInstallEnv,
-    port: params.port,
-    runtime: params.runtime,
-    runtimePath: params.runtimePath,
-    existingCommand: params.command,
-    existingEnvironment: managed?.environment,
-    existingEnvironmentValueSources: managed?.environmentValueSources,
-    warn: (message, title) => note(message, title),
-    config: params.cfg,
-  });
-}
-
-async function normalizeExecutablePath(value: string): Promise<string> {
-  const resolvedPath = path.resolve(value);
-  try {
-    return await fs.realpath(resolvedPath);
-  } catch {
-    return resolvedPath;
-  }
-}
-
 function extractDetailPath(detail: string, prefix: string): string | null {
   if (!detail.startsWith(prefix)) {
     return null;
   }
   const value = detail.slice(prefix.length).trim();
   return value.length > 0 ? value : null;
-}
-
-function isExecStartRepairIssue(issue: { code: string }): boolean {
-  return EXECSTART_REPAIR_CODES.has(issue.code);
-}
-
-function isOperatorOwnedEnvironmentIssue(
-  issue: { code: string; environmentKeys?: readonly string[] },
-  command: GatewayServiceCommandConfig,
-  environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
-): boolean {
-  switch (issue.code) {
-    case SERVICE_AUDIT_CODES.gatewayPathMissing:
-    case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
-    case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:
-      return hasGatewayServiceEnvironmentOverride(command, ["PATH"], { environmentValueSources });
-    case SERVICE_AUDIT_CODES.gatewayTokenEmbedded:
-    case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
-    case SERVICE_AUDIT_CODES.gatewayTokenDrift:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
-        environmentValueSources,
-      });
-    case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
-      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
-        environmentValueSources,
-      });
-    case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
-      return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
-        environmentValueSources,
-        normalizeKey: normalizeServiceEnvKey,
-      });
-    case SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded:
-      return hasGatewayServiceEnvironmentOverride(
-        command,
-        (issue.environmentKeys ?? []).filter((key) =>
-          SERVICE_PROXY_ENV_KEYS.some((proxyKey) => proxyKey === key),
-        ),
-        { ignoreResets: true },
-      );
-    default:
-      return false;
-  }
-}
-
-function resolveSystemdScopeFromServicePath(sourcePath: string | undefined): SystemdUnitScope {
-  const normalized = sourcePath?.replaceAll("\\", "/") ?? "";
-  return normalized.startsWith("/etc/systemd/") ||
-    normalized.startsWith("/usr/lib/systemd/") ||
-    normalized.startsWith("/lib/systemd/")
-    ? "system"
-    : "user";
-}
-
-function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): string {
-  const base = sourcePath ? path.posix.basename(sourcePath.replaceAll("\\", "/")) : "";
-  return base.endsWith(".service") ? base : "openclaw-gateway.service";
-}
-
-function shouldDeferUpdateModeSystemdServiceRepair(params: {
-  repairMode: DoctorPrompter["repairMode"];
-  shouldForce: boolean;
-}): boolean {
-  return (
-    process.platform === "linux" &&
-    isDoctorUpdateRepairMode(params.repairMode) &&
-    !params.shouldForce
-  );
-}
-
-async function readWindowsGatewayRuntimeForUpdateRepair(params: {
-  service: ReturnType<typeof resolveGatewayService>;
-  env: NodeJS.ProcessEnv;
-}): Promise<GatewayServiceRuntime | null> {
-  if (process.platform !== "win32") {
-    return null;
-  }
-  return await params.service.readRuntime(params.env).catch(() => null);
-}
-
-async function resolveSystemdServiceRewriteBlock(
-  command: GatewayServiceCommandConfig,
-  issues: { code: string }[],
-): Promise<string | undefined> {
-  if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
-    return undefined;
-  }
-  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
-  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
-  const active = await isSystemdUnitActive(process.env, unitName, scope);
-  if (!active.ok) {
-    return `Could not determine whether gateway service ${unitName} is active: ${active.error}. Leaving supervisor metadata unchanged. Check \`systemctl${scope === "user" ? " --user" : ""} status ${unitName}\` and rerun doctor.`;
-  }
-  if (!active.value) {
-    return undefined;
-  }
-  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
-  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`openclaw gateway install --force\` when you want to replace the active launcher.`;
 }
 
 async function filterInactiveExtraGatewayServices(
@@ -498,15 +318,15 @@ async function cleanupLegacyLinuxUserServices(
 /**
  * Audits and optionally rewrites the installed local gateway service configuration.
  *
- * The repair preserves managed env sources and avoids Nix/remote installs. Update-mode repairs
- * stay staged except for running Windows services, which must be activated to replace a fallback.
+ * The repair preserves managed env sources and avoids Nix/remote installs.
+ * Updater-driven Doctor leaves service publication with update finalization.
  */
 export async function maybeRepairGatewayServiceConfig(
   cfg: OpenClawConfig,
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-  options: GatewayServiceConfigRepairOptions = {},
+  options: GatewayServiceConfigRepairOptions,
 ): Promise<OpenClawConfig> {
   if (!isDefaultInstallIdentity(process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
@@ -522,6 +342,9 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
+
   const service = resolveGatewayService();
   let command: Awaited<ReturnType<typeof service.readCommand>> | null;
   try {
@@ -535,15 +358,9 @@ export async function maybeRepairGatewayServiceConfig(
       command: null,
       platform: process.platform,
     });
+    reportServiceDefinitionDrift(audit);
     if (audit.issues.length > 0) {
-      note(
-        audit.issues
-          .map((issue) =>
-            issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
-          )
-          .join("\n"),
-        "Gateway service config",
-      );
+      note(formatServiceConfigIssues(audit.issues).join("\n"), "Gateway service config");
     }
     return cfg;
   }
@@ -555,10 +372,13 @@ export async function maybeRepairGatewayServiceConfig(
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const serviceInstallEnv =
-    managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
-      ? { ...process.env, [OPENCLAW_WRAPPER_ENV_KEY]: managedWrapperPath }
-      : process.env;
+  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const serviceInstallEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
+      ? { [OPENCLAW_WRAPPER_ENV_KEY]: managedWrapperPath }
+      : {}),
+  };
   const serviceWrapperPath = normalizeOptionalString(
     command.environment?.[OPENCLAW_WRAPPER_ENV_KEY],
   );
@@ -590,9 +410,17 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const expectedGatewayToken = tokenRefConfigured ? undefined : gatewayTokenResolution.token;
   const port = resolveGatewayPort(cfg, process.env);
-  const runtimeChoice = resolveGatewayDaemonRuntime(managedDefinition.programArguments);
+  const hasInstallWrapper = Boolean(serviceInstallEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim());
+  const activeRuntimePin = hasInstallWrapper ? undefined : pinSnapshot.pin?.path;
+  const runtimeChoice = hasInstallWrapper
+    ? "node"
+    : resolveGatewayDaemonRuntime(
+        activeRuntimePin ? [activeRuntimePin] : managedDefinition.programArguments,
+      );
   const installedRuntimePath =
-    runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
+    runtimeChoice === "bun"
+      ? (activeRuntimePin ?? managedDefinition.programArguments[0])
+      : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
     command,
@@ -600,7 +428,19 @@ export async function maybeRepairGatewayServiceConfig(
     port,
     runtime: runtimeChoice,
     runtimePath: installedRuntimePath,
+    pinnedRuntimePath: pinSnapshot.pin?.path,
   });
+  const expectedLayout = await summarizeGatewayServiceLayout(expectedPlan);
+  const expectedRoot = expectedLayout?.packageRootReal;
+  const installationDrift = expectedRoot
+    ? await inspectGatewayServiceInstallationDrift(serviceLayout, expectedRoot)
+    : undefined;
+  const repairPort =
+    installationDrift &&
+    cfg.gateway?.port === undefined &&
+    !process.env.OPENCLAW_GATEWAY_PORT?.trim()
+      ? (parseTcpPortFromArgs(command.programArguments) ?? port)
+      : port;
   const expectedManagedServiceEnvKeys = readManagedServiceEnvKeysFromEnvironment(
     expectedPlan.environment,
   );
@@ -610,8 +450,15 @@ export async function maybeRepairGatewayServiceConfig(
     expectedGatewayToken,
     expectedManagedServiceEnvKeys,
     expectedServicePath: expectedPlan.environment.PATH,
-    expectedPort: port,
+    expectedPort: repairPort,
+    ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
+  reportServiceDefinitionDrift(audit);
+  const definitionRepair =
+    !installationDrift &&
+    Boolean(expectedRoot) &&
+    !expectedLayout?.entrypointSourceCheckout &&
+    hasRepairableServiceDefinitionDrift(audit);
   if (audit.runtimeNote) {
     note(audit.runtimeNote, "Gateway runtime");
   }
@@ -625,7 +472,8 @@ export async function maybeRepairGatewayServiceConfig(
       level: "recommended",
     });
   }
-  const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  const needsNodeRuntime =
+    !hasInstallWrapper && !activeRuntimePin && needsNodeRuntimeMigration(audit.issues);
   // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
@@ -649,34 +497,50 @@ export async function maybeRepairGatewayServiceConfig(
           cfg,
           command,
           serviceInstallEnv,
-          port,
+          port: repairPort,
           runtime: "node",
           runtimePath: systemNodePath,
         })
       : expectedPlan;
-  const { programArguments } = expectedRuntimePlan;
-  const expectedEntrypoint = findGatewayEntrypoint(programArguments);
-  const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
-  const normalizedExpectedEntrypoint = expectedEntrypoint
-    ? await normalizeExecutablePath(expectedEntrypoint)
-    : null;
-  const normalizedCurrentEntrypoint = serviceLayout?.entrypoint
-    ? await normalizeExecutablePath(serviceLayout.entrypoint)
-    : null;
+  if (installationDrift && expectedRoot) {
+    note(
+      formatGatewayServiceInstallationDrift(installationDrift, undefined, serviceInstallEnv),
+      "Gateway service installation",
+    );
+    if (!serviceRepairDeferred) {
+      try {
+        await assertGatewayServiceInstallationRepairAllowed({
+          service,
+          command,
+          activeRoot: expectedRoot,
+          maintenance: options.serviceMaintenance,
+        });
+      } catch (error) {
+        note(String(error), "Gateway service installation");
+        return cfg;
+      }
+    }
+  }
+  const runtimeLayout =
+    expectedRuntimePlan === expectedPlan
+      ? expectedLayout
+      : await summarizeGatewayServiceLayout(expectedRuntimePlan);
   if (
-    normalizedExpectedEntrypoint &&
-    normalizedCurrentEntrypoint &&
-    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
+    runtimeLayout?.entrypointReal &&
+    serviceLayout?.entrypointReal &&
+    runtimeLayout.entrypointReal !== serviceLayout.entrypointReal
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
       message: "Gateway service entrypoint does not match the current install.",
-      detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
+      detail: `${serviceLayout?.entrypoint} -> ${runtimeLayout?.entrypoint}`,
       level: "recommended",
     });
   }
 
-  const serviceRewriteBlock = await resolveSystemdServiceRewriteBlock(command, audit.issues);
+  const serviceRewriteBlock = installationDrift
+    ? undefined
+    : await resolveSystemdServiceRewriteBlock(command, audit.issues);
   if (serviceRewriteBlock) {
     note(serviceRewriteBlock, "Gateway service config");
   }
@@ -686,35 +550,34 @@ export async function maybeRepairGatewayServiceConfig(
   );
   const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
 
-  if (audit.issues.length === 0) {
+  if (audit.issues.length === 0 && !definitionRepair) {
     if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
       note(sourceCheckoutWarning, "Gateway service config");
     }
     return cfg;
   }
 
-  const serviceRepairPolicy = resolveServiceRepairPolicy();
-  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
-
   const consolidatedLines: string[] = [];
   let emittedSourceCheckoutWarning = false;
   if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
-    consolidatedLines.push(sourceCheckoutWarning);
-    consolidatedLines.push("");
+    consolidatedLines.push(sourceCheckoutWarning, "");
     emittedSourceCheckoutWarning = true;
   }
-  consolidatedLines.push(
-    ...audit.issues.map((issue) =>
-      issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
-    ),
-  );
+  consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
-  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+  if (
+    audit.issues.length > 0 &&
+    audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
+  ) {
     return cfg;
   }
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
-  const needsAggressive = aggressiveIssues.length > 0;
+  const needsAggressive =
+    aggressiveIssues.length > 0 ||
+    (installationDrift !== undefined &&
+      (audit.definitionDriftError !== undefined ||
+        audit.definitionDrift?.some((finding) => finding.kind === "unknown-edit") === true));
 
   if (needsAggressive && !prompter.shouldForce) {
     note(
@@ -723,8 +586,16 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
-  if (serviceRepairExternal) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");
+  if (serviceRepairDeferred) {
+    note(formatServiceRepairDeferredNote(), "Gateway service config");
+    return cfg;
+  }
+
+  if (
+    definitionRepair &&
+    !options.serviceMaintenance &&
+    !(await canRepairRunningGatewayDefinition({ service, command, env: serviceInstallEnv }))
+  ) {
     return cfg;
   }
 
@@ -752,45 +623,22 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
-  if (updateRepairMode && !updateParentAllowsGatewayServiceRepair(process.env)) {
-    note(
-      "Update parent did not authorize changes to this gateway service definition; leaving it unchanged.",
-      "Gateway service config",
-    );
-    return cfg;
-  }
-  if (
-    shouldDeferUpdateModeSystemdServiceRepair({
-      repairMode: prompter.repairMode,
-      shouldForce: prompter.shouldForce,
-    })
-  ) {
-    note(
-      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to rewrite its managed unit; operator-owned drop-ins remain unchanged.",
-      "Gateway service config",
-    );
-    return cfg;
-  }
-
-  const repairMessage = needsAggressive
-    ? "Overwrite gateway service config with current defaults now?"
-    : "Update gateway service config to the recommended defaults now?";
-  const repair = updateRepairMode
-    ? needsAggressive
-      ? await prompter.confirmAggressiveAutoFix({
-          message: repairMessage,
-          initialValue: prompter.shouldForce,
-        })
-      : await prompter.confirmAutoFix({
-          message: repairMessage,
-          initialValue: true,
-        })
-    : await prompter.confirmRuntimeRepair({
-        message: repairMessage,
-        initialValue: needsAggressive ? prompter.shouldForce : true,
-        requiresInteractiveConfirmation: true,
-      });
+  const gatewayTokenForRepair = expectedGatewayToken ?? readEmbeddedGatewayToken(managedDefinition);
+  const configuredGatewayToken =
+    typeof cfg.gateway?.auth?.token === "string"
+      ? normalizeOptionalString(cfg.gateway.auth.token)
+      : undefined;
+  const needsConfigWrite =
+    !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
+  const repair = await prompter.confirmRuntimeRepair({
+    message: needsAggressive
+      ? "Overwrite gateway service config with current defaults now?"
+      : "Update gateway service config to the recommended defaults now?",
+    initialValue: needsAggressive ? prompter.shouldForce : true,
+    requiresInteractiveConfirmation:
+      !(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
+      !(definitionRepair && !needsConfigWrite && isServiceDefinitionOnlyRepair(audit)),
+  });
   if (!repair) {
     if (!emittedSourceCheckoutWarning) {
       note(
@@ -818,75 +666,8 @@ export async function maybeRepairGatewayServiceConfig(
     runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
-  const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);
-  const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
-  const configuredGatewayToken =
-    typeof cfg.gateway?.auth?.token === "string"
-      ? normalizeOptionalString(cfg.gateway.auth.token)
-      : undefined;
   let cfgForServiceInstall = cfg;
-  // Windows update repairs rewrite the Scheduled Task immediately, so migrate an
-  // embedded legacy token first; otherwise the restarted gateway loses auth.
-  const updateRepairWillRewriteWindowsTask = updateRepairMode && process.platform === "win32";
-  const serviceRuntimeEnv = {
-    ...serviceInstallEnv,
-    ...managedDefinition.environment,
-  };
-  const installedWindowsTaskName =
-    managedDefinition.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
-  const serviceRepairEnv =
-    updateRepairWillRewriteWindowsTask && installedWindowsTaskName
-      ? {
-          ...serviceInstallEnv,
-          OPENCLAW_WINDOWS_TASK_NAME: installedWindowsTaskName,
-        }
-      : serviceInstallEnv;
-  const updateRepairCanActivateGateway =
-    updateRepairWillRewriteWindowsTask && updateParentAllowsGatewayActivation(process.env);
-  // Config writes can make the live gateway reload between audit and repair.
-  // Preserve its initial state so a transient reload does not strand a fallback.
-  const updateRepairRuntime = updateRepairCanActivateGateway
-    ? await readWindowsGatewayRuntimeForUpdateRepair({
-        service,
-        env: serviceRuntimeEnv,
-      })
-    : null;
-  const updateRepairShouldInstall = updateRepairRuntime?.status === "running";
-  let startupFallbackTakeoverRuntime: GatewayServiceRuntime | undefined;
-  if (updateRepairShouldInstall) {
-    try {
-      const fallbackRuntime = await readWindowsStartupFallbackRuntimeForUpdate(serviceRuntimeEnv);
-      if (fallbackRuntime && (fallbackRuntime.status !== "running" || !fallbackRuntime.pid)) {
-        note(
-          "Could not verify the running Windows login item before service repair; leaving it unchanged.",
-          "Gateway",
-        );
-        return cfg;
-      }
-      startupFallbackTakeoverRuntime = fallbackRuntime ?? undefined;
-    } catch (err) {
-      runtime.error(
-        `Could not inspect the Windows login item before service repair: ${String(err)}`,
-      );
-      return cfg;
-    }
-  }
-  if (
-    (!updateRepairMode || updateRepairWillRewriteWindowsTask) &&
-    !tokenRefConfigured &&
-    !configuredGatewayToken &&
-    gatewayTokenForRepair
-  ) {
-    if (
-      updateRepairWillRewriteWindowsTask &&
-      shouldSkipLegacyUpdateRepairConfigWrite(process.env)
-    ) {
-      note(
-        "Legacy update parent cannot persist gateway.auth.token before service repair; leaving the existing gateway service unchanged.",
-        "Gateway",
-      );
-      return cfg;
-    }
+  if (needsConfigWrite) {
     const nextCfg: OpenClawConfig = {
       ...cfg,
       gateway: {
@@ -899,20 +680,7 @@ export async function maybeRepairGatewayServiceConfig(
       },
     };
     try {
-      await replaceConfigFile({
-        nextConfig: nextCfg,
-        afterWrite: { mode: "auto" },
-        writeOptions: {
-          auditOrigin: "doctor",
-          allowConfigSizeDrop: options.allowConfigSizeDrop === true || updateRepairMode,
-          skipPluginValidation: options.skipPluginValidation === true || updateRepairMode,
-          preservedLegacyRootKeys: options.preservedLegacyRootKeys,
-          ...(options.lastTouchedVersionOverride
-            ? { lastTouchedVersionOverride: options.lastTouchedVersionOverride }
-            : {}),
-        },
-      });
-      cfgForServiceInstall = nextCfg;
+      cfgForServiceInstall = await options.writeConfig(nextCfg);
       note(
         expectedGatewayToken
           ? "Persisted gateway.auth.token from environment before reinstalling service."
@@ -928,52 +696,34 @@ export async function maybeRepairGatewayServiceConfig(
     }
   }
 
-  const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
     command,
     serviceInstallEnv,
-    port: updatedPort,
+    port: repairPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     runtimePath: needsNodeRuntime && systemNodePath ? systemNodePath : installedRuntimePath,
+    pinnedRuntimePath: pinSnapshot.pin?.path,
   });
-  // Windows `install` activates the task/login item. Require both a running
-  // gateway and parent authorization so `update --no-restart` stays non-disruptive.
-  const repairService =
-    updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
-  try {
-    await repairService({
-      env: serviceRepairEnv,
+  await installDoctorGatewayService({
+    service,
+    command,
+    maintenance: options.serviceMaintenance,
+    runtime,
+    repair:
+      installationDrift && expectedRoot
+        ? { kind: "installation", root: expectedRoot }
+        : definitionRepair && expectedRoot
+          ? { kind: "definition", root: expectedRoot }
+          : { kind: "config" },
+    args: {
+      ...updatedPlan,
+      runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
+      env: serviceInstallEnv,
       stdout: process.stdout,
       warn: (message) => note(message, "Gateway"),
-      programArguments: updatedPlan.programArguments,
-      workingDirectory: updatedPlan.workingDirectory,
-      environment: updatedPlan.environment,
-      environmentValueSources: updatedPlan.environmentValueSources,
-      startupFallbackTakeoverRuntime,
-    });
-    if (
-      updateRepairShouldInstall &&
-      !isTruthyEnvValue(process.env[UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV])
-    ) {
-      const restartEnv = {
-        ...serviceRepairEnv,
-        ...updatedPlan.environment,
-      };
-      if (installedWindowsTaskName) {
-        // Scheduled Task identity is caller-owned; a canonical rebuilt plan must
-        // not redirect restart/cleanup to the default task after profile repair.
-        restartEnv.OPENCLAW_WINDOWS_TASK_NAME = installedWindowsTaskName;
-      }
-      await service.restart({
-        env: restartEnv,
-        stdout: process.stdout,
-      });
-      note("Restarted the repaired gateway for a legacy update parent.", "Gateway");
-    }
-  } catch (err) {
-    runtime.error(`Gateway service update failed: ${String(err)}`);
-  }
+    },
+  });
   return cfgForServiceInstall;
 }
 
@@ -1002,11 +752,11 @@ export async function maybeScanExtraGatewayServices(
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
     const serviceRepairPolicy = resolveServiceRepairPolicy();
-    const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Legacy gateway cleanup skipped");
+    const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
     }
-    const shouldRemove = serviceRepairExternal
+    const shouldRemove = serviceRepairDeferred
       ? false
       : await confirmDoctorServiceRepair(
           prompter,
@@ -1048,7 +798,10 @@ export async function maybeScanExtraGatewayServices(
     extraServices.filter((service) => service.legacy !== true),
   );
   if (cleanupHints.length > 0) {
-    note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    note(
+      cleanupHints.map((hint) => `- ${hint}`).join("\n"),
+      process.platform === "linux" ? "Inspection hints" : "Cleanup hints",
+    );
   }
 
   note(
@@ -1126,8 +879,8 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   );
 
   const policy = resolveServiceRepairPolicy();
-  if (isServiceRepairExternallyManaged(policy)) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway cleanup skipped");
+  if (isServiceRepairDeferred(policy)) {
+    note(formatServiceRepairDeferredNote(), "Gateway cleanup skipped");
     return;
   }
 

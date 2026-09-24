@@ -279,43 +279,6 @@ if (process.exitCode === 0) {
     }
   });
 
-  it.each(["ready", "stale", "incomplete"])(
-    "checks %s macOS Resources ahead of a healthy unused dist root",
-    async (kind) => {
-      const root = abs("fixtures/packaged-app");
-      const execPath = path.join(root, "OpenClaw.app", "Contents", "MacOS", "OpenClaw");
-      const bundledUiDir = path.join(root, "OpenClaw.app", "Contents", "Resources", "control-ui");
-      const indexPath = path.join(bundledUiDir, "index.html");
-      const document = (buildId: string) =>
-        `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`;
-      setFile(execPath);
-      setFile(indexPath, document(kind === "stale" ? "runtime-a" : "runtime-b"));
-      if (kind !== "incomplete") {
-        setFile(path.join(bundledUiDir, "assets", "startup.js"));
-      }
-      setFile(path.join(root, "dist", "control-ui", "index.html"), document("runtime-b"));
-      setFile(path.join(root, "dist", "control-ui", "assets", "startup.js"));
-      setFile(path.join(root, "ui", "vite.config.ts"));
-      setFile(path.join(root, "scripts", "ui.js"));
-      vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValue(root);
-
-      const result = await ensureControlUiAssetsBuilt(undefined, {
-        argv1: path.join(root, "entry.js"),
-        cwd: root,
-        execPath,
-        expectedBuildId: "runtime-b",
-      });
-      expect(result).toMatchObject({ ok: kind === "ready", built: false });
-      if (result.ok) {
-        expect(result.assets.indexPath).toBe(indexPath);
-      } else {
-        expect(result.message).toContain(indexPath);
-        expect(result.message).toContain("Reinstall OpenClaw");
-      }
-      expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
-
   it("tells packaged installs to reinstall when their bundled assets are missing", async () => {
     const root = abs("fixtures/packaged-missing");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
@@ -374,6 +337,58 @@ if (process.exitCode === 0) {
         message: expect.stringContaining("index.html exceeds its size limit"),
       }),
     );
+  });
+
+  it("enforces the index limit when the file grows after metadata admission", () => {
+    const root = abs("fixtures/growing-index");
+    const indexPath = path.join(root, "index.html");
+    setFile(indexPath, "<html></html>");
+    const identity = fs.statSync(indexPath);
+    const statSync = fs.statSync;
+    const fstatSync = fs.fstatSync;
+    let grew = false;
+    const grow = (stat: fs.Stats | fs.BigIntStats) => {
+      if (!grew && BigInt(stat.ino) === BigInt(identity.ino)) {
+        grew = true;
+        fs.appendFileSync(indexPath, "x".repeat(256 * 1024));
+      }
+    };
+    const pathStat = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const stat = statSync(...args);
+      if (stat) {
+        grow(stat);
+      }
+      return stat;
+    });
+    const descriptorStat = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+      const stat = fstatSync(...args);
+      grow(stat);
+      return stat;
+    });
+    try {
+      expect(inspectControlUiRootAssets(root)).toEqual({
+        kind: "incomplete",
+        indexPath,
+        missingAsset: "index.html exceeds its size limit",
+      });
+      expect(grew).toBe(true);
+    } finally {
+      pathStat.mockRestore();
+      descriptorStat.mockRestore();
+    }
+  });
+
+  it.each(["symlink", "hardlink"])("accepts a contained %s index", (kind) => {
+    const root = abs(`fixtures/${kind}-index`);
+    const target = path.join(root, "original.html");
+    setFile(target, "<html></html>");
+    const indexPath = path.join(root, "index.html");
+    if (kind === "symlink") {
+      fs.symlinkSync(target, indexPath, "file");
+    } else {
+      fs.linkSync(target, indexPath);
+    }
+    expect(inspectControlUiRootAssets(root)).toEqual({ kind: "ready", indexPath });
   });
 
   it("builds the source checkout selected by canonical package-root discovery", async () => {
@@ -578,16 +593,6 @@ if (process.exitCode === 0) {
     // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
-  });
-
-  it("prefers packaged app Control UI assets in Contents/Resources", () => {
-    const execPath = abs("fixtures/OpenClaw.app/Contents/MacOS/OpenClaw");
-    const bundledUiDir = abs("fixtures/OpenClaw.app/Contents/Resources/control-ui");
-    setFile(path.join(bundledUiDir, "index.html"), "<html></html>\n");
-
-    setFile(execPath);
-
-    expect(resolveControlUiRootSync({ execPath })).toBe(bundledUiDir);
   });
 
   it("resolves control-ui root for symlinked argv1 via realpath", () => {

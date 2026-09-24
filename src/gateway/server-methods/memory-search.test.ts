@@ -111,6 +111,32 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
+  it("keeps automatic rebuild disclosure when subsequent retrieval fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    const notice = { sequence: 0, warning: "" };
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: false,
+      custom: { automaticRebuildNotice: notice },
+    });
+    manager.search.mockImplementation(async () => {
+      notice.sequence += 1;
+      notice.warning =
+        "Rebuilding may call the configured embedding provider and can incur provider cost.";
+      throw new Error("query retrieval failed");
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+    const respond = await invokeMemorySearch({ query: "alpha" }, cfg);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining(notice.warning) }),
+    );
+    expect(manager.close).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { requested: 100, expected: 50 },
     { requested: 0, expected: 1 },
@@ -425,6 +451,7 @@ describe("memory.search gateway method", () => {
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({
+            warning: expect.stringContaining("does not call an embedding provider"),
             results: [
               expect.objectContaining({
                 path: "memory/orchard.md",

@@ -6,6 +6,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getApfsCloneId } from "../../../test/helpers/apfs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { listTemplates } from "./template-registry.js";
@@ -128,10 +129,9 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
       const root = tempDirs.make("openclaw-service-apfs-acl-race-");
       const repo = await initializeRepository(root);
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-      const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-      const clone = apfsFilesystem.cloneDirectory;
-      vi.spyOn(apfsFilesystem, "cloneDirectory").mockImplementationOnce(
-        async (source, destination) => {
+      const copy = nativeWorktreeFilesystem.copy;
+      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementationOnce(
+        async (source, destination, options) => {
           await execFileAsync("/bin/chmod", [
             "+a",
             changed === "parent"
@@ -139,7 +139,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
               : "everyone allow read",
             changed === "parent" ? path.dirname(destination) : source,
           ]);
-          await clone(source, destination);
+          await copy(source, destination, options);
         },
       );
       const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });

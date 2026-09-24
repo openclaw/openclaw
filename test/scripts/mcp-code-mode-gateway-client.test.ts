@@ -1,5 +1,13 @@
 // Mcp Code Mode Gateway Client tests cover mcp code mode gateway client script behavior.
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  projectMcpCodeModeDiagnostics,
+  readMcpCodeModeDiagnostics,
+} from "../../scripts/e2e/lib/mcp-code-mode-diagnostics.ts";
 import {
   extractMcpCodeModePlannedTools,
   validateMcpCodeModeResult,
@@ -30,6 +38,301 @@ const okMentions = {
   mcpTool: 1,
   toolSearchPollution: 0,
 };
+
+describe("MCP code-mode matched failure diagnostics", () => {
+  const id = "call_mock_exec_0123456789";
+  const user = {
+    role: "user",
+    content: [{ type: "input_text", text: "mcp code mode api file qa check:" }],
+  };
+  const call = {
+    type: "function_call",
+    name: "exec",
+    call_id: id,
+    arguments: '{"code":"return await MCP.fixture.lookupNote({ id: \'alpha\' });"}',
+  };
+  const record = (input: unknown[], seq = 1) => ({
+    method: "POST",
+    path: "/v1/responses",
+    seq,
+    body: JSON.stringify({ input }),
+  });
+  const output = { status: "failed", error: "TypeError: result.content is not a function" };
+
+  it("binds only the current fixture exec output and its persisted pair before validation", () => {
+    const diagnostics = projectMcpCodeModeDiagnostics(
+      [
+        record([user]),
+        record(
+          [
+            user,
+            call,
+            { type: "function_call_output", call_id: "unrelated", output: "fixture-note-alpha" },
+            { type: "function_call_output", call_id: id, output: JSON.stringify(output) },
+          ],
+          2,
+        ),
+      ],
+      [
+        { message: user },
+        {
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: `${id}|fc_mock_exec_0123456789`,
+                name: "exec",
+                arguments: {},
+              },
+            ],
+          },
+        },
+        {
+          message: {
+            role: "toolResult",
+            toolCallId: "unrelated",
+            content: [{ type: "text", text: "fixture-note-alpha" }],
+          },
+        },
+        {
+          message: {
+            role: "toolResult",
+            toolCallId: `${id}|fc_mock_exec_0123456789`,
+            isError: true,
+            content: [{ type: "text", text: JSON.stringify(output) }],
+            details: output,
+          },
+        },
+      ],
+    );
+    expect(diagnostics).toMatchObject({
+      providerTurns: [
+        { seq: 1, execCalls: [] },
+        {
+          seq: 2,
+          unrelatedOutputs: 1,
+          execCalls: [
+            {
+              callId: id,
+              outputPresent: true,
+              output: {
+                terms: ["TypeError", "not a function"],
+                json: { status: { state: "failed" } },
+              },
+            },
+          ],
+        },
+      ],
+      transcriptPairs: [
+        {
+          callId: id,
+          callPresent: true,
+          resultPresent: true,
+          isError: true,
+          details: { status: { state: "failed" } },
+        },
+      ],
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("fixture-note-alpha");
+    expect(() => validateMcpCodeModeResult({ output: [] }, okMentions)).toThrow();
+  });
+
+  it("preserves content-array shape without printing credentials, paths, prompts, or unknown keys", () => {
+    const privateText =
+      "Bearer not-a-real-key https://private.example.invalid /Users/example/private@example.invalid";
+    const diagnostics = projectMcpCodeModeDiagnostics(
+      [
+        record([
+          user,
+          call,
+          {
+            type: "function_call_output",
+            call_id: id,
+            output: [
+              {
+                type: "input_text",
+                text: JSON.stringify({
+                  status: "completed",
+                  value: {
+                    marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+                    note: "fixture-note-alpha",
+                    privateText,
+                    [privateText]: privateText,
+                  },
+                }),
+              },
+            ],
+          },
+        ]),
+      ],
+      [
+        {
+          message: {
+            role: "toolResult",
+            toolCallId: id,
+            content: [{ type: "text", text: privateText }],
+          },
+        },
+      ],
+    );
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain(createHash("sha256").update(privateText).digest("hex"));
+    expect(serialized).toContain('"kind":"array"');
+    expect(serialized).toContain("MCP_CODE_MODE_FILE_TOOL_RESULT");
+    expect(serialized).toContain("fixture-note-alpha");
+    for (const secret of [
+      "Bearer",
+      "not-a-real-key",
+      "private.example.invalid",
+      "/Users/",
+      "private@example.invalid",
+      "privateText",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it("ignores historical fixture outputs and unrelated user turns", () => {
+    expect(
+      projectMcpCodeModeDiagnostics(
+        [
+          record([
+            user,
+            call,
+            { type: "function_call_output", call_id: id, output: "fixture-note-alpha" },
+            { role: "user", content: "another task" },
+          ]),
+          record([{ role: "user", content: "another task" }, call]),
+        ],
+        [],
+      ),
+    ).toEqual({
+      providerTurns: [],
+      transcriptPairs: [],
+      transcriptFixtureTurnPresent: false,
+      persistedExecWithoutSelectedWireCall: false,
+      responsesRecordBodyTruncated: [],
+      recordsTruncated: false,
+    });
+  });
+
+  it("reports a persisted exec without a wire call instead of fabricating a matched pair", () => {
+    const diagnostics = projectMcpCodeModeDiagnostics(
+      [record([user, { type: "function_call_output", call_id: id, output: "fixture-note-alpha" }])],
+      [
+        { message: user },
+        { message: { role: "assistant", content: [{ type: "toolCall", name: "exec", id }] } },
+        { message: { role: "toolResult", toolCallId: id, content: "private-persisted-result" } },
+      ],
+    );
+    expect(diagnostics).toMatchObject({
+      persistedExecWithoutSelectedWireCall: true,
+      transcriptPairs: [],
+      providerTurns: [{ execCalls: [], unrelatedOutputs: 1 }],
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("private-persisted-result");
+    expect(JSON.stringify(diagnostics)).not.toContain("fixture-note-alpha");
+  });
+
+  it("reports producer truncation without reading the preview or attributing it to current QA", () => {
+    const body = {
+      truncated: true,
+      byteLength: 300_000,
+      get preview(): never {
+        throw new Error("private preview must not be read");
+      },
+    };
+    expect(projectMcpCodeModeDiagnostics([{ ...record([], 7), body }], [])).toMatchObject({
+      responsesRecordBodyTruncated: [{ seq: 7, byteLength: 300_000 }],
+      providerTurns: [],
+      transcriptPairs: [],
+      transcriptFixtureTurnPresent: false,
+    });
+  });
+
+  it("selects the newest same-marker attempt and does not export arbitrary call IDs or their hashes", () => {
+    const privateId = "private-call-identity";
+    const diagnostics = projectMcpCodeModeDiagnostics(
+      [
+        record([user], 1),
+        record(
+          [user, call, { type: "function_call_output", call_id: id, output: "fixture-note-alpha" }],
+          2,
+        ),
+        record([user], 3),
+        record(
+          [
+            user,
+            { ...call, call_id: privateId },
+            { type: "function_call_output", call_id: privateId, output: JSON.stringify(output) },
+          ],
+          4,
+        ),
+      ],
+      [],
+    );
+    expect(diagnostics).toMatchObject({
+      providerTurns: [
+        { seq: 3 },
+        {
+          seq: 4,
+          execCalls: [
+            { callId: "selected-exec-1", output: { terms: ["TypeError", "not a function"] } },
+          ],
+        },
+      ],
+    });
+    const serialized = JSON.stringify(diagnostics);
+    for (const privateValue of [
+      privateId,
+      createHash("sha256").update(privateId).digest("hex"),
+      "fixture-note-alpha",
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
+  });
+
+  it("reports malformed and unreadable private logs without printing them or replacing validation", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "mcp-diagnostics-"));
+    const file = path.join(dir, "requests.jsonl");
+    try {
+      await writeFile(file, `private-malformed-record\n${JSON.stringify(record([user]))}\n`);
+      const diagnostics = await readMcpCodeModeDiagnostics(file, []);
+      expect(diagnostics).toMatchObject({
+        requestLog: "read",
+        malformed: 1,
+        providerTurns: [{ seq: 1 }],
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("private-malformed-record");
+      await expect(readMcpCodeModeDiagnostics(path.join(dir, "missing"), [])).resolves.toEqual({
+        requestLog: "unreadable",
+      });
+      await writeFile(file, "x".repeat(8 * 1024 * 1024 + 1));
+      await expect(readMcpCodeModeDiagnostics(file, [])).resolves.toEqual({
+        requestLog: "over-limit",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds turns and result structure, and reports missing logs without replacing the failure", async () => {
+    const nested = { content: Array.from({ length: 100 }, () => ({ text: "x".repeat(40_000) })) };
+    const largeRecord = record([
+      user,
+      call,
+      { type: "function_call_output", call_id: id, output: nested },
+    ]);
+    const records = Array.from({ length: 300 }, () => largeRecord);
+    const diagnostics = projectMcpCodeModeDiagnostics(records, []);
+    expect(diagnostics).toMatchObject({ recordsTruncated: true, providerTurns: [{}, {}] });
+    expect(Buffer.byteLength(JSON.stringify(diagnostics))).toBeLessThanOrEqual(32_768);
+    await expect(readMcpCodeModeDiagnostics(undefined, [])).resolves.toEqual({
+      requestLog: "not-configured",
+    });
+  });
+});
 
 describe("MCP code-mode gateway Docker client fetch helper", () => {
   it("rejects loose numeric env limits instead of parsing prefixes", () => {
@@ -228,7 +531,6 @@ describe("MCP code-mode gateway Docker client result validation", () => {
               id: "mcp-code-mode-exec",
               name: "exec",
               arguments: {
-                language: "javascript",
                 code: 'return await MCP.fixture.lookupNote({ id: "alpha" });',
               },
             },

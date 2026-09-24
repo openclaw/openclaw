@@ -118,7 +118,11 @@ describe("CronPage lifecycle", () => {
       const page = createPage(context, { render: true });
       await waitForCronPage(() => expect(reads).toBe(1));
       gateway.emitRetiredEvent({ type: "event", event: "config.changed", payload: {} });
+      await page.updateComplete;
+      expect(reads).toBe(1);
+      oldResult.resolve({ models: [{ id: "retired-model" }] });
       await waitForCronPage(() => expect(reads).toBe(2));
+      expect(page.cronModelSuggestions).toEqual([]);
 
       if (change === "agent") {
         context.agentSelection.set("writer");
@@ -134,10 +138,9 @@ describe("CronPage lifecycle", () => {
         gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
       }
       const expected = change === "detach" ? [] : ["current-model"];
-      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
-      oldResult.resolve({ models: [{ id: "retired-model" }] });
       oldError.reject(new Error("Retired catalog error"));
       await Promise.allSettled([oldResult.promise, oldError.promise]);
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
       await page.updateComplete;
       expect(page.cronModelSuggestions).toEqual(expected);
       expect(page.textContent).not.toContain("Retired catalog error");
@@ -309,6 +312,11 @@ describe("CronPage lifecycle", () => {
           page.remove();
         }
         await page.updateComplete;
+        await waitForCronPage(() =>
+          expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
+            change === "reconnect" || change === "gateway source" ? 2 : 1,
+          ),
+        );
         const count = request.mock.calls.length;
         held.resolve();
         // Let the retired read and its queued completion settle before checking dispatch.

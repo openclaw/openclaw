@@ -161,6 +161,16 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
+/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  return (
+    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    entry.abortedLastRun !== true &&
+    entry.mainRestartRecovery !== undefined &&
+    !entry.mainRestartRecovery.tombstone
+  );
+}
+
 type MainRestartRecoveryRolloverEligibility =
   | { eligible: true }
   | {
@@ -343,6 +353,7 @@ export function transitionMainSessionRecovery(
         });
       }
       entry.status = "running";
+      entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
       entry.lastRunId = undefined;
       entry.abortedLastRun = true;

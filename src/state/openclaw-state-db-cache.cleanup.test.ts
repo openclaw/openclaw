@@ -6,6 +6,7 @@ import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coo
 import {
   openClawStateDatabaseCache as cache,
   readOpenClawStateWalHealth,
+  retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -19,6 +20,36 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 describe("shared-state disposal ownership", () => {
+  it.each(["canonical", "borrow"] as const)(
+    "retries released-borrow cleanup through the %s owner without closing its replacement",
+    (retry) => {
+      const root = tempDirs.make("openclaw-state-borrow-cleanup-");
+      const owner = openOpenClawStateDatabase({ path: path.join(root, "state.sqlite") });
+      const borrow = retainOpenClawStateDatabase(owner);
+      const failure = new Error("maintenance cleanup callback failed");
+      const closeMaintenance = owner.walMaintenance.close;
+      vi.spyOn(owner.walMaintenance, "close").mockImplementationOnce((options) => {
+        closeMaintenance(options);
+        throw failure;
+      });
+
+      try {
+        expect(() => borrow.release()).toThrow(failure);
+        expect(owner.db.isOpen).toBe(false);
+        if (retry === "canonical") {
+          expect(cache.closeOpenClawStateDatabaseByPath(owner.path)).toBe(true);
+        } else {
+          expect(() => borrow.release()).not.toThrow();
+        }
+        const replacement = openOpenClawStateDatabase({ path: owner.path });
+        borrow.release();
+        expect(replacement.db.isOpen).toBe(true);
+      } finally {
+        borrow.release();
+      }
+    },
+  );
+
   it("reads only recorded WAL health and forgets it when the database retires", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-state-wal-health-"));
     expect(readOpenClawStateWalHealth()).toBeUndefined();

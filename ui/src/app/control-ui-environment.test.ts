@@ -7,6 +7,7 @@ import type {
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import "../components/app-topbar.ts";
 import "../components/sidebar-agent-card.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 
 type EnvironmentElement = HTMLElement & {
@@ -30,6 +31,8 @@ afterEach(() => {
 });
 
 describe("Control UI environment presentation", () => {
+  setupSidebarTest();
+
   it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills only when configured", async () => {
     const favicon = document.createElement("link");
     favicon.rel = "icon";

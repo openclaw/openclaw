@@ -6,6 +6,7 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
@@ -18,6 +19,8 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
@@ -72,7 +75,39 @@ export async function runLocalAgentCommand<TResult>(params: {
               withAgentPluginRegistry({
                 config: admittedPrepared.cfg,
                 workspaceDir: admittedPrepared.workspaceDir,
-                run: () => params.run(admittedPrepared, resolvedDeps),
+                run: async () => {
+                  await using lease = await acquireAgentRunPreparedModelRuntime(
+                    {
+                      config: admittedPrepared.cfg,
+                      agentId: admittedPrepared.sessionAgentId,
+                      agentDir: admittedPrepared.agentDir,
+                      workspaceDir: admittedPrepared.workspaceDir,
+                    },
+                    { abortSignal: admittedPrepared.opts.abortSignal },
+                  );
+                  let active = true;
+                  try {
+                    return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
+                      withPreparedModelRuntimePluginGenerationScope(
+                        lease.pluginGeneration,
+                        () =>
+                          params.run(
+                            {
+                              ...admittedPrepared,
+                              commandRuntimeContext: {
+                                config: lease.snapshot.config,
+                                pluginGeneration: lease.pluginGeneration,
+                              },
+                            },
+                            resolvedDeps,
+                          ),
+                        () => (active ? lease.snapshot : undefined),
+                      ),
+                    );
+                  } finally {
+                    active = false;
+                  }
+                },
               });
             return capability
               ? await runWithCronCreatorAuthorityCapability(

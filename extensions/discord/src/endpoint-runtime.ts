@@ -21,7 +21,11 @@ type DiscordEndpointDescriptor = Readonly<{
 
 export type DiscordEndpointRuntime = Readonly<{
   descriptor: DiscordEndpointDescriptor;
-  fetch: typeof fetch;
+  fetch: (
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+    beforeRequest?: () => void,
+  ) => ReturnType<typeof fetch>;
 }>;
 
 function parseHttpAnchor(value: string, label: string): URL {
@@ -109,13 +113,10 @@ function assertEndpointHttpTarget(target: URL, descriptor: DiscordEndpointDescri
 }
 
 function requestInitFromRequest(request: Request, signal: AbortSignal): RequestInit {
-  const rawDuplex: unknown = Reflect.get(request, "duplex");
   return {
     method: request.method,
     headers: request.headers,
-    ...(request.body
-      ? { body: request.body, ...(rawDuplex === "half" ? { duplex: "half" as const } : {}) }
-      : {}),
+    ...(request.body ? { body: request.body, duplex: "half" as const } : {}),
     signal,
     cache: request.cache,
     credentials: request.credentials,
@@ -127,11 +128,13 @@ function requestInitFromRequest(request: Request, signal: AbortSignal): RequestI
   };
 }
 
-function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetch {
+function createEndpointFetch(
+  descriptor: DiscordEndpointDescriptor,
+): DiscordEndpointRuntime["fetch"] {
   const allowedOrigins = Array.from(
     new Set([new URL(descriptor.restApiBaseUrl).origin, new URL(descriptor.gatewayBotUrl).origin]),
   );
-  return async (input, init) => {
+  return async (input, init, beforeRequest) => {
     const request = new Request(input, init);
     const target = new URL(request.url);
     assertEndpointHttpTarget(target, descriptor);
@@ -144,6 +147,7 @@ function createEndpointFetch(descriptor: DiscordEndpointDescriptor): typeof fetc
       maxRedirects: 0,
       capture: false,
       auditContext: "discord.endpoint-runtime",
+      beforeRequest,
     });
     try {
       const body = await readResponseWithLimit(

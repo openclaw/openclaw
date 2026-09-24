@@ -1,9 +1,15 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
@@ -41,17 +47,15 @@ export function runBuiltRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runSourceRuntime(
@@ -61,17 +65,15 @@ export function runSourceRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runIsolatedModuleScript(
@@ -110,10 +112,14 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
+    "node-host-launcher.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-root-options.mjs",
+    "gateway-run-argv.mjs",
+    "gateway-shutdown-budget.mjs",
     "package.json",
     "tsconfig.json",
   ]) {
@@ -162,16 +168,15 @@ export function seedV17AdditiveRepairDatabase(
   stateDir: string,
   options: { participantDependency?: boolean } = {},
 ): string {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
-    ensureOpenClawAgentDatabaseSchema(database, {
-      agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      path: databasePath,
-      register: false,
-    });
+    seedOpenClawAgentSchemaV21(database);
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
       DROP TABLE session_participants;
       DROP TRIGGER session_conversations_route_context_invalidate_after_update;

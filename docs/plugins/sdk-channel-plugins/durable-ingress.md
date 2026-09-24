@@ -65,6 +65,16 @@ fences are unrelated to this rule. Stable outbound message IDs use the shared
 outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
 channel-local TTL cache.
 
+Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
+migration in the shared state worker. Competing records are compared again in the
+write transaction; clearing memory or forgetting a key fences older asynchronous
+cache fills. Await commits and deletions before acknowledging adoption or finishing
+cleanup. Error hooks retain their existing policy: a throwing hook rejects the
+operation, while a nonthrowing hook permits the guard's memory fallback. Worker
+failures never switch persistence to synchronous SQLite. Multi-key commits and
+deletions settle every accepted write before returning an error, so rollback and
+shutdown cannot race a still-running sibling mutation.
+
 ### Transport classes and retention
 
 Classify a transport by the recovery guarantee at its receive boundary:
@@ -125,6 +135,15 @@ the claim commits, or if the record expires while its ingress row is still
 pending.
 
 ### Dynamic policy publication
+
+Gateway reply dispatch selects the current committed model-runtime config and
+catalog for each new turn, including low-level `channel.reply.dispatchReplyFromConfig`
+calls from a monitor that retained its startup config. Dispatch waits for an
+in-progress model-runtime publication before admission. Channel transport and
+access-policy freshness still belong to the account monitor; reply dispatch does
+not replace durable ingress or its append-before-ack contract.
+The legacy `usePublishedModelRuntime` argument remains accepted for SDK
+compatibility but no longer controls Gateway model admission.
 
 Use `reload.noopPrefixes` only for fields whose consumers read the committed
 runtime config without replacing a channel resource. These writes still publish

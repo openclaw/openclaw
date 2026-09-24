@@ -28,45 +28,6 @@ interface AuditHead {
   seq: number;
 }
 
-export class MemoryAuditStore implements AuditStore {
-  readonly #auditKey: Uint8Array;
-  readonly #rng: (length: number) => Uint8Array;
-  readonly #entries: AuditEntry[] = [];
-  #head: AuditHead = { hash: "", seq: 0 };
-  #tail: Promise<void> = Promise.resolve();
-
-  constructor(auditKey: Uint8Array, rng: (length: number) => Uint8Array = randomBytes) {
-    this.#auditKey = validateAuditKey(auditKey).slice();
-    this.#rng = rng;
-  }
-
-  async appendEvent(
-    type: string,
-    payload: unknown,
-    ts = Math.floor(Date.now() / 1000),
-  ): Promise<AuditEntry> {
-    return this.#withLock(() => {
-      const entry = createAuditEntry(type, payload, ts, this.#auditKey, this.#head, this.#rng);
-      this.#entries.push(entry);
-      this.#head = { hash: entry.entryHash, seq: entry.event.seq };
-      return structuredClone(entry);
-    });
-  }
-
-  async entries(): Promise<AuditEntry[]> {
-    return this.#withLock(() => structuredClone(this.#entries));
-  }
-
-  #withLock<T>(operation: () => T | Promise<T>): Promise<T> {
-    const result = this.#tail.then(operation);
-    this.#tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
-}
-
 export interface AuditCheckpoint {
   head: string;
   signature: string;

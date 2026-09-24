@@ -22,6 +22,7 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
     setMatrixRuntime: (runtime: Pick<PluginRuntime, "logging">) => {
       runtimeFixture.logging = runtime.logging;
     },
+    SqliteBackedMatrixSyncStore: { create: async () => ({}) },
     MatrixClient: class {
       on() {}
       off() {}

@@ -1,12 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { approveDevicePairing } from "../../../infra/device-pairing-approval.js";
 import * as deviceTokens from "../../../infra/device-pairing-tokens.js";
+import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pairing.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import * as profileAuthority from "../../../state/user-channel-identity-operations.js";
+import { ensureProfileForEmail, linkEmail } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import * as expectedProfile from "../../expected-profile.js";
+import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { deviceHandlers } from "../../server-methods/devices.js";
 import { createSecretsHandlers } from "../../server-methods/secrets.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
-import { disconnectAllSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
+import { disconnectStaleSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
 import { holdGatewayPolicyResponse } from "../ws-policy-close.js";
 import {
   createDispatchTestHarness,
@@ -37,6 +44,231 @@ describe("policy writer response ownership", () => {
   });
 
   it.each([false, true])(
+    "keeps a later revoke final across profile preparation (failed middle: %s)",
+    async (failedMiddle) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("credential-admin@example.test");
+        const targetDeviceId = "another-device";
+        const pairing = await requestDevicePairing({
+          deviceId: targetDeviceId,
+          publicKey: "another-device-public-key",
+          role: "operator",
+          scopes: ["operator.read"],
+        });
+        const approved = await approveDevicePairing(pairing.request.requestId, {
+          callerScopes: ["operator.admin"],
+        });
+        expect(approved?.status).toBe("approved");
+        const client = createOperatorWsClient({ socket: { close: vi.fn() } });
+        client.authenticatedUserId = "credential-admin@example.test";
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        client.connect.device = {
+          id: "administrator-device",
+          publicKey: "administrator-public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        };
+        client.isDeviceTokenAuth = true;
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => ({}),
+          logGateway: createSubsystemLogger("credential-order-test"),
+          invalidateClientsForDevice: vi.fn(),
+          disconnectClientsForDevice: vi.fn(),
+        });
+        const harness = createDispatchTestHarness({ buildRequestContext: () => context });
+        const checkpoint = createDispatchTestHarness({ buildRequestContext: () => context });
+        const { handleGatewayRequest } =
+          await vi.importActual<typeof import("../../server-methods.js")>(
+            "../../server-methods.js",
+          );
+        const credentialExecutions: Promise<void>[] = [];
+        runtime.handler.mockImplementation(async (options) => {
+          if (options.req.method === "test.credential-checkpoint") {
+            // Starts are FIFO across dispatchers. Join earlier mutations that reached
+            // the router, without waiting for the held connection's mutation barrier.
+            await Promise.all(credentialExecutions);
+            options.respond(true, {});
+            return;
+          }
+          const execution = handleGatewayRequest({ ...options, extraHandlers: deviceHandlers });
+          credentialExecutions.push(execution);
+          await execution;
+        });
+        const preparationEntered = createDeferredCore();
+        const releasePreparation = createDeferredCore();
+        const prepareOriginal = profileAuthority.prepareUserProfileSelectionAuthority;
+        const prepare = vi
+          .spyOn(profileAuthority, "prepareUserProfileSelectionAuthority")
+          .mockImplementationOnce(async (...args) => {
+            preparationEntered.resolve();
+            await releasePreparation.promise;
+            return prepareOriginal(...args);
+          });
+        const createBinding = expectedProfile.createExpectedProfileBinding;
+        const binding = failedMiddle
+          ? vi
+              .spyOn(expectedProfile, "createExpectedProfileBinding")
+              .mockImplementationOnce(createBinding)
+              .mockRejectedValueOnce(new Error("middle profile preparation failed"))
+          : undefined;
+        const dispatched: Promise<void>[] = [];
+        try {
+          dispatched.push(
+            harness.dispatcher.dispatch(
+              {
+                type: "req",
+                id: "rotate-before-revoke",
+                method: "device.token.rotate",
+                params: { deviceId: targetDeviceId, role: "operator" },
+                expectedProfileId: profile.id,
+              },
+              client,
+            ),
+          );
+          await preparationEntered.promise;
+          if (failedMiddle) {
+            await expect(
+              harness.dispatcher.dispatch(
+                {
+                  type: "req",
+                  id: "failed-middle-rotation",
+                  method: "device.token.rotate",
+                  params: { deviceId: targetDeviceId, role: "operator" },
+                  expectedProfileId: profile.id,
+                },
+                client,
+              ),
+            ).rejects.toThrow("middle profile preparation failed");
+          }
+          dispatched.push(
+            harness.dispatcher.dispatch(
+              {
+                type: "req",
+                id: "final-revoke",
+                method: "device.token.revoke",
+                params: { deviceId: targetDeviceId, role: "operator" },
+              },
+              client,
+            ),
+          );
+          await checkpoint.dispatcher.dispatch(
+            { type: "req", id: "checkpoint", method: "test.credential-checkpoint", params: {} },
+            client,
+          );
+          releasePreparation.resolve();
+          await Promise.all(dispatched);
+          expect(await harness.awaitResponseFrame("rotate-before-revoke")).toMatchObject({
+            ok: true,
+            payload: { tokenDelivery: "withheld-cross-device" },
+          });
+          expect(await harness.awaitResponseFrame("final-revoke")).toMatchObject({ ok: true });
+          expect(client.invalidated).not.toBe(true);
+          const stored = expectDefined(await getPairedDevice(targetDeviceId), "paired target");
+          expect(stored.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
+        } finally {
+          releasePreparation.resolve();
+          await Promise.allSettled(dispatched);
+          prepare.mockRestore();
+          binding?.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["success", "error", "throw"] as const)(
+    "redacts a held %s response after a real profile merge despite the policy-close exception",
+    async (outcome) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const source = ensureProfileForEmail("policy-source@example.test");
+        const target = ensureProfileForEmail("policy-target@example.test");
+        const fixture = createFixture();
+        fixture.client.authenticatedUserProfile = {
+          profileId: source.id,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: source.updatedAt,
+        };
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const receipt = { committed: true, accountData: "original-account-result" };
+        const { handleGatewayRequest } =
+          await vi.importActual<typeof import("../../server-methods.js")>(
+            "../../server-methods.js",
+          );
+        runtime.handler.mockImplementation((options: GatewayRequestOptions) =>
+          handleGatewayRequest({
+            ...options,
+            context: {
+              ...options.context,
+              getRuntimeConfig: () => ({}),
+              logGateway: {
+                ...createSubsystemLogger("gateway-test"),
+                ...fixture.harness.logGateway,
+              },
+            },
+            extraHandlers: {
+              "config.patch": async ({ respond }) => {
+                holdGatewayPolicyResponse(respond);
+                entered.resolve();
+                await release.promise;
+                if (outcome === "throw") {
+                  throw new Error("original-account-error");
+                }
+                respond(outcome === "success", receipt, {
+                  code: "UNAVAILABLE",
+                  message: "original-account-error",
+                });
+              },
+            },
+          }),
+        );
+        const request = fixture.harness.dispatcher.dispatch(
+          {
+            type: "req",
+            id: "bound-writer",
+            method: "config.patch",
+            params: {},
+            expectedProfileId: source.id,
+          },
+          fixture.client,
+        );
+        try {
+          await Promise.race([entered.promise, request]);
+          linkEmail("policy-source@example.test", target.id);
+          // The accepted policy writer may bypass transport invalidation, never profile binding.
+          disconnectStaleSharedGatewayAuthClients({
+            clients: [fixture.client],
+            expectedGeneration: null,
+          });
+          release.resolve();
+          await request;
+          expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
+            type: "res",
+            id: "bound-writer",
+            ok: false,
+            payload: undefined,
+            error: expect.objectContaining({
+              details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+            }),
+          });
+          expect(fixture.socketClose).toHaveBeenCalledOnce();
+        } finally {
+          release.resolve();
+          await request;
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
     "delivers a secrets activation result before closing (failed=%s)",
     async (failed) => {
       const fixture = createFixture();
@@ -44,7 +276,10 @@ describe("policy writer response ownership", () => {
       const release = createDeferredCore();
       const handlers = createSecretsHandlers({
         reloadSecrets: async () => {
-          disconnectAllSharedGatewayAuthClients([fixture.client]);
+          disconnectStaleSharedGatewayAuthClients({
+            clients: [fixture.client],
+            expectedGeneration: null,
+          });
           published.resolve();
           await release.promise;
           if (failed) {
@@ -122,7 +357,10 @@ describe("policy writer response ownership", () => {
           dispatches.push(fixture.dispatch(writer.id, method));
           await writer.started.promise;
         }
-        disconnectAllSharedGatewayAuthClients([fixture.client]);
+        disconnectStaleSharedGatewayAuthClients({
+          clients: [fixture.client],
+          expectedGeneration: null,
+        });
         readRelease.resolve();
         await dispatches[0];
         expect(fixture.harness.send).not.toHaveBeenCalled();
@@ -224,7 +462,10 @@ describe("policy writer response ownership", () => {
       const fixture = createFixture();
       runtime.handler.mockImplementation(async ({ respond }) => {
         holdGatewayPolicyResponse(respond);
-        disconnectAllSharedGatewayAuthClients([fixture.client]);
+        disconnectStaleSharedGatewayAuthClients({
+          clients: [fixture.client],
+          expectedGeneration: null,
+        });
         if (completion === "throw") {
           throw new Error("write failed");
         }

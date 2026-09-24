@@ -6,7 +6,10 @@ import {
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   loadSubagentSessionEntry,
@@ -68,24 +71,28 @@ describe("subagent session reconciliation ownership", () => {
     { name: "explicit shared SQLite", file: "shared.sqlite" },
   ])("reconciles each agent in a $name store", async ({ file }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = file ? state.path(file) : undefined;
-      const cfg: OpenClawConfig = storePath ? { session: { store: storePath } } : {};
-      for (const agentId of ["main", "worker"]) {
-        replaceSessionEntrySync(
-          { agentId, sessionKey: `agent:${agentId}:subagent:child`, storePath, env: state.env },
-          { ...terminalSession, sessionId: `${agentId}-child` },
-        );
-      }
+      try {
+        const storePath = file ? state.path(file) : undefined;
+        const cfg: OpenClawConfig = storePath ? { session: { store: storePath } } : {};
+        for (const agentId of ["main", "worker"]) {
+          replaceSessionEntrySync(
+            { agentId, sessionKey: `agent:${agentId}:subagent:child`, storePath, env: state.env },
+            { ...terminalSession, sessionId: `${agentId}-child` },
+          );
+        }
 
-      for (const agentId of ["main", "worker"]) {
-        const childSessionKey = `agent:${agentId}:subagent:child`;
-        expect(loadSubagentSessionEntry({ childSessionKey, cfg })?.sessionId).toBe(
-          `${agentId}-child`,
-        );
-        expect(
-          resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
-        ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
-        expect(resolveSubagentSessionStartedAt({ childSessionKey, cfg })).toBe(1_000);
+        for (const agentId of ["main", "worker"]) {
+          const childSessionKey = `agent:${agentId}:subagent:child`;
+          expect(loadSubagentSessionEntry({ childSessionKey, cfg })?.sessionId).toBe(
+            `${agentId}-child`,
+          );
+          expect(
+            resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
+          ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
+          expect(resolveSubagentSessionStartedAt({ childSessionKey, cfg })).toBe(1_000);
+        }
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(state.root);
       }
     });
   });
@@ -94,33 +101,37 @@ describe("subagent session reconciliation ownership", () => {
     "keeps %s incognito completion separate from its configured durable store",
     async (agentId) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const storePath = state.path("custom-sessions.json");
-        const cfg = { session: { store: storePath } } satisfies OpenClawConfig;
-        const durableKey = `agent:${agentId}:subagent:durable`;
-        const childSessionKey = `agent:${agentId}:subagent:incognito-child`;
-        replaceSessionEntrySync(
-          { agentId, sessionKey: durableKey, storePath, env: state.env },
-          { ...terminalSession, sessionId: "durable-child" },
-        );
-        replaceSessionEntrySync(
-          { agentId, sessionKey: childSessionKey, storePath, env: state.env },
-          { ...terminalSession, sessionId: "incognito-child", incognito: true },
-        );
+        try {
+          const storePath = state.path("custom-sessions.json");
+          const cfg = { session: { store: storePath } } satisfies OpenClawConfig;
+          const durableKey = `agent:${agentId}:subagent:durable`;
+          const childSessionKey = `agent:${agentId}:subagent:incognito-child`;
+          replaceSessionEntrySync(
+            { agentId, sessionKey: durableKey, storePath, env: state.env },
+            { ...terminalSession, sessionId: "durable-child" },
+          );
+          replaceSessionEntrySync(
+            { agentId, sessionKey: childSessionKey, storePath, env: state.env },
+            { ...terminalSession, sessionId: "incognito-child", incognito: true },
+          );
 
-        expect(
-          resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
-        ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
-        expect(loadSubagentSessionEntry({ childSessionKey, cfg })?.sessionId).toBe(
-          "incognito-child",
-        );
-        expect(
-          listSessionEntriesReadOnly({ agentId, storePath, env: state.env }).map(
-            ({ sessionKey }) => sessionKey,
-          ),
-        ).toEqual([durableKey]);
-        expect(
-          fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })),
-        ).toBe(false);
+          expect(
+            resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
+          ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
+          expect(loadSubagentSessionEntry({ childSessionKey, cfg })?.sessionId).toBe(
+            "incognito-child",
+          );
+          expect(
+            listSessionEntriesReadOnly({ agentId, storePath, env: state.env }).map(
+              ({ sessionKey }) => sessionKey,
+            ),
+          ).toEqual([durableKey]);
+          expect(
+            fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })),
+          ).toBe(false);
+        } finally {
+          await closeOpenClawAgentDatabasesAsync(state.root);
+        }
       });
     },
   );

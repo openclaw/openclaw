@@ -138,7 +138,7 @@ describe("acknowledged config revision", () => {
         await expect(runtimeConfig.save()).resolves.toBe(true);
         expect(submissions).toEqual([{ raw: '{"count":2,"enabled":true}', baseHash: "hash-2" }]);
       }
-      runtimeConfig.resetDraft();
+      runtimeConfig.setWritesSuspended(true);
       runtimeConfig.dispose();
     },
   );
@@ -408,7 +408,7 @@ describe("acknowledged config revision", () => {
     } else {
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
     }
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   });
 });

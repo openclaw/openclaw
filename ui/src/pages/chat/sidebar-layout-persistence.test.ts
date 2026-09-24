@@ -17,6 +17,111 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
+  it("retains only a normalized task identity on the Tasks panel", () => {
+    const saved = normalizeSidebarSessionLayouts({
+      main: {
+        columns: [
+          {
+            id: "side",
+            side: "right",
+            activePanelId: "tasks",
+            panels: [
+              {
+                id: "tasks",
+                slot: "tasks",
+                taskId: "  selected-task  ",
+                result: "not persisted",
+              },
+              { id: "workspace", slot: "workspace", taskId: "wrong-slot" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(saved.main?.columns[0]?.panels).toEqual([
+      { id: "tasks", slot: "tasks", taskId: "selected-task" },
+      { id: "workspace", slot: "workspace" },
+    ]);
+  });
+
+  it.each(["before", "after", "absent"] as const)(
+    "normalizes saved Review task selection into the sole Tasks panel with Tasks %s it",
+    (position) => {
+      const detail = { id: "saved-review", slot: "detail", taskId: "selected-task" };
+      const tasks = { id: "saved-tasks", slot: "tasks" };
+      const panels =
+        position === "before" ? [tasks, detail] : position === "after" ? [detail, tasks] : [detail];
+      const saved = normalizeSidebarSessionLayouts({
+        main: {
+          mainPanelId: "saved-review",
+          columns: [
+            { id: "side", side: "right", width: 600, activePanelId: "saved-review", panels },
+          ],
+          expanded: true,
+          open: false,
+        },
+      }).main!;
+      const selected = saved.columns[0]!.panels.find((panel) => panel.slot === "tasks")!;
+      expect(saved.columns[0]!.panels.filter((panel) => panel.slot === "tasks")).toEqual([
+        selected,
+      ]);
+      expect(saved.columns[0]!.panels.some((panel) => panel.slot === "detail")).toBe(false);
+      expect(selected.taskId).toBe("selected-task");
+      expect(saved.mainPanelId).toBe(selected.id);
+      expect(saved).toMatchObject({ expanded: true, open: false, columns: [{ width: 600 }] });
+      expect(normalizeSidebarSessionLayouts({ main: saved }).main).toEqual(saved);
+    },
+  );
+
+  it("preserves an explicit Tasks selection over a saved Review task and redirects active focus", () => {
+    const saved = normalizeSidebarSessionLayouts({
+      main: {
+        columns: [
+          {
+            id: "side",
+            side: "right",
+            activePanelId: "saved-review",
+            panels: [
+              { id: "tasks", slot: "tasks", taskId: "new-task" },
+              { id: "saved-review", slot: "detail", taskId: "old-task" },
+              { id: "files", slot: "workspace" },
+            ],
+          },
+        ],
+        open: true,
+        expanded: true,
+        expandedSide: true,
+        mainPanelId: "conversation",
+      },
+    }).main!;
+    expect(saved.columns[0]!.panels.find((panel) => panel.slot === "tasks")).toEqual({
+      id: "tasks",
+      slot: "tasks",
+      taskId: "new-task",
+    });
+    expect(saved.columns[0]!.activePanelId).toBe("tasks");
+    expect(saved).toMatchObject({ expanded: true, expandedSide: true, open: true });
+    expect(saved.columns[0]!.panels.find((panel) => panel.slot === "workspace")).toEqual({
+      id: "files",
+      slot: "workspace",
+    });
+  });
+
+  it.each(["split", "expanded", null, undefined] as const)(
+    "preserves the stored override %s during unrelated layout writes",
+    (override) => {
+      const layout = openSlot({ columns: [] }, "workspace");
+      const current = { main: { ...layout, dashboardPresentationOverride: override } };
+      const stale = {
+        ...layout,
+        dashboardPresentationOverride: override === "expanded" ? null : ("expanded" as const),
+      };
+      const next = updateSidebarSessionLayout(current, "main", openSlot(stale, "terminal"));
+      expect(next.main?.dashboardPresentationOverride).toBe(override);
+      expect(next.main?.columns[0]?.panels.some((panel) => panel.slot === "terminal")).toBe(true);
+    },
+  );
+
   it("uses one persistence key for configured main-session aliases", () => {
     const host = {
       agentsList: { defaultId: "main", mainKey: "main" },
@@ -55,7 +160,7 @@ describe("sidebar session layout settings", () => {
     layout = setSidebarOpen(layout, false);
 
     const persisted = updateSidebarSessionLayout({}, "main", layout).main;
-    expect(persisted).toEqual({ ...layout, dock: "right" });
+    expect(persisted).toEqual({ ...layout, dock: "right", dashboardPresentationOverride: null });
     expect(persisted?.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "workspace",
       "terminal",

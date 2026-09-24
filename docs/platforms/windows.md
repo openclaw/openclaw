@@ -154,6 +154,13 @@ through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
+If you append output redirection to the `gateway.cmd` launch line, quote the
+entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
+Complete trailing redirections are excluded from process ownership checks.
+Unquoted environment expansions can leave filename fragments in the Gateway's
+arguments; OpenClaw preserves ambiguous launcher commands and refuses to terminate
+a listener whose ownership cannot be verified. Quote the target before retrying.
+
 The hidden launcher owns the supervised Gateway process tree. Ending the task
 with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
 Scheduler's **End** action terminates the Gateway and its descendants. After
@@ -161,6 +168,13 @@ updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
+
+The task probe allows Windows PowerShell to inherit or create a console because
+some PowerShell 5.1 hosts fail inspection when console creation is disabled.
+Invoking it from an app without a console can briefly display a console window.
+If inspection fails, Doctor and update refusals include the underlying probe
+detail; an empty response identifies the exit code and reports that PowerShell
+produced no output.
 
 During update preflight, the Scheduled Task runtime probe uses the update's `--timeout` budget for each attempt and retries once on timeout; if it still times out, the refusal reports the probe budget and keeps code unchanged.
 

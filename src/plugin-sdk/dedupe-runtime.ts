@@ -119,7 +119,11 @@ export function createPersistentDedupeCache<TRecord>(params: {
         disablePersistentStore(error);
         return false;
       }
-      memory.check(key, params.persistent.readTimestamp?.(record));
+      const recordedAt = params.persistent.readTimestamp?.(record);
+      if (recordedAt !== undefined && params.ttlMs > 0 && Date.now() - recordedAt >= params.ttlMs) {
+        return false;
+      }
+      memory.check(key, recordedAt);
       return true;
     },
     register: async (key, record, opts) => {

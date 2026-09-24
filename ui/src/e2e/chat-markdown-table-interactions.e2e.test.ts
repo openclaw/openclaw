@@ -12,6 +12,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -44,6 +45,229 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("fits prose tables, preserves the reading column, and keeps expanded headers visible", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    const rows = Array.from(
+      { length: 24 },
+      (_, index) =>
+        `| A detailed failure description with enough context to explain the affected workflow, item ${index + 1} | Ready |`,
+    ).join("\n");
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `The surrounding explanation stays at the normal reading width.\n\n| Failure description | Recorded implementation status |\n| --- | --- |\n${rows}
+
+| A | B | C | D |
+| --- | --- | --- | --- |
+| 1 | 2 | 3 | 4 |
+
+| A | B | C | D | E | F | G | H |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |`,
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: { id: "wrapping-table", seq: 1 },
+        },
+      ],
+    });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const message = page.locator('[data-entry-id="wrapping-table"]');
+      const shell = message.locator(".markdown-table").first();
+      const compact = message.locator(".markdown-table__viewport");
+      const expand = shell.getByRole("button", { name: "Expand table" });
+      await shell.waitFor({ state: "visible" });
+      for (const width of [1440, 760, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.locator(".chat-thread").evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await expect
+          .poll(() =>
+            shell.evaluate((element) => {
+              const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+              return viewport.scrollWidth - viewport.clientWidth;
+            }),
+          )
+          .toBeLessThanOrEqual(1);
+        expect(
+          await compact.evaluateAll((elements) =>
+            elements.slice(1).every((element) => element.scrollWidth <= element.clientWidth + 1),
+          ),
+        ).toBe(true);
+        const geometry = await shell.evaluate((element) => {
+          const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+          const table = element.querySelector("table")!;
+          const cells = table.querySelectorAll("tbody tr:first-child td");
+          const paragraph = element.parentElement!.querySelector("p")!;
+          const pane = element.closest(".chat-thread")!;
+          const action = element.querySelector("button")!;
+          const rect = element.getBoundingClientRect();
+          const paneRect = pane.getBoundingClientRect();
+          const header = table.querySelector("th")!.getBoundingClientRect();
+          return {
+            width: rect.width,
+            prose: paragraph.getBoundingClientRect().width,
+            withinPane: rect.left >= paneRect.left && rect.right <= paneRect.right,
+            verticalOverflow: viewport.scrollHeight - viewport.clientHeight,
+            columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
+            topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),
+            headerPainted: table.contains(
+              document.elementFromPoint(header.left + 4, header.top + 4),
+            ),
+            actionAboveTable:
+              action.getBoundingClientRect().bottom <= table.getBoundingClientRect().top,
+          };
+        });
+        expect(geometry.withinPane).toBe(true);
+        expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
+        expect(geometry.topAligned).toBe(true);
+        expect(geometry.headerPainted).toBe(true);
+        expect(geometry.actionAboveTable).toBe(true);
+        expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
+        if (width === 1440) {
+          expect(geometry.width).toBeGreaterThan(geometry.prose + 100);
+          expect(geometry.prose).toBeLessThanOrEqual(768);
+        } else {
+          expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
+        }
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, `wrap-${width}.png`) });
+        }
+      }
+      await page.setViewportSize({ width: 1440, height: 800 });
+      await openChatSidePanelType(page, "Files");
+      await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
+      await expect
+        .poll(() =>
+          shell.evaluate((element) => {
+            const pane = element.closest(".chat-thread")!.getBoundingClientRect();
+            const bounds = element.getBoundingClientRect();
+            const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
+            return (
+              bounds.left >= pane.left &&
+              bounds.right <= pane.right &&
+              viewport.scrollWidth <= viewport.clientWidth + 1
+            );
+          }),
+        )
+        .toBe(true);
+      await page.getByRole("button", { name: "Close Files" }).click();
+      await expand.click();
+      const dialog = page.locator(".markdown-table-dialog");
+      await dialog.waitFor({ state: "visible" });
+      await dialog.evaluate((element) => {
+        element.scrollTop = 400;
+      });
+      const sticky = await dialog.evaluate((element) => {
+        const header = element.querySelector("thead")!;
+        const rect = header.getBoundingClientRect();
+        return {
+          scrolled: element.scrollTop,
+          pinned: Math.abs(rect.top - element.getBoundingClientRect().top) < 2,
+          painted: header.contains(document.elementFromPoint(rect.left + 4, rect.top + 4)),
+          background: getComputedStyle(header).backgroundColor,
+        };
+      });
+      expect(sticky.scrolled).toBeGreaterThan(100);
+      expect(sticky.pinned).toBe(true);
+      expect(sticky.painted).toBe(true);
+      expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => expand.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("contains widened tables after restoring a percentage reading width", async () => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Keep this explanation at the saved reading width.
+
+| Failure | Recorded implementation author |
+| --- | --- |
+| Quiet mode displays reasoning and an unwanted exit message after a queued run is cancelled | Morgan, with Riley as coauthor on the follow-up repair |
+| A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |`,
+            },
+          ],
+          timestamp: Date.now(),
+          __openclaw: { id: "percentage-table", seq: 1 },
+        },
+      ],
+    });
+    try {
+      await page.goto(`${server.baseUrl}settings/appearance#settings-appearance-chat`);
+      const widthInput = page.locator("[data-settings-chat-message-width]");
+      await widthInput.fill("82%");
+      await widthInput.press("Tab");
+      await page.goto(`${server.baseUrl}chat`);
+      const shell = page.locator('[data-entry-id="percentage-table"] .markdown-table');
+      await shell.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat")
+            .evaluate((element) =>
+              getComputedStyle(element).getPropertyValue("--chat-thread-max-width").trim(),
+            ),
+        )
+        .toBe("82%");
+      const contained = () =>
+        shell.evaluate((element) => {
+          const pane = element.closest(".chat-thread")!.getBoundingClientRect();
+          const bounds = element.getBoundingClientRect();
+          return bounds.left >= pane.left && bounds.right <= pane.right;
+        });
+      for (const width of [1440, 1920, 1280]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expect.poll(contained).toBe(true);
+        await expect
+          .poll(() =>
+            shell.evaluate(
+              (element) =>
+                element.getBoundingClientRect().width >
+                element.parentElement!.getBoundingClientRect().width,
+            ),
+          )
+          .toBe(true);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expect.poll(contained).toBe(true);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage.png") });
+      }
+      await openChatSidePanelType(page, "Files");
+      await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
+      await expect.poll(contained).toBe(true);
+      expect(
+        await shell
+          .locator(".markdown-table__viewport")
+          .evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeLessThanOrEqual(1);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "saved-percentage-files.png") });
+      }
+    } finally {
+      await context.close();
+    }
   });
 
   it.each(["chat", "assistant panel"])(
@@ -112,7 +336,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         await page.goto(`${server.baseUrl}chat`);
         if (surface === "assistant panel") {
           await page.locator(".sidebar-brand__search").click();
-          await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
+          await page
+            .locator("openclaw-command-palette")
+            .getByPlaceholder("Search or start a task…")
+            .fill("Ask OpenClaw");
           await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
         }
         const bubble = page.locator(
@@ -144,6 +371,15 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 
         await expand.focus();
         const inlineTable = shell.locator("table");
+        const noteWidth = await inlineTable
+          .locator("td")
+          .last()
+          .evaluate((cell) => cell.getBoundingClientRect().width);
+        const statusWidth = await inlineTable
+          .locator("td")
+          .nth(3)
+          .evaluate((cell) => cell.getBoundingClientRect().width);
+        expect(noteWidth).toBeGreaterThan(statusWidth * 2);
         const inlineHeader = inlineTable.locator("th").first();
         const inlineCell = inlineTable.locator("td").first();
         await expand.dblclick();
@@ -240,129 +476,180 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     },
   );
 
-  it("releases an expanded table when browser history retires its retained pane", async () => {
-    const alphaKey = "agent:main:dashboard:table-alpha";
-    const betaKey = "agent:main:dashboard:table-beta";
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-      ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: alphaKey,
-      sessions: [
-        { key: alphaKey, label: "Alpha table" },
-        { key: betaKey, label: "Beta table" },
-      ],
-      featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
-      sessionTranscripts: Object.fromEntries(
-        [
-          [alphaKey, betaKey, "history-alpha", "Alpha"],
-          [betaKey, alphaKey, "history-beta", "Beta"],
-        ].map(([key, other, id, name]) => [
-          key,
-          {
-            messages: [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: `| Name | Task |\n| --- | --- |\n| ${name} table | ${other} |`,
-                  },
-                ],
-                timestamp: 1,
-                __openclaw: { id, seq: 1 },
-              },
-            ],
-          },
-        ]),
-      ),
-    });
-    try {
-      await page.goto(controlUiSessionUrl(server.baseUrl, alphaKey));
-      const alpha = page.locator('[data-entry-id="history-alpha"]');
-      await alpha.waitFor({ state: "visible" });
-      const alphaPane = await alpha.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
-      const timeOrigin = await page.evaluate(() => performance.timeOrigin);
-
-      await alpha.locator(`a[data-session-key="${betaKey}"]`).click();
-      await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
-      const beta = page.locator('[data-entry-id="history-beta"]');
-      await beta.waitFor({ state: "visible" });
-      const betaPane = await beta.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
-      const expectRetainedPanes = async (activeIndex: number) => {
-        const states = await Promise.all(
-          [alphaPane, betaPane].map((pane) =>
-            pane.evaluate((element) => ({
-              connected: element?.isConnected,
-              hidden: element?.getAttribute("aria-hidden"),
-              inert: element?.hasAttribute("inert"),
-            })),
-          ),
-        );
-        expect(states).toEqual(
-          [0, 1].map((index) => ({
-            connected: true,
-            hidden: String(index !== activeIndex),
-            inert: index !== activeIndex,
-          })),
-        );
-        expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-      };
-      await expectRetainedPanes(1);
-
-      await beta.getByRole("button", { name: "Expand table" }).click();
-      const dialog = page.locator(".markdown-table-dialog");
-      await dialog.waitFor({ state: "visible" });
-      expect(await dialog.textContent()).toContain("Beta table");
-      await page.goBack();
-      await page.waitForURL(controlUiSessionUrl(server.baseUrl, alphaKey));
-      await expect
-        .poll(() => alphaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
-        .toBe("false");
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "history-back-to-alpha.png") });
-      }
-      await expect.poll(() => dialog.count()).toBe(0);
-      await expectRetainedPanes(0);
-
-      const alphaExpand = alpha.getByRole("button", { name: "Expand table" });
-      await alphaExpand.click();
-      await dialog.waitFor({ state: "visible" });
-      expect(await dialog.count()).toBe(1);
-      expect(await dialog.textContent()).toContain("Alpha table");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => dialog.count()).toBe(0);
-      await expect
-        .poll(() => alphaExpand.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-
-      await page.goForward();
-      await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
-      await expect
-        .poll(() => betaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
-        .toBe("false");
-      await expectRetainedPanes(1);
-      await beta.getByRole("button", { name: "Expand table" }).click();
-      await dialog.waitFor({ state: "visible" });
-      expect(await dialog.count()).toBe(1);
-      expect(await dialog.textContent()).toContain("Beta table");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => dialog.count()).toBe(0);
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error(String(error)),
-        label: "Expanded table across retained-pane browser history",
+  it.each(["expanded table", "held session hovercard"])(
+    "releases an %s when browser history retires its retained pane",
+    async (overlay) => {
+      const alphaKey = "agent:main:dashboard:table-alpha";
+      const betaKey = "agent:main:dashboard:table-beta";
+      const context = await browser.newContext({
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 900 },
+        ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
       });
-      throw error;
-    } finally {
-      await context.close();
-    }
-  });
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessionKey: alphaKey,
+        sessions: [
+          { key: alphaKey, label: "Alpha table" },
+          { key: betaKey, label: "Beta table" },
+        ],
+        featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
+        sessionTranscripts: Object.fromEntries(
+          [
+            [alphaKey, betaKey, "history-alpha", "Alpha"],
+            [betaKey, alphaKey, "history-beta", "Beta"],
+          ].map(([key, other, id, name]) => [
+            key,
+            {
+              messages: [
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "text",
+                      text: `| Name | Task |\n| --- | --- |\n| ${name} table | ${other} |`,
+                    },
+                  ],
+                  timestamp: 1,
+                  __openclaw: { id, seq: 1 },
+                },
+              ],
+            },
+          ]),
+        ),
+      });
+      try {
+        await page.goto(controlUiSessionUrl(server.baseUrl, alphaKey));
+        const alpha = page.locator('[data-entry-id="history-alpha"]');
+        await alpha.waitFor({ state: "visible" });
+        const alphaPane = await alpha.evaluateHandle((entry) =>
+          entry.closest("openclaw-chat-pane"),
+        );
+        const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+
+        await alpha.locator(`a[data-session-key="${betaKey}"]`).click();
+        await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
+        const beta = page.locator('[data-entry-id="history-beta"]');
+        await beta.waitFor({ state: "visible" });
+        const betaPane = await beta.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
+        const expectRetainedPanes = async (activeIndex: number) => {
+          const states = await Promise.all(
+            [alphaPane, betaPane].map((pane) =>
+              pane.evaluate((element) => ({
+                connected: element?.isConnected,
+                hidden: element?.getAttribute("aria-hidden"),
+                inert: element?.hasAttribute("inert"),
+              })),
+            ),
+          );
+          expect(states).toEqual(
+            [0, 1].map((index) => ({
+              connected: true,
+              hidden: String(index !== activeIndex),
+              inert: index !== activeIndex,
+            })),
+          );
+          expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+        };
+        await expectRetainedPanes(1);
+
+        const dialog = page.locator(".markdown-table-dialog");
+        const hovercard = page.locator(".session-progress-hovercard");
+        const sourceLink = beta.locator(`a[data-session-key="${alphaKey}"]`);
+        if (overlay === "expanded table") {
+          // The parked pointer can open Beta's backlink card over the table controls.
+          await page.mouse.move(8, 8);
+          await expect.poll(() => hovercard.count()).toBe(0);
+          await beta.getByRole("button", { name: "Expand table" }).click();
+          await dialog.waitFor({ state: "visible" });
+          expect(await dialog.textContent()).toContain("Beta table");
+        } else {
+          await sourceLink.hover();
+          await hovercard.waitFor({ state: "visible" });
+          expect(await sourceLink.getAttribute("aria-controls")).toBe(
+            await hovercard.getAttribute("id"),
+          );
+          await hovercard.hover();
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "held-before-history-back.png") });
+          }
+        }
+        await page.goBack();
+        await page.waitForURL(controlUiSessionUrl(server.baseUrl, alphaKey));
+        await expect
+          .poll(() => alphaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
+          .toBe("false");
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, "history-back-to-alpha.png") });
+        }
+        await expect.poll(() => dialog.count()).toBe(0);
+        await expectRetainedPanes(0);
+        if (overlay === "held session hovercard") {
+          if (captureProof) {
+            const identity = await sourceLink.evaluate((link) => {
+              const pane = link.closest("openclaw-chat-pane");
+              const card = document.getElementById(link.getAttribute("aria-controls") ?? "");
+              return {
+                sessionKey: link.getAttribute("data-session-key"),
+                entryId: link.closest("[data-entry-id]")?.getAttribute("data-entry-id"),
+                paneConnected: pane?.isConnected,
+                paneHidden: pane?.getAttribute("aria-hidden"),
+                paneInert: pane?.hasAttribute("inert"),
+                cardConnected: card?.isConnected ?? false,
+                cardBounds: card?.getBoundingClientRect().toJSON(),
+                sidebarRows: Array.from(document.querySelectorAll(".sidebar-recent-session")).map(
+                  (row) => ({
+                    key: row.getAttribute("data-session-key"),
+                    classes: row.className,
+                    current: row.querySelector("[aria-current]")?.getAttribute("aria-current"),
+                  }),
+                ),
+              };
+            });
+            fs.writeFileSync(
+              path.join(artifactDir, "held-after-history-back.json"),
+              JSON.stringify(identity, null, 2),
+            );
+          }
+          await expect.poll(() => hovercard.count()).toBe(0);
+        }
+
+        const alphaExpand = alpha.getByRole("button", { name: "Expand table" });
+        await alphaExpand.click();
+        await dialog.waitFor({ state: "visible" });
+        expect(await dialog.count()).toBe(1);
+        expect(await dialog.textContent()).toContain("Alpha table");
+        await page.keyboard.press("Escape");
+        await expect.poll(() => dialog.count()).toBe(0);
+        await expect
+          .poll(() => alphaExpand.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+
+        await page.goForward();
+        await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
+        await expect
+          .poll(() => betaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
+          .toBe("false");
+        await expectRetainedPanes(1);
+        await beta.getByRole("button", { name: "Expand table" }).click();
+        await dialog.waitFor({ state: "visible" });
+        expect(await dialog.count()).toBe(1);
+        expect(await dialog.textContent()).toContain("Beta table");
+        await page.keyboard.press("Escape");
+        await expect.poll(() => dialog.count()).toBe(0);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: "Expanded table across retained-pane browser history",
+        });
+        throw error;
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("restores overflow affordances when a retained table viewport narrows", async () => {
     const context = await browser.newContext({
@@ -380,9 +667,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
           content: [
             {
               type: "text",
-              text: `| Service | Status | Reference |
-| --- | --- | --- |
-| Gateway | Healthy | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
+              text: `| Service | Owner | Region | Status | Version | Reference |
+| --- | --- | --- | --- | --- | --- |
+| Gateway | Platform | EU | Healthy | 1.0 | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
             },
           ],
           timestamp: 1,
@@ -545,6 +832,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       };
       const openSource = async () => {
         await page.goto(controlUiSessionUrl(server.baseUrl, sourceKey));
+        await page.locator('[data-entry-id="table-links"]').waitFor({ state: "visible" });
         if (surface === "assistant panel") {
           await page.locator(".sidebar-footer-bar__home").click();
           await page

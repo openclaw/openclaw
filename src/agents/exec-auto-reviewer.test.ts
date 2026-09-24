@@ -350,79 +350,99 @@ describe("createModelExecAutoReviewer", () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
-  it("uses the configured exec reviewer model for review calls", async () => {
-    const prepare = vi.fn(async () => ({
-      selection: {
-        provider: "openrouter",
-        modelId: "anthropic/claude-sonnet-4-6",
-        agentDir: "/agent",
-      },
-      model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
-      auth: { apiKey: "key", mode: "env" },
-      [Symbol.asyncDispose]: async () => {},
-    }));
-    let capturedPrompt = "";
-    const complete = vi.fn(
-      async (request: { context: { messages: Array<{ content: string }> } }) => {
-        capturedPrompt = request.context.messages[0]?.content ?? "";
-        return {
-          stopReason: "stop" as const,
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                decision: "ask",
-                risk: "high",
-                rationale: "network side effect",
-              }),
-            },
-          ],
-        };
-      },
-    );
-    const reviewer = createModelExecAutoReviewer({
-      cfg: {},
-      agentId: "ops",
-      reviewer: { model: { primary: "openrouter/anthropic/claude-sonnet-4-6" } },
-      deps: {
-        acquireSimpleCompletionModelForAgent:
-          prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-        completeWithPreparedSimpleCompletionModel:
-          complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-      },
-    });
-
-    await expect(reviewer(input)).resolves.toEqual({
-      decision: "ask",
-      risk: "high",
-      rationale: "network side effect",
-    });
-    expect(prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    { thinking: undefined, fastMode: undefined },
+    { thinking: "low", fastMode: true },
+    { thinking: "high", fastMode: false },
+    { thinking: "max", fastMode: true },
+  ] as const)(
+    "uses reviewer model, thinking $thinking and Fast mode $fastMode for review calls",
+    async ({ thinking, fastMode }) => {
+      const prepare = vi.fn(async () => ({
+        selection: {
+          provider: "openrouter",
+          modelId: "anthropic/claude-sonnet-4-6",
+          agentDir: "/agent",
+        },
+        model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
+        auth: { apiKey: "key", mode: "env" },
+        [Symbol.asyncDispose]: async () => {},
+      }));
+      let capturedPrompt = "";
+      const complete = vi.fn(
+        async (request: {
+          context: { messages: Array<{ content: string }> };
+          options: { reasoning?: string; serviceTier?: string };
+        }) => {
+          capturedPrompt = request.context.messages[0]?.content ?? "";
+          return {
+            stopReason: "stop" as const,
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  decision: "ask",
+                  risk: "high",
+                  rationale: "network side effect",
+                }),
+              },
+            ],
+          };
+        },
+      );
+      const reviewerModel = { primary: "openrouter/anthropic/claude-sonnet-4-6" };
+      const reviewer = createModelExecAutoReviewer({
+        cfg: {},
         agentId: "ops",
-        modelRef: "openrouter/anthropic/claude-sonnet-4-6",
-      }),
-    );
-    expect(complete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          systemPrompt: expect.stringContaining('"decision":"allow|deny|ask"'),
-          messages: [
-            expect.objectContaining({
-              content: expect.stringContaining("UNTRUSTED_EXEC_REQUEST_JSON_BEGIN"),
-            }),
-          ],
+        reviewer: { model: reviewerModel, thinking, fastMode },
+        deps: {
+          acquireSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModel:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        },
+      });
+
+      await expect(reviewer(input)).resolves.toEqual({
+        decision: "ask",
+        risk: "high",
+        rationale: "network side effect",
+      });
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "ops",
+          modelRef: "openrouter/anthropic/claude-sonnet-4-6",
         }),
-        options: expect.objectContaining({
-          temperature: 0,
+      );
+      expect(complete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: expect.objectContaining({
+            systemPrompt: expect.stringContaining('"decision":"allow|deny|ask"'),
+            messages: [
+              expect.objectContaining({
+                content: expect.stringContaining("UNTRUSTED_EXEC_REQUEST_JSON_BEGIN"),
+              }),
+            ],
+          }),
+          options: expect.objectContaining({
+            temperature: 0,
+          }),
         }),
-      }),
-    );
-    expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
-    expect(capturedPrompt).not.toContain("sessionKey");
-    expect(capturedPrompt).toContain("return deny with risk high");
-    expect(capturedPrompt).not.toContain("UNTRUSTED_TRANSCRIPT");
-  });
+      );
+      const options = complete.mock.calls[0]?.[0].options;
+      if (thinking && fastMode !== undefined) {
+        const serviceTier = fastMode ? "priority" : "default";
+        expect(options).toMatchObject({ reasoning: thinking, serviceTier });
+      } else {
+        expect(options).not.toHaveProperty("reasoning");
+        expect(options).not.toHaveProperty("serviceTier");
+      }
+      expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
+      expect(capturedPrompt).not.toContain("sessionKey");
+      expect(capturedPrompt).toContain("return deny with risk high");
+      expect(capturedPrompt).not.toContain("UNTRUSTED_TRANSCRIPT");
+    },
+  );
 
   it.each([
     ["\n", "\\n"],

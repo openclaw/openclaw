@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
@@ -40,25 +44,56 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              archiveMaterializationHook.beforeCommitRequest?.();
-              params.onCommitRequest?.();
-              archiveMaterializationHook.afterCommitRequest?.();
-            }
-          : undefined,
-      }),
     materializeSessionStateDeletePlans: async (
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
       return await actual.materializeSessionStateDeletePlans(...args);
     },
+  };
+});
+
+vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
+  return {
+    ...actual,
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+      actual.withSqliteReclamationWorker(
+        options,
+        claim,
+        async (worker) => {
+          const originalRun = worker.run.bind(worker);
+          let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            return originalRun({
+              ...params,
+              withWriteAdmission: (performWrite, diagnostics) =>
+                params.withWriteAdmission((refusal) => {
+                  // Bound Worker messages otherwise run outside the active writer context.
+                  inWriteAdmission = AsyncLocalStorage.snapshot();
+                  return performWrite(refusal);
+                }, diagnostics),
+              onCommitRequest: () => {
+                if (!inWriteAdmission) {
+                  throw new Error("Worker requested commit without writer admission");
+                }
+                inWriteAdmission(() => archiveMaterializationHook.beforeCommitRequest?.());
+                const errors = params.onCommitRequest();
+                archiveMaterializationHook.afterCommitRequest?.();
+                return errors;
+              },
+            });
+          });
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+        assertRequestCurrent,
+        signal,
+      )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
 
@@ -71,12 +106,13 @@ describe("SQLite reclamation admission races", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.beforeReclaim = undefined;
     archiveMaterializationHook.beforeCommitRequest = undefined;
     archiveMaterializationHook.afterCommitRequest = undefined;
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 

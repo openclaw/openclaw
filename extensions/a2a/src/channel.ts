@@ -29,6 +29,7 @@ const a2aChannelMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId,
         to: ctx.to,
         text: ctx.text,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       });
       return {
         messageId: result.messageId,
@@ -79,8 +80,8 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
     base: { deliveryMode: "direct" },
     attachedResults: {
       channel: A2A_CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId }) =>
-        await sendA2aChannelText({ cfg, accountId, to, text }),
+      sendText: async ({ cfg, to, text, accountId, assertDirectAdapterHandoff }) =>
+        await sendA2aChannelText({ cfg, accountId, to, text, assertDirectAdapterHandoff }),
     },
   },
 });

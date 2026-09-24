@@ -18,15 +18,26 @@ struct DashboardFailurePageTests {
         #expect(html.contains("data-id=\"profile:test&quot;&#39;&amp;&lt;&gt;\""))
         #expect(!html.contains("<script>"))
         if signingIn {
-            #expect(html.contains("Complete sign-in in your browser…"))
             #expect(html.contains(">Cancel</button>"))
             #expect(html.contains("type:'reconnect-cancel',id:this.dataset.id"))
-            #expect(!html.contains("Failed"))
         } else {
             #expect(html.contains(">Sign in again</button>"))
             #expect(html.contains("type:'reconnect',id:this.dataset.id"))
             #expect(html.contains("Failed &lt;script&gt;&amp;&quot;&#39;"))
         }
+        #expect(html.contains("Failed &lt;script&gt;&amp;&quot;&#39;"))
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `browser recovery is available only during the current sign in`(signingIn: Bool, available: Bool) {
+        let page = DashboardFailurePage.SignedOut(
+            target: .profile("fixture"), name: "Fixture", host: "gateway.example", expiresAt: .distantPast)
+        let html = DashboardFailurePage.html(
+            signedOut: page, signingIn: signingIn, browserAttempt: available ? UUID() : nil)
+        #expect(html.contains(">Open browser</button>") == (signingIn && available))
+        #expect(html.contains("reconnect-browser") == (signingIn && available))
+        #expect(!html.contains("redirect_url"))
+        #expect(!html.contains("edge_token_transfer"))
     }
 
     @Test func `renewal page does not claim a future expiry already happened`() {

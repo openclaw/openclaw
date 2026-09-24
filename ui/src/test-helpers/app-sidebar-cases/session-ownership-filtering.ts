@@ -81,7 +81,7 @@ describe("AppSidebar session ownership filtering", () => {
       sidebar.querySelector(
         '[data-session-key="agent:main:opaque-profile"] openclaw-session-owner-chip',
       ),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       sidebar.querySelector(
         '[data-session-key="agent:main:discord-channel"] openclaw-session-owner-chip',
@@ -153,6 +153,23 @@ describe("AppSidebar session ownership filtering", () => {
     expect(
       sidebar.querySelector(".sidebar-session-toolbar .sidebar-session-sort--filtered"),
     ).not.toBeNull();
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
+    await sidebar.updateComplete;
+    sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "empty-groups:never" } },
+      }),
+    );
+    await sidebar.updateComplete;
+    // The explicit display choice restores the heading, never filtered-out sessions.
+    expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:bob"]')).toBeNull();
+    await selectOwner(sidebar, "");
+    await selectOwner(sidebar, "profile-ada");
+    expect(sidebar.querySelector('[data-session-section="category:Operations"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:bob"]')).toBeNull();
   });
 
   describe.each(["category", "person", "project", "none"] as const)("%s grouping", (grouping) => {
@@ -193,7 +210,7 @@ describe("AppSidebar session ownership filtering", () => {
         // the bounded avatar preview. Its filtered response is the UI boundary.
         harness.list.mockImplementation(async () => ({ ...result, count: 1, sessions: [match] }));
         const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
-        Object.assign(sidebar, { sessionsGrouping: grouping, sessionsHideEmptyGroups: false });
+        Object.assign(sidebar, { sessionsGrouping: grouping });
         await sidebar.updateComplete;
         const sectionIds = () =>
           [...sidebar.querySelectorAll<HTMLElement>("[data-session-section]")].map(
@@ -504,7 +521,7 @@ describe("AppSidebar session ownership filtering", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const navigationParentKey = "agent:main:dashboard:navigation-parent";
     const controlParentKey = "agent:main:main";
-    const childKey = "agent:main:subagent:controlled-child";
+    const childKey = "agent:main:dashboard:controlled-child";
     const child = {
       key: childKey,
       kind: "direct" as const,

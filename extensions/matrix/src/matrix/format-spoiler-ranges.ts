@@ -2,7 +2,7 @@
 import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
-import { findMatrixTableSourceRanges } from "./format-table-ranges.js";
+import { matrixTableSourceRangesFromTokens } from "./format-table-ranges.js";
 
 const spoilerParser = new MarkdownIt({ html: false, linkify: true, typographer: false });
 spoilerParser.linkify.set({ fuzzyLink: true });
@@ -160,6 +160,7 @@ export function prepareMatrixMarkdownSource(markdown: string) {
   return {
     markdown,
     inlineRanges,
+    tableRanges: matrixTableSourceRangesFromTokens(tokens, lineStarts, markdown.length),
     metadataRanges: ranges,
     codeRegions,
     underlineTags: [...tokenizeHtmlTags(markdown)].filter(
@@ -205,7 +206,7 @@ function hasMatrixSpoilerMetadataCollision(
   // Matrix consumes underline tags before parsing inline code, so backticks
   // inside their attributes cannot make a literal code region.
   const literalRanges = [
-    ...findMatrixTableSourceRanges(markdown),
+    ...source.tableRanges,
     ...codeRegions.filter(
       (code) => !underlineTags.some((tag) => code.start > tag.start && code.start < tag.end),
     ),

@@ -4,6 +4,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
@@ -20,6 +21,30 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
+    const input = {
+      event: "item" as const,
+      itemKind: "tool",
+      itemId: "task",
+      name: "process",
+      title: "Check sample results",
+      progressText: "sample job",
+    };
+    const running = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "running",
+    });
+    const failed = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "failed",
+    });
+    expect(running).toContain("Check sample results");
+    expect(failed).toContain("Check sample results");
+    expect(failed).toContain("failed");
+    expect(failed).toContain("sample job");
+    expect(failed).not.toBe(running);
+  });
+
   it("keeps non-zero exits in the legacy quiet summary", () => {
     expect(
       formatChannelProgressDraftText({

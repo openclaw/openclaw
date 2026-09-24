@@ -1,4 +1,3 @@
-// Telegram plugin module implements account throttler behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose, sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";

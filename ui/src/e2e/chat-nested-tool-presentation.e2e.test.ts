@@ -1,9 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import {
-  createNestedToolActivity,
-  nestedToolActivityContent,
-} from "../../../src/sessions/nested-tool-activity.ts";
+import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,7 +12,7 @@ const suite = createControlUiE2eSuite({
 });
 const timestamp = Date.UTC(2026, 8, 11, 15, 0);
 const runId = "github-sign-in-run";
-const command = "gh auth login --hostname github.com --web";
+const command = "printf '\n--- GitHub sign-in ---\n'\ngh auth login --hostname github.com --web";
 const wrapperCode = "await tools.exec({ command: 'gh auth login --hostname github.com --web' });";
 
 function nestedHistoryMessage(
@@ -39,13 +37,7 @@ function nestedHistoryMessage(
     startedAt: timestamp + startOrder * 1_000,
     timestamp: timestamp + startOrder * 1_000 + 500,
   });
-  const [call, result] = nestedToolActivityContent(activity);
-  return {
-    ...activity,
-    runId,
-    __openclaw: { runId },
-    content: [call, { ...result, role: "toolResult" }],
-  };
+  return { ...activity, runId, __openclaw: { runId } };
 }
 
 suite.define(() => {
@@ -55,66 +47,69 @@ suite.define(() => {
       { viewport: { width: 1280, height: 900 }, locale: "en-US" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          historyMessages: [
-            { role: "user", content: "Sign in to GitHub so I can authorize access.", timestamp },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Starting GitHub authentication." }],
-              openclawStreamFallback: {
-                itemId: "github-commentary",
-                replacementText: "Starting GitHub authentication.",
-                source: "segment",
+          methodResponses: {
+            "chat.history": prepareChatHistoryFixture([
+              { role: "user", content: "Sign in to GitHub so I can authorize access.", timestamp },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Starting GitHub authentication." }],
+                openclawStreamFallback: {
+                  itemId: "github-commentary",
+                  replacementText: "Starting GitHub authentication.",
+                  source: "segment",
+                },
+                timestamp: timestamp + 100,
               },
-              timestamp: timestamp + 100,
-            },
-            {
-              role: "assistant",
-              runId,
-              content: [
-                {
-                  type: "toolCall",
-                  id: "github-wrapper",
-                  name: "exec",
-                  runId,
-                  arguments: { title: "Start GitHub authentication", code: wrapperCode },
-                },
-              ],
-              timestamp: timestamp + 500,
-            },
-            nestedHistoryMessage(
-              "github-login",
-              "exec",
-              { title: "Sign in to GitHub", command },
-              "gh: command not found",
-              1,
-              true,
-            ),
-            nestedHistoryMessage(
-              "github-read",
-              "read",
-              { path: "/workspace/README.md" },
-              "GitHub CLI is required for this workflow.",
-              2,
-            ),
-            {
-              role: "toolResult",
-              runId,
-              toolCallId: "github-wrapper",
-              toolName: "exec",
-              content: [{ type: "text", text: "Child operations finished." }],
-              timestamp: timestamp + 3_000,
-            },
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "GitHub sign-in could not start because the GitHub CLI is unavailable.",
-                },
-              ],
-              timestamp: timestamp + 4_000,
-            },
-          ],
+              {
+                role: "assistant",
+                runId,
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "github-wrapper",
+                    name: "exec",
+                    runId,
+                    arguments: { title: "Start GitHub authentication", code: wrapperCode },
+                  },
+                ],
+                timestamp: timestamp + 500,
+              },
+              nestedHistoryMessage(
+                "github-login",
+                "exec",
+                { command },
+                "gh: command not found",
+                1,
+                true,
+              ),
+              nestedHistoryMessage(
+                "github-read",
+                "read",
+                { path: "/workspace/README.md" },
+                "GitHub CLI is required for this workflow.",
+                2,
+              ),
+              {
+                role: "toolResult",
+                runId,
+                toolCallId: "github-wrapper",
+                toolName: "exec",
+                isError: false,
+                content: [{ type: "text", text: "Child operations finished." }],
+                timestamp: timestamp + 3_000,
+              },
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: "GitHub sign-in could not start because the GitHub CLI is unavailable.",
+                  },
+                ],
+                timestamp: timestamp + 4_000,
+              },
+            ]),
+          },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await page
@@ -128,22 +123,27 @@ suite.define(() => {
         await summary.waitFor();
         await page.screenshot({ path: path.join(artifactDir, "01-collapsed.png") });
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
-        expect(await summary.textContent()).toContain("Ran a command, read a file");
+        expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
+          "2 commands · 1 read",
+        );
+        expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
+        expect(await summary.textContent()).not.toContain("/workspace/README.md");
         const failure = summary.getByText("1 failed", { exact: true });
         expect(await failure.isVisible()).toBe(true);
         expect(await work.textContent()).not.toContain("gh: command not found");
         expect(await work.textContent()).not.toContain("Sign in to GitHub");
         await summary.click();
         const activityBody = work.locator(".chat-activity-group__body");
+        await page.screenshot({ path: path.join(artifactDir, "02-operation-list.png") });
+        expect(await activityBody.locator(".chat-tool-row").count()).toBe(1);
         const wrapper = activityBody.locator(".chat-tool-msg-summary", {
           hasText: "Start GitHub authentication",
         });
         await wrapper.waitFor();
+        expect(await wrapper.textContent()).toContain("1 failed");
         await wrapper.click();
-        await activityBody.getByText(wrapperCode, { exact: false }).first().waitFor();
-        const login = activityBody.locator(".chat-tool-msg-summary", {
-          hasText: "Sign in to GitHub",
-        });
+        const children = activityBody.locator(".chat-tool-children");
+        const login = children.locator(".chat-tool-msg-summary", { hasText: "GitHub sign-in" });
         await login.waitFor();
         expect(await activityBody.getByText("gh: command not found").count()).toBe(0);
         await login.click();
@@ -153,6 +153,8 @@ suite.define(() => {
             .locator(".chat-tool-msg-body", { hasText: "gh: command not found" })
             .isVisible(),
         ).toBe(true);
+        await activityBody.locator(".chat-tool-wrapper-details > summary").click();
+        await activityBody.getByText(wrapperCode, { exact: false }).first().waitFor();
         await page.screenshot({ path: path.join(artifactDir, "02-expanded.png") });
         await summary.click();
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
@@ -160,7 +162,11 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         await summary.waitFor();
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
-        expect(await summary.textContent()).toContain("Ran a command, read a file");
+        expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
+          "2 commands · 1 read",
+        );
+        expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
+        expect(await summary.textContent()).not.toContain("/workspace/README.md");
         expect(await failure.isVisible()).toBe(true);
         expect(await work.textContent()).not.toContain("gh: command not found");
         await page.screenshot({ path: path.join(artifactDir, "03-reloaded.png") });

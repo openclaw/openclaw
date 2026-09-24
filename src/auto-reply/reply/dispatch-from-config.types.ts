@@ -33,7 +33,7 @@ export type DispatchFromConfigParams = {
   /** Full runtime config captured by the channel; reply resolution refreshes it per turn. */
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply">;
+  replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply" | "onPreparedBlockReply">;
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
@@ -42,10 +42,7 @@ export type DispatchFromConfigParams = {
   configOverride?: OpenClawConfig;
   /** Gateway-owned worker services for archive recovery outside a request scope. */
   sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
-  /**
-   * Channel turns consume the Gateway's committed model-runtime owner even when the global
-   * config snapshot is unavailable during startup or durable ingress replay.
-   */
+  /** @deprecated Always enabled in the Gateway; remove in the next Plugin SDK major. */
   usePublishedModelRuntime?: boolean;
 };
 

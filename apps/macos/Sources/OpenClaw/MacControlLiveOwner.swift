@@ -146,11 +146,14 @@ final class MacControlLiveOwner: MacControlOwner {
 
     func addGateway(_ request: MacControlRequest) async throws -> MacControlGatewayStatus {
         try Task.checkCancellation()
-        let profile = try await GatewayBrowserSignInCoordinator.connect(
-            name: request.name ?? "",
-            address: request.url ?? "",
-            token: request.token ?? "",
-            password: request.password ?? "")
+        let profile = try await GatewayBrowserOnboardingController.withSignInProgress { progress in
+            try await GatewayBrowserSignInCoordinator.connect(
+                name: request.name ?? "",
+                address: request.url ?? "",
+                token: request.token ?? "",
+                password: request.password ?? "",
+                progress: progress)
+        }
         let gateway = try await self.gateway(id: profile.id)
         return try await Self.connectSavedGateway(gateway, deadline: request.deadline) {
             try Task.checkCancellation()
@@ -195,7 +198,9 @@ final class MacControlLiveOwner: MacControlOwner {
     }
 
     func reconnectGateway(id: String) async throws -> MacControlGatewayStatus {
-        try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id)
+        try await GatewayBrowserOnboardingController.withSignInProgress { progress in
+            try await GatewayBrowserSignInCoordinator.reconnectGateway(id: id, progress: progress)
+        }
         return try await self.gateway(id: id)
     }
 

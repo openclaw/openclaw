@@ -9,7 +9,7 @@ import {
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
+import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
@@ -22,6 +22,7 @@ import { preserveCreationStamp } from "../config/sessions/session-entry-provenan
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveTargetSqliteOptions } from "../infra/session-sqlite-migration-readers.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -429,7 +430,7 @@ async function repairCanonicalSessionGroup(
     }
   }
   setCanonicalSqliteSessionMainKey(
-    openOpenClawAgentDatabase({ agentId: destination.agentId, path: destination.sqlitePath }),
+    openOpenClawAgentDatabase(resolveTargetSqliteOptions(destination, params.env)),
     params.cfg.session?.mainKey,
   );
   const winnerResult = await applySessionEntryLifecycleMutation({
@@ -512,7 +513,7 @@ export async function repairCanonicalSessionKeys(params: {
   if (params.apply) {
     for (const store of stores) {
       setCanonicalSqliteSessionMainKey(
-        openOpenClawAgentDatabase({ agentId: store.agentId, path: store.sqlitePath }),
+        openOpenClawAgentDatabase(resolveTargetSqliteOptions(store, env)),
         params.cfg.session?.mainKey,
       );
     }

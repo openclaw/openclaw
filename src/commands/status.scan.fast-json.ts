@@ -6,9 +6,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
+import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
-import type { StatusScanResult } from "./status.scan-result.ts";
+import type { StatusJsonScanResult } from "./status.scan-result.ts";
+
+const statusGatewayModuleLoader = createLazyImportLoader(() => import("./status.scan.gateway.js"));
 
 const statusScanMemoryModuleLoader = createLazyImportLoader(
   () => import("./status.scan-memory.js"),
@@ -71,12 +74,15 @@ function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boole
 
 /** Runs the default fast status JSON scan. */
 export async function scanStatusJsonFast(
-  opts: {
-    timeoutMs?: number;
+  opts: StatusGatewayProbeBudget & {
     all?: boolean;
   },
   runtime: RuntimeEnv,
-): Promise<StatusScanResult> {
+): Promise<StatusJsonScanResult> {
+  const online = await (await statusGatewayModuleLoader.load()).scanStatusJsonGateway(opts);
+  if (online.scan) {
+    return online.scan;
+  }
   const overview = await collectStatusScanOverview({
     env: process.env,
     commandName: "status --json",
@@ -89,7 +95,7 @@ export async function scanStatusJsonFast(
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs: opts.all === true ? undefined : (opts.timeoutMs ?? 1000),
+    gatewaySnapshot: online.gatewaySnapshot,
   });
   const pluginCompatibility = opts.all
     ? await statusScanPluginStatusModuleLoader

@@ -6,6 +6,61 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  it("replays complete prepared items and evicts raw and item siblings together", () => {
+    const state = createChatRunState();
+    let seq = 0;
+    const send = (stream: string, data: Record<string, unknown>) => {
+      state.recordProgressEvent("run", { runId: "run", stream, data, seq: ++seq, ts: seq });
+    };
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "end",
+      status: "completed",
+      title: "Status",
+      progressText: "Ready",
+    });
+    send("item", {
+      itemId: "preamble",
+      kind: "preamble",
+      phase: "update",
+      status: "running",
+      title: "Status",
+      progressText: "Checking",
+    });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { data: { phase: "end", progressText: "Ready", title: "Status", status: "completed" } },
+    ]);
+    send("item", { itemId: "preamble", kind: "preamble", phase: "start", progressText: "" });
+    expect(state.runs.get("run")?.progressSnapshot?.events).toEqual([]);
+    for (let index = 0; index < 30; index += 1) {
+      const toolCallId = `call-${index}`;
+      send("tool", { toolCallId, name: "read", phase: "start", args: { path: "README.md" } });
+      send("item", {
+        itemId: `tool:${toolCallId}`,
+        toolCallId,
+        name: "read",
+        kind: "tool",
+        phase: "end",
+        title: "Read file",
+        status: "completed",
+        extraTypedFact: "retained",
+      });
+    }
+    const events = state.runs.get("run")?.progressSnapshot?.events ?? [];
+    expect(events).toHaveLength(50);
+    expect(
+      events.filter((event) => event.stream === "item").map((event) => event.data.toolCallId),
+    ).toEqual(
+      events.filter((event) => event.stream === "tool").map((event) => event.data.toolCallId),
+    );
+    expect(events.at(-1)?.data).toMatchObject({
+      title: "Read file",
+      status: "completed",
+      extraTypedFact: "retained",
+    });
+  });
+
   it.each([false, true])(
     "stops returning finalized recipients at expiry (other state: %s)",
     (keepState) => {
@@ -154,7 +209,14 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each(["naming_worktree", "creating_worktree", "running_setup", "preparing_context"])(
+  it.each([
+    "waiting_for_state",
+    "naming_worktree",
+    "creating_worktree",
+    "running_setup",
+    "preparing_context",
+    "memory_flushing",
+  ])(
     "retains only the latest startup status (%s) until observable run activity begins",
     (phase) => {
       const state = createChatRunState();
@@ -389,7 +451,7 @@ describe("createChatRunState", () => {
   });
 
   it.each(["tool", "notice"])(
-    "recounts changed payloads before %s activity evicts multiple reconnect owners",
+    "isolates captured payloads from producer mutation before %s activity",
     (stream) => {
       const state = createChatRunState();
       const args = { text: "x".repeat(1_024) };
@@ -416,7 +478,8 @@ describe("createChatRunState", () => {
       });
       const snapshot = state.runs.get("run-1")?.progressSnapshot;
       expect(snapshot?.events.at(-1)?.seq).toBe(51);
-      expect(snapshot?.events.length).toBeLessThan(49);
+      expect(snapshot?.events).toHaveLength(50);
+      expect(snapshot?.events[0]?.data.args).toEqual({ text: "x".repeat(1_024) });
       expect(snapshot?.byteLength).toBe(
         snapshot?.events.reduce(
           (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
@@ -426,6 +489,84 @@ describe("createChatRunState", () => {
       expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
     },
   );
+
+  it("captures nested tool JSON once with the same values reconnect transport sends", () => {
+    const state = createChatRunState();
+    let serializations = 0;
+    const details = {
+      toJSON: () => {
+        serializations += 1;
+        return { text: "é", omitted: undefined, values: [undefined, Number.NaN] };
+      },
+    };
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: { phase: "result", toolCallId: "done", result: { details } },
+    });
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: 2,
+      data: { phase: "input_delta", toolCallId: "active", diff: { added: 1, removed: 0 } },
+    });
+    expect(serializations).toBe(1);
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events[0]?.data.result).toEqual({
+      details: { text: "é", values: [null, null] },
+    });
+    const captured = snapshot!.events[0]!.data.result as {
+      details: { text: string; values: null[] };
+    };
+    expect(Reflect.set(captured, "details", {})).toBe(false);
+    expect(Reflect.set(captured.details, "text", "changed")).toBe(false);
+    expect(Reflect.set(captured.details.values, "0", "changed")).toBe(false);
+    expect(snapshot?.byteLength).toBe(
+      snapshot?.events.reduce(
+        (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+        0,
+      ),
+    );
+  });
+
+  it.each([
+    [
+      "cyclic",
+      (): unknown => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["bigint", (): unknown => 1n],
+    [
+      "throwing toJSON",
+      (): unknown => ({
+        toJSON: () => {
+          throw new Error("unserializable tool result");
+        },
+      }),
+    ],
+  ] as const)("retains tool metadata when a %s result cannot be replayed", (_label, result) => {
+    const state = createChatRunState();
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: { phase: "result", toolCallId: "done", name: "read", result: result() },
+    });
+    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect(snapshot?.events[0]?.data).toEqual({
+      phase: "result",
+      toolCallId: "done",
+      name: "read",
+    });
+    expect(snapshot?.byteLength).toBe(Buffer.byteLength(JSON.stringify(snapshot?.events[0])));
+  });
 
   it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
     const state = createChatRunState();

@@ -734,29 +734,29 @@ describe("lookupContextTokens", () => {
 
   it("bounds an authored effective cap by a smaller authored context window", async () => {
     mockDiscoveryDeps([]);
-    const resolveContextTokensForModel = await importResolveContextTokensForModel();
-
-    expect(
-      resolveContextTokensForModel({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                models: [
-                  {
-                    id: "gpt-5.6-sol",
-                    contextWindow: 128_000,
-                    contextTokens: 1_000_000,
-                  },
-                ],
-              },
+    const { resolveContextTokensForModel, resolveModelContextTokenProjection } =
+      await importContextModule();
+    const params = {
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.invalid",
+              models: [{ ...createConfiguredModel("wide", 1_000_000), contextWindow: 128_000 }],
             },
           },
-        } as never,
-        provider: "openai",
-        model: "gpt-5.6-sol",
-      }),
-    ).toBe(128_000);
+        },
+      },
+      provider: "custom",
+      model: "wide",
+      allowAsyncLoad: false,
+    } satisfies Parameters<typeof resolveModelContextTokenProjection>[0];
+
+    expect(resolveModelContextTokenProjection(params)).toEqual({
+      contextTokens: 128_000,
+      authoredContextTokens: 1_000_000,
+    });
+    expect(resolveContextTokensForModel(params)).toBe(128_000);
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {

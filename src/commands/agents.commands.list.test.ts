@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -13,7 +15,7 @@ const {
   buildProviderSummaryMetadataIndexMock,
   listProvidersForAgentMock,
   listAgentProvenanceMock,
-  readAgentProvenanceMock,
+  readAgentProvenanceForDisplayMock,
   providerSummaryMetadataMock,
   requireValidConfigMock,
   summarizeBindingsMock,
@@ -22,7 +24,7 @@ const {
   buildProviderSummaryMetadataIndexMock: vi.fn(),
   listProvidersForAgentMock: vi.fn(),
   listAgentProvenanceMock: vi.fn(),
-  readAgentProvenanceMock: vi.fn(),
+  readAgentProvenanceForDisplayMock: vi.fn(),
   providerSummaryMetadataMock: new Map([
     [
       "telegram",
@@ -50,7 +52,7 @@ vi.mock("./agents.providers.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   listAgentProvenance: listAgentProvenanceMock,
-  readAgentProvenance: readAgentProvenanceMock,
+  readAgentProvenanceForDisplay: readAgentProvenanceForDisplayMock,
 }));
 
 const { agentsListCommand } = await import("./agents.commands.list.js");
@@ -79,19 +81,72 @@ describe("agentsListCommand", () => {
     buildProviderStatusIndexMock.mockResolvedValue(new Map());
     buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
     listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
-    listAgentProvenanceMock.mockReturnValue([]);
-    readAgentProvenanceMock.mockReturnValue(undefined);
+    listAgentProvenanceMock.mockResolvedValue([]);
+    readAgentProvenanceForDisplayMock.mockResolvedValue([]);
     summarizeBindingsMock.mockReturnValue(["Telegram default"]);
   });
 
+  it.each(["main", "research"])(
+    "keeps migrated default %s in JSON after reloading persisted explicit ownership",
+    async (agentId) => {
+      const legacy: OpenClawConfig = {
+        agents: {
+          list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
+        },
+      };
+      const migrated = migratePersistedImplicitMainRoster(legacy).config as OpenClawConfig;
+      const persisted = structuredClone<OpenClawConfig>({
+        ...migrated,
+        agents: { ...migrated.agents, ownership: "explicit" },
+      });
+      expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe(agentId);
+      expect(Object.values(persisted.agents?.entries ?? {}).some((entry) => entry.default)).toBe(
+        false,
+      );
+
+      for (const config of [legacy, persisted]) {
+        requireValidConfigMock.mockResolvedValueOnce(config);
+        const runtime = createRuntime();
+        await agentsListCommand({ json: true }, runtime);
+        expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual(
+          ["main", "research"].map((id) =>
+            expect.objectContaining({ id, isDefault: id === agentId }),
+          ),
+        );
+      }
+    },
+  );
+
+  it.each([undefined, "ops"])(
+    "reports no default without a designation despite provenance %s",
+    async (retainedAgentId) => {
+      const config = retainLegacyDefaultAgentId(
+        {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        },
+        retainedAgentId,
+      );
+      requireValidConfigMock.mockResolvedValueOnce(config);
+      const runtime = createRuntime();
+      await agentsListCommand({ json: true }, runtime);
+      expect(runtime.writeJson.mock.calls[0]?.[0]).toEqual([
+        expect.objectContaining({ id: "ops", isDefault: false }),
+        expect.objectContaining({ id: "research", isDefault: false }),
+      ]);
+    },
+  );
+
   it("adds durable provenance to JSON without loading provider details", async () => {
     const runtime = createRuntime();
-    readAgentProvenanceMock.mockReturnValue({
-      agentId: "main",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: 42,
-    });
+    listAgentProvenanceMock.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
+    readAgentProvenanceForDisplayMock.mockResolvedValue([
+      {
+        agentId: "main",
+        createdVia: "operator",
+        creatorAgentId: null,
+        createdAtMs: 42,
+      },
+    ]);
 
     await agentsListCommand({ json: true }, runtime);
 
@@ -106,6 +161,10 @@ describe("agentsListCommand", () => {
     });
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
+
+    await expect(agentsListCommand({ json: true, tree: true }, createRuntime())).rejects.toThrow(
+      "unrelated stored provenance is invalid",
+    );
   });
 
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
@@ -119,7 +178,7 @@ describe("agentsListCommand", () => {
         },
       },
     } satisfies OpenClawConfig);
-    listAgentProvenanceMock.mockReturnValue([
+    listAgentProvenanceMock.mockResolvedValue([
       { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 1 },
       { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
       { agentId: "orphan", createdVia: "agent", creatorAgentId: "deleted", createdAtMs: 3 },

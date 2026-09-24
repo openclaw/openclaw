@@ -131,15 +131,6 @@ describe("resolveEffectiveHomeDir", () => {
     ).toBe(path.resolve("/data/data/com.termux/files/home/workspace"));
   });
 
-  it("expands OPENCLAW_HOME when set to ~", () => {
-    const env = {
-      OPENCLAW_HOME: "~/svc",
-      HOME: "/home/alice",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveEffectiveHomeDir(env)).toBe(path.resolve("/home/alice/svc"));
-  });
-
   it("does not interpret $ patterns in HOME when expanding OPENCLAW_HOME tilde", () => {
     const env = {
       OPENCLAW_HOME: "~/state",

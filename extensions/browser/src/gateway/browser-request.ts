@@ -29,11 +29,13 @@ import {
   type BrowserProxyEnvelope,
   type BrowserProxySuccess,
 } from "../browser-proxy-envelope.js";
+import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
 import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
+import { normalizeBrowserRequestPath } from "../browser/request-policy.js";
 import type { BrowserRequest } from "../browser/routes/types.js";
 import {
   ErrorCodes,
@@ -54,6 +56,7 @@ import {
   type GatewayRequestHandlers,
   type NodeSession,
 } from "../core-api.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 
 const logger = createSubsystemLogger("browser");
 const dashboardRequestSchema = z.object({
@@ -85,7 +88,7 @@ export async function handleBrowserGatewayRequest({
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
-  const path = normalizeOptionalString(typed.path) ?? "";
+  const path = normalizeBrowserRequestPath(normalizeOptionalString(typed.path) ?? "");
   let query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   let body = typed.body;
   const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
@@ -96,14 +99,15 @@ export async function handleBrowserGatewayRequest({
     invocationSignal && connectionSignal && invocationSignal !== connectionSignal
       ? AbortSignal.any([invocationSignal, connectionSignal])
       : (invocationSignal ?? connectionSignal);
+  const isRequesterCurrent = () =>
+    !requestSignal?.aborted &&
+    !client?.invalidated &&
+    !client?.connectionSignal?.aborted &&
+    hasCurrentClientAuthority?.() !== false;
   const assertRequesterCurrent = () => {
     requestSignal?.throwIfAborted();
-    if (
-      client?.invalidated ||
-      client?.connectionSignal?.aborted ||
-      hasCurrentClientAuthority?.() === false
-    ) {
-      throw new Error("Browser dashboard requester is no longer active");
+    if (!isRequesterCurrent()) {
+      throw new Error("Browser requester is no longer active");
     }
   };
 
@@ -208,7 +212,10 @@ export async function handleBrowserGatewayRequest({
       }
       if (
         path === "/tabs/open" ||
+        path === "/tabs/action" ||
+        path === "/start" ||
         path === "/stop" ||
+        path === "/reset-profile" ||
         path.startsWith("/profiles") ||
         path.startsWith("/system-")
       ) {
@@ -224,8 +231,8 @@ export async function handleBrowserGatewayRequest({
       const binding = { kind: "tab" as const, tabId: 0, ...tab };
       query = { ...applyBrowserTabToolBinding(query ?? {}, binding), managedOnly: true };
       const bodyRecord = asNullableRecord(body);
-      if (bodyRecord) {
-        body = applyBrowserTabToolBinding(bodyRecord, binding);
+      if (bodyRecord || methodRaw === "POST") {
+        body = applyBrowserTabToolBinding(bodyRecord ?? {}, binding);
       }
       assertDashboardCurrent = (profile) =>
         assertBrowserDashboardTargetCurrent(dashboard, scope.data.agentId, authority, profile);
@@ -253,12 +260,14 @@ export async function handleBrowserGatewayRequest({
   let nodeTarget: NodeSession | null = null;
   if (!forceHostLocal && typed.target !== "host") {
     try {
-      nodeTarget = resolveBrowserNodeTarget({
-        nodes: context.nodeRegistry.listConnected(),
-        policy: cfg.gateway?.nodes?.browser,
+      nodeTarget = await resolveBrowserNodeTarget({
+        nodes: () => context.nodeRegistry.listConnected(),
+        config: cfg,
+        profile: resolveRequestedBrowserProfile({ query, body }),
         explicitTarget: explicitNode,
         requestedNode,
       });
+      assertRequesterCurrent();
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
@@ -310,11 +319,14 @@ export async function handleBrowserGatewayRequest({
   }
   if (nodeTarget) {
     try {
+      assertRequesterCurrent();
       preparedUpload = await prepareBrowserProxyUploadRequest({
         method: methodRaw,
         path,
         body,
+        signal: requestSignal,
       });
+      assertRequesterCurrent();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -345,23 +357,34 @@ export async function handleBrowserGatewayRequest({
       return;
     }
 
+    const { proxyTimeoutMs, nodeInvokeTimeoutMs } = resolveBrowserProxyTimeouts(timeoutMs);
     const proxyParams = {
       method: methodRaw,
       path,
       query,
       body: preparedUpload.body,
       upload: preparedUpload.upload,
-      timeoutMs,
+      timeoutMs: proxyTimeoutMs,
       profile: resolveRequestedBrowserProfile({ query, body }),
       errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
-    const res = await context.nodeRegistry.invoke({
-      nodeId: nodeTarget.nodeId,
-      command: proxyCommand,
-      params: proxyParams,
-      timeoutMs,
-      idempotencyKey: crypto.randomUUID(),
-    });
+    let res;
+    try {
+      assertRequesterCurrent();
+      res = await context.nodeRegistry.invoke({
+        nodeId: nodeTarget.nodeId,
+        command: proxyCommand,
+        params: proxyParams,
+        timeoutMs: nodeInvokeTimeoutMs,
+        signal: requestSignal,
+        isDispatchAuthorized: isRequesterCurrent,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      assertRequesterCurrent();
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      return;
+    }
     const allowAutomaticHostFallback =
       !explicitNode && !configuredNode && isBrowserControlHostUnavailableError(res.error);
     if (allowAutomaticHostFallback && !res.ok) {
@@ -391,6 +414,7 @@ export async function handleBrowserGatewayRequest({
       const success = proxy as BrowserProxySuccess;
       try {
         const result = await persistBrowserProxyResultFiles(success.result, success.files);
+        assertRequesterCurrent();
         respond(true, result);
       } catch {
         respond(
@@ -408,7 +432,11 @@ export async function handleBrowserGatewayRequest({
   // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, await describeBrowserControlUnavailable()),
+    );
     return;
   }
 
@@ -433,36 +461,30 @@ export async function handleBrowserGatewayRequest({
             hasCurrentClientAuthority?.() !== false,
         }
       : undefined;
+  const assertCurrent: NonNullable<BrowserRequest["assertCurrent"]> = async (profile) => {
+    assertRequesterCurrent();
+    await assertDashboardCurrent?.(profile);
+    assertRequesterCurrent();
+  };
+  const dispatch = (timeoutSignal?: AbortSignal) =>
+    dispatcher.dispatch({
+      method: methodRaw,
+      path,
+      query,
+      body,
+      signal:
+        timeoutSignal && requestSignal
+          ? AbortSignal.any([timeoutSignal, requestSignal])
+          : (timeoutSignal ?? requestSignal),
+      ...(requester ? { requester } : {}),
+      assertCurrent,
+    });
   let result;
   try {
-    await assertDashboardCurrent?.();
+    await assertCurrent();
     result = timeoutMs
-      ? await withTimeout(
-          (timeoutSignal) =>
-            dispatcher.dispatch({
-              method: methodRaw,
-              path,
-              query,
-              body,
-              signal:
-                timeoutSignal && requestSignal
-                  ? AbortSignal.any([timeoutSignal, requestSignal])
-                  : (timeoutSignal ?? requestSignal),
-              ...(requester ? { requester } : {}),
-              assertCurrent: assertDashboardCurrent,
-            }),
-          timeoutMs,
-          "browser request",
-        )
-      : await dispatcher.dispatch({
-          method: methodRaw,
-          path,
-          query,
-          body,
-          signal: requestSignal,
-          ...(requester ? { requester } : {}),
-          assertCurrent: assertDashboardCurrent,
-        });
+      ? await withTimeout(dispatch, timeoutMs, "browser request")
+      : await dispatch();
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     return;

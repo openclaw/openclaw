@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -551,7 +552,9 @@ describe("legacy agent directory migration", () => {
         expect(getAgentDir()).toBe(legacyDir);
         await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
         if (process.platform !== "win32") {
+          await fs.chown(canonicalDir, -1, userInfo().gid);
           await fs.chmod(canonicalDir, 0o2750);
+          expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
         }
         const sourceRoot = await fs.realpath(legacyDir);
         const detected = await detect();
@@ -875,5 +878,30 @@ describe("legacy agent directory migration", () => {
       ).toEqual(["agent.legacy-1234"]);
       await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
     });
+  });
+
+  it("refuses when recoverable archive warnings mix with non-recoverable database migration failures", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+        "Skipped agent database migration for /path/agent.db: Error: schema mismatch",
+      ],
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("refused");
+  });
+
+  it("marks archive-only failures as recoverable through the receipt path", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+      ],
+      warningDisposition: "recoverable",
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("warning");
+    expect(receipt.outcome).not.toBe("refused");
   });
 });

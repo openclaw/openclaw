@@ -450,13 +450,13 @@ describe("createNodePluginTools", () => {
       codeModeTools,
       `
         const api = await API.read("mcp/docs.d.ts");
-        const called = await MCP.docs.search({ query: "needle" });
-        const direct = await catalog.search("docs_search");
+        const discovered = await catalog.search("docs_search");
+        const called = await discovered[0]({ query: "needle" });
         return {
           api: api.content,
           called,
           allHasNodeMcp: catalog.all().some((entry) => entry.source === "mcp"),
-          direct,
+          discovered,
         };
       `,
     );
@@ -486,7 +486,15 @@ describe("createNodePluginTools", () => {
         isError: false,
       },
       allHasNodeMcp: false,
-      direct: [],
+      discovered: [
+        {
+          callableName: "MCP.docs.search",
+          toolName: "search",
+          description: "Search node-local docs (node: Studio Node)",
+          source: "mcp",
+          apiPath: "mcp/docs.d.ts",
+        },
+      ],
     });
     expect((details.value as { api: string }).api).toContain("@param query Search phrase");
     expect(callGatewayTool).toHaveBeenCalledWith(

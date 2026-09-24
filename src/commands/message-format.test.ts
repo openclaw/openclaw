@@ -483,6 +483,46 @@ describe("formatMessageCliText provider-reported failures", () => {
 });
 
 describe("formatMessageCliText poll results", () => {
+  it.each(["direct", "gateway"] as const)(
+    "preserves %s poll summaries with missing and optional result fields",
+    (via) => {
+      for (const [delivery, messageId, pollLine] of [
+        [undefined, "unknown", []],
+        [{ messageId: "p1" }, "p1", []],
+        [{ messageId: "p1", pollId: "poll-1" }, "p1", ["Poll id: poll-1"]],
+        [{ messageId: "", pollId: "" }, "", []],
+      ] as const) {
+        const result = {
+          kind: "poll",
+          action: "poll",
+          channel: "directchat",
+          to: "room-1",
+          handledBy: "core",
+          payload: {},
+          dryRun: false,
+          pollResult: {
+            channel: "directchat",
+            to: "room-1",
+            question: "Lunch?",
+            options: ["Pizza", "Sushi"],
+            maxSelections: 1,
+            durationSeconds: null,
+            durationHours: null,
+            via,
+            result: delivery,
+          },
+        } satisfies MessageActionResult;
+
+        expect(formatMessageCliText(result)).toEqual([
+          via === "direct"
+            ? `✅ Poll sent via Direct Chat. Message ID: ${messageId}`
+            : `✅ Poll sent via gateway (directchat). Message ID: ${messageId}`,
+          ...pollLine,
+        ]);
+      }
+    },
+  );
+
   it("formats direct core poll results as direct deliveries", () => {
     const result = {
       kind: "poll",

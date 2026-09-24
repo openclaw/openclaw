@@ -1,4 +1,4 @@
-import { unlinkSync } from "node:fs";
+import fsSync, { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -320,7 +320,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         }
         if (shimFailure) {
           const activeRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
-          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
           expect(result.activePackageRoot).toBe(activeRoot);
           expect(result.afterVersion).toBe("2.0.0");
           await expect(fs.stat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -373,7 +373,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             "concurrent sibling package\n",
           );
           await expect(fs.readFile(siblingManifest, "utf8")).resolves.toBe(concurrentManifest);
-          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
           expect(result.failedStep?.stderrTail).toContain("native global installation changed");
           expect(result.afterVersion).toBe("1.0.0");
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
@@ -478,9 +478,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               }
             }
           });
-          const lstat = fs.lstat.bind(fs);
-          const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const copyResult = await lstat(...args);
+          const lstat = fsSync.lstatSync.bind(fsSync);
+          const observation = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+            const copyResult = lstat(...args);
             if (rollbackFailure === "copy-cleanup" && published && String(args[0]) === backupRoot) {
               current = false;
             }
@@ -497,6 +497,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               await expect(retained.rollback(assertCurrent)).rejects.toThrow(
                 "native executor lost",
               );
+              expect(current).toBe(false);
               await expect(
                 retained.complete({ activationVerified: true }, () => {}),
               ).rejects.toThrow("native executor lost");
@@ -624,7 +625,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           beforeActivate,
           timeoutMs: 1000,
         });
-        expect(result.failedStep).toMatchObject({ name: "pnpm staging preflight", exitCode: 1 });
+        expect(result.failedStep).toMatchObject({ name: "pnpm-staging-preflight", exitCode: 1 });
         expect(result.failedStep?.stderrTail).toContain(
           failure === "probe-error" ? "configuration rejected" : `pnpm ${failure} selected`,
         );
@@ -667,7 +668,7 @@ it("gives actionable Windows Bun recovery before stopping or installing", async 
         beforeActivate,
         timeoutMs: 1000,
       });
-      expect(result.failedStep).toMatchObject({ name: "global install stage", exitCode: 1 });
+      expect(result.failedStep).toMatchObject({ name: "package-stage", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("bun add -g --trust openclaw@2.0.0");
       expect(result.failedStep?.stderrTail).toContain("openclaw gateway restart");
       expect(result.failedStep?.stderrTail).toContain("openclaw update status");

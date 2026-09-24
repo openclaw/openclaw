@@ -14,7 +14,10 @@ import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/s
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatTaskMigrationFindings,
@@ -52,6 +55,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (originalHome === undefined) {
     delete process.env.HOME;
@@ -204,10 +208,12 @@ describe("heartbeat scratch task cron migration", () => {
 
   it("does not migrate older shared state while detecting heartbeat tasks", async () => {
     const fixture = await createFixture(2_000_000_000_000);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const statePath = resolveOpenClawStateSqlitePath(fixture.env);
     const older = openNodeSqliteDatabase(statePath);
     older.exec(`
+      DROP INDEX idx_worker_session_placements_environment;
       PRAGMA user_version = 7;
       UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
     `);

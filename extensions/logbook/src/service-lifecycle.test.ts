@@ -10,15 +10,17 @@ import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { resolveLogbookConfig } from "./config.js";
 import { dayKeyFor } from "./day.js";
 import { LogbookService } from "./service.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const runtimeSource = fileURLToPath(new URL("../index.ts", import.meta.url));
 const quietLogger = { info() {}, warn() {}, error() {}, debug() {} };
 const snapshot = { payload: { base64: Buffer.from("synthetic image").toString("base64") } };
@@ -41,9 +43,13 @@ function completion(
 }
 
 describe("Logbook service disposal", () => {
-  it.each([false, true])(
-    "publishes synthesized cards with queued retention (prune=%s)",
-    async (prune) => {
+  it.each([
+    { prune: false, pending: false },
+    { prune: true, pending: false },
+    { prune: false, pending: true },
+  ])(
+    "publishes synthesized cards with queued retention (prune=$prune, pending=$pending)",
+    async ({ prune, pending }) => {
       const dataDir = tempDirs.make("logbook-publication-retention-");
       const day = dayKeyFor(Date.now());
       const startMs = new Date(`${day}T10:00:00`).getTime();
@@ -86,36 +92,80 @@ describe("Logbook service disposal", () => {
       });
       const logger = { ...quietLogger, warn: vi.fn(), error: vi.fn() };
       const service = new LogbookService(
-        resolveLogbookConfig({ captureEnabled: false, visionModel: "codex/gpt-5.6-sol" }),
+        resolveLogbookConfig({
+          captureEnabled: false,
+          visionModel: "codex/gpt-5.6-sol",
+          analysisIntervalMinutes: 10,
+        }),
         { dataDir, workerModuleUrl, runtime, fullConfig: {}, logger },
       );
       const peer = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
-        const frameId = await peer.captureFrame({
-          day,
-          capturedAtMs: startMs + 5 * 60_000,
-          screenIndex: 0,
-          buffer: Buffer.from("synthetic keyframe"),
-        });
-        await peer.createBatch({ day, startMs, endMs, frameIds: [frameId] });
+        const frameTimes = pending
+          ? [...Array.from({ length: 10 }, (_, index) => startMs + index * 60_000), endMs - 1]
+          : [startMs + 5 * 60_000];
+        const frameIds: number[] = [];
+        for (const capturedAtMs of frameTimes) {
+          frameIds.push(
+            await peer.captureFrame({
+              day,
+              capturedAtMs,
+              screenIndex: 0,
+              buffer: Buffer.from(`synthetic keyframe ${capturedAtMs}`),
+            }),
+          );
+        }
+        const frameId = frameIds[pending ? 5 : 0];
+        if (pending) {
+          expect(await peer.latestBatch()).toBeNull();
+          expect(await peer.countUnbatchedActiveFrames()).toBe(11);
+        } else {
+          await peer.createBatch({ day, startMs, endMs, frameIds });
+        }
         await service.start();
         expect(await service.analyzeNow()).toEqual({ started: true });
         await synthesized.promise;
         await setImmediate();
         expect(await pruning).toEqual({ status: "fulfilled", value: prune ? 1 : 0 });
         await service.stop();
-        expect(await peer.latestBatch()).toMatchObject({ status: "done", error: undefined });
+        const batch = await peer.latestBatch();
+        if (!batch) {
+          throw new Error("Expected the analyzed batch to persist");
+        }
+        expect(batch).toMatchObject({
+          day,
+          startMs,
+          endMs,
+          frameCount: frameIds.length,
+          status: "done",
+          error: undefined,
+        });
+        const frames = await peer.batchFrames(batch.id);
+        expect(frames).toEqual(
+          prune
+            ? []
+            : frameIds.map((id, index) =>
+                expect.objectContaining({ id, capturedAtMs: frameTimes[index], idle: false }),
+              ),
+        );
+        expect(await peer.countUnbatchedActiveFrames()).toBe(0);
         expect(logger.warn).not.toHaveBeenCalled();
         const cards = await peer.cardsForDay(day);
         expect(cards).toHaveLength(1);
         expect(cards[0]).toMatchObject({
           title: "Retained synthesis",
+          day,
+          startMs,
+          endMs,
           keyframeId: prune ? undefined : frameId,
         });
         await peer.close();
         const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
         try {
           expect(await reopened.cardsForDay(day)).toEqual(cards);
+          expect(await reopened.latestBatch()).toEqual(batch);
+          expect(await reopened.batchFrames(batch.id)).toEqual(frames);
+          expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
         } finally {
           await reopened.close();
         }

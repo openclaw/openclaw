@@ -17,6 +17,7 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -60,12 +61,47 @@ describe("catalog transcript cache", () => {
   afterEach(resetTranscriptTestDom);
 
   it("reuses unchanged catalog history while admitting an older page", () => {
-    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    const { pane, state, context } = createRefreshChatPane(createGatewayBrowserClientFixture());
     const sessionKey = buildCatalogSessionKey(
       { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
       "main",
     );
     pane.sessionKey = state.sessionKey = sessionKey;
+    const now = Date.now();
+    pane.receiveQuestionEvent({
+      event: "question.requested",
+      payload: {
+        id: "catalog-question",
+        sessionKey,
+        agentId: "main",
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+        status: "pending",
+        questions: [
+          {
+            questionId: "confirm",
+            header: "Confirm",
+            question: "Unrelated live question",
+            options: [],
+          },
+        ],
+      },
+    });
+    state.chatSessionApprovalQueue = [
+      {
+        id: "catalog-approval",
+        kind: "exec",
+        request: { command: "Unrelated live approval", sessionKey },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      },
+    ];
+    Object.assign(context, {
+      overlays: {
+        snapshot: { approvalQueue: state.chatSessionApprovalQueue },
+        decideApproval: vi.fn(),
+      },
+    });
     const messages = [
       { role: "user", content: "Saved catalog question", timestamp: 2, messageId: "user" },
       { role: "assistant", content: "Saved catalog answer", timestamp: 3, messageId: "answer" },
@@ -86,6 +122,7 @@ describe("catalog transcript cache", () => {
     draw();
     expect(container.textContent).toContain("Saved catalog answer");
     expect(container.textContent).not.toContain("Unrelated live tool");
+    expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
     draw();
     expect(build).toHaveBeenCalledOnce();
 
@@ -109,7 +146,7 @@ describe("chat pane catalog session lifecycle", () => {
     (sessionKey) => {
       const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
-      const sessions = { retireModelOverride } as unknown as SessionCapability;
+      const sessions = createSessionCapabilityFixture({ retireModelOverride });
       const { pane, state } = createTestChatPane({ client, sessions });
       pane.sessionKey = state.sessionKey = sessionKey;
       pane.context.agentSelection.set("other");

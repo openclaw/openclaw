@@ -1,32 +1,96 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as sessionHistoryWorkers from "../../config/sessions/session-history-worker-runtime.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import * as sessionTranscriptReaders from "../session-transcript-readers.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
+import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
   directSessionReq,
   seedLinearSessionTranscript,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import {
+  disposeSessionReadContexts,
   identifiedClient,
+  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 
 setupGatewaySessionsHandlerTestHarness();
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
+  const now = Date.now();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(now);
+  const ownerId = ensureProfileForEmail("recap-reader@example.test").id;
+  setUserProfileRole(ownerId, "view");
+  const client = identifiedClient(ownerId);
+  const foreignId = ensureProfileForEmail("recap-owner@example.test").id;
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  for (const [name, creator, visibility] of [
+    ["own", ownerId, "draft"],
+    ["member", foreignId, "read-only"],
+    ["viewer", foreignId, "shared"],
+  ] as const) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: `agent:main:recap-${name}`, storePath },
+      {
+        sessionId: `recap-${name}`,
+        updatedAt: now,
+        visibility,
+        createdActor: { type: "human", source: "profile", id: creator },
+      },
+    );
+  }
+  addSessionMember(
+    { agentId: "main", sessionKey: "agent:main:recap-member", storePath },
+    { identityId: ownerId, addedBy: foreignId },
+  );
+  for (const capped of [true, false]) {
+    const context = requestContext(capped ? rolePolicyConfig() : {});
+    const result = await listSessions({
+      client,
+      context,
+      request: { includeActivitySummary: true },
+    });
+    const sessions = new Map(result.sessions.map((session) => [session.key, session]));
+    expect(sessions.get("agent:main:recap-own")).toMatchObject({
+      sharingRole: "owner",
+      activitySummary: { canEnsure: true },
+    });
+    expect(sessions.get("agent:main:recap-member")).toMatchObject({
+      sharingRole: "member",
+      activitySummary: { canEnsure: true },
+    });
+    expect(sessions.get("agent:main:recap-viewer")).toMatchObject({
+      sharingRole: "viewer",
+      visibility: "shared",
+      activitySummary: { canEnsure: !capped },
+    });
+    for (const includeActivitySummary of [undefined, false]) {
+      const ordinary = await listSessions({ client, context, request: { includeActivitySummary } });
+      expect(ordinary.sessions).toEqual(
+        result.sessions.map(({ activitySummary: _summary, ...row }) => row),
+      );
+    }
+  }
 });
 
 test.each([
@@ -54,6 +118,7 @@ test.each([
       {
         sessionId,
         updatedAt: 42,
+        displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
       },
@@ -73,6 +138,11 @@ test.each([
       includeDerivedTitles: transcript,
       includeLastMessage: transcript,
     };
+    if (transcript) {
+      const backfilled = observeSessionRowBackfill([sessionKey]);
+      await initializeSessionReadContext(context);
+      await backfilled;
+    }
     const result = await listSessions({ client, context, request });
     expect.soft(result.sessions).toHaveLength(1);
     expect.soft(result.sessions[0]).toMatchObject({
@@ -295,7 +365,6 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   const admin = identifiedClient(profileId("draft-admin"));
   admin.connect!.scopes = ["operator.admin"];
   const missingProfile = identifiedClient(profileId("draft-missing-profile"));
-  delete missingProfile.authenticatedUserProfile;
   const cases = [
     {
       name: "view",
@@ -348,6 +417,8 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       sharedRole: "viewer",
     },
   ] as const;
+  delete missingProfile.authenticatedUserProfile;
+  delete missingProfile.preparedSessionProfile;
 
   for (const { name, client, cfg, hidden, sharedRole } of cases) {
     const described = await directSessionReq<{
@@ -406,6 +477,13 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   }
 
   let describeCfg = roleConfig("write");
+  const readCatalog = vi
+    .fn(async () => ({ entries: [] }))
+    .mockImplementationOnce(async () => {
+      describeCfg = roleConfig("view");
+      setRuntimeConfigSnapshot(describeCfg);
+      return { entries: [] };
+    });
   const describedAfterRoleChange = await directSessionReq<{
     session: { sharingRole?: string; visibility?: string } | null;
   }>(
@@ -415,10 +493,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       client: cases[0].client,
       context: {
         getRuntimeConfig: () => describeCfg,
-        readPreparedGatewayModelCatalog: async () => {
-          describeCfg = roleConfig("view");
-          return { entries: [] };
-        },
+        readPreparedGatewayModelCatalog: readCatalog,
       },
     },
   );
@@ -428,7 +503,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     visibility: "shared",
   });
 
-  const originalRead = sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync;
+  const originalRead = sessionHistoryWorkers.readSessionHistoryPageInWorker;
   for (const mutation of [
     { name: "visibility change", sessionId, visibility: "draft" as const },
     {
@@ -447,7 +522,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       },
     );
     const readSpy = vi
-      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+      .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
       .mockImplementationOnce(async (...args) => {
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -484,7 +559,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   );
   let currentCfg = roleConfig("view");
   const roleDriftRead = vi
-    .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+    .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
     .mockImplementationOnce(async (...args) => {
       currentCfg = roleConfig("none");
       return await originalRead(...args);

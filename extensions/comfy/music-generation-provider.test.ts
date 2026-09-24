@@ -2,7 +2,7 @@
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
-import { fetchGuardJson } from "./test-helpers.js";
+import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -54,24 +54,16 @@ describe("comfy music-generation provider", () => {
       provider: "comfy",
       model: "workflow",
       prompt: "gentle ambient synth loop",
-      cfg: {
-        plugins: {
-          entries: {
-            comfy: {
-              config: {
-                music: {
-                  workflow: {
-                    "6": { inputs: { text: "" } },
-                    "9": { inputs: {} },
-                  },
-                  promptNodeId: "6",
-                  outputNodeId: "9",
-                },
-              },
-            },
+      cfg: buildComfyConfig({
+        music: {
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
           },
+          promptNodeId: "6",
+          outputNodeId: "9",
         },
-      } as never,
+      }),
     });
 
     expect(result).toEqual({
@@ -120,22 +112,16 @@ describe("comfy music-generation provider", () => {
         model: "workflow",
         prompt: "gentle ambient synth loop",
         cfg: {
-          plugins: {
-            entries: {
-              comfy: {
-                config: {
-                  music: {
-                    workflow: {
-                      "6": { inputs: { text: "" } },
-                      "9": { inputs: {} },
-                    },
-                    promptNodeId: "6",
-                    outputNodeId: "9",
-                  },
-                },
+          ...buildComfyConfig({
+            music: {
+              workflow: {
+                "6": { inputs: { text: "" } },
+                "9": { inputs: {} },
               },
+              promptNodeId: "6",
+              outputNodeId: "9",
             },
-          },
+          }),
           agents: { defaults: { mediaMaxMb: 0.000001 } },
         } as never,
       }),
@@ -168,24 +154,16 @@ describe("comfy music-generation provider", () => {
         model: "workflow",
         prompt: "gentle ambient synth loop",
         timeoutMs: 1000,
-        cfg: {
-          plugins: {
-            entries: {
-              comfy: {
-                config: {
-                  music: {
-                    workflow: {
-                      "6": { inputs: { text: "" } },
-                      "9": { inputs: {} },
-                    },
-                    promptNodeId: "6",
-                    outputNodeId: "9",
-                  },
-                },
-              },
+        cfg: buildComfyConfig({
+          music: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+              "9": { inputs: {} },
             },
+            promptNodeId: "6",
+            outputNodeId: "9",
           },
-        } as never,
+        }),
       }),
     ).rejects.toThrow("Comfy workflow did not finish within 1s");
   });

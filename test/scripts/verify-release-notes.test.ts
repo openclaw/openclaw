@@ -1680,11 +1680,11 @@ console.log(JSON.stringify({ data }));
   });
 
   it.each([
-    { mode: "recover", attempts: 2, error: undefined },
-    { mode: "exhaust", attempts: 5, error: "unexpected EOF" },
-    { mode: "auth", attempts: 1, error: "Bad credentials" },
-    { mode: "missing-data", attempts: 1, error: "did not include data" },
-    { mode: "schema", attempts: 1, error: "Field unknownField does not exist" },
+    { mode: "recover", attempts: 2, error: undefined, waits: [500] },
+    { mode: "exhaust", attempts: 5, error: "unexpected EOF", waits: [500, 1000, 2000, 4000] },
+    { mode: "auth", attempts: 1, error: "Bad credentials", waits: [] },
+    { mode: "missing-data", attempts: 1, error: "did not include data", waits: [] },
+    { mode: "schema", attempts: 1, error: "Field unknownField does not exist", waits: [] },
   ])("handles GraphQL transport failure at the CLI boundary: $mode", (scenario) => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-transport-"));
     try {
@@ -1735,11 +1735,27 @@ console.log(JSON.stringify({ data }));
 `,
       );
       chmodSync(gh, 0o755);
+      const waitsPath = join(cwd, "waits.jsonl");
+      const preload = join(cwd, "record-waits.mjs");
+      writeFileSync(waitsPath, "");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const nativeWait = Atomics.wait;
+Atomics.wait = function (...args) {
+  const result = Reflect.apply(nativeWait, this, args);
+  fs.appendFileSync(${JSON.stringify(waitsPath)}, JSON.stringify({ timeout: args[3], result }) + "\\n");
+  return result;
+};
+`,
+      );
       const manifestPath = join(cwd, "manifest.json");
       splitChangelog({ rootDir: cwd });
       const result = spawnSync(
         process.execPath,
         [
+          "--import",
+          preload,
           verifier,
           "--base",
           base,
@@ -1771,6 +1787,11 @@ console.log(JSON.stringify({ data }));
           "### Complete contribution record",
         );
       }
+      const waits = readFileSync(waitsPath, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { timeout: number; result: string });
+      expect(waits).toEqual(scenario.waits.map((timeout) => ({ timeout, result: "timed-out" })));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

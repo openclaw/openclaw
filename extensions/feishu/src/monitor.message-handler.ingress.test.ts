@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -171,44 +172,94 @@ afterEach(() => {
 });
 
 describe("Feishu durable ingress debounce lifecycle", () => {
-  it("accepts an empty group message body without losing bot mentions or ingress adoption", async () => {
+  it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
     const transport = createLifecycle();
-    const logicalClaim = createClaim("empty-group-mention");
+    const logicalClaim = createClaim("delayed-admission");
+    const pending =
+      createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
     const harness = createHarness({
-      lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
-      claims: [logicalClaim],
+      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
+      claims: [],
       adoptTurn: true,
     });
-    const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
-    event.message.chat_type = "group";
-    event.message.content = "";
-    event.message.mentions = [
-      {
-        key: "@_bot_1",
-        id: { open_id: "ou-bot" },
-        name: "OpenClaw",
-      },
-    ];
+    harness.claim.mockReturnValueOnce(pending.promise);
+    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    transport.controller.abort();
+    await transport.lifecycle.onAbandoned();
+    pending.resolve({ kind: "claimed", handle: logicalClaim });
 
-    await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
-    await harness.flush();
+    await expect(handling).resolves.toMatchObject({ kind: "failed-retryable" });
+    expect(logicalClaim.release).toHaveBeenCalledOnce();
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(harness.entries).toEqual([]);
+    expect(harness.handleMessage).not.toHaveBeenCalled();
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+  });
 
-    expect(harness.handleMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_type: "group",
-            content: "",
-            mentions: event.message.mentions,
+  it.each(["group", "topic_group", "private", "p2p"] as const)(
+    "accepts an empty %s message body without losing bot mentions or ingress adoption",
+    async (chatType) => {
+      const transport = createLifecycle();
+      const logicalClaim = createClaim("empty-group-mention");
+      const harness = createHarness({
+        lifecycles: new Map([["evt-empty-group-mention", transport.lifecycle]]),
+        claims: [logicalClaim],
+        adoptTurn: true,
+      });
+      const event = createTextEvent("evt-empty-group-mention", "om-empty-group-mention", "");
+      event.message.chat_type = chatType;
+      event.message.content = "";
+      event.message.mentions = [
+        {
+          key: "@_bot_1",
+          id: { open_id: "ou-bot" },
+          name: "OpenClaw",
+        },
+      ];
+
+      await expect(harness.handler(event)).resolves.toEqual({ kind: "deferred" });
+      await harness.flush();
+
+      expect(harness.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({
+            message: expect.objectContaining({
+              chat_type: chatType,
+              content: "",
+              mentions: event.message.mentions,
+            }),
           }),
         }),
-      }),
-    );
-    expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
-    expect(harness.runtimeError).not.toHaveBeenCalled();
-  });
+      );
+      expect(logicalClaim.commit).toHaveBeenCalledTimes(1);
+      expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+      expect(transport.calls.abandoned).not.toHaveBeenCalled();
+      expect(harness.runtimeError).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([" group ", "GROUP", 42])(
+    "rejects chat type %j with a valid body before claims or dispatch",
+    async (chatType) => {
+      const transport = createLifecycle();
+      const harness = createHarness({
+        lifecycles: new Map([["evt-invalid-chat-type", transport.lifecycle]]),
+        claims: [],
+        adoptTurn: true,
+      });
+      const event = createTextEvent("evt-invalid-chat-type", "om-invalid-chat-type", "hello");
+      Reflect.set(event.message, "chat_type", chatType);
+
+      await expect(harness.handler(event)).rejects.toThrow(
+        "Feishu durable message event payload is malformed.",
+      );
+
+      expect(harness.claim).not.toHaveBeenCalled();
+      expect(harness.entries).toEqual([]);
+      expect(harness.handleMessage).not.toHaveBeenCalled();
+      expect(transport.calls.adopted).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
 function metadata(owner: string) {
@@ -73,13 +76,10 @@ describe("prepared auth metadata ownership", () => {
           config,
           env: {},
           metadataSnapshot: selected,
-          authProfileStore: {
-            version: 1,
-            profiles: {
-              "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
-              "fixture:selected": createApiKeyCredential("selected-auth", "synthetic-selected"),
-            },
-          },
+          authProfileStore: createAuthProfileStoreFixture({
+            "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
+            "fixture:selected": createApiKeyCredential("selected-auth", "synthetic-selected"),
+          }),
           ...(selection === "user" || selection === "user-link"
             ? { sessionAuthProfileId: "fixture:selected", sessionAuthProfileSource: selection }
             : {}),
@@ -109,13 +109,10 @@ describe("prepared auth metadata ownership", () => {
           config,
           env: {},
           metadataSnapshot: createPluginMetadataSnapshotFixture(),
-          authProfileStore: {
-            version: 1,
-            profiles: {
-              "fixture:exact": createApiKeyCredential("fixture-alias", "synthetic-exact"),
-              "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
-            },
-          },
+          authProfileStore: createAuthProfileStoreFixture({
+            "fixture:exact": createApiKeyCredential("fixture-alias", "synthetic-exact"),
+            "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
+          }),
         }),
       { config, trustConfigIdentity: true },
     );

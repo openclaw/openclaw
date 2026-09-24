@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { readSessionWorkspaceRecoveryRequiredError } from "../error-details.js";
 import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
@@ -10,6 +11,7 @@ import {
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   OutboundDeliveryQueuedErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
@@ -23,6 +25,31 @@ import {
 import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
+  it("validates and reads exact pending workspace recovery routes", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED,
+      cause: "device_offline" as const,
+      recoveryAction: "continue_on_gateway" as const,
+      sessionId: "session-1",
+      source: { generation: 5, environmentId: "environment-1", ownerEpoch: 70 },
+    };
+    const error = { code: ErrorCodes.UNAVAILABLE, message: "Recover workspace", details };
+
+    expect(Value.Check(SessionWorkspaceRecoveryRequiredErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ErrorShapeSchema, error)).toBe(true);
+    expect(readSessionWorkspaceRecoveryRequiredError(error)).toEqual(details);
+    expect(
+      readSessionWorkspaceRecoveryRequiredError({
+        ...error,
+        details: { ...details, source: { ...details.source, ownerEpoch: 0 } },
+      }),
+    ).toBeNull();
+    expect(
+      readSessionWorkspaceRecoveryRequiredError({ ...error, code: ErrorCodes.FORBIDDEN }),
+    ).toBeNull();
+  });
+
   it("reads only closed, keyed publication selection rejections", () => {
     const details = {
       code: GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED,

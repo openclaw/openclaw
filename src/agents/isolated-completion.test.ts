@@ -3,6 +3,7 @@ import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js"
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
+  nativeAuthPlan,
   isolatedCompletionMocks as mocks,
   runIsolatedCompletion,
   preparedModelRuntime,
@@ -12,6 +13,7 @@ import {
   resetIsolatedCompletionTestState,
   type IsolatedCliRunParams,
 } from "./isolated-completion.test-support.js";
+import type * as RuntimeAuth from "./runtime-plan/prepare-auth.js";
 
 // The shared fixture must register mocks before other runtime modules load.
 const { createDeferred } = await import("../../test/helpers/promise.js");
@@ -24,10 +26,199 @@ const { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } =
 const { validateAgentRunDelegatedAuthority } = await import("../infra/agent-run-registry.js");
 const { mintSecretSentinel } = await import("../secrets/sentinel.js");
 const { getAdmittedRunDelegatedAuthority } = await import("./admitted-run-context.js");
+const { resolveModelFallbackError } = await import("./failover-error.js");
+const { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } = await import("../llm/types.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion", () => {
+  function prepareQuotaProfiles() {
+    const profileIds = ["openai:first", "openai:backup"];
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: Object.fromEntries(
+        profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
+      ),
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValue({
+      plan: nativeAuthPlan,
+      attempts: profileIds.map((profileId) => ({
+        kind: "profile",
+        profileId,
+        plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
+      })),
+    });
+  }
+
+  it.each([
+    "429 Too many requests",
+    "You have hit your ChatGPT usage limit. Try again in 120 minutes.",
+    "Your credit balance is too low to access the API.",
+  ])("rotates prepared profiles after returned quota errors: %s", async (errorMessage) => {
+    prepareQuotaProfiles();
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({ assistant: { ...isolatedAssistant([], "error"), errorMessage } })
+      .mockResolvedValueOnce({
+        assistant: isolatedAssistant([{ type: "text", text: "recovered" }]),
+      });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+
+    await expect(runIsolatedCompletion(isolatedRequest())).resolves.toMatchObject({
+      text: "recovered",
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(
+      dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+    ).toEqual(["openai:first", "openai:backup"]);
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the first quota cause when every prepared profile is exhausted", async () => {
+    prepareQuotaProfiles();
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistant: {
+          ...isolatedAssistant([], "error"),
+          errorMessage: "429 Too many requests. Retry after 90 seconds.",
+        },
+      })
+      .mockResolvedValueOnce({
+        assistant: {
+          ...isolatedAssistant([], "error"),
+          errorMessage: "429 Too many requests. Retry after 120 seconds.",
+        },
+      });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    const error = await runIsolatedCompletion(isolatedRequest()).catch(
+      (failure: unknown) => failure,
+    );
+    expect(error).toMatchObject({ code: "output-rejected", cause: { retryAfterMs: 90_000 } });
+    expect(resolveModelFallbackError(error)).toMatchObject({
+      kind: "failover",
+      error: { reason: "rate_limit" },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not broaden an explicitly selected profile after a returned quota error", async () => {
+    prepareQuotaProfiles();
+    const { prepareAgentRuntimeAuth } = await vi.importActual<typeof RuntimeAuth>(
+      "./runtime-plan/prepare-auth.js",
+    );
+    mocks.prepareAgentRuntimeAuth.mockImplementationOnce(prepareAgentRuntimeAuth);
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
+      })
+      .mockResolvedValueOnce({
+        assistant: isolatedAssistant([{ type: "text", text: "unauthorized backup result" }]),
+      });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    await expect(
+      runIsolatedCompletion({ ...isolatedRequest(), authProfileId: "openai:first" }),
+    ).rejects.toMatchObject({ code: "output-rejected" });
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each([400, 1_000])(
+    "shares the request timeout after a quota attempt consumes %s ms",
+    async (elapsedMs) => {
+      prepareQuotaProfiles();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const dispatch = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          now.mockReturnValue(1_000 + elapsedMs);
+          return {
+            assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
+          };
+        })
+        .mockResolvedValueOnce({
+          assistant: isolatedAssistant([{ type: "text", text: "recovered" }]),
+        });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+      try {
+        const completion = runIsolatedCompletion(isolatedRequest());
+        if (elapsedMs === 1_000) {
+          await expect(completion).rejects.toThrow("timed out");
+          expect(dispatch).toHaveBeenCalledOnce();
+        } else {
+          await expect(completion).resolves.toMatchObject({ text: "recovered" });
+          expect(dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutMs: 600 }));
+        }
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it.each(["terminal", "tool", "aborted", "authorization", "unknown"] as const)(
+    "does not rotate prepared profiles after %s output",
+    async (kind) => {
+      prepareQuotaProfiles();
+      const assistant = isolatedAssistant(
+        kind === "tool"
+          ? [{ type: "toolCall", id: "call-1", name: "update_plan", arguments: {} }]
+          : kind === "terminal"
+            ? [{ type: "text", text: "Partial output must not be replayed." }]
+            : [],
+        kind === "aborted" ? "aborted" : "error",
+      );
+      assistant.errorMessage =
+        kind === "authorization"
+          ? "403 Permission denied"
+          : kind === "unknown"
+            ? "Unknown failure"
+            : "429 Too many requests";
+      if (kind === "terminal") {
+        assistant.errorCode = PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE;
+      }
+      const dispatch = vi.fn().mockResolvedValue({ assistant });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+      await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
+        code: "output-rejected",
+      });
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["retired", "aborted"] as const)(
+    "does not rotate after a returned quota error when %s",
+    async (state) => {
+      prepareQuotaProfiles();
+      const controller = new AbortController();
+      let current = true;
+      const expired = new Error("Completion owner retired.");
+      const dispatch = vi.fn(async () => {
+        if (state === "retired") {
+          current = false;
+        } else {
+          controller.abort(expired);
+        }
+        return {
+          assistant: { ...isolatedAssistant([], "error"), errorMessage: "429 Too many requests" },
+        };
+      });
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+      await expect(
+        runIsolatedCompletion({
+          ...isolatedRequest(),
+          abortSignal: controller.signal,
+          assertCurrent() {
+            if (!current) {
+              throw expired;
+            }
+          },
+        }),
+      ).rejects.toBe(expired);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["v1", "v2"] as const)(
     "rejects a retained %s dispatch callback after isolated completion closes",
     async (version) => {
@@ -122,8 +313,8 @@ describe("runIsolatedCompletion", () => {
       mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(
         provider === "claude-cli" ? "anthropic" : undefined,
       );
-      mocks.resolveEffectiveAgentRuntime.mockReturnValue(
-        provider === "anthropic" ? "claude-cli" : "codex",
+      mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(
+        provider === "anthropic" ? "claude-cli" : undefined,
       );
       mocks.isCliRuntimeAliasForProvider.mockImplementation(
         ({ runtime, provider: modelProvider }) =>
@@ -421,6 +612,45 @@ describe("runIsolatedCompletion", () => {
         code: "output-rejected",
         message: expect.stringContaining(`stop reason ${stopReason}`),
       });
+    },
+  );
+
+  it.each([
+    { errorMessage: "529 Overloaded", errorCode: undefined, reason: "overloaded" },
+    {
+      errorMessage: "429 Too many requests. Retry after 90 seconds.",
+      errorCode: undefined,
+      reason: "rate_limit",
+      retryAfterMs: 90_000,
+    },
+    {
+      errorMessage: "529 Overloaded after output started",
+      errorCode: PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+      reason: undefined,
+    },
+  ])(
+    "preserves retry classification without replaying terminal output: $errorMessage",
+    async ({ errorMessage, errorCode, reason, retryAfterMs }) => {
+      registerIsolatedHarness({
+        runIsolatedCompletion: vi.fn(async () => ({
+          assistant: {
+            ...isolatedAssistant([], "error"),
+            errorMessage,
+            errorCode,
+          },
+        })),
+      });
+      const error = await runIsolatedCompletion(isolatedRequest()).catch(
+        (failure: unknown) => failure,
+      );
+      expect(error).toMatchObject({ code: "output-rejected" });
+      expect(resolveModelFallbackError(error)).toMatchObject(
+        reason ? { kind: "failover", error: { reason } } : { kind: "unknown" },
+      );
+      if (retryAfterMs !== undefined) {
+        expect(error).toMatchObject({ cause: { retryAfterMs } });
+      }
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     },
   );
 

@@ -2,19 +2,46 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const busctl = vi.hoisted(() => vi.fn());
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-exec.js", async (original) => ({
   ...(await original<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
   bindSystemdManagerOwner: vi.fn(),
-  systemdInspectionError: (_result: unknown, message: string) => new Error(message),
+}));
+vi.mock("./systemd-peer-native.js", async (original) => ({
+  ...(await original<typeof import("./systemd-peer-native.js")>()),
+  openSystemdUserManager: vi.fn(),
 }));
 
+import { execFileUtf8 } from "./exec-file.js";
+import {
+  assertDaemonRuntimePinDefinition,
+  commitDaemonRuntimePin,
+  readDaemonRuntimePin,
+} from "./runtime-pin-state.js";
+import {
+  hasGatewayServiceEnvironmentOverride,
+  hasGatewayServiceLauncherOverride,
+} from "./service-types.js";
+import {
+  buildSystemdManagerPropertyOutput,
+  buildSystemdUnitPropertyOutput,
+} from "./service.test-helpers.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
+import { openSystemdUserManager } from "./systemd-peer-native.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
+import { buildSystemdUnit } from "./systemd-unit.js";
+import {
+  systemdManagerVersionProbe,
+  systemdOperatorBusFixtures,
+} from "./systemd-user-bus.test-support.js";
 
-const queryEnv = { XDG_RUNTIME_DIR: "/run/user/1234" };
+afterEach(() => closeOpenClawStateDatabaseForTest());
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+let queryEnv: { HOME: string; XDG_RUNTIME_DIR: string; DBUS_SESSION_BUS_ADDRESS: string };
 const unitName = "openclaw-gateway.service";
 const callArgs = ["call", "org.test", "/unitName", "org.test.Manager", "LoadUnit", "s", unitName];
 const unavailable = () => new Error("inspection unavailable");
@@ -25,13 +52,148 @@ const query = async (options?: Parameters<typeof createSystemdCommandQuery>[2]) 
 const success = (stdout: string) => ({ code: 0, termination: "exit" as const, stdout, stderr: "" });
 const failure = (stderr: string) => ({ ...success(""), code: 1, stderr });
 const unsupported = failure("busctl: unrecognized option '--json=short'");
+let versionProbeResult = success('s "252.39"');
 
 beforeEach(() => {
   busctl.mockReset();
+  const home = dirs.make("openclaw-command-query-");
+  queryEnv = {
+    HOME: home,
+    XDG_RUNTIME_DIR: path.join(home, "runtime"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
+  };
+  versionProbeResult = success('s "252.39"');
+  vi.mocked(execFileUtf8)
+    .mockReset()
+    .mockImplementation(async (command, args) => {
+      await systemdManagerVersionProbe(command, args);
+      return versionProbeResult;
+    });
+  vi.mocked(openSystemdUserManager).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("does not infer ownership from expanded specifiers or normalized working directories", async () => {
+  const home = queryEnv.HOME;
+  const unit = path.join(home, ".config/systemd/user", unitName);
+  const workingDirectory = `${home}/Open Claw`;
+  await fs.mkdir(path.dirname(unit), { recursive: true });
+  await fs.writeFile(
+    unit,
+    [
+      "[Service]",
+      "ExecStart=%h/bin/openclaw gateway --unit %n",
+      "WorkingDirectory=-%h/Open Claw",
+      "Environment=OPENCLAW_HOME=%h/openclaw UNIT_NAME=%n",
+    ].join("\n"),
+  );
+  busctl.mockImplementation(async (_env, args: string[]) =>
+    success(
+      args.includes("LoadUnit")
+        ? JSON.stringify({ type: "o", data: ["/unit"] })
+        : args.includes("org.freedesktop.systemd1.Unit")
+          ? buildSystemdUnitPropertyOutput({ fragmentPath: unit })
+          : buildSystemdManagerPropertyOutput({
+              programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", unitName],
+              workingDirectory: `!${workingDirectory}`,
+              environment: [`OPENCLAW_HOME=${home}/openclaw`, `UNIT_NAME=${unitName}`],
+            }),
+    ),
+  );
+
+  const command = await readSystemdServiceExecStart(queryEnv);
+  expect(command).toEqual({
+    programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", unitName],
+    workingDirectory,
+    environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: unitName },
+    environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
+    managedDefinition: {
+      programArguments: [`${home}/bin/openclaw`, "gateway", "--unit", "%n"],
+      workingDirectory,
+      environment: { OPENCLAW_HOME: `${home}/openclaw`, UNIT_NAME: "%n" },
+      environmentValueSources: { OPENCLAW_HOME: "inline", UNIT_NAME: "inline" },
+    },
+    managedOverrides: {},
+    sourcePath: unit,
+    definitionPaths: [unit],
+  });
+  expect(hasGatewayServiceLauncherOverride(command)).toBe(false);
+  expect(hasGatewayServiceEnvironmentOverride(command, ["UNIT_NAME"])).toBe(false);
+});
+
+describe("ordinary private-manager inspection", () => {
+  it.each(["absent", "disconnected"])(
+    "closes the captured private connection when %s",
+    async (result) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(process, "geteuid").mockReturnValue(1000);
+      const home = dirs.make("openclaw-private-manager-");
+      const runtime = path.join(home, "runtime");
+      const socket = path.posix.join(runtime, "systemd/private");
+      await fs.mkdir(path.dirname(socket), { recursive: true });
+      await fs.writeFile(socket, "");
+      versionProbeResult = failure(systemdOperatorBusFixtures.stale.getUnitFileState);
+      const closeDiscovery = vi.fn(async () => {});
+      const close = vi.fn(async () => {});
+      vi.mocked(openSystemdUserManager)
+        .mockResolvedValueOnce({
+          close: closeDiscovery,
+          verify: () => {},
+          query: async (args, signatures) => {
+            expect(args).toEqual([
+              "get-property",
+              "org.freedesktop.systemd1",
+              "/org/freedesktop/systemd1",
+              "org.freedesktop.systemd1.Manager",
+              "Version",
+            ]);
+            expect(signatures).toEqual(["s"]);
+            return ["252.39"];
+          },
+        })
+        .mockResolvedValue({
+          close,
+          verify: () => {},
+          query: async () => {
+            if (result === "disconnected") {
+              throw new Error("native-error-secret-canary");
+            }
+            return null;
+          },
+        });
+      busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
+      const inspected = readSystemdServiceExecStart(
+        {
+          HOME: home,
+          XDG_RUNTIME_DIR: runtime,
+          DBUS_SESSION_BUS_ADDRESS: systemdOperatorBusFixtures.stale.address,
+        },
+        { requireEffective: true },
+      );
+      if (result === "absent") {
+        await expect(inspected).resolves.toBeNull();
+      } else {
+        await expect(inspected).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
+      }
+      expect(closeDiscovery).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+      expect(busctl).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("systemd command query legacy compatibility", () => {
+  it("distinguishes the operator's manager exit transcript from an absent unit", async () => {
+    const args = [...callArgs];
+    args[4] = "GetUnitFileState";
+    busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
+    await expect((await reader()).query(args, ["s"])).rejects.toMatchObject({
+      reason: "systemd-user-bus-unavailable",
+    });
+    busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.runtime.getUnitFileState));
+    await expect((await reader()).query(args, ["s"])).resolves.toBeNull();
+  });
+
   it("retains legacy mode only for this reader", async () => {
     busctl.mockResolvedValueOnce(unsupported).mockResolvedValue(success('o "/unitName"'));
     const legacy = await reader();
@@ -109,10 +271,10 @@ describe("systemd command query legacy compatibility", () => {
 });
 
 describe("effective service inspection through legacy busctl", () => {
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
   let env: Record<string, string>;
   let unit: string;
   let dropIn: string;
+  let loadedDropIns: string[];
   let requiredFile: string;
   let pendingReload: boolean;
   let malformed: boolean;
@@ -120,9 +282,15 @@ describe("effective service inspection through legacy busctl", () => {
 
   beforeEach(async () => {
     const home = await fs.realpath(dirs.make("openclaw-systemd-legacy-"));
-    env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: "openclaw-legacy" };
+    env = {
+      HOME: home,
+      XDG_RUNTIME_DIR: path.join(home, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-legacy",
+    };
     unit = path.join(home, ".config/systemd/user/openclaw-legacy.service");
     dropIn = `${unit}.d/override.conf`;
+    loadedDropIns = [dropIn];
     requiredFile = path.join(home, "required.env");
     await fs.mkdir(path.dirname(dropIn), { recursive: true });
     await fs.writeFile(unit, "[Service]\nExecStart=/local/file gateway\n");
@@ -139,7 +307,7 @@ describe("effective service inspection through legacy busctl", () => {
       }
       if (args.includes("org.freedesktop.systemd1.Unit")) {
         return success(
-          `s ${JSON.stringify(unit)}\nas 1 ${JSON.stringify(dropIn)}\nb ${pendingReload}\ns "loaded"\n`,
+          `s ${JSON.stringify(unit)}\nas ${[loadedDropIns.length, ...loadedDropIns.map((file) => JSON.stringify(file))].join(" ")}\nb ${pendingReload}\ns "loaded"\n`,
         );
       }
       return success(
@@ -155,6 +323,38 @@ describe("effective service inspection through legacy busctl", () => {
       );
     });
   });
+
+  it.each(["none", "resource-only"])(
+    "persists an authored runtime pin with default user cwd and %s drop-ins",
+    async (dropIns) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const planned = {
+        programArguments: ["/usr/bin/node", "gateway", "café", 'quoted "value" \\ path'],
+      };
+      await fs.writeFile(unit, buildSystemdUnit(planned));
+      if (dropIns === "none") {
+        loadedDropIns = [];
+      } else {
+        await fs.writeFile(dropIn, "[Service]\nMemoryMax=1G\n");
+      }
+      const actual = await inspect();
+      expect(actual?.workingDirectory).toBe(env.HOME);
+      expect(() => assertDaemonRuntimePinDefinition(planned, actual)).not.toThrow();
+      expect(hasGatewayServiceLauncherOverride(actual)).toBe(false);
+
+      const scope = {
+        kind: "gateway" as const,
+        env: {
+          ...env,
+          OPENCLAW_STATE_DIR: path.join(env.HOME!, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(env.HOME!, "state", "openclaw.json"),
+        },
+      };
+      const pin = { runtime: "node" as const, path: "/usr/bin/node" };
+      commitDaemonRuntimePin(scope, { expected: readDaemonRuntimePin(scope, null), pin }, actual);
+      expect(readDaemonRuntimePin(scope, await inspect()).pin).toEqual(pin);
+    },
+  );
 
   it.each([false, true])(
     "retains manager data and selected drop-ins with reloadPending=%s",

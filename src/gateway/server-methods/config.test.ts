@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -242,10 +243,7 @@ describe("config application settlement", () => {
       ].map(({ name, config }) => ({ method, name, config })),
     ),
   )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
-    let settleApplication!: (status: "applied") => void;
-    const application = new Promise<"applied">((resolve) => {
-      settleApplication = resolve;
-    });
+    const { promise: application, resolve: settleApplication } = createDeferred<"applied">();
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
       path: "/tmp/openclaw.json",
       config,

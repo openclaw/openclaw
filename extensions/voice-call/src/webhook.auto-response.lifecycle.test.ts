@@ -72,6 +72,7 @@ const state = createEventManagerHarness();
 const managers: CallManager[] = [];
 const servers: VoiceCallWebhookServer[] = [];
 const pendingResponses: ReturnType<typeof createDeferred<ResponseResult>>[] = [];
+const responseCompletions: ReturnType<typeof createDeferred<void>>[] = [];
 
 async function startCall(streaming = false) {
   const config = VoiceCallConfigSchema.parse({
@@ -86,6 +87,19 @@ async function startCall(streaming = false) {
   const ctx = state.createContext({ config });
   const manager = new CallManager(config, ctx.storePath);
   managers.push(manager);
+  const createGuard = manager.createAutoResponseGuard.bind(manager);
+  vi.spyOn(manager, "createAutoResponseGuard").mockImplementation((call) => {
+    const guard = createGuard(call);
+    const completion = createDeferred<void>();
+    responseCompletions.push(completion);
+    return {
+      ...guard,
+      release() {
+        guard.release();
+        completion.resolve();
+      },
+    };
+  });
   await manager.initialize(provider, "https://example.test/voice/webhook");
   const started = await manager.initiateCall("+15550000001", undefined, { mode: "conversation" });
   expect(started.success).toBe(true);
@@ -132,18 +146,17 @@ async function startCall(streaming = false) {
 async function responseAt(index: number) {
   await vi.waitFor(() => expect(pendingResponses.length).toBeGreaterThan(index));
   const response = pendingResponses[index];
+  const completion = responseCompletions[index];
   const early = mocks.generate.mock.calls[index]?.[0].onEarlyText;
-  if (!response || !early) {
+  expect(responseCompletions).toHaveLength(pendingResponses.length);
+  if (!response || !early || !completion) {
     throw new Error("Expected pending response and early delivery callback");
   }
   return {
     early,
     finish: async (text: string) => {
       response.resolve({ text, deliveredEarly: false });
-      // Finish the synchronous provider's promise continuations before asserting absence.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await completion.promise;
     },
   };
 }
@@ -164,6 +177,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) {
     await server.stop();
   }
+  await Promise.all(responseCompletions.splice(0).map((completion) => completion.promise));
   for (const manager of managers.splice(0)) {
     await finalizeTestManagerCalls(manager);
   }

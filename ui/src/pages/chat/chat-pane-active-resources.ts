@@ -14,15 +14,10 @@ import {
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
-import {
-  areUiSessionKeysEquivalent,
-  uiSessionEventMatches,
-  uiSessionRowMatchesSelectedChat,
-} from "../../lib/sessions/session-key.ts";
+import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   openSlot,
   sidebarActivePanel,
@@ -34,6 +29,7 @@ import {
 type ResourceSlot = "desktop" | "browser";
 export type ActiveResourceOwner = {
   client: GatewayBrowserClient;
+  observation: SessionRowObservation;
   sessionKey: string;
   agentId?: string;
   connectionEpoch: number;
@@ -45,7 +41,7 @@ export type ActiveResourceOwner = {
   archived?: boolean;
   browserTab?: BrowserTabSelection;
   layout: () => SidebarLayout;
-  commit: (layout: SidebarLayout) => void;
+  commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
   requestUpdate: () => void;
   isCurrent: () => boolean;
 };
@@ -86,6 +82,14 @@ function resourceIdentityForSession(session: ResourceIdentitySource | undefined)
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
+  private owner: ActiveResourceOwner | null = null;
+  private descriptorRead:
+    | {
+        observation: SessionRowObservation;
+        current: () => boolean;
+        promise: Promise<GatewaySessionRow | null>;
+      }
+    | undefined;
   private generation = 0;
   private signature: string | undefined;
   private client: GatewayBrowserClient | undefined;
@@ -97,6 +101,7 @@ export class ChatPaneActiveResources {
   private desktop:
     | {
         client: GatewayBrowserClient;
+        observation: SessionRowObservation;
         sessionKey: string;
         agentId?: string;
         connectionEpoch: number;
@@ -107,10 +112,11 @@ export class ChatPaneActiveResources {
 
   syncPane(view: {
     state: () => ChatPageHost | undefined;
+    observation: () => SessionRowObservation | null;
     gateway: ApplicationGatewaySnapshot;
     isConnected: () => boolean;
     isPresented: () => boolean;
-    commit: (layout: SidebarLayout) => void;
+    commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
     requestUpdate: () => void;
   }): void {
     const state = view.state();
@@ -120,17 +126,20 @@ export class ChatPaneActiveResources {
     const agentId = state
       ? scopedAgentParamsForSession(state, state.sessionKey).agentId
       : undefined;
-    const session = state ? selectedChatSessionRow(state) : undefined;
+    const observation = view.observation();
+    const session = observation?.row ?? undefined;
     // Keyboard focus may move to another split pane without hiding this resource.
     this.sync(
       state &&
         client &&
         sessionKey &&
         state.connected &&
+        observation?.isCurrent() &&
         view.isPresented() &&
         !parseCatalogSessionKey(sessionKey)
         ? {
             client,
+            observation,
             sessionKey,
             agentId,
             connectionEpoch: state.connectionEpoch,
@@ -146,7 +155,7 @@ export class ChatPaneActiveResources {
             layout: () => state.sidebarLayout,
             // Discovery is not a saved layout preference. Reload must validate again
             // before mounting a resource; explicit UI actions still persist normally.
-            commit: (layout) => view.commit(layout),
+            commit: (layout, resource) => view.commit(layout, resource),
             requestUpdate: () => view.requestUpdate(),
             isCurrent: () =>
               view.isConnected() &&
@@ -156,6 +165,10 @@ export class ChatPaneActiveResources {
               scopedAgentParamsForSession(state, state.sessionKey).agentId === agentId &&
               state.connectionEpoch === connectionEpoch &&
               state.connected &&
+              view.observation() === observation &&
+              observation.isCurrent() &&
+              resourceIdentityForSession(observation.row ?? undefined) ===
+                resourceIdentityForSession(session) &&
               view.isPresented(),
           }
         : null,
@@ -172,47 +185,77 @@ export class ChatPaneActiveResources {
     this.requestProbeUpdate = undefined;
   }
 
-  reconcileSession(
-    payload: unknown,
-    state: ChatPageHost,
-    view: { requestUpdate: () => void; updated: () => Promise<unknown> },
-  ): void {
-    const changed = readSessionChangedEvent(payload);
-    if (!changed || !uiSessionEventMatches(state, changed.key, changed.agentId)) {
+  reconcileObservation(view: { requestUpdate: () => void; updated: () => Promise<unknown> }): void {
+    const owner = this.owner;
+    if (!owner?.isCurrent() || !owner.observation.isCurrent()) {
       return;
     }
-    // The roster owner coalesces/absorbs scheduled event refreshes. Sync its
-    // post-event snapshot before releasing existing probe results, without
-    // discarding them when only metadata changed.
+    const layout = owner.layout();
+    const desktopDiscovery =
+      owner.desktopAvailable &&
+      (this.desktop !== undefined ||
+        !layout.columns.some((column) => column.panels.some((panel) => panel.slot === "desktop")));
+    const browserDiscovery =
+      !this.dismissed(layout) && owner.browserAvailable && owner.browserTab !== undefined;
+    if (!desktopDiscovery && !browserDiscovery) {
+      return;
+    }
+    // The pane's row observation admits descriptor reads without changing the
+    // foreground roster query. Metadata refreshes hold existing inventory work.
     this.reconcile(async () => {
-      const result = await state.sessions.refreshReplacement(
-        scopedAgentParamsForSession(state, state.sessionKey).agentId,
-      );
-      if (
-        !result?.sessions.some((row) =>
-          uiSessionRowMatchesSelectedChat(state, row.key, state.sessionKey, row.agentId),
-        )
-      ) {
-        // A filtered/paged roster may retain a cached selected row for display;
-        // that row is not post-event evidence of resource ownership.
-        return false;
-      }
+      await this.readSession(owner);
       view.requestUpdate();
       await view.updated();
-      return true;
+      return owner.observation.isCurrent();
     });
+  }
+
+  private readSession(owner: ActiveResourceOwner): Promise<GatewaySessionRow | null> {
+    const previous = this.descriptorRead;
+    if (previous?.observation === owner.observation && previous.current()) {
+      return previous.promise;
+    }
+    const generation = this.generation;
+    const current = () =>
+      generation === this.generation && owner.isCurrent() && owner.observation.isCurrent();
+    const read = {
+      observation: owner.observation,
+      current,
+      promise: Promise.resolve<GatewaySessionRow | null>(null),
+    };
+    read.promise = (async () => {
+      while (current()) {
+        const reconcile = owner.observation.captureReconcile();
+        const { session } = await owner.client.request<{ session?: GatewaySessionRow }>(
+          "sessions.describe",
+          { key: owner.sessionKey, ...(owner.agentId ? { agentId: owner.agentId } : {}) },
+        );
+        if (!current()) {
+          return null;
+        }
+        const outcome = reconcile(session);
+        if (outcome.status === "current") {
+          return outcome.row;
+        }
+        if (outcome.status === "retired") {
+          return null;
+        }
+        // Events during the read share this flight and require one fresh receipt.
+      }
+      return null;
+    })().finally(() => {
+      if (this.descriptorRead === read) {
+        this.descriptorRead = undefined;
+      }
+    });
+    this.descriptorRead = read;
+    return read.promise;
   }
 
   /** Hold existing results, rather than discarding/reissuing them for every event. */
   reconcile(refresh: () => Promise<boolean>): void {
     const current = this.probeCurrent;
-    if (
-      (!this.pendingProbes &&
-        !this.desktop &&
-        !this.reconciliationFailed &&
-        !this.reconciliation) ||
-      !current?.()
-    ) {
+    if (!current?.()) {
       return;
     }
     const retryDiscovery = this.reconciliationFailed && this.pendingProbes === 0;
@@ -242,7 +285,10 @@ export class ChatPaneActiveResources {
     });
   }
 
-  private async currentAfterReconciliation(current: () => boolean): Promise<boolean> {
+  private async afterReconciliation<T>(
+    current: () => boolean,
+    action: () => T,
+  ): Promise<T | undefined> {
     let pending: Promise<boolean> | undefined;
     while (current() && (pending = this.reconciliation)) {
       const ok = await pending;
@@ -251,10 +297,12 @@ export class ChatPaneActiveResources {
         continue;
       }
       if (!ok) {
-        return false;
+        return undefined;
       }
     }
-    return current();
+    // Ownership and publication must share a turn: another event can retire the
+    // pane or start a newer refresh before an awaiting caller resumes.
+    return current() ? action() : undefined;
   }
 
   private trackProbe(probe: Promise<void>, generation: number): void {
@@ -277,6 +325,7 @@ export class ChatPaneActiveResources {
       return undefined;
     }
     return this.desktop.client === client &&
+      this.desktop.observation.isCurrent() &&
       this.desktop.connectionEpoch === connectionEpoch &&
       this.desktop.resourceIdentity === resourceIdentityForSession(session)
       ? this.desktop.source
@@ -284,12 +333,12 @@ export class ChatPaneActiveResources {
   }
 
   sync(owner: ActiveResourceOwner | null): void {
+    const previousOwner = this.owner;
+    this.owner = owner;
     if (!owner) {
       this.invalidate();
-      // Retained panes must revalidate their automatic target before showing it again.
-      if (this.desktop) {
-        this.desktop.source = null;
-      }
+      // The Desktop panel owns its hidden-view retention timer. Its observed
+      // session and connection still fence this source while the pane is hidden.
       return;
     }
     const identity = resourceIdentityForSession(owner);
@@ -303,7 +352,11 @@ export class ChatPaneActiveResources {
       owner.browserTab,
       owner.layout().resourceAutoOpenDismissed,
     ]);
-    if (this.client === owner.client && this.signature === signature) {
+    if (
+      this.client === owner.client &&
+      this.signature === signature &&
+      previousOwner?.observation === owner.observation
+    ) {
       return;
     }
     if (this.reconciliationFailed || (this.probeCurrent && !this.probeCurrent())) {
@@ -382,6 +435,7 @@ export class ChatPaneActiveResources {
     const changed = this.desktop?.source !== source;
     this.desktop = {
       client: owner.client,
+      observation: owner.observation,
       sessionKey: owner.sessionKey,
       agentId: owner.agentId,
       connectionEpoch: owner.connectionEpoch,
@@ -418,35 +472,36 @@ export class ChatPaneActiveResources {
     }
     next.expanded = layout.expanded;
     next.expandedSide = layout.expandedSide;
-    owner.commit(next);
+    owner.commit(next, slot);
   }
 
   private async discoverDesktop(owner: ActiveResourceOwner, current: () => boolean): Promise<void> {
     try {
-      const { session } = await owner.client.request<{ session?: GatewaySessionRow }>(
-        "sessions.describe",
-        { key: owner.sessionKey, ...(owner.agentId ? { agentId: owner.agentId } : {}) },
-      );
-      if (!(await this.currentAfterReconciliation(current))) {
-        return;
-      }
-      if (
-        !session ||
-        !areUiSessionKeysEquivalent(session.key, owner.sessionKey) ||
-        session.archived
-      ) {
-        this.publishDesktop(owner, null);
-        return;
-      }
-      // The default gateway desktop is shared, not session-owned. Only an explicit
-      // assignment can justify discovery; never infer ownership from global availability.
-      const source = resolveChatPaneDesktopTarget(session);
-      if (
-        !source ||
-        source === "gateway" ||
-        (desktopSourceForEnvironment({ id: source }).kind === "environment" && !session.sessionId)
-      ) {
-        this.publishDesktop(owner, null);
+      const session = await this.readSession(owner);
+      const source = await this.afterReconciliation(current, () => {
+        if (
+          !session ||
+          !areUiSessionKeysEquivalent(session.key, owner.sessionKey) ||
+          session.archived
+        ) {
+          this.publishDesktop(owner, null);
+          return undefined;
+        }
+        // The default gateway desktop is shared, not session-owned. Only an explicit
+        // assignment can justify discovery; never infer ownership from global availability.
+        const assignedSource = resolveChatPaneDesktopTarget(session);
+        if (
+          !assignedSource ||
+          assignedSource === "gateway" ||
+          (desktopSourceForEnvironment({ id: assignedSource }).kind === "environment" &&
+            !session.sessionId)
+        ) {
+          this.publishDesktop(owner, null);
+          return undefined;
+        }
+        return assignedSource;
+      });
+      if (!source) {
         return;
       }
       const target = await loadDesktopEnvironments(owner.client, {
@@ -454,28 +509,27 @@ export class ChatPaneActiveResources {
         isCurrent: current,
         recoverToPicker: false,
       });
-      if (!(await this.currentAfterReconciliation(current))) {
-        return;
-      }
-      const environment = target?.environments.find((entry) => entry.id === source);
-      if (!environment || environment.status !== "available" || environment.desktop !== true) {
-        this.publishDesktop(owner, null);
-        return;
-      }
-      if (
-        environment.type === "worker" &&
-        (environment.worker?.state !== "attached" ||
-          !session.sessionId ||
-          !environment.worker.attachedSessionIds.includes(session.sessionId))
-      ) {
-        this.publishDesktop(owner, null);
-        return;
-      }
-      this.publishDesktop(owner, source);
+      await this.afterReconciliation(current, () => {
+        const environment = target?.environments.find((entry) => entry.id === source);
+        if (!environment || environment.status !== "available" || environment.desktop !== true) {
+          this.publishDesktop(owner, null);
+          return;
+        }
+        if (
+          environment.type === "worker" &&
+          (environment.worker?.state !== "attached" ||
+            !session?.sessionId ||
+            !environment.worker.attachedSessionIds.includes(session.sessionId))
+        ) {
+          this.publishDesktop(owner, null);
+          return;
+        }
+        this.publishDesktop(owner, source);
+      });
     } catch {
-      if (await this.currentAfterReconciliation(current)) {
+      await this.afterReconciliation(current, () => {
         this.publishDesktop(owner, null);
-      }
+      });
       // Unavailable inventory is not evidence of a live resource. Manual opening remains available.
     }
   }
@@ -486,20 +540,25 @@ export class ChatPaneActiveResources {
     current: () => boolean,
   ): Promise<void> {
     try {
-      const snapshot = await listBrowserTabs(
-        bindBrowserRequestClient(owner.client, selection.tab, current),
-      );
-      if (
-        !(await this.currentAfterReconciliation(current)) ||
-        !snapshot.running ||
-        !snapshot.tabs.some(
-          (tab) => tab.targetId === selection.tab.targetId && !tab.urlUnavailableReason,
-        )
-      ) {
+      const session = await this.readSession(owner);
+      if (!session || session.archived) {
         return;
       }
-      // No /start, /tabs/open, focus, or unscoped default-browser probe.
-      this.reveal(owner, "browser");
+      const snapshot = await this.afterReconciliation(current, () =>
+        listBrowserTabs(bindBrowserRequestClient(owner.client, selection.tab, current)),
+      );
+      await this.afterReconciliation(current, () => {
+        if (
+          !snapshot?.running ||
+          !snapshot.tabs.some(
+            (tab) => tab.targetId === selection.tab.targetId && !tab.urlUnavailableReason,
+          )
+        ) {
+          return;
+        }
+        // No /start, /tabs/open, focus, or unscoped default-browser probe.
+        this.reveal(owner, "browser");
+      });
     } catch {
       // Historical result cards alone cannot prove the tab still exists.
     }

@@ -20,6 +20,7 @@ export async function runCliDisposer(
   name: string,
   dispose: () => Promise<void>,
   runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+  timeoutMs = DISPOSER_TIMEOUT_MS,
 ): Promise<void> {
   const token = Symbol(name);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -32,9 +33,9 @@ export async function runCliDisposer(
       operation,
       new Promise<void>((resolve) => {
         timer = setTimeout(() => {
-          console.error(`CLI cleanup timed out: ${name} after ${DISPOSER_TIMEOUT_MS}ms`);
+          console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
           resolve();
-        }, DISPOSER_TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]);
   } catch {
@@ -107,6 +108,16 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
           await import("../plugins/memory-runtime.js");
         await closeActiveMemorySearchManagersCore();
       }
+    },
+    "agent-databases": async () => {
+      const { hasOpenClawAgentDatabaseAsyncResources } =
+        await import("../state/openclaw-agent-db-resources.js");
+      if (!hasOpenClawAgentDatabaseAsyncResources()) {
+        return;
+      }
+      const { closeOpenClawAgentDatabasesAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      await closeOpenClawAgentDatabasesAsync();
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {

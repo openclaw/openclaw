@@ -719,6 +719,17 @@ describe("dedicated worker websocket protocol", () => {
           placements,
           runtimeInstanceId: ATTACHED_IDENTITY.environmentId,
           sessionKey: "agent:main:worker-suspension",
+          sessionTarget: {
+            agentId: "main",
+            sessionId: claim.sessionId,
+            sessionKey: "agent:main:worker-suspension",
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+          },
+          assertSourceCurrent: () => {
+            if (!placementActive) {
+              throw new Error("worker source placement is no longer active");
+            }
+          },
           turn: {
             preparedRunAdmission,
             runId: claim.runId,

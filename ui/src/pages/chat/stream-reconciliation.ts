@@ -1,4 +1,5 @@
 import {
+  projectSessionTerminalReplyMessage,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
@@ -142,6 +143,7 @@ function buildAssistantStreamMessage(
   itemId?: string,
   runId?: string,
   afterBoundaryRunId?: string,
+  afterSequence?: number,
 ): Record<string, unknown> {
   return {
     role: "assistant",
@@ -153,6 +155,7 @@ function buildAssistantStreamMessage(
       ...(itemId ? { itemId } : {}),
       ...(runId ? { runId } : {}),
       ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
+      ...(afterSequence === undefined ? {} : { afterSequence }),
     },
   };
 }
@@ -192,7 +195,7 @@ export function appendTerminalAssistantMessage(
     ...(terminalRunId ? { runId: terminalRunId } : {}),
     ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
   });
-  const terminalText = extractText(message)?.trim() ?? "";
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim() ?? "";
   const removedIndexes = new Set<number>();
   const currentFallbackIndexes: number[] = [];
   let terminalCursor = 0;
@@ -453,7 +456,7 @@ export function terminalMessageReplacesVisibleStream(
   state: StreamReconciliationState,
   opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
 ): boolean {
-  const terminalText = extractText(message)?.trim();
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim();
   if (!terminalText) {
     return false;
   }
@@ -585,6 +588,10 @@ export function materializeVisibleStreamState(
       part.itemId,
       part.runId,
       part.afterBoundaryRunId,
+      nextMessages
+        .slice(0, insertIndex)
+        .map((message) => readSessionMessageIdentity(message)?.sequence)
+        .findLast((sequence): sequence is number => typeof sequence === "number"),
     );
     nextMessages = [
       ...nextMessages.slice(0, insertIndex),

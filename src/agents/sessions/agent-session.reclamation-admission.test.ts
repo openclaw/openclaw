@@ -16,7 +16,10 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   createTestSession,
@@ -29,27 +32,42 @@ import { SessionManager } from "./session-manager.js";
 
 const checkpoint = vi.hoisted(() => ({ startForeground: undefined as (() => void) | undefined }));
 
-vi.mock("../../config/sessions/session-accessor.sqlite-archive.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../config/sessions/session-accessor.sqlite-archive.js")
-    >();
-  return {
-    ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              checkpoint.startForeground?.();
-              params.onCommitRequest?.();
+vi.mock(
+  "../../config/sessions/session-accessor.sqlite-reclamation-worker.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../config/sessions/session-accessor.sqlite-reclamation-worker.js")
+      >();
+    return {
+      ...actual,
+      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+        actual.withSqliteReclamationWorker(
+          options,
+          claim,
+          async (worker) => {
+            const originalRun = worker.run.bind(worker);
+            const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
+              originalRun({
+                ...params,
+                onCommitRequest: () => {
+                  checkpoint.startForeground?.();
+                  return params.onCommitRequest();
+                },
+              }),
+            );
+            try {
+              return await run(worker);
+            } finally {
+              spy.mockRestore();
             }
-          : undefined,
-      }),
-  };
-});
+          },
+          assertRequestCurrent,
+          signal,
+        )) satisfies typeof actual.withSqliteReclamationWorker,
+    };
+  },
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -61,8 +79,9 @@ describe("agent session persistence during reclamation", () => {
     storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     checkpoint.startForeground = undefined;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -173,7 +192,7 @@ describe("agent session persistence during reclamation", () => {
     }
   });
 
-  it("settles an unrelated custom-message append while the worker awaits commit authorization", async () => {
+  it("queues an unrelated custom-message append behind worker commit authorization", async () => {
     const sessionKey = "agent:main:reclamation-transcript";
     const sessionId = "reclamation-transcript";
     // Automatic retention remains enabled while the real archive Worker starts.
@@ -209,7 +228,7 @@ describe("agent session persistence during reclamation", () => {
       write = session.sendCustomMessage(message);
       void write.catch(() => {});
       message.content = "Caller changed the input after submission.";
-      // This callback still holds the real Worker's admission until its exit is joined.
+      // Publication must wait for this operation's writer admission to settle.
       publishedDuringCommitAuthorization = [...published];
     };
     const deletion = await deleteSessionEntryLifecycle({

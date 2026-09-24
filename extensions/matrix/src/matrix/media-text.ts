@@ -1,4 +1,3 @@
-// Matrix plugin module implements media text behavior.
 import path from "node:path";
 import {
   asNullableObjectRecord,
@@ -26,25 +25,6 @@ function resolveMatrixMediaKind(
   // Remote message types must match a declared key, never an inherited property.
   const key = msgtype ?? "";
   return Object.hasOwn(MATRIX_MEDIA_KINDS, key) ? MATRIX_MEDIA_KINDS[key] : undefined;
-}
-
-function resolveMatrixMediaLabel(
-  kind: MatrixMessageAttachmentKind | undefined,
-  fallback = "media",
-): string {
-  return `${kind ?? fallback} attachment`;
-}
-
-function formatMatrixAttachmentMarker(params: {
-  kind?: MatrixMessageAttachmentKind;
-  tooLarge?: boolean;
-  unavailable?: boolean;
-}): string {
-  const label = resolveMatrixMediaLabel(params.kind);
-  if (params.tooLarge) {
-    return `[matrix ${label} too large]`;
-  }
-  return params.unavailable ? `[matrix ${label} unavailable]` : `[matrix ${label}]`;
 }
 
 export function isLikelyBareFilename(text: string): boolean {
@@ -143,21 +123,6 @@ export function resolveMatrixMessageAttachment(
   };
 }
 
-function formatMatrixAttachmentText(params: {
-  attachment?: MatrixMessageAttachmentSummary;
-  tooLarge?: boolean;
-  unavailable?: boolean;
-}): string | undefined {
-  if (!params.attachment) {
-    return undefined;
-  }
-  return formatMatrixAttachmentMarker({
-    kind: params.attachment.kind,
-    tooLarge: params.tooLarge,
-    unavailable: params.unavailable,
-  });
-}
-
 export function formatMatrixMessageText(params: {
   body?: string;
   filename?: string;
@@ -167,14 +132,11 @@ export function formatMatrixMessageText(params: {
 }): string | undefined {
   const attachment = resolveMatrixMessageAttachment(params);
   const body = attachment ? (attachment.caption ?? "") : (params.body?.trim() ?? "");
-  const marker = formatMatrixAttachmentText({
-    attachment,
-    tooLarge: params.tooLarge,
-    unavailable: params.unavailable,
-  });
-  if (!marker) {
+  if (!attachment) {
     return body || undefined;
   }
+  const availability = params.tooLarge ? " too large" : params.unavailable ? " unavailable" : "";
+  const marker = `[matrix ${attachment.kind} attachment${availability}]`;
   if (!body) {
     return marker;
   }

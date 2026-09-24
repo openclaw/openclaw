@@ -93,7 +93,6 @@ describe("dispatchReplyFromConfig", () => {
           cfg,
           dispatcher,
           replyResolver,
-          usePublishedModelRuntime: true,
           replyOptions: { abortSignal: abort.signal },
         });
         expect(result.queuedFinal).toBe(!aborted);
@@ -148,7 +147,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       SessionKey: "agent:main:main",
     });
 
@@ -170,7 +168,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg,
         dispatcher,
         replyResolver,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLookup.mockRestore();
@@ -230,14 +227,12 @@ describe("dispatchReplyFromConfig", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
-          Provider: "whatsapp",
           SessionKey: "agent:main:main",
           MessageSid: "prepared",
         }),
         cfg,
         dispatcher: createDispatcher(),
         replyResolver,
-        usePublishedModelRuntime: true,
       });
       expect(preparedLookup).toHaveBeenCalledTimes(2);
       expect(preparedLookup).toHaveBeenNthCalledWith(1, { agentId: "main" });
@@ -745,8 +740,6 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       SessionKey: "agent:main:whatsapp:direct:chat-1",
       BodyForAgent: "text turn",
     });

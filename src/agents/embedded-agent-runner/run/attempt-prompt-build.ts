@@ -15,10 +15,6 @@ import {
   resolveHeartbeatSummaryForAgent,
   type HeartbeatSummary,
 } from "../../../infra/heartbeat-summary.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildInterSessionPromptContext } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -41,6 +37,7 @@ import {
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
 import { log } from "../logger.js";
+import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
   cloneToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
@@ -52,6 +49,7 @@ import {
   toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
+import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,
@@ -84,6 +82,7 @@ type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]
 type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
+  isCurrent: () => boolean;
 };
 
 type EmbeddedAttemptPromptAssembly = {
@@ -112,6 +111,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
+  prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }): Promise<EmbeddedAttemptPromptAssembly> {
@@ -142,24 +142,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     effectivePrompt = effectivePrompt.slice(originContext.text.length).replace(/^\n/, "");
   }
   const hookCtx = {
-    runId: attempt.runId,
-    trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-    agentId: input.hookAgentId,
-    sessionKey: attempt.sessionKey,
-    sessionId: attempt.sessionId,
-    workspaceDir: attempt.workspaceDir,
+    ...buildEmbeddedAgentHookContext(
+      attempt,
+      input.hookAgentId,
+      freezeDiagnosticTraceContext(input.diagnosticTrace),
+    ),
     activeProjectKeys: [...(attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
-    trigger: attempt.trigger,
     inputProvenance: attempt.inputProvenance,
-    ...buildAgentHookContextChannelFields(attempt),
-    ...buildAgentHookContextIdentityFields({
-      trigger: attempt.trigger,
-      senderId: attempt.senderId,
-      chatId: attempt.chatId,
-      channelContext: attempt.channelContext,
-    }),
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
@@ -174,7 +165,15 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookRunner: input.hookRunner,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       });
-  const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  const callableToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
+  // Regenerate owned capability guidance before composing hook additions, without
+  // rerunning hooks or altering already-recorded conversation messages.
+  if (input.prepareSystemPrompt) {
+    const preparedSystemPrompt = await input.prepareSystemPrompt(systemPromptText);
+    if (preparedSystemPrompt !== systemPromptText) {
+      setSystemPrompt(preparedSystemPrompt);
+    }
+  }
   const hookRunner = input.hookRunner;
   const assertHostActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
@@ -185,13 +184,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       ? undefined
       : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
           toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
-          activeToolNames: promptCacheToolNames,
+          activeToolNames: callableToolNames,
           assertHostActive,
         });
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
-    activeToolNames: promptCacheToolNames,
+    activeToolNames: callableToolNames,
     finalize: attempt.finalizePromptForResolvedTools,
   });
   let effectiveTranscriptPrompt = attempt.transcriptPrompt ?? promptBeforeResolvedToolFinalization;
@@ -294,14 +293,19 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
   if (attempt.sessionKey && !preserveExactPrompt) {
     const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = leasePendingAgentSteeringItems({
+    const leased = await leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,
       leaseId,
     });
     if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds };
+      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
       // Transfer cleanup ownership before any prompt mutation can throw.
       input.setLeasedSteering(leasedSteering);
+      if (!leased.isCurrent()) {
+        throw new Error(
+          "The queued child results lost authority before requester prompt injection.",
+        );
+      }
       effectivePrompt = prependAgentSteeringPrompt({
         steeringPrompt: leased.prompt,
         prompt: effectivePrompt,
@@ -413,13 +417,16 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const preparedUserTurnTimestamp = (
     input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
   )?.timestamp;
-  let sessionMessages = filterHeartbeatTranscriptArtifacts(
+  const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
     input.messages,
     input.prompt.heartbeatSummary?.ackMaxChars,
     input.prompt.heartbeatSummary?.prompt,
   );
-  if (sessionMessages.length < input.messages.length) {
+  let sessionMessages = normalizeAssistantReplayContent(heartbeatFiltered);
+  if (sessionMessages !== heartbeatFiltered || sessionMessages.length < input.messages.length) {
     input.replaceSessionMessages(sessionMessages);
+  } else {
+    sessionMessages = input.messages;
   }
   // Raw probes temporarily hide durable history; only normal prepared history
   // is authoritative for reclaiming session-owned provider projections.

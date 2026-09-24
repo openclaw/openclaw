@@ -11,12 +11,12 @@ const CHUNK_WRITE_TABLES = [
   "memory_index_chunk_provenance",
 ];
 
-const PREPARED_WRITE_TABLES = [...CHUNK_WRITE_TABLES, "memory_index_chunks_fts"];
+const PREPARED_WRITE_TABLES = new Set([...CHUNK_WRITE_TABLES, "memory_index_chunks_fts"]);
 
 function chunkWriteTables(sqls: string[]): string[] {
   return sqls.flatMap((sql) => {
     const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
-    return table && PREPARED_WRITE_TABLES.includes(table) ? [table] : [];
+    return table && PREPARED_WRITE_TABLES.has(table) ? [table] : [];
   });
 }
 
@@ -27,7 +27,7 @@ describe("memory chunk publication", () => {
   });
 
   it.each(["none", "batch-wide-test"])(
-    "bounds preparations while preserving oversized entry annotations (%s)",
+    "publishes oversized entry annotations without caller-thread index writes (%s)",
     async (provider) => {
       const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
       await fs.writeFile(
@@ -81,15 +81,7 @@ describe("memory chunk publication", () => {
           projectKey: null,
           importance: null,
         });
-        const nonemptyFiles = db
-          .prepare("SELECT DISTINCT path, source FROM memory_index_chunks")
-          .all().length;
-        for (const table of PREPARED_WRITE_TABLES) {
-          expect(
-            preparedTables.filter((prepared) => prepared === table),
-            table,
-          ).toHaveLength(nonemptyFiles);
-        }
+        expect(preparedTables).toEqual([]);
 
         await fs.writeFile(memoryPath, "");
         Reflect.set(manager, "dirty", true);
@@ -155,9 +147,7 @@ describe("memory chunk publication", () => {
           await expect(manager.sync({ reason: "test" })).rejects.toThrow(
             "forced chunk publication failure",
           );
-          expect(chunkWriteTables(prepare.mock.calls.map(([sql]) => sql))).toEqual(
-            CHUNK_WRITE_TABLES.slice(0, CHUNK_WRITE_TABLES.indexOf(failedTable) + 1),
-          );
+          expect(chunkWriteTables(prepare.mock.calls.map(([sql]) => sql))).toEqual([]);
         } finally {
           prepare.mockRestore();
         }

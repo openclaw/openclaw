@@ -14,6 +14,8 @@ import {
   renderForwardedAvatar,
 } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 
@@ -44,6 +46,19 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("resolveChatAvatarUrl", () => {
+  it("prefers the authenticated avatar blob over persisted and protected URLs", () => {
+    const state = {
+      sessionKey: "agent:main:main",
+      chatAvatarUrl: "blob:authenticated-avatar",
+      assistantAvatar: "/avatar/main",
+      assistantAgentId: "main",
+    } as unknown as ChatPageHost;
+
+    expect(resolveChatAvatarUrl(state)).toBe("blob:authenticated-avatar");
+  });
 });
 
 describe("renderChatAvatar", () => {

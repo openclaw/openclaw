@@ -12,6 +12,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
 
 type PreviewBinding = {
   context: ApplicationContext;
@@ -160,14 +161,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     const binding = this.binding;
     const frame = this.querySelector<HTMLIFrameElement>("iframe");
     const view = this.view;
-    if (
-      this.mode === "strict" ||
-      !frame ||
-      !view ||
-      !this.isCurrent(binding) ||
-      this.sandboxHost ||
-      this.error
-    ) {
+    if (!frame || !view || !this.isCurrent(binding) || this.sandboxHost || this.error) {
       return;
     }
     const generation = this.frameGeneration;
@@ -180,12 +174,14 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
         this.fail(error);
       }
     };
+    const allowScripts = this.mode !== "strict";
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxUrl: this.sandboxUrl,
       sandboxOrigin: this.sandboxOrigin,
       documentKey: String(this.frameGeneration),
-      loadDocument: async () => view.html,
+      allowScripts,
+      loadDocument: async () => prepareHtmlPreviewLinks(view.html, allowScripts),
       onLoaded: () => {},
       onRendered: () => {
         if (currentFrame()) {
@@ -213,11 +209,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     for (const port of event.ports) {
       port.close();
     }
-    if (
-      this.mode === "strict" ||
-      !this.isCurrent(this.binding) ||
-      event.origin !== this.sandboxOrigin
-    ) {
+    if (!this.isCurrent(this.binding) || event.origin !== this.sandboxOrigin) {
       return;
     }
     host.handleMessage(event);
@@ -242,19 +234,17 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     if (!this.view) {
       return html`<div role="status">${t("common.loading")}</div>`;
     }
-    const scripts = this.mode !== "strict";
     const binding = this.binding;
     const generation = this.frameGeneration;
     return html`
-      ${scripts && !this.rendered ? html`<div role="status">${t("common.loading")}</div>` : nothing}
+      ${!this.rendered ? html`<div role="status">${t("common.loading")}</div>` : nothing}
       ${keyed(
         this.frameGeneration,
         html`<iframe
           class="chat-html-preview__frame"
           title=${this.title}
-          src=${scripts ? this.sandboxUrl : nothing}
-          srcdoc=${scripts ? nothing : this.view.html}
-          sandbox=${scripts ? "allow-scripts allow-same-origin allow-forms" : ""}
+          src=${this.sandboxUrl}
+          sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"
           @error=${(event: Event) => {
             if (

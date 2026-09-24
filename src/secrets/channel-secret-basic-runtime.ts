@@ -1,6 +1,7 @@
 /** Basic channel secret runtime helpers for account/root credential collection. */
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { normalizeAccountId } from "../routing/account-id.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
   collectSecretInputAssignment,
   hasOwnProperty,
@@ -192,7 +193,7 @@ export type ChannelAccountSurface = {
 export type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
 
 /** Stable owner identity shared by SecretRef collection and channel activation. */
-function createChannelAccountSecretOwner(
+export function createChannelAccountSecretOwner(
   channelKey: string,
   accountId: string,
   channel: Record<string, unknown>,
@@ -394,7 +395,7 @@ export function collectSimpleChannelFieldAssignments(params: {
     }
     collectSecretInputAssignment({
       value: account[params.field],
-      path: `channels.${params.channelKey}.accounts.${accountId}.${params.field}`,
+      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, accountId)}.${params.field}`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -447,7 +448,7 @@ export function collectConditionalChannelFieldAssignments(params: {
     }
     collectSecretInputAssignment({
       value: entry.account[params.field],
-      path: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.field}`,
+      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${params.field}`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -516,7 +517,7 @@ export function collectNestedChannelFieldAssignments(params: {
     }
     collectSecretInputAssignment({
       value: nested[params.field],
-      path: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.nestedKey}.${params.field}`,
+      path: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${params.nestedKey}.${params.field}`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,

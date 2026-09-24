@@ -2,7 +2,11 @@ import {
   countChannelIngressQueuePressure,
   countFailedChannelIngressQueueEntries,
 } from "../../channels/message/ingress-queue-health.js";
-import { countFailedDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  countFailedDeliveryQueueEntries,
+  type DeliveryQueueStateContext,
+} from "../../infra/delivery-queue-sqlite.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -15,35 +19,48 @@ const debugHealth = (message: string, error: unknown) => {
   }
 };
 
-function readQueueHealth<T>(message: string, read: () => T[]): T[] {
+async function readQueueHealth<T>(message: string, read: () => T[] | Promise<T[]>): Promise<T[]> {
   try {
-    return read();
+    return await read();
   } catch (error) {
     debugHealth(message, error);
     return [];
   }
 }
 
+type DeliveryQueueHealthContext = { stateContext: DeliveryQueueStateContext } | { error: unknown };
+
+export function captureDeliveryQueueHealthContext(): DeliveryQueueHealthContext {
+  try {
+    return { stateContext: captureDeliveryQueueStateContext() };
+  } catch (error) {
+    return { error };
+  }
+}
+
 /** Builds redacted inbound pressure and dead-letter health for gateway snapshots. */
-export function buildDeliveryQueueHealthSummary(
+export async function buildDeliveryQueueHealthSummary(
   cachedIngressPressure?: ReturnType<typeof countChannelIngressQueuePressure>,
+  context: DeliveryQueueHealthContext = captureDeliveryQueueHealthContext(),
 ) {
   // Queue health reads are diagnostic; a storage failure must not take the
   // gateway health endpoint down with it.
-  const failed = readQueueHealth(
-    "outbound delivery queue health read failed",
-    countFailedDeliveryQueueEntries,
-  );
-  const ingressFailed = readQueueHealth(
+  const failed = await readQueueHealth("outbound delivery queue health read failed", () => {
+    if ("error" in context) {
+      throw context.error;
+    }
+    return countFailedDeliveryQueueEntries(undefined, context.stateContext);
+  });
+  const ingressFailed = await readQueueHealth(
     "channel ingress failed queue health read failed",
     countFailedChannelIngressQueueEntries,
   );
   const ingressPressure =
     cachedIngressPressure ??
-    readQueueHealth(
+    (await readQueueHealth(
       "channel ingress pressure health read failed",
       countChannelIngressQueuePressure,
-    );
+    ));
 
   if (failed.length === 0 && ingressFailed.length === 0 && ingressPressure.length === 0) {
     return undefined;

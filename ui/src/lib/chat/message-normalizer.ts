@@ -1,8 +1,7 @@
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 /**
  * Message normalization utilities for chat rendering.
  */
-
-import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import {
   asFiniteNumber,
   asNonNegativeFiniteNumber,
@@ -14,21 +13,21 @@ import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import {
-  isRelativeAssistantMediaReference,
-  splitMediaFromOutput,
-} from "../../../../src/media/parse.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
+import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
+import { normalizeImageContentBlock } from "./message-normalizer-images.ts";
 import { formatSenderLabel, normalizeSenderIdentity, type SenderIdentity } from "./sender-label.ts";
 
 // Keep legacy labels readable without treating their UUID suffix as profile evidence.
@@ -70,10 +69,12 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
   }
   const sessionKey = normalizeOptionalString(source.sessionKey);
   const agentId = normalizeOptionalString(source.agentId);
+  const label = normalizeOptionalString(source.label);
   return sessionKey || agentId
     ? {
         ...("sessionKey" in source ? { sessionKey } : {}),
         ...("agentId" in source ? { agentId } : {}),
+        ...(label ? { label } : {}),
       }
     : undefined;
 }
@@ -84,6 +85,7 @@ function normalizeOmittedMediaContentBlock(
   if (
     item.type !== "image" ||
     item.omitted !== true ||
+    normalizeOptionalString(item.artifactId) !== undefined ||
     normalizeOptionalString(item.url) !== undefined
   ) {
     return null;
@@ -134,7 +136,7 @@ export function resolveMessageRole(message: unknown): string {
     : (readStringField(m, "role") ?? "unknown");
 }
 
-function resolveMessageSender(
+export function resolveMessageSender(
   metadata: Record<string, unknown> | undefined,
 ): SenderIdentity | null {
   const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
@@ -404,10 +406,6 @@ function expandTextContent(
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (isRelativeAssistantMediaReference(segment.url)) {
-        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        continue;
-      }
       const inferred = inferAttachmentKind(segment.url);
       parts.push({
         type: "attachment",
@@ -452,13 +450,9 @@ function expandTextContent(
     content:
       content.length > 0
         ? content
-        : (parsed.mediaUrls ?? []).some(isRelativeAssistantMediaReference)
-          ? (parsed.mediaUrls ?? [])
-              .filter(isRelativeAssistantMediaReference)
-              .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
-          : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-            ? [{ type: "text", text: parsed.text }]
-            : [],
+        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+          ? [{ type: "text", text: parsed.text }]
+          : [],
     audioAsVoice,
     replyTarget,
   };
@@ -468,7 +462,9 @@ function expandTextContent(
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asOptionalRecord(projectImportedMessageForDisplay(message)) ?? {};
+  const m =
+    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
+    {};
   const role = resolveMessageRole(m);
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
@@ -504,6 +500,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       const omittedMedia = normalizeOmittedMediaContentBlock(item);
       if (omittedMedia) {
         return [omittedMedia];
+      }
+      const image = normalizeImageContentBlock(item);
+      if (image) {
+        return [image];
       }
       const type = item.type;
       if (type === "clawhub") {
@@ -605,6 +605,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const metaSender = resolveMessageSender(openClawMeta);
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
+  const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
   content = stripMessageDisplayMetadata(content);
   const senderSession = readMessageSenderSession(m.senderSession);
@@ -617,6 +618,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText
       ? {

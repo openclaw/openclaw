@@ -71,7 +71,7 @@ actor MacGatewayProfileStore {
             self.liveness.value
         }
 
-        fileprivate func revoke() {
+        func revoke() {
             self.liveness.withValue { $0 = false }
         }
 
@@ -143,6 +143,8 @@ actor MacGatewayProfileStore {
     }
 
     func beginBrowserSignIn(url: URL) throws -> BrowserSignInAttempt {
+        // Cancelled callers must not migrate state or revoke another sign-in.
+        try Task.checkCancellation()
         let url = try Self.canonicalURL(url)
         // Finish legacy import before capturing ownership; a late callback may
         // replace only this attempt, never a subsequently edited or forgotten profile.

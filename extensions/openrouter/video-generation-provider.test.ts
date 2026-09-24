@@ -535,7 +535,12 @@ describe("openrouter video generation provider", () => {
     expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
   });
 
-  it("resolves live per-model capabilities for runtime overlays", async () => {
+  it.each([
+    { name: "the first normalized duplicate", model: "google/veo-3.1", found: true },
+    { name: "an absent model", model: "google/missing", found: false },
+    { name: "an untrimmed request", model: " google/veo-3.1 ", found: false },
+    { name: "an empty request", model: "", found: false },
+  ])("resolves live capabilities for $name", async ({ model, found }) => {
     const requestOverrides = {
       allowPrivateNetwork: true,
       headers: { "X-OpenRouter-Capabilities": "enabled" },
@@ -543,14 +548,21 @@ describe("openrouter video generation provider", () => {
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
         data: [
+          null,
+          "malformed",
+          [],
+          {},
+          { id: " " },
+          { id: "google/other", supported_durations: [10] },
           {
-            id: "google/veo-3.1",
+            id: " google/veo-3.1 ",
             name: "Veo 3.1",
             generate_audio: false,
             supported_durations: [5],
             supported_resolutions: ["720p"],
             allowed_passthrough_parameters: ["seed"],
           },
+          { id: "google/veo-3.1", supported_durations: [8], generate_audio: true },
         ],
       }),
     );
@@ -558,7 +570,7 @@ describe("openrouter video generation provider", () => {
     const provider = buildOpenRouterVideoGenerationProvider();
     const capabilities = await provider.resolveModelCapabilities?.({
       provider: "openrouter",
-      model: "google/veo-3.1",
+      model,
       cfg: {
         models: {
           providers: {
@@ -601,6 +613,10 @@ describe("openrouter video generation provider", () => {
     expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 3, "fetch")).toBeTypeOf(
       "function",
     );
+    if (!found) {
+      expect(capabilities).toBeUndefined();
+      return;
+    }
     const resolvedCapabilities = requireRecord(capabilities, "resolved capabilities");
     expect(resolvedCapabilities.providerOptions).toEqual({
       callback_url: "string",
@@ -878,28 +894,43 @@ describe("openrouter video generation provider", () => {
     expect(oversized.wasCanceled()).toBe(true);
   });
 
-  it("rejects unknown OpenRouter poll statuses without waiting for timeout", async () => {
-    postJsonRequestMock.mockResolvedValue(
-      releasedJson({
-        id: "job-123",
-        polling_url: "/api/v1/videos/job-123",
-        status: "pending",
-      }),
-    );
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
-      releasedJson({
-        id: "job-123",
-        status: "nearly_done",
-      }),
-    );
+  it.each([
+    {
+      status: "nearly_done",
+      error: undefined,
+      expected: "OpenRouter video generation response malformed",
+    },
+    {
+      status: "failed",
+      error: "  ",
+      expected: "OpenRouter video generation failed",
+    },
+  ])(
+    "rejects poll status $status without waiting for timeout",
+    async ({ status, error, expected }) => {
+      postJsonRequestMock.mockResolvedValue(
+        releasedJson({
+          id: "job-123",
+          polling_url: "/api/v1/videos/job-123",
+          status: "pending",
+        }),
+      );
+      fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+        releasedJson({
+          id: "job-123",
+          status,
+          error,
+        }),
+      );
 
-    await expect(
-      generateVideo({
-        prompt: "bad status",
-      }),
-    ).rejects.toThrow("OpenRouter video generation response malformed");
-    expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        generateVideo({
+          prompt: "bad status",
+        }),
+      ).rejects.toThrow(expected);
+      expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects malformed OpenRouter completed output URL arrays", async () => {
     postJsonRequestMock.mockResolvedValue(

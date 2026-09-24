@@ -23,7 +23,7 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.153.4`; newer custom, remote, and macOS desktop-owned
+  `@openai/codex` `0.155.1`; newer custom, remote, and macOS desktop-owned
   binaries continue with a compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
@@ -411,12 +411,20 @@ reusing its app inventory and plugin metadata caches.
 OpenClaw first reads and caches one `plugin/installed` snapshot scoped to the
 target Codex app-server and configured workspace. That snapshot covers plugins
 from the marketplaces visible in that scope, including disabled plugin
-identities; failed or incomplete snapshots are never cached. `plugin/read` is
+identities; failed or incomplete snapshots are never cached. Conversations in
+the same runtime and workspace share this metadata, and owner installation
+invalidates it for all of them. App readiness remains specific to each thread.
+`plugin/read` is
 limited to exact configured plugin details required to establish ownership.
 Explicit discovery queries `plugin/list` with the conversation workspace to
 find repository marketplaces. Routine setup retains its existing curated
 recovery behavior; additional marketplace installation requires the explicit
 owner or administrator command.
+
+Codex owns skill, hook, and MCP refresh after plugin installation. OpenClaw
+refreshes its plugin and app inventories without reloading unrelated threads.
+Use `/new` or `/reset` if an older custom Codex runtime does not make a newly
+installed plugin available in an existing conversation.
 
 OpenClaw reads installed app runtime state through `app/installed` and fetches
 canonical app metadata with `app/read` in batches of at most 100 app IDs. The
@@ -450,6 +458,13 @@ plugin through stable ownership: an exact app id from plugin detail, a known
 MCP server name, or unique stable metadata. Display-name-only or ambiguous
 ownership is excluded until the next inventory refresh proves ownership.
 
+Missing plugins and marketplaces remain in saved settings for future discovery,
+but are omitted from the effective runtime plugin policy. OpenClaw logs an error
+and continues with healthy plugins and connected account apps. A missing entry's
+permissions do not apply to other apps, even when their display names match.
+The entry is reconsidered on the next normal inventory refresh; no saved settings
+are removed. Found plugins disabled by an administrator retain their restrictions.
+
 ## Connected account apps
 
 Owner-operated agents can opt into every app already connected to their Codex
@@ -481,7 +496,7 @@ and callable for that thread. OpenClaw does not install, authenticate, or enable
 apps globally. Existing threads keep their persisted app set; use `/new`,
 `/reset`, or restart the gateway to pick up newly connected or revoked apps.
 
-An explicitly disabled configured plugin always overrides account-wide app
+An explicitly disabled configured plugin found in the inventory overrides account-wide app
 access. Because Codex `app/read` omits a disabled workspace plugin's display
 names, OpenClaw uses its `plugin/installed` snapshot and reads only that exact
 configured plugin's details to reserve its owned app IDs. This narrow,
@@ -536,7 +551,10 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
   that plugin.
-- `false`: OpenClaw returns a deterministic decline.
+- `false`: OpenClaw excludes destructive hosted app tools before execution.
+  Native approval requests for permitted tools still go through OpenClaw consent,
+  including during a `/btw` side question. Plugin-provided MCP server approval
+  requests receive a deterministic decline.
 - `true`: OpenClaw auto-accepts only safe schemas it can map to an approval
   response, such as a boolean approve field.
 - `"auto"`: OpenClaw exposes destructive plugin actions to Codex, then

@@ -1,4 +1,3 @@
-// Imessage plugin module implements probe behavior.
 import path from "node:path";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import {

@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentDir } from "../agents/config.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -12,6 +15,7 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -86,6 +90,68 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller storage", () => {
+  it("reports legacy-main session repairs without migrating when other detectors are empty", async () => {
+    await withOpenClawTestState(
+      { label: "preflight-legacy-main", layout: "split", agentEnv: "clear" },
+      async (state) => {
+        const cfg = { agents: { entries: { worker: {} } } };
+        const source = { agentId: "main", env: state.env, sessionKey: "agent:main:chat" };
+        const destination = { agentId: "worker", env: state.env, sessionKey: "agent:worker:chat" };
+        const entry = { sessionId: "legacy-main-session", updatedAt: 100 };
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, source.sessionKey, entry, {
+              allowStoredAliases: true,
+              previousEntry: null,
+            }),
+          source,
+        );
+
+        const result = await autoMigrateLegacyState({
+          cfg,
+          env: state.env,
+          homedir: () => state.home,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+
+        expect(result.changes).not.toContain(
+          "Migrated legacy main session claim agent:worker:chat.",
+        );
+        expect(result.notices).toContainEqual(expect.stringContaining("openclaw doctor --fix"));
+        expect(loadExactSessionEntryReadOnly(source)?.entry).toMatchObject(entry);
+        expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
+      },
+    );
+  });
+
+  it.each([undefined, "missing"])(
+    "keeps retained migration ownership separate from runtime selection with system owner %s",
+    async (systemAgentId) => {
+      await withOpenClawTestState(
+        { label: "retained-install-owner", layout: "split", agentEnv: "clear" },
+        async (state) => {
+          const cfg: OpenClawConfig = {
+            agents: {
+              ownership: "explicit",
+              defaults: systemAgentId ? { systemAgent: { agentId: systemAgentId } } : {},
+              entries: { main: {}, worker: {} },
+            },
+          };
+          retainLegacyDefaultAgentId(cfg, "worker");
+          const resolution = resolveInstallAgentDir(cfg, {
+            env: state.env,
+            homedir: () => state.home,
+          });
+
+          expect(resolution.migrationTarget).toEqual(
+            systemAgentId ? undefined : { dir: state.agentDir("worker"), owner: "worker" },
+          );
+          expect(resolution.optionalDirectory).toBeUndefined();
+        },
+      );
+    },
+  );
+
   it.each(
     [
       { name: "configured main directory", agentId: "main", custom: true, override: "none" },

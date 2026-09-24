@@ -322,11 +322,6 @@ describe("formatMSTeamsMarkdown", () => {
     expect(formatMSTeamsMarkdown(before, "off")).toBe(`**Status**\n\n${table}\n\n• next`);
   });
 
-  it("keeps blockquoted tables raw when table conversion is disabled", () => {
-    const table = ["> | Name | State |", "> |---|---|", "> | deploy | ready |"].join("\n");
-    expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
-  });
-
   const collisionUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const authoredToken = `\u{E000}msteamsformat-${collisionUuid}\u{E001}m0\u{E002}`;
   const encodedToken = `&#xE000;msteamsformat-${collisionUuid}&#xE001;m0&#xE002;`;

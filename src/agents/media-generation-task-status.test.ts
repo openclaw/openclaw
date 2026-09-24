@@ -5,12 +5,11 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "./media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 import {
-  buildActiveImageGenerationTaskPromptContextForSession,
+  buildMediaTaskRuntimeContext,
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
   findDuplicateGuardImageGenerationTaskForSession,
   IMAGE_GENERATION_TASK_KIND,
-  buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
@@ -21,7 +20,6 @@ const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
     listTasksForOwnerKey: vi.fn(),
     listFreshTasksForOwnerKey: vi.fn(),
-    reloadTaskRegistryFromStore: vi.fn(),
   };
   mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
     mocks.listTasksForOwnerKey(ownerKey),
@@ -30,6 +28,9 @@ const taskRuntimeInternalMocks = vi.hoisted(() => {
 });
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
+vi.mock("../tasks/task-registry-state.js", () => ({
+  assertTaskRegistryOwnerCurrent: vi.fn(),
+}));
 
 function expectActiveImageGenerationTask(
   task: Awaited<ReturnType<typeof findDuplicateGuardImageGenerationTaskForSession>>,
@@ -49,7 +50,6 @@ describe("image generation task status", () => {
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
       taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
     );
-    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
     resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
@@ -565,6 +565,7 @@ describe("image generation task status", () => {
         taskKind: IMAGE_GENERATION_TASK_KIND,
         sourceId: "image_generate:openai",
         requesterSessionKey: "agent:main",
+        requesterAgentId: "main",
         ownerKey: "agent:main",
         scopeKind: "session",
         task: "running task",
@@ -576,10 +577,14 @@ describe("image generation task status", () => {
       },
     ]);
 
-    const context = await buildActiveImageGenerationTaskPromptContextForSession("agent:main");
+    const context = await buildMediaTaskRuntimeContext({
+      capabilityToolNames: new Set(["image_generate"]),
+      sessionKey: "agent:main",
+      agentId: "main",
+    });
 
     expect(context).toBe(
-      '- tool=image_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating image"',
+      '## Media Generation Tasks\n- tool=image_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating image"',
     );
   });
 });
@@ -601,7 +606,6 @@ describe("video generation task status", () => {
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
       taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
     );
-    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
     resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
@@ -699,6 +703,7 @@ describe("video generation task status", () => {
         taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         requesterSessionKey: "agent:main",
+        requesterAgentId: "main",
         ownerKey: "agent:main",
         scopeKind: "session",
         task: "running task",
@@ -710,10 +715,14 @@ describe("video generation task status", () => {
       },
     ]);
 
-    const context = await buildActiveVideoGenerationTaskPromptContextForSession("agent:main");
+    const context = await buildMediaTaskRuntimeContext({
+      capabilityToolNames: new Set(["video_generate"]),
+      sessionKey: "agent:main",
+      agentId: "main",
+    });
 
     expect(context).toBe(
-      '- tool=video_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating video"',
+      '## Media Generation Tasks\n- tool=video_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating video"',
     );
   });
 });

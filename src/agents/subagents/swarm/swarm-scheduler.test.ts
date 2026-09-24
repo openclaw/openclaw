@@ -217,6 +217,37 @@ describe("swarm scheduler", () => {
     },
   );
 
+  it("joins a released reservation's pending launch before shutdown cleanup", async () => {
+    const lifecycleOwner = {};
+    const entered = createDeferred();
+    const finishLaunch = createDeferred();
+    const onRemoved = vi.fn(async () => undefined);
+    enqueueSwarmRun({
+      groupId: "released-launch",
+      runId: "pending-launch",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      lifecycleOwner,
+      start: async () => {
+        entered.resolve();
+        await finishLaunch.promise;
+      },
+      onStartFailure: () => true,
+      onRemoved,
+    });
+    await entered.promise;
+    expect(releaseSwarmRun("pending-launch")).toBe(true);
+    const closing = closeSwarmScheduler(lifecycleOwner);
+    try {
+      await flushMicrotasks();
+      expect(onRemoved).not.toHaveBeenCalled();
+    } finally {
+      finishLaunch.resolve();
+    }
+    await closing;
+    expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
+  });
+
   it("preserves restored active slots when shutting down queued launch resources", async () => {
     const start = vi.fn(async () => undefined);
     const onRemoved = vi.fn(async () => undefined);

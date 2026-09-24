@@ -1,10 +1,10 @@
-// Msteams plugin module implements reaction handler behavior.
-import { normalizeMSTeamsConversationId } from "../inbound.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
+import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 type ReactionDirection = "added" | "removed";
 
@@ -90,6 +90,11 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       ...(teamId ? { teamId } : {}),
     });
+    const sessionKey = resolveMSTeamsRouteSessionKey({
+      baseSessionKey: route.sessionKey,
+      isChannel,
+      conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
+    });
 
     // The replyToId points to the message that was reacted to.
     const targetMessageId = activity.replyToId ?? "unknown";
@@ -111,7 +116,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       });
 
       core.system.enqueueSystemEvent(label, {
-        sessionKey: route.sessionKey,
+        sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,
       });
     }

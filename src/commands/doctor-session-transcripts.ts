@@ -3,6 +3,10 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  repairAcpSessionMetaKeysForDoctor,
+  type AcpSessionKeyRepairReport,
+} from "../acp/runtime/session-meta-doctor.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -14,6 +18,7 @@ import {
 } from "../config/sessions/legacy-transcript-repair.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
 import type {
@@ -35,6 +40,13 @@ import {
   repairReservedIncognitoSessionKeys,
   type ReservedIncognitoKeyRepairReport,
 } from "./doctor-session-incognito-key-repair.js";
+import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
+import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
+import {
+  repairLegacySessionTitles,
+  type SessionTitleRepairReport,
+} from "./doctor-session-title-repair.js";
+import { repairLegacySessionWorktreeWorkspaces } from "./doctor-session-worktree-workspace.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
@@ -191,6 +203,7 @@ export async function noteSessionTranscriptHealth(params?: {
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   return await noteSessionSqliteMigrationHealth({
     cfg: params?.cfg,
@@ -203,6 +216,7 @@ export async function noteSessionTranscriptHealth(params?: {
       ? { postSessionPluginMigrationPlanBound: true }
       : {}),
     ...(params?.onStepReceipt ? { onStepReceipt: params.onStepReceipt } : {}),
+    ...(params?.onWarnings ? { onWarnings: params.onWarnings } : {}),
   });
 }
 
@@ -213,6 +227,7 @@ async function noteSessionSqliteMigrationHealth(params: {
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
+  onWarnings?: (warnings: readonly string[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
@@ -235,6 +250,19 @@ async function noteSessionSqliteMigrationHealth(params: {
     removedRows: 0,
     repairedGroups: 0,
     scannedStores: 0,
+  };
+  let worktreeWorkspaceReport = { found: 0, repaired: 0, scannedStores: 0 };
+  let acpKeyReport: AcpSessionKeyRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedRows: 0,
+    warnings: [],
+  };
+  let titleReport: SessionTitleRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+    warnings: [],
   };
   let legacyMainSessionResult:
     | Awaited<
@@ -275,12 +303,31 @@ async function noteSessionSqliteMigrationHealth(params: {
       env: params.env,
     };
     canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
+    // Import and key repair can create stores; later row repairs share their settled inventory.
+    const rowRepairParams = {
+      ...repairParams,
+      targets: listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
+    };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
-    resolvedSkillsReport = repairCanonicalSessionResolvedSkills(repairParams);
+    resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
-    reservedKeyReport = await repairReservedIncognitoSessionKeys(repairParams);
-    deliveryReport = repairCanonicalSessionDeliveryStates(repairParams);
-    repairLegacySessionExecPolicy(repairParams);
+    reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
+    deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
+    repairLegacySessionExecPolicy(rowRepairParams);
+    acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
+      ...repairParams,
+      authority: maintenanceAuthority,
+    });
+    titleReport = await repairLegacySessionTitles({
+      ...rowRepairParams,
+      authority: maintenanceAuthority,
+    });
+    worktreeWorkspaceReport = await repairLegacySessionWorktreeWorkspaces({
+      ...rowRepairParams,
+      // Workspace metadata participates in an unfinished legacy-main source claim.
+      apply:
+        params.shouldRepair && (!legacyMainSessionResult.armed || legacyMainSessionResult.complete),
+    });
     if (params.postSessionPluginMigrationPlanBound && !params.postSessionPluginMigration) {
       return report;
     }
@@ -306,6 +353,23 @@ async function noteSessionSqliteMigrationHealth(params: {
         config: params.cfg ?? {},
         env: params.env,
         maintenanceAuthority,
+        ...(maintenanceAuthority
+          ? {
+              beforeCompletion: async (
+                completedPluginIds: readonly string[],
+                assertCurrent: () => void,
+              ) => {
+                const { settleRetainedDoctorSessionSources } =
+                  await import("./doctor-session-sqlite.js");
+                await settleRetainedDoctorSessionSources(
+                  report,
+                  completedPluginIds,
+                  maintenanceAuthority,
+                  assertCurrent,
+                );
+              },
+            }
+          : {}),
         ...(params.postSessionPluginMigration
           ? { plannedActions: params.postSessionPluginMigration.plannedActions }
           : {}),
@@ -353,6 +417,36 @@ async function noteSessionSqliteMigrationHealth(params: {
       message: "Session SQLite maintenance ownership was unavailable.",
     });
     return postSessionPluginReceipt;
+  }
+  if (worktreeWorkspaceReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Repaired canonical workspace metadata for ${worktreeWorkspaceReport.repaired} of ${worktreeWorkspaceReport.found} managed-worktree session(s). Check project/worktree ownership for any remaining entries.`
+        : `- Found ${worktreeWorkspaceReport.found} managed-worktree session(s) missing canonical workspace metadata. Run "openclaw doctor --fix" to repair them.`,
+      "Session worktrees",
+    );
+  }
+  if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
+    note(
+      [
+        params.shouldRepair
+          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata key(s).`
+          : `- Found ${acpKeyReport.found} legacy ACP metadata key(s). Run "openclaw doctor --fix" to repair them.`,
+        ...acpKeyReport.warnings,
+      ].join("\n"),
+      "ACP session keys",
+    );
+  }
+  if (titleReport.found > 0 || titleReport.warnings.length > 0) {
+    note(
+      [
+        params.shouldRepair
+          ? `- Repaired ${titleReport.repaired} of ${titleReport.found} missing session title(s) without changing activity.`
+          : `- Found ${titleReport.found} missing session title(s). Run "openclaw doctor --fix" to repair them.`,
+        ...titleReport.warnings,
+      ].join("\n"),
+      "Session titles",
+    );
   }
   if (reservedKeyReport.found > 0) {
     note(
@@ -405,10 +499,21 @@ async function noteSessionSqliteMigrationHealth(params: {
   ) {
     return postSessionPluginReceipt;
   }
+  const informationalIndexes = report.targets.filter(isInformationalMissingSessionIndex);
+  const actionableTargets = report.targets.filter(
+    (target) => !isInformationalMissingSessionIndex(target),
+  );
+  const actionableIssues = actionableTargets.reduce(
+    (count, target) => count + target.issues.length,
+    0,
+  );
   const lines = [
     `- Legacy entries: ${report.totals.legacyEntries}; SQLite entries: ${report.totals.sqliteEntries}.`,
     `- Transcript events: imported=${report.totals.importedTranscriptEvents}; validated=${report.totals.validatedTranscriptEvents}.`,
   ];
+  for (const target of informationalIndexes) {
+    lines.push(...target.issues.map((issue) => `- ${issue.message}`));
+  }
   if (report.totals.archivedTranscriptFiles > 0) {
     lines.push(
       `- Archived ${report.totals.archivedTranscriptFiles} legacy transcript artifact(s).`,
@@ -419,12 +524,26 @@ async function noteSessionSqliteMigrationHealth(params: {
       `- Archived ${report.totals.archivedUnreferencedJsonlFiles} unreferenced JSONL artifact(s).`,
     );
   }
-  if (report.totals.issues > 0) {
+  if (actionableIssues > 0) {
+    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets);
+    const deferredHistory = actionableTargets.reduce(
+      (count, target) =>
+        count +
+        target.issues.filter((issue) => issue.code === "historical_transcript_deferred").length,
+      0,
+    );
+    if (deferredHistory > 0) {
+      warnings.unshift(
+        `Deferred ${deferredHistory} historical transcript claim(s); originals remain protected. Preserve the named files and migration manifests, resolve the reported conflicts, then rerun "${formatCliCommand("openclaw doctor --fix", params.env)}".`,
+      );
+    }
+    params.onWarnings?.(warnings);
+    lines.push(...warnings.map((warning) => `- ${warning}`));
     lines.push(
-      `- Found ${report.totals.issues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
+      `- Found ${actionableIssues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
     );
   }
-  if (!params.shouldRepair) {
+  if (!params.shouldRepair && actionableTargets.length > 0) {
     lines.push(
       '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
     );

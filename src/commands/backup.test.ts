@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
+import * as lifecycleWriteCustody from "../infra/lifecycle-write-custody.js";
+import { readLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -19,12 +26,15 @@ import {
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
-  tarCreateMock,
+  backupWalkMock,
 } from "./backup.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { backupCreateCommand } = await import("./backup.js");
 const actualTar = await vi.importActual<typeof import("tar")>("tar");
+const { walkBackupTar } = await vi.importActual<typeof import("../infra/backup-tar-walk.js")>(
+  "../infra/backup-tar-walk.js",
+);
 
 type CapturedBackupManifest = {
   schemaVersion: 1;
@@ -65,8 +75,8 @@ describe("backup commands", () => {
 
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
-    tarCreateMock.mockReset();
-    tarCreateMock.mockImplementation(() => createMockTarStream());
+    backupWalkMock.mockReset();
+    backupWalkMock.mockImplementation(() => createMockTarStream());
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -86,6 +96,64 @@ describe("backup commands", () => {
   afterAll(async () => {
     await tempHome.restore();
   });
+
+  it.each(["success", "failure", "uncertain"] as const)(
+    "retains archive custody until stream cleanup is confirmed: %s",
+    async (outcome) => {
+      await mockStateOnlyBackupPlan(path.join(tempHome.home, ".openclaw"));
+      const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
+      let releaseCustody: (() => void) | undefined;
+      vi.spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody").mockImplementation((phase) => {
+        releaseCustody = beginCustody(phase);
+        return releaseCustody;
+      });
+      const entered = createDeferred();
+      const settled = createDeferred();
+      backupWalkMock.mockImplementation(() =>
+        createMockTarStream({
+          beforeRead: async () => {
+            entered.resolve();
+            await settled.promise;
+          },
+          ...(outcome === "success"
+            ? {}
+            : {
+                error: new Error(
+                  "archive failed",
+                  outcome === "uncertain"
+                    ? {
+                        cause: new AggregateError(
+                          [new CommandProcessCleanupError()],
+                          "nested cleanup",
+                        ),
+                      }
+                    : undefined,
+                ),
+              }),
+        }),
+      );
+      const running = backupCreateCommand(createTestRuntime(), {
+        output: path.join(tempHome.home, "backup.tgz"),
+        includeWorkspace: false,
+      }).catch((error: unknown) => error);
+      await entered.promise;
+      try {
+        expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+        settled.resolve();
+        const result = await running;
+        expect(result instanceof Error).toBe(outcome !== "success");
+        expect(hasCommandProcessCleanupError(result)).toBe(outcome === "uncertain");
+        expect(readLifecycleWriteCustody()).toEqual(
+          outcome === "uncertain" ? [{ phase: "backup", count: 1 }] : [],
+        );
+      } finally {
+        settled.resolve();
+        await running;
+        releaseCustody?.();
+      }
+      expect(readLifecycleWriteCustody()).toEqual([]);
+    },
+  );
 
   async function withInvalidWorkspaceBackupConfig<T>(
     raw: string,
@@ -225,7 +293,7 @@ describe("backup commands", () => {
       const runtime = createTestRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
-      tarCreateMock.mockImplementationOnce(actualTar.c);
+      backupWalkMock.mockImplementationOnce(walkBackupTar);
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
         includeWorkspace: true,
@@ -306,7 +374,7 @@ describe("backup commands", () => {
       const sessions = path.join(stateDir, "sessions");
       await fs.mkdir(sessions);
       await fs.writeFile(path.join(sessions, "s.jsonl"), "volatile\n");
-      tarCreateMock.mockImplementationOnce(actualTar.c);
+      backupWalkMock.mockImplementationOnce(walkBackupTar);
 
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
@@ -353,7 +421,7 @@ describe("backup commands", () => {
     const outputPath = path.join(tempHome.home, "backups", "daily", "backup.tar.gz");
     await mockStateOnlyBackupPlan(stateDir);
 
-    tarCreateMock.mockImplementationOnce(actualTar.c);
+    backupWalkMock.mockImplementationOnce(walkBackupTar);
     const result = await backupCreateCommand(createTestRuntime(), { output: outputPath });
 
     expect(result.archivePath).toBe(outputPath);
@@ -535,16 +603,12 @@ describe("backup commands", () => {
             });
       await withInvalidWorkspaceBackupConfig(raw, async (runtime) => {
         await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
-          /--no-include-workspace/i,
+          /ownership could not be resolved/i,
         );
 
-        const result = await backupCreateCommand(runtime, {
-          dryRun: true,
-          includeWorkspace: false,
-        });
-
-        expect(result.includeWorkspace).toBe(false);
-        expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
+        await expect(
+          backupCreateCommand(runtime, { dryRun: true, includeWorkspace: false }),
+        ).rejects.toThrow(/ownership could not be resolved/i);
 
         const configOnly = await backupCreateCommand(runtime, {
           dryRun: true,

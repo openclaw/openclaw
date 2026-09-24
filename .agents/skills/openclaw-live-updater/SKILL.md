@@ -63,6 +63,7 @@ Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, ne
    ```bash
    MAIN_SHA="<exact-main-sha>"
    pnpm ci:full-release \
+     -f validation_purpose=main-qualification \
      --sha "$MAIN_SHA" \
      --workflow-sha "$MAIN_SHA" \
      -f provider=openai \

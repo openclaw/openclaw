@@ -66,6 +66,23 @@ export function resolveDockerReleasePolicy(version) {
   return { version: parsed.version, channel: "stable", movingAliases: STABLE_ALIASES };
 }
 
+export function parseDockerImageConfigVersion(raw, imageRef, platform) {
+  let version;
+  try {
+    version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
+  } catch (error) {
+    throw new Error(`Could not parse the ${platform} image config for ${imageRef}.`, {
+      cause: error,
+    });
+  }
+  if (typeof version !== "string" || version.trim().length === 0) {
+    throw new Error(
+      `${imageRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+    );
+  }
+  return version.trim();
+}
+
 /**
  * Resolve the newest immutable tag owned by each moving Docker channel.
  * Unsupported historical tags and prereleases do not participate.

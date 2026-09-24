@@ -4,12 +4,18 @@ import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
   PluginListResult,
+  PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 
 registerPluginManagementEnglish();
 
+export type PluginMutationAction = "install" | "enable" | "disable" | "uninstall";
+
 export type PluginsPageDetail = {
+  catalog?: PluginDiscoveryDetailResult;
+  catalogLoading?: boolean;
+  tools?: Array<{ name: string; description?: string }>;
   pluginId: string;
   inspection: PluginsInspectResult | null;
   error: string | null;
@@ -50,4 +56,17 @@ export function pluginMutationBlockedReason(params: {
     return t("pluginsPage.adminRequired");
   }
   return params.mutationAllowed === false ? t("pluginsPage.changesDisabled") : null;
+}
+
+export function installRequestForDiscoveryDetail(
+  result: PluginDiscoveryDetailResult,
+): PluginInstallRequest | null {
+  if (result.plugin.local.installed || result.plugin.local.action !== "install") {
+    return null;
+  }
+  if (result.plugin.local.install) {
+    return result.plugin.local.install;
+  }
+  const packageName = result.detail.packageName?.trim();
+  return packageName ? { source: "clawhub", packageName } : null;
 }

@@ -203,18 +203,20 @@ export async function withDoctorSqliteMaintenanceLock<T>(
 
   let active = true;
   try {
-    await assertMaintenancePathsOwnedByStateDir(
-      env,
-      params.operation,
-      params.protectedPaths ?? [],
-      params.reconcileHardlink,
-    );
-    return await params.run({
-      assertCurrent() {
-        if (!active) {
-          throw new Error("Doctor SQLite maintenance authority has expired.");
-        }
-      },
+    return await lock.run(async () => {
+      await assertMaintenancePathsOwnedByStateDir(
+        env,
+        params.operation,
+        params.protectedPaths ?? [],
+        params.reconcileHardlink,
+      );
+      return await params.run({
+        assertCurrent() {
+          if (!active) {
+            throw new Error("Doctor SQLite maintenance authority has expired.");
+          }
+        },
+      });
     });
   } finally {
     active = false;

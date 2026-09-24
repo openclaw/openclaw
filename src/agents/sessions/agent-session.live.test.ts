@@ -189,7 +189,8 @@ describeLive("AgentSession live", () => {
       registerSecretValueForRedaction(secret);
       const { session, sessionManager, cwd } = await createLiveSession({ tools: ["read"] });
       guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["read"] });
-      const fixturePath = join(cwd, "credential-fixture.txt");
+      const fixtureName = "credential-fixture.txt";
+      const fixturePath = join(cwd, fixtureName);
       await writeFile(fixturePath, `${marker}\ncredential=${secret}\n`);
       expect(session.getActiveToolNames().join(",")).toBe("read");
       const originalStream = session.agent.streamFn;
@@ -216,7 +217,7 @@ describeLive("AgentSession live", () => {
           },
         });
       await session.prompt(
-        `Read ${fixturePath} exactly once using read. Reply with only the VISIBLE_TOOL_RESULT marker from the file; do not repeat its credential.`,
+        `Read ${fixtureName} exactly once using read, passing that relative path. Reply with only the VISIBLE_TOOL_RESULT marker from the file; do not repeat its credential.`,
       );
       const results = session.messages.filter((message) => message.role === "toolResult");
       expect(results.length).toBe(1);

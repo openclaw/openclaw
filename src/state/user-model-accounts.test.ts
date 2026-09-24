@@ -1,9 +1,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -20,7 +25,8 @@ import {
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
-import { ensureProfileForEmail, linkEmail } from "./user-profiles.js";
+import { ensureProfileForEmail, linkEmail, setAvatar } from "./user-profiles.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tempDirs = createTempDirTracker();
 const statePaths: string[] = [];
@@ -76,6 +82,67 @@ function connectToken(
 }
 
 describe("personal model accounts", () => {
+  it.each(["direct", "merged", "missing target", "unflattened chain"])(
+    "resolves %s account ownership without reading profile avatars",
+    (kind) => {
+      const options = stateOptions();
+      const source = ensureProfileForEmail("owner-source@example.test", options);
+      const target = ensureProfileForEmail("owner-target@example.test", options);
+      const avatar = new Uint8Array(512 * 1024).fill(42);
+      expect(setAvatar(source.id, avatar, "image/png", options).ok).toBe(true);
+      expect(setAvatar(target.id, avatar, "image/png", options).ok).toBe(true);
+      const { authProfileId } = connectToken(source.id, options);
+      if (kind !== "direct") {
+        linkEmail("owner-source@example.test", target.id, options);
+      }
+      const { db } = openOpenClawStateDatabase(options);
+      if (kind === "missing target" || kind === "unflattened chain") {
+        const successor =
+          kind === "unflattened chain"
+            ? ensureProfileForEmail("owner-successor@example.test", options).id
+            : "missing-profile";
+        // Simulate damaged persisted lineage; only the merge writer may flatten it.
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<UserProfilesDatabase>(db)
+            .updateTable("user_profiles")
+            .set({ merged_into: successor })
+            .where("id", "=", kind === "missing target" ? source.id : target.id),
+        );
+      }
+      db.setAuthorizer((action, table, column) =>
+        action === constants.SQLITE_READ && table === "user_profiles" && column === "avatar"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      try {
+        const ownsCredential = kind === "direct" || kind === "merged";
+        expect(
+          listUserProfileAuthLinks(source.id, options).map((link) => link.authProfileId),
+        ).toEqual(ownsCredential ? [authProfileId] : []);
+        expect(isUserModelAuthProfileOwner({ profileId: source.id, authProfileId }, options)).toBe(
+          ownsCredential,
+        );
+        expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual(
+          ownsCredential
+            ? { type: "token", provider: "anthropic", token: "synthetic-personal-token" }
+            : undefined,
+        );
+        expect(listUserProfileAuthLinks("missing-profile", options)).toEqual([]);
+        if (!ownsCredential) {
+          expect(() =>
+            setUserProfileAuthLink(
+              { profileId: source.id, provider: "anthropic", authProfileId },
+              options,
+            ),
+          ).toThrow("owner is unavailable");
+        }
+      } finally {
+        db.setAuthorizer(null);
+      }
+    },
+  );
+
   it("links, replaces per provider, and unlinks", () => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("alice@example.test", options);

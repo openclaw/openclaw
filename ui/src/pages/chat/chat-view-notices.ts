@@ -5,12 +5,16 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
+import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
+
+registerNewSessionSetupEnglish();
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
@@ -28,9 +32,12 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  connected?: boolean;
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
-  runError?: { summary: string } | null;
+  providerReviewNotice?: TemplateResult | typeof nothing;
+  runError?: ChatRunError | null;
+  onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
@@ -73,6 +80,7 @@ function renderErrorNotice(
   error: string,
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
+  tone: "danger" | "warn" = "danger",
 ) {
   const lines = displayError
     .trim()
@@ -81,11 +89,11 @@ function renderErrorNotice(
   const [firstLine = ""] = lines;
   const summary = clampText(firstLine);
   const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
+  // Keep the bounded summary readable without opening the technical details.
   return html`
     <div
-      class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
-      role="alert"
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
+      role=${tone === "warn" ? "status" : "alert"}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
@@ -151,9 +159,21 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 }
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  const contention = props.runError?.kind === "state_contention";
+  const refresh = props.onRefresh
+    ? html`<button
+        class="btn btn--sm chat-error__refresh"
+        type="button"
+        ?disabled=${!props.connected}
+        @click=${props.onRefresh}
+      >
+        ${t(contention ? "chat.checkStatus" : "common.refresh")}
+      </button>`
+    : nothing;
   return html`
+    ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary) : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,

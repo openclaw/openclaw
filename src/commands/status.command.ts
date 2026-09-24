@@ -17,6 +17,7 @@ import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
+  reportStatusScanFailure,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
@@ -24,6 +25,7 @@ import {
 } from "./status-runtime-shared.ts";
 import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
 const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
 const statusScanFastJsonModuleLoader = createLazyImportLoader(
@@ -70,12 +72,6 @@ function resolvePairingRecoveryContext(params: {
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.statusCommandTestApi")] = {
-    resolvePairingRecoveryContext,
-  };
-}
-
 function normalizeStatusWrapperPath(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -108,6 +104,7 @@ export async function statusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const probeBudget = createStatusGatewayProbeBudget(opts.timeoutMs);
   assertStatusUsageAgentScope(opts);
   for (const finding of await collectNodeRuntimeFindings()) {
     const write = opts.json ? runtime.error : runtime.log;
@@ -119,13 +116,13 @@ export async function statusCommand(
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader
       .load()
-      .then(({ statusAllCommand }) => statusAllCommand(runtime, opts));
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, { ...opts, ...probeBudget }));
     return;
   }
 
   if (opts.json) {
     await runStatusJsonCommand({
-      opts,
+      opts: { ...opts, ...probeBudget },
       runtime,
       includeSecurityAudit: opts.all === true || opts.deep === true,
       includePluginCompatibility: opts.all === true,
@@ -140,7 +137,8 @@ export async function statusCommand(
 
   const scan = await statusScanModuleLoader
     .load()
-    .then(({ scanStatus }) => scanStatus({ timeoutMs: opts.timeoutMs, deep: opts.deep }));
+    .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
+    .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
   const {
     cfg,
@@ -190,11 +188,13 @@ export async function statusCommand(
   } = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
     sourceConfig: scan.sourceConfig,
-    timeoutMs: opts.timeoutMs,
+    ...probeBudget,
     ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
+    ...(gatewayProbe?.startupPhase ? { gatewayStartupPhase: gatewayProbe.startupPhase } : {}),
+    ...(gatewayProbe?.error ? { gatewayProbeError: gatewayProbe.error } : {}),
     includeSecurityAudit: opts.all === true || opts.deep === true,
     resolveSecurityAudit: async (input) =>
       await withProgress(

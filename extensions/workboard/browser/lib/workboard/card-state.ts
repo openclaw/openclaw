@@ -1,5 +1,6 @@
-import { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
@@ -9,8 +10,7 @@ import type {
   WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
-
-export { normalizeString };
+export { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
@@ -36,6 +36,55 @@ export function nextWorkboardCardPosition(
   return Math.max(0, ...positions) + 1000;
 }
 
+type WorkboardCardDropMove =
+  | { id: string; status: WorkboardStatus; position: number }
+  | { id: string; expectedUpdatedAt: number; position: number };
+
+export function planWorkboardCardDrop(
+  cards: readonly WorkboardCard[],
+  card: WorkboardCard,
+  status: WorkboardStatus,
+  beforeCardId: string | null,
+  boardFilter: WorkboardUiState["boardFilter"],
+): WorkboardCardDropMove[] {
+  const peers = cards
+    .filter(
+      (candidate) =>
+        candidate.id !== card.id &&
+        candidate.status === status &&
+        matchesBoardFilter(candidate, boardFilter),
+    )
+    .toSorted((left, right) => left.position - right.position || left.createdAt - right.createdAt);
+  const beforeIndex = peers.findIndex((candidate) => candidate.id === beforeCardId);
+  const index = beforeIndex < 0 ? peers.length : beforeIndex;
+  const previous = peers[index - 1]?.position ?? -1;
+  const next = peers[index]?.position;
+  if (
+    card.status === status &&
+    card.position > previous &&
+    (next === undefined || card.position < next)
+  ) {
+    return [];
+  }
+  const position =
+    next === undefined
+      ? Math.max(0, previous) + 1000
+      : next - previous > 1
+        ? Math.floor((previous + next) / 2)
+        : previous + 1000;
+  const moves: WorkboardCardDropMove[] = [];
+  // Positions are nonnegative integers. Make room from the end when the gap is full.
+  let occupied = position;
+  for (const peer of peers.slice(index)) {
+    if (peer.position > occupied) {
+      break;
+    }
+    occupied += 1000;
+    moves.push({ id: peer.id, expectedUpdatedAt: peer.updatedAt, position: occupied });
+  }
+  return [...moves.toReversed(), { id: card.id, status, position }];
+}
+
 export function selectedWorkboardBoardParams(
   state: Pick<WorkboardUiState, "boards" | "boardFilter">,
 ): { boardId?: string } {
@@ -43,10 +92,31 @@ export function selectedWorkboardBoardParams(
   return boardId ? { boardId } : {};
 }
 
+export function setWorkboardCards(state: WorkboardUiState, cards: WorkboardCard[]) {
+  state.cards = cards;
+  const selectableIds = new Set(cards.filter(isActiveWorkboardCard).map((card) => card.id));
+  for (const id of state.selectedCardIds) {
+    if (!selectableIds.has(id)) {
+      state.selectedCardIds.delete(id);
+    }
+  }
+  if (state.bulkDialog) {
+    state.bulkDialog.cardIds = state.bulkDialog.cardIds.filter((id) =>
+      state.selectedCardIds.has(id),
+    );
+    if (!state.bulkDialog.cardIds.length) {
+      state.bulkDialog = null;
+    }
+  }
+}
+
 export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);
-  state.cards = next.toSorted((left, right) => left.position - right.position);
+  setWorkboardCards(
+    state,
+    next.toSorted((left, right) => left.position - right.position),
+  );
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {
@@ -110,6 +180,7 @@ export function removeCardAndReferences(
 export function resetDraftState(state: WorkboardUiState) {
   const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
   state.draftOpen = false;
+  state.draftDiscardOpen = false;
   state.editingCardId = null;
   state.editingCardBase = null;
   state.draftTitle = "";
@@ -126,7 +197,7 @@ export function resetDraftState(state: WorkboardUiState) {
   }
 }
 
-function normalizeDraftLabels(value: string): string[] {
+export function normalizeDraftLabels(value: string): string[] {
   const labels: string[] = [];
   for (const label of value.split(",")) {
     const trimmed = label.trim();

@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import {
   normalizeOptionalString,
-  normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -221,7 +221,7 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (hasInline) {
     return parseBatchEntries(batchJson, "--batch-json");
   }
-  const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
+  const pathname = readNonBlankString(opts.batchFile);
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }

@@ -9,7 +9,10 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -474,10 +477,7 @@ describe("shared auth profile read-through", () => {
         });
         if (localKey) {
           writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: { [profileId]: { ...credential, key: localKey } },
-            },
+            createAuthProfileStoreFixture({ [profileId]: { ...credential, key: localKey } }),
             agentDir,
           );
         }
@@ -518,16 +518,15 @@ describe("getApiKeyForModelCore", () => {
         agentEnv: "main",
       },
       async (state) => {
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
+        await state.writeAuthProfiles(
+          createAuthProfileStoreFixture({
             "openai:default": {
               type: "oauth",
               provider: "openai",
               ...oauthFixture,
             },
-          },
-        });
+          }),
+        );
 
         const model = {
           id: "codex-mini-latest",
@@ -626,16 +625,13 @@ describe("getApiKeyForModelCore", () => {
       const resolved = await resolveApiKeyForProviderCore({
         provider: "openai",
         modelApi: "openai-audio-transcriptions",
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "oauth",
-              provider: "openai",
-              ...oauthFixture,
-            },
+        store: createAuthProfileStoreFixture({
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            ...oauthFixture,
           },
-        },
+        }),
       });
 
       expect(resolved).toMatchObject({ apiKey: "direct-openai-audio-key", mode: "api-key" });
@@ -681,21 +677,15 @@ describe("getApiKeyForModelCore", () => {
       },
       async (state) => {
         await state.writeAuthProfiles(
-          {
-            version: 1,
-            profiles: {
-              "xai:default": createApiKeyCredential("xai", "process-default-key"),
-            },
-          },
+          createAuthProfileStoreFixture({
+            "xai:default": createApiKeyCredential("xai", "process-default-key"),
+          }),
           "main",
         );
         await state.writeAuthProfiles(
-          {
-            version: 1,
-            profiles: {
-              "xai:default": createApiKeyCredential("xai", "configured-agent-key"),
-            },
-          },
+          createAuthProfileStoreFixture({
+            "xai:default": createApiKeyCredential("xai", "configured-agent-key"),
+          }),
           "configured",
         );
 
@@ -805,16 +795,15 @@ describe("getApiKeyForModelCore", () => {
         },
       },
       async (state) => {
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
+        await state.writeAuthProfiles(
+          createAuthProfileStoreFixture({
             "openai:default": {
               type: "oauth",
               provider: "openai",
               ...oauthFixture,
             },
-          },
-        });
+          }),
+        );
 
         const resolved = await resolveApiKeyForProviderCore({ provider: "openai" });
 
@@ -982,12 +971,9 @@ describe("getApiKeyForModelCore", () => {
     await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProviderCore({
         provider: "openai",
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": createApiKeyCredential("openai", "stored-openai-key"),
-          },
-        },
+        store: createAuthProfileStoreFixture({
+          "openai:default": createApiKeyCredential("openai", "stored-openai-key"),
+        }),
       });
       expect(resolved.apiKey).toBe("stored-openai-key");
       expect(resolved.source).toBe("profile:openai:default");
@@ -1000,12 +986,9 @@ describe("getApiKeyForModelCore", () => {
       const resolved = await resolveApiKeyForProviderCore({
         provider: "openai",
         credentialPrecedence: "env-first",
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": createApiKeyCredential("openai", "stored-openai-key"),
-          },
-        },
+        store: createAuthProfileStoreFixture({
+          "openai:default": createApiKeyCredential("openai", "stored-openai-key"),
+        }),
       });
       expect(resolved.apiKey).toBe("env-openai-key");
       expect(resolved.source).toContain("OPENAI_API_KEY");
@@ -2102,16 +2085,13 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
                   },
                 },
               },
-              store: {
-                version: 1,
-                profiles: {
-                  "custom-provider:prepared": {
-                    type: "api_key",
-                    provider: "custom-provider",
-                    key: "prepared-key",
-                  },
+              store: createAuthProfileStoreFixture({
+                "custom-provider:prepared": {
+                  type: "api_key",
+                  provider: "custom-provider",
+                  key: "prepared-key",
                 },
-              },
+              }),
             }).finally(() => clearAuthProfileMigrationDiagnostics()),
           ).rejects.toMatchObject({
             code: "AUTH_PROFILE_MIGRATION_REQUIRED",
@@ -2179,12 +2159,9 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           },
         },
       },
-      store: {
-        version: 1,
-        profiles: {
-          "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
-        },
-      },
+      store: createAuthProfileStoreFixture({
+        "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
+      }),
     });
 
     expect(resolved.apiKey).toBe("sk-or-actual-key-b");
@@ -2213,10 +2190,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           },
         },
       },
-      store: {
-        version: 1,
-        profiles: {},
-      },
+      store: createAuthProfileStoreFixture({}),
     });
 
     expect(resolved.apiKey).toBe("sk-or-literal-key");
@@ -2244,12 +2218,9 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             },
           },
         },
-        store: {
-          version: 1,
-          profiles: {
-            OPENROUTER_PROFILE: createApiKeyCredential("openrouter", "sk-or-wrong-profile"),
-          },
-        },
+        store: createAuthProfileStoreFixture({
+          OPENROUTER_PROFILE: createApiKeyCredential("openrouter", "sk-or-wrong-profile"),
+        }),
       });
 
       expect(resolved.apiKey).toBe("sk-or-env-secret");
@@ -2274,12 +2245,9 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             },
           },
         },
-        store: {
-          version: 1,
-          profiles: {
-            "openai:key-b": createApiKeyCredential("openai", "sk-profile-key"),
-          },
-        },
+        store: createAuthProfileStoreFixture({
+          "openai:key-b": createApiKeyCredential("openai", "sk-profile-key"),
+        }),
       });
 
       expect(resolved.apiKey).toBe("sk-env-first");
@@ -2361,14 +2329,11 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           },
         },
       },
-      store: {
-        version: 1,
-        profiles: {
-          "openrouter:key-a": createApiKeyCredential("openrouter", "sk-or-key-a"),
-          "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
-          "openrouter:key-c": createApiKeyCredential("openrouter", "sk-or-key-c"),
-        },
-      },
+      store: createAuthProfileStoreFixture({
+        "openrouter:key-a": createApiKeyCredential("openrouter", "sk-or-key-a"),
+        "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
+        "openrouter:key-c": createApiKeyCredential("openrouter", "sk-or-key-c"),
+      }),
     });
 
     // Should select key-b (from per-entry apiKey reference), not key-a (first in auth.order)
@@ -2401,12 +2366,9 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           },
         },
       },
-      store: {
-        version: 1,
-        profiles: {
-          "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
-        },
-      },
+      store: createAuthProfileStoreFixture({
+        "openrouter:key-b": createApiKeyCredential("openrouter", "sk-or-actual-key-b"),
+      }),
     });
 
     expect(resolved.apiKey).toBe("sk-or-actual-key-b");
@@ -2433,16 +2395,13 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
               },
             },
           },
-          store: {
-            version: 1,
-            profiles: {
-              "openai:token": {
-                type: "token",
-                provider: "openai",
-                token: "oauth-token",
-              },
+          store: createAuthProfileStoreFixture({
+            "openai:token": {
+              type: "token",
+              provider: "openai",
+              token: "oauth-token",
             },
-          },
+          }),
         }),
       ).rejects.toThrow(/requires an OpenAI API key profile/);
     },
@@ -2503,16 +2462,13 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
             },
           },
         },
-        store: {
-          version: 1,
-          profiles: {
-            "openrouter:key-b": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-actual-key-b",
-            },
+        store: createAuthProfileStoreFixture({
+          "openrouter:key-b": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "sk-or-actual-key-b",
           },
-        },
+        }),
       }),
     ).rejects.toThrow(/not compatible with this provider entry's auth binding/);
   });

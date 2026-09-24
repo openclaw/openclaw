@@ -7,6 +7,7 @@ import {
   isDangerousHostEnvVarName,
 } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { isSkillSecretOwnerUnavailable, resolveSkillConfig } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
@@ -181,7 +182,7 @@ function applySkillConfigEnvOverrides(params: {
     const resolvedApiKey =
       normalizeResolvedSecretInputString({
         value: skillConfig.apiKey,
-        path: `skills.entries.${skillKey}.apiKey`,
+        path: `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`,
       }) ?? "";
     if (resolvedApiKey) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;

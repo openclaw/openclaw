@@ -16,6 +16,39 @@ function register(conversationRef = "conv_a", signal?: AbortSignal) {
 }
 
 describe("conversation turn correlation", () => {
+  it.each(["complete", "release"] as const)(
+    "does not let a released claim %s a successor claim",
+    async (operation) => {
+      const pending = register();
+      pending.setOutboundMessageId("outbound-claim");
+      pending.markReady();
+      const claimReply = (messageId: string) =>
+        claimPendingConversationTurnReply({
+          agentId: "main",
+          conversationRef: "conv_a",
+          sessionId: "session-main",
+          messageId,
+          replyToId: "outbound-claim",
+          text: messageId,
+        });
+      try {
+        const released = await claimReply("released-reply");
+        expect(released).toBeDefined();
+        released!.release();
+        const successor = await claimReply("successor-reply");
+        expect(successor).toBeDefined();
+        released![operation]();
+        if (operation === "release") {
+          expect(await claimReply("third-reply")).toBeUndefined();
+        }
+        successor!.complete();
+        await expect(pending.wait()).resolves.toMatchObject({ messageId: "successor-reply" });
+      } finally {
+        pending.cancel();
+      }
+    },
+  );
+
   it("returns the stable operation id with an exact reply claim", async () => {
     const pending = registerPendingConversationTurn({
       agentId: "main",

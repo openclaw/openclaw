@@ -28,8 +28,6 @@ export default class VitestResourceReporter implements Reporter {
       arch: process.arch,
       ...detectVitestHostInfo(),
       osLogicalCpuCount: os.cpus().length,
-      constrainedMemoryBytes: process.constrainedMemory(),
-      availableMemoryBytes: process.availableMemory(),
       rootMaxWorkers: ctx.config.maxWorkers ?? null,
     });
   }

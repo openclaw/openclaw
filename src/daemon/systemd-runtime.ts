@@ -7,10 +7,17 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import { ServiceInspectionError } from "./service-inspection-error.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
+import {
+  sanitizeServiceInspectionError,
+  ServiceInspectionError,
+} from "./service-inspection-error.js";
+import {
+  createServiceRuntimeInspectionFailure,
+  type GatewayServiceRuntime,
+} from "./service-runtime.js";
 import type {
   GatewayServiceEnv,
+  GatewayServiceCommandInspection,
   GatewayServiceEnvArgs,
   GatewayServiceReadOptions,
 } from "./service-types.js";
@@ -19,14 +26,14 @@ import {
   execSystemctl,
   execSystemctlUser,
   isSystemctlMissing,
-  isSystemdUnitMissingDetail,
   isSystemdUnitNotEnabled,
   readSystemctlDetail,
   systemdInspectionError,
 } from "./systemd-exec.js";
 import { readLoadedSystemdServiceRuntime } from "./systemd-loaded-runtime.js";
 import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
-import { resolveSystemdServiceName } from "./systemd-service-files.js";
+import { readSystemdServiceExecStart, resolveSystemdServiceName } from "./systemd-service-files.js";
+import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
 type SystemdServiceInfo = {
   loadState?: string;
@@ -148,24 +155,56 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env));
   if (opts?.requireLoaded) {
     return await readLoadedSystemdServiceRuntime(
       env,
       opts.timeoutMs,
       opts.loadForInspection,
       opts.systemdReadBinding,
+      installed ?? undefined,
     );
   }
   const timeoutMs = opts?.timeoutMs;
-  const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
+  let commandInspectionFailure =
+    opts?.commandInspection?.kind === "unavailable"
+      ? createServiceRuntimeInspectionFailure(
+          sanitizeServiceInspectionError(opts.commandInspection.error),
+        )
+      : undefined;
   if (installed?.scope !== "system") {
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
       return {
+        ...commandInspectionFailure,
         status: "unknown",
         detail: formatErrorMessage(err),
         ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
+      };
+    }
+    const inspection: GatewayServiceCommandInspection =
+      opts?.commandInspection ??
+      (installed
+        ? { kind: "present" }
+        : await readSystemdServiceExecStart(env, { ...opts, requireEffective: true }).then(
+            (command) => ({ kind: command ? "present" : "absent" }) as const,
+            (error: unknown) => ({ kind: "unavailable", error }) as const,
+          ));
+    if (inspection.kind === "unavailable") {
+      commandInspectionFailure = createServiceRuntimeInspectionFailure(
+        sanitizeServiceInspectionError(inspection.error),
+      );
+      if (!installed) {
+        return commandInspectionFailure;
+      }
+    }
+    if (!installed && inspection.kind === "absent") {
+      const transport = await readSystemdUserTransport(env);
+      return {
+        status: "stopped",
+        missingUnit: true,
+        ...(transport ? { systemd: { transport } } : {}),
       };
     }
   }
@@ -183,17 +222,28 @@ export async function readSystemdServiceRuntime(
       : await execSystemctlUser(env, showArgs, timeoutMs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = res.termination === "exit" && !installed && isSystemdUnitMissingDetail(detail);
-    const error = missing ? undefined : systemdInspectionError(res, detail, installed?.scope);
+    const error = systemdInspectionError(res, detail, installed?.scope);
     return {
-      status: missing ? "stopped" : "unknown",
-      ...(!missing && detail ? { detail } : {}),
-      missingUnit: missing,
+      ...commandInspectionFailure,
+      status: "unknown",
+      ...(detail ? { detail } : {}),
+      missingUnit: false,
       ...(error instanceof ServiceInspectionError ? { inspectionReason: error.reason } : {}),
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
+  const loadState = normalizeLowercaseStringOrEmpty(parsed.loadState);
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+  if (loadState !== "loaded") {
+    return {
+      status: "unknown",
+      missingUnit: false,
+      detail:
+        loadState === "not-found"
+          ? `Unit ${unitName} is not visible in the ${installed?.scope ?? "user"} systemd manager.`
+          : `Unit ${unitName} has an unverified systemd load state.`,
+    };
+  }
   // Restart and shutdown transitions can still own or respawn the process.
   // Only terminal native states establish that offline maintenance is safe.
   const status =
@@ -203,19 +253,16 @@ export async function readSystemdServiceRuntime(
         ? "stopped"
         : "unknown";
   return {
+    ...commandInspectionFailure,
     status,
-    // `systemctl show` succeeds for absent units. Preserve stopped status for
-    // staged definitions, but only affirm absence when no definition exists.
-    ...(normalizeLowercaseStringOrEmpty(parsed.loadState) === "not-found" &&
-    activeState === "inactive"
-      ? { missingUnit: !installed }
-      : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
     systemd: {
+      scope: installed?.scope ?? "user",
+      transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,

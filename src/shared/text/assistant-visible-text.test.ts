@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  minimaxToolCallTextFilter,
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
-  stripDowngradedToolCallText,
-  stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
+import { stripDowngradedToolCallText } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -773,7 +773,7 @@ describe("stripToolCallXmlTags", () => {
   });
 });
 
-describe("stripMinimaxToolCallXml", () => {
+describe("MiniMax tool-call text", () => {
   it("strips minimax tool-call XML outside code regions", () => {
     const input = [
       "Before",
@@ -781,7 +781,7 @@ describe("stripMinimaxToolCallXml", () => {
       "After",
     ].join("\n");
 
-    expect(stripMinimaxToolCallXml(input)).toBe("Before\n\nAfter");
+    expect(minimaxToolCallTextFilter.transform(input)).toBe("Before\n\nAfter");
   });
 
   it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
@@ -792,8 +792,8 @@ describe("stripMinimaxToolCallXml", () => {
       "```",
     ].join("\n");
 
-    expect(stripMinimaxToolCallXml(inline)).toBe(inline);
-    expect(stripMinimaxToolCallXml(fenced)).toBe(fenced);
+    expect(minimaxToolCallTextFilter.transform(inline)).toBe(inline);
+    expect(minimaxToolCallTextFilter.transform(fenced)).toBe(fenced);
   });
 });
 

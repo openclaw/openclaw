@@ -32,6 +32,10 @@ import {
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
+import {
+  copyPluginInstallTransactionRequest,
+  retainPluginInstallTransaction,
+} from "../../../plugins/install-transaction.js";
 import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
@@ -80,6 +84,8 @@ export async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
@@ -163,6 +169,7 @@ async function installCandidatePackage(
   const npmSpecs = candidate.npmSpec
     ? await resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
+        timeoutMs: params.timeoutMs,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseRegistryNpmSpec(candidate.npmSpec)?.name
@@ -249,14 +256,16 @@ async function installCandidatePackage(
             spec,
             source.expectedIntegrity,
           );
-          const options = {
+          const options = copyPluginInstallTransactionRequest(params, {
             spec,
             config: params.config,
+            timeoutMs: params.timeoutMs,
+            workTimeoutMs: params.workTimeoutMs,
             extensionsDir,
             expectedPluginId: candidate.pluginId,
             expectedIntegrity: source.expectedIntegrity,
             onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-          };
+          });
           if (source.source === "clawhub") {
             const result = await installPluginFromClawHub({
               ...options,
@@ -268,6 +277,7 @@ async function installCandidatePackage(
                 warn: (message) => warnings.push(stripAnsi(message)),
               },
             });
+            retainPluginInstallTransaction(params, result);
             return { result, capabilityConsent };
           }
           const mode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
@@ -282,6 +292,7 @@ async function installCandidatePackage(
           if (!result.ok && mode === "install" && isPluginAlreadyExistsError(result.error)) {
             result = await install("update");
           }
+          retainPluginInstallTransaction(params, result);
           return { result, capabilityConsent };
         },
         isRetryable: (attempt) =>

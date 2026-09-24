@@ -11,7 +11,10 @@ import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import { createContainerWorkspaceSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
@@ -218,12 +221,9 @@ describe("createPdfTool", () => {
   it("defers automatic model config resolution during registration (#76644)", async () => {
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
     const cfg = withDefaultModel("openai/gpt-5.4");
-    const authProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:default": createApiKeyCredential("anthropic", "fixture"),
-      },
-    } satisfies AuthProfileStore;
+    const authProfileStore = createAuthProfileStoreFixture({
+      "anthropic:default": createApiKeyCredential("anthropic", "fixture"),
+    }) satisfies AuthProfileStore;
     const createTool = await loadCreatePdfTool();
     await withTempPdfAgentDir(async (agentDir) => {
       expect(
@@ -398,15 +398,18 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("rejects unsupported scheme references", async () => {
-    await withConfiguredPdfTool(async (tool) => {
-      const result = await tool.execute("t1", {
-        prompt: "test",
-        pdf: "ftp://example.com/doc.pdf",
+  it.each(["ftp://example.com/doc.pdf", "data:application/pdf;base64,JVBERi0xLjQ="])(
+    "rejects unsupported scheme reference %s",
+    async (pdf) => {
+      await withConfiguredPdfTool(async (tool) => {
+        const result = await tool.execute("t1", {
+          prompt: "test",
+          pdf,
+        });
+        expectFields(result.details, { error: "unsupported_pdf_reference" });
       });
-      expectFields(result.details, { error: "unsupported_pdf_reference" });
-    });
-  });
+    },
+  );
 
   it("resolves media://inbound PDF refs", async () => {
     await withManagedInboundPdf(async ({ mediaId }) => {

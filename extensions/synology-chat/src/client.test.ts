@@ -662,18 +662,4 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
     expect(userId).toBeUndefined();
     expect(warns.some((line) => line.includes("exceeded"))).toBe(true);
   });
-
-  it("verifies TLS by default for user_list lookups", async () => {
-    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    const freshUrl =
-      "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
-
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: freshUrl,
-      mutableWebhookUsername: "jmn",
-    });
-
-    const firstCall = firstHttpsGetCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
-  });
 });

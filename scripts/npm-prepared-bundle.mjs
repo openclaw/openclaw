@@ -22,6 +22,7 @@ import {
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
+import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
@@ -52,9 +53,9 @@ const CORE_PACKAGE_POLICY = JSON.parse(
 const CORE_PACKAGES = CORE_PACKAGE_POLICY.map((entry) => entry.name);
 const MAX_TARBALL_BYTES = 192 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
-// SDK evidence embeds complete declaration diffs, which have exceeded 4 MiB.
+// SDK evidence embeds complete declaration diffs, which have exceeded 16 MiB.
 // Qualified manifests carry that evidence; raw package descriptors do not.
-const MAX_SDK_EVIDENCE_BYTES = 16 * 1024 * 1024;
+const MAX_SDK_EVIDENCE_BYTES = 32 * 1024 * 1024;
 
 function requireMatch(value, pattern, label) {
   if (typeof value !== "string" || !pattern.test(value)) {
@@ -142,7 +143,7 @@ function validateProducer(producer, { repository, toolingSha, jobName }) {
   return producer;
 }
 
-function validateCorePackages(corePackages, version) {
+export function validatePreparedCorePackages(corePackages, version) {
   if (!Array.isArray(corePackages) || corePackages.length > CORE_PACKAGES.length) {
     throw new Error("Invalid prepared core package inventory.");
   }
@@ -207,7 +208,7 @@ export function validatePreparedNpmBundleDescriptor({
   fileName(pkg.fileName);
   digest(pkg.sha256, "root tarball digest");
   digest(descriptor.manifestSha256, "package manifest digest");
-  validateCorePackages(descriptor.corePackages, pkg.version);
+  validatePreparedCorePackages(descriptor.corePackages, pkg.version);
   if (descriptor.corePackages.some((entry) => entry.tarballName === pkg.fileName)) {
     throw new Error("Prepared root and core tarball filenames overlap.");
   }
@@ -258,6 +259,24 @@ function readAttemptJobs(repository, producer, runGh) {
   throw new Error("Incomplete npm producer job inventory.");
 }
 
+function validateProducerRun(run, producer, toolingSha, expectedAttempt) {
+  const workflow = producerWorkflow(producer);
+  const [runPath, runRef] = String(run.path).split("@");
+  if (
+    String(run.id) !== producer.runId ||
+    String(run.run_attempt) !== String(expectedAttempt) ||
+    run.head_sha !== toolingSha ||
+    runPath !== workflow.path ||
+    (runRef !== undefined && runRef !== workflow.fullRef) ||
+    run.head_branch !== workflow.ref ||
+    run.event !== "workflow_dispatch" ||
+    run.repository?.full_name !== producer.repository ||
+    run.head_repository?.full_name !== producer.repository
+  ) {
+    throw new Error("npm bundle producer run identity mismatch.");
+  }
+}
+
 /**
  * @param {{
  *   producer: Record<string, string>,
@@ -291,31 +310,12 @@ export function verifyNpmBundleProducer({
           ? VERIFY_JOB_NAME
           : PREPARE_JOB_NAME,
   });
-  const workflow = producerWorkflow(producer);
   const run = githubJson(
     repository,
     `actions/runs/${producer.runId}/attempts/${producer.runAttempt}`,
     runGh,
   );
-  const [runPath, runRef] = String(run.path).split("@");
-  if (
-    String(run.id) !== producer.runId ||
-    String(run.run_attempt) !== producer.runAttempt ||
-    run.head_sha !== toolingSha ||
-    runPath !== workflow.path ||
-    (runRef !== undefined && runRef !== workflow.fullRef) ||
-    run.head_branch !== workflow.ref ||
-    run.event !== "workflow_dispatch" ||
-    run.repository?.full_name !== repository ||
-    run.head_repository?.full_name !== repository
-  ) {
-    throw new Error("npm bundle producer run identity mismatch.");
-  }
-  // Qualification retries reuse completed producer jobs from failed attempts.
-  // Publication additionally requires the complete producer attempt to succeed.
-  if (requireCompletedParent && (run.status !== "completed" || run.conclusion !== "success")) {
-    throw new Error("npm publication requires a successful producer parent.");
-  }
+  validateProducerRun(run, producer, toolingSha, producer.runAttempt);
   const matches = readAttemptJobs(repository, producer, runGh).filter(
     (job) => job.name === producer.jobName,
   );
@@ -331,7 +331,47 @@ export function verifyNpmBundleProducer({
   ) {
     throw new Error("npm bundle requires its unique exact completed producer job.");
   }
-  return { run, job };
+  if (!requireCompletedParent) {
+    // Qualification retries can consume a successful job from a failed attempt.
+    return { run, job };
+  }
+
+  const current = githubJson(repository, `actions/runs/${producer.runId}`, runGh);
+  const currentAttempt = Number(decimal(String(current.run_attempt), "current producer attempt"));
+  validateProducerRun(current, producer, toolingSha, currentAttempt);
+  if (
+    currentAttempt < Number(producer.runAttempt) ||
+    current.status !== "completed" ||
+    current.conclusion !== "success"
+  ) {
+    throw new Error("npm publication requires a successful producer parent.");
+  }
+  // Failed-job reruns retain green jobs. A later receipt-only retry may make
+  // the parent successful without recreating this descriptor or package, but
+  // a later execution of this same job supersedes its earlier proof.
+  for (let attempt = Number(producer.runAttempt) + 1; attempt <= currentAttempt; attempt += 1) {
+    const jobs = readAttemptJobs(repository, { ...producer, runAttempt: String(attempt) }, runGh);
+    if (
+      jobs.length === 0 ||
+      jobs.some(
+        (entry) =>
+          String(entry.run_id) !== producer.runId ||
+          Number(entry.run_attempt) !== attempt ||
+          entry.head_sha !== toolingSha,
+      )
+    ) {
+      throw new Error("Incomplete or mismatched npm producer attempt evidence.");
+    }
+    if (jobs.some((entry) => entry.name === producer.jobName)) {
+      throw new Error("npm bundle producer job was superseded by a later attempt.");
+    }
+  }
+  const reread = githubJson(repository, `actions/runs/${producer.runId}`, runGh);
+  validateProducerRun(reread, producer, toolingSha, currentAttempt);
+  if (reread.status !== "completed" || reread.conclusion !== "success") {
+    throw new Error("npm producer parent changed while verifying completed evidence.");
+  }
+  return { run: reread, job };
 }
 
 export function verifyNpmSourceCheck({ descriptor, repository, sourceSha, toolingSha, runGh }) {
@@ -660,18 +700,54 @@ export function prepareNpmPackageBundle({
   releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
+  sanitizeRootDeclarations = (distRoot) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        fileURLToPath(new URL("./lib/sanitize-bundler-helper-dts-exports.mts", import.meta.url)),
+        distRoot,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
+  prepareRootShrinkwrap = ({ aiTarballPath }) => {
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        join(sourceDir, "scripts/tsx.mjs"),
+        join(sourceDir, "scripts/prepare-openclaw-npm-shrinkwrap.ts"),
+        aiTarballPath,
+      ],
+      { cwd: sourceDir, stdio: "inherit" },
+    );
+  },
   runPack = (directory, destination) =>
-    execFileSync("pnpm", ["--dir", directory, "pack", "--pack-destination", destination], {
-      env: {
-        ...process.env,
-        OPENCLAW_PREPACK_PREPARED: "1",
-        ...(/^[a-f0-9]{40}$/u.test(releaseRef)
-          ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
-          : {}),
+    // Bundled dependencies only pack under the hoisted linker; prepack scripts stay enabled.
+    execFileSync(
+      "pnpm",
+      [
+        "--dir",
+        directory,
+        "pack",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        destination,
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENCLAW_PREPACK_PREPARED: "1",
+          ...(/^[a-f0-9]{40}$/u.test(releaseRef)
+            ? { OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1" }
+            : {}),
+        },
+        stdio: "inherit",
+        timeout: 30 * 60 * 1000,
       },
-      stdio: "inherit",
-      timeout: 30 * 60 * 1000,
-    }),
+    ),
 }) {
   const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
     sourceDir,
@@ -693,6 +769,10 @@ export function prepareNpmPackageBundle({
   }
   // Preserve non-root installs before hashing; qualified consumers never rewrite the archive.
   normalizePackModes(sourceDir);
+  const distRoot = join(sourceDir, "dist");
+  if (existsSync(distRoot)) {
+    sanitizeRootDeclarations(distRoot);
+  }
   const pack = (directory, packageName) => {
     const before = new Set(readdirSync(outputDir));
     runPack(directory, outputDir);
@@ -710,6 +790,21 @@ export function prepareNpmPackageBundle({
     );
     if (manifest.name !== packageName || manifest.version !== root.version) {
       throw new Error(`Packed identity mismatch for ${packageName}.`);
+    }
+    if (packageName === "openclaw") {
+      const entries = execFileSync("tar", ["-tzf", path], {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+      }).split("\n");
+      if (entries.includes("package/npm-shrinkwrap.json")) {
+        const shrinkwrap = JSON.parse(
+          execFileSync("tar", ["-xOf", path, "package/npm-shrinkwrap.json"], {
+            encoding: "utf8",
+            maxBuffer: MAX_MANIFEST_BYTES,
+          }),
+        );
+        assertNpmShrinkwrapDependencies(manifest, shrinkwrap);
+      }
     }
     return {
       packageName,
@@ -738,6 +833,13 @@ export function prepareNpmPackageBundle({
     }
     return [pack(directory, packageName)];
   });
+  const aiPackage = corePackageTarballs.find(({ packageName }) => packageName === "@openclaw/ai");
+  const hasRootShrinkwrap = existsSync(join(sourceDir, "npm-shrinkwrap.json"));
+  if (aiPackage && hasRootShrinkwrap) {
+    prepareRootShrinkwrap({
+      aiTarballPath: join(outputDir, aiPackage.tarballName),
+    });
+  }
   const packed = pack(sourceDir, "openclaw");
   const manifest = {
     schema: PACKAGE_MANIFEST_SCHEMA,

@@ -1,11 +1,14 @@
 import type { ChatMessageGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
+
+registerChatMessageMetadataEnglish();
 
 export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   private activeReplyNavigation: symbol | null = null;
@@ -116,6 +119,10 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
       request: this.requestReplyMessage,
       open: this.openReplyMessage,
     };
+  }
+
+  protected retireReplyMessages(): void {
+    this.replyMessages.clear();
   }
 
   protected resetReplyNavigation(): void {

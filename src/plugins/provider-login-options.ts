@@ -41,6 +41,7 @@ function isEligible(choice: ProviderAuthChoiceMetadata): boolean {
   return (
     Boolean(choice.choiceId.trim()) &&
     choice.assistantVisibility !== "manual-only" &&
+    choice.assistantVisibility !== "detected-only" &&
     supportsProviderAuthChoiceTextInference(choice.onboardingScopes)
   );
 }

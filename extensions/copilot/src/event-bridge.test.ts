@@ -9,6 +9,7 @@ import type {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
+import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 
 const nativeTaskRuntime = vi.hoisted<{
@@ -256,10 +257,12 @@ describe("attachEventBridge", () => {
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const session = createFakeSession();
     const onAssistantDelta = vi.fn();
+    const onAgentEvent = vi.fn();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
       isAborted: () => false,
       onAssistantDelta,
+      onAgentEvent,
     });
 
     session.emit("assistant.message_delta", {
@@ -274,6 +277,13 @@ describe("attachEventBridge", () => {
       ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
       agentId: "child-1",
     } as SessionEvent);
+    bridge.completeTool({ toolCallId: "child-call", toolName: "write", isError: false });
+    bridge.completeTool({
+      toolCallId: "child-nested",
+      parentToolCallId: "child-call",
+      toolName: "read",
+      isError: false,
+    });
     session.emit("tool.execution_complete", {
       ...makeEvent("tool.execution_complete", {
         result: { content: "child write" },
@@ -299,7 +309,9 @@ describe("attachEventBridge", () => {
       } as SessionEvent),
     ).toBe(false);
     await bridge.awaitDeltaChain();
+    await bridge.awaitAgentEventChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "item")).toBe(false);
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
@@ -837,28 +849,7 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("tool.execution_start increments startedCount and pushes toolMetas without meta", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-1", toolName: "bash" }),
-    );
-
-    expect(bridge.snapshot()).toEqual({
-      assistantTexts: [],
-      completedCount: 0,
-      lastAssistantEvent: undefined,
-      startedCount: 1,
-      streamError: undefined,
-      toolMetas: [{ toolName: "bash" }],
-      usage: undefined,
-    });
-  });
+  registerCopilotToolEventTests({ createFakeSession, makeEvent });
 
   it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();

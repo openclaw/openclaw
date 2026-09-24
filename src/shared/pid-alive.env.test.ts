@@ -10,6 +10,18 @@ import { getFileLockProcessStartTime } from "./pid-alive.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("bounds the native start-time read by the supplied process allowance", () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  let elapsedMs = 0;
+  vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, _args, options) => {
+    elapsedMs += options?.timeout ?? 0;
+    throw new Error("native inspection timed out");
+  });
+
+  expect(getFileLockProcessStartTime(424242, process.env, 125)).toBeNull();
+  expect(elapsedMs).toBe(125);
+});
+
 it("isolates the lock-owner ps child while retaining its stable locale and timezone", async () => {
   const nativeExec = childProcess.execFileSync;
   const routing = createDiagnosticFixtureRouting({
@@ -36,7 +48,7 @@ it("isolates the lock-owner ps child while retaining its stable locale and timez
       expect(getFileLockProcessStartTime(424242)).toBe(Date.parse("2026-09-03T00:00:00Z") / 1000);
       expect(process.env).toEqual(parent);
       expect(report).toEqual({
-        present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+        defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
         routingPreserved: true,
       });
     },

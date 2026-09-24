@@ -77,13 +77,16 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publication-in
 try {
   const index = path.resolve(cwd, text(["rev-parse", "--git-path", "index"]));
   env.GIT_INDEX_FILE = path.join(temporary, "index");
-  // Keep explicitly staged ignored paths and cached removals; normalize only the copy.
+  // Keep explicitly staged ignored paths and cached removals; stage changes only in the copy.
+  const indexStat = fs.statSync(index, { bigint: true });
   fs.copyFileSync(index, env.GIT_INDEX_FILE);
+  // A newer copy timestamp hides racy-clean edits. Round down so lost precision only adds reads.
+  const indexTimestamp = Number(indexStat.mtimeNs / 1_000_000_000n);
+  fs.utimesSync(env.GIT_INDEX_FILE, indexTimestamp, indexTimestamp);
   // Unresolved merge stages cannot define an accepted tree.
   git(["write-tree"]);
+  // Ordinary staging preserves unchanged blobs; renormalization would rewrite unrelated CRLF files.
   git(["add", "-A"]);
-  // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
-  git(["add", "--renormalize", "-u"]);
   const workspaceTree = text(["write-tree"]);
   const baseTree = text(["rev-parse", baseCommit + "^{tree}"]);
   const attributes = git(["ls-tree", "-r", "-z", "--full-tree", workspaceTree]);

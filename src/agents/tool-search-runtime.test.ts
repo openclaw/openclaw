@@ -28,10 +28,12 @@ import {
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
 import {
-  formatToolSearchControlError,
-  formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
+} from "./tool-search-request.js";
+import {
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
@@ -757,6 +759,7 @@ describe("Tool Search input schemas", () => {
         name: target.name,
         description: target.description,
         parameters: hostileSchema,
+        outputSchema: hostileSchema as never,
         tool: target,
       };
       const catalogRef = createToolSearchCatalogRef();

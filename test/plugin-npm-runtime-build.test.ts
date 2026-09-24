@@ -42,6 +42,45 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("packages declared theme definitions and artwork outside conventional asset paths", () => {
+    const packageDir = tempDirs.make("openclaw-plugin-theme-package-");
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "theme-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "theme-fixture",
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "palettes/workshop.json",
+            hats: { beret: "art/beret.svg" },
+            critters: { ferris: { source: "visitors/ferris.svg", crossMs: 9000 } },
+          },
+        ],
+      }),
+    );
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
+    );
+    expect(plan.packageFiles).toEqual(
+      expect.arrayContaining([
+        "openclaw.plugin.json",
+        "palettes/workshop.json",
+        "art/beret.svg",
+        "visitors/ferris.svg",
+      ]),
+    );
+  });
+
   it.each([
     "missing-directory",
     "missing-manifest",
@@ -221,6 +260,12 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeExtensions);
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
+      if (existsSync(path.join(plan.packageDir, "assets", "activity.svg"))) {
+        expect(plan.packageFiles).toContain("assets/activity.svg");
+      }
+      if (existsSync(path.join(plan.packageDir, "assets", "activity"))) {
+        expect(plan.packageFiles).toContain("assets/activity/*.svg");
+      }
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
         plan.packageJson.openclaw?.compat?.pluginApi,
       );
@@ -244,6 +289,7 @@ describe("plugin npm runtime build planning", () => {
       "openclaw.plugin.json",
       "README.md",
       "assets/icon.png",
+      "assets/activity.svg",
       "skills/**",
     ]);
   });

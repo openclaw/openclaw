@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
 import {
   closeSlot,
@@ -61,6 +61,22 @@ const settle = () =>
 function fixture() {
   let layout: SidebarLayout = normalizeSidebarLayout(undefined);
   let live = true;
+  let observed: GatewaySessionRow | null = session;
+  const observation: SessionRowObservation = {
+    get row() {
+      return observed;
+    },
+    get sessionId() {
+      return observed?.sessionId ?? null;
+    },
+    hasObserved: true,
+    isCurrent: () => live,
+    dispose: () => {},
+    captureReconcile: () => (row) => {
+      observed = row ?? null;
+      return { status: "current", row: observed };
+    },
+  };
   const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async (method) => {
     if (method === "sessions.describe") {
       return { session };
@@ -78,6 +94,7 @@ function fixture() {
   });
   const owner: ActiveResourceOwner = {
     client: { request } as unknown as GatewayBrowserClient,
+    observation,
     sessionKey: key,
     connectionEpoch: 1,
     placement: session.placement,
@@ -105,6 +122,55 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it.each(["desktop", "browser"] as const)(
+    "never publishes %s discovery after its session retires during reconciliation",
+    async (resource) => {
+      const effects: { depth: number | null; current: boolean }[] = [];
+      for (const depth of [0, 1, 2, 3, 4, 5, 6, 7, null]) {
+        const f = fixture();
+        f.owner.desktopAvailable = resource === "desktop";
+        f.owner.browserAvailable = resource === "browser";
+        const inventoryMethod = resource === "desktop" ? "environments.status" : "browser.request";
+        const inventory = createDeferred<unknown>();
+        const reconciliation = createDeferred<boolean>();
+        const respond = f.request.getMockImplementation()!;
+        f.request.mockImplementation((method, params) =>
+          method === inventoryMethod ? inventory.promise : respond(method, params),
+        );
+        let retired = false;
+        const commit = f.owner.commit;
+        f.owner.commit = (...args) => {
+          effects.push({ depth, current: !retired });
+          commit(...args);
+        };
+        f.owner.requestUpdate = () => {
+          effects.push({ depth, current: !retired });
+        };
+        f.controller.sync(f.owner);
+        await settle();
+        f.controller.reconcile(() => reconciliation.promise);
+        inventory.resolve(await respond(inventoryMethod));
+        await settle();
+        reconciliation.resolve(true);
+        if (depth !== null) {
+          let remaining = depth;
+          const retire = () => {
+            if (remaining-- > 0) {
+              queueMicrotask(retire);
+            } else {
+              retired = true;
+              f.leave();
+            }
+          };
+          retire();
+        }
+        await settle();
+      }
+      expect(effects.some((effect) => effect.depth === null)).toBe(true);
+      expect(effects.filter((effect) => !effect.current)).toEqual([]);
+    },
+  );
+
   it("retains a visible verified Desktop when another resource is dismissed", async () => {
     const f = fixture();
     f.controller.sync(f.owner);
@@ -155,35 +221,24 @@ describe("session active resource discovery", () => {
     expect(f.owner.requestUpdate).toHaveBeenCalled();
   });
 
-  it("checks a completed Desktop against the post-event result, not a cached selected row", async () => {
+  it("discovers resources after an identical-looking observation replaces a retired binding", async () => {
     const f = fixture();
     f.owner.browserAvailable = false;
+    const pending = createDeferred<unknown>();
+    f.request.mockImplementationOnce(async () => pending.promise);
     f.controller.sync(f.owner);
     await settle();
-    const refreshReplacement = vi.fn(async () => ({ sessions: [] }));
-    // SAFETY: this event-boundary fixture supplies the state fields read by reconciliation;
-    // it deliberately retains the display cache while the fresh slice omits it.
-    const state = {
-      sessionKey: key,
-      assistantAgentId: "main",
-      sessionsResult: { sessions: [session] },
-      sessions: { refreshReplacement },
-    } as unknown as ChatPageHost;
-    f.controller.reconcileSession({ key, reason: "patch" }, state, {
-      requestUpdate: () => f.controller.sync(f.owner),
-      updated: async () => {},
+    f.owner.observation.isCurrent = () => false;
+    f.controller.sync({
+      ...f.owner,
+      observation: { ...f.owner.observation, isCurrent: () => true },
     });
     await settle();
-    expect(refreshReplacement).toHaveBeenCalledOnce();
-    expect(
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      ),
-    ).toBeNull();
+    expect(f.slots()).toEqual(["desktop"]);
+    pending.resolve({ session });
+    await settle();
+    expect(f.slots()).toEqual(["desktop"]);
+    expect(f.commit).toHaveBeenCalledOnce();
   });
 
   it("discovers only the exact target without waiting for unrelated inventory catalogs", async () => {
@@ -555,6 +610,8 @@ describe("session active resource discovery", () => {
     f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
     f.controller.sync(f.owner);
     await settle();
+    f.controller.reconcileObservation({ requestUpdate: () => {}, updated: async () => {} });
+    await settle();
     expect(f.request).not.toHaveBeenCalled();
     expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");
   });
@@ -691,7 +748,9 @@ describe("session active resource discovery", () => {
   ])("does not treat stale or blocked browser history as an active tab (%j)", async (snapshot) => {
     const f = fixture();
     f.owner.desktopAvailable = false;
-    f.request.mockResolvedValue(snapshot);
+    f.request.mockImplementation(async (method) =>
+      method === "sessions.describe" ? { session } : snapshot,
+    );
     f.controller.sync(f.owner);
     await settle();
     expect(f.commit).not.toHaveBeenCalled();

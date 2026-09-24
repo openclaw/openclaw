@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+import { buildBoardWidgetContentSecurityPolicy } from "../gateway/board-sandbox.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import {
   resolveCanvasDocumentsDir,
@@ -86,7 +87,16 @@ export async function handleCanvasDocumentHttpRequest(
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Content-Length", String(Buffer.byteLength(body)));
       if ((await resolveDocumentSandbox(root, relativePath)) === "scripts") {
-        res.setHeader("Content-Security-Policy", "sandbox allow-scripts");
+        // Registered documents allow local renderer scripts in their own CSP;
+        // the response policy must preserve that permission because policies intersect.
+        res.setHeader(
+          "Content-Security-Policy",
+          buildBoardWidgetContentSecurityPolicy({
+            grantState: "none",
+            resourceOrigins: ["'self'"],
+          }),
+        );
+        res.setHeader("Referrer-Policy", "no-referrer");
       }
       if (req.method === "HEAD") {
         res.end();

@@ -5,7 +5,7 @@ import type { SessionDiffBaseline } from "../config/sessions/types.js";
 export type GitCheckoutContext = {
   owner: string;
   repo: string;
-  branch: string;
+  branch: string | null;
   root?: string;
   defaultBranch?: string;
 };

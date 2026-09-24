@@ -65,6 +65,25 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
   }),
 );
 
+export function hasActiveSharedCodexAppServerWork(): boolean {
+  const state = getSharedCodexAppServerClientState();
+  if (state.startup.pending.size > 0 || state.startup.controller.signal.aborted) {
+    return true;
+  }
+  for (const entry of state.clients.values()) {
+    if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+      return true;
+    }
+  }
+  for (const client of state.liveClients) {
+    const entry = state.entriesByClient.get(client);
+    if (entry && (entry.activeLeases > 0 || entry.pendingAcquires > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getCurrentSharedClientEntry(
   client: CodexAppServerClient | undefined,
 ): SharedCodexAppServerClientEntry | undefined {

@@ -61,14 +61,22 @@ while (args[commandIndex]?.startsWith("--")) {
   }
   flags.add(flag);
 }
-if (!flags.has("--json=short")) {
-  fail();
-}
-
 // This fixture owns a stopped, loaded user service and never starts a manager.
 const owner = ":1.42";
 const bus = "org.freedesktop.DBus";
 const invocation = args.slice(commandIndex);
+if (
+  flags.has("--auto-start=no") &&
+  flags.size === 1 &&
+  invocation.length === 5 &&
+  invocation.join(" ") === `get-property ${manager} ${rootObjectPath} ${manager}.Manager Version`
+) {
+  process.stdout.write('s "252.39-1~deb12u2"\n');
+  process.exit(0);
+}
+if (!flags.has("--json=short")) {
+  fail();
+}
 const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
   /(?:\.service)?$/u,
   ".service",

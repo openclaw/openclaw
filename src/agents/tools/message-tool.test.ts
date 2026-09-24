@@ -2,6 +2,7 @@
 // outbound message execution context.
 import fs from "node:fs/promises";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -40,6 +41,7 @@ import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-deliv
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
@@ -513,37 +515,36 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
-  it("reports model-authored send normalization without inviting a retry", async () => {
-    const notice =
-      "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.";
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: { ok: true },
-      normalization: { locationOmitted: true, notice },
-      toolResult: {
-        content: [{ type: "text", text: "sent" }],
-        details: { ok: true },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult);
+  it.each([false, true])(
+    "reports normalization guidance only after an actual send (dryRun=%s)",
+    async (dryRun) => {
+      const notice = "The normalized message was delivered; do not retry.";
+      const receipt = dryRun ? "Prepared reply" : "Sent reply";
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: "telegram:123",
+        handledBy: "plugin",
+        payload: { ok: true },
+        normalization: { locationOmitted: true, notice },
+        toolResult: {
+          content: [{ type: "text", text: receipt }],
+          details: { dryRun },
+        },
+        dryRun,
+      } satisfies MessageActionResult);
 
-    const { call, result } = await executeSendWithResult({
-      action: { channel: "telegram", target: "telegram:123", message: "hello" },
-    });
+      const { result } = await executeSendWithResult({
+        action: { channel: "telegram", target: "telegram:123", message: "hello", dryRun },
+      });
 
-    expect(call?.actionOrigin).toBe("message-tool");
-    expect(result).toEqual({
-      content: [
-        { type: "text", text: "sent" },
-        { type: "text", text: notice },
-      ],
-      details: { ok: true },
-    });
-  });
+      expect(result.content).toEqual([
+        { type: "text", text: receipt },
+        ...(dryRun ? [] : [{ type: "text", text: notice }]),
+      ]);
+    },
+  );
 
   it("carries core send settlement in private result details", async () => {
     const sendResult = {
@@ -713,6 +714,7 @@ describe("message tool gateway timeout", () => {
         return {};
       });
       await runSessionsSendA2AFlow({
+        targetAgentId: "main",
         callGateway: gateway,
         targetSessionKey: sessionKey,
         requesterSessionKey: sessionKey,
@@ -863,90 +865,81 @@ describe("completion source-reply authority", () => {
   });
 
   it.each([
-    { name: "delete", args: { action: "delete" } },
-    { name: "ban", args: { action: "ban" } },
-    { name: "broadcast", args: { action: "broadcast" } },
-    { name: "other provider", args: { action: "send", channel: "telegram" } },
-    { name: "other target", args: { action: "send", target: "channel:other" } },
-    { name: "legacy recipient", args: { action: "send", to: "channel:other" } },
-    { name: "channel-id alias", args: { action: "send", channelId: "channel:other" } },
-    { name: "plugin target alias", args: { action: "send", destination: "channel:other" } },
-    { name: "other account", args: { action: "send", accountId: "other-account" } },
-    { name: "other thread", args: { action: "send", threadId: "thread-2" } },
-    { name: "hidden thread alias", args: { action: "send", thread_ts: "thread-2" } },
-    { name: "other reply", args: { action: "send", replyTo: "message-2" } },
-    { name: "multiple targets", args: { action: "send", targets: ["channel:other"] } },
-    { name: "remote gateway", args: { action: "send", gatewayUrl: "wss://other.example" } },
-    { name: "gateway token", args: { action: "send", gatewayToken: "other-token" } },
-    { name: "local media", args: { action: "send", media: "./AGENTS.md" } },
-    { name: "remote media", args: { action: "send", mediaUrl: "https://other.example/file" } },
-    { name: "media URL array", args: { action: "send", mediaUrls: ["file:///etc/passwd"] } },
-    { name: "local path", args: { action: "send", path: "./AGENTS.md" } },
-    { name: "file path", args: { action: "send", filePath: "./AGENTS.md" } },
-    { name: "file URL", args: { action: "send", fileUrl: "file:///etc/passwd" } },
-    { name: "image alias", args: { action: "send", image: "./AGENTS.md" } },
-    { name: "nested attachment", args: { action: "send", attachments: [{ path: "./AGENTS.md" }] } },
-    { name: "inline buffer", args: { action: "send", buffer: "c2VjcmV0" } },
-    { name: "filename", args: { action: "send", filename: "AGENTS.md" } },
-    { name: "content type", args: { action: "send", contentType: "text/plain" } },
-    { name: "MIME type", args: { action: "send", mimeType: "text/plain" } },
-    { name: "caption", args: { action: "send", caption: "secret" } },
-    { name: "presentation", args: { action: "send", presentation: { blocks: [] } } },
-    { name: "interactive controls", args: { action: "send", interactive: { buttons: [] } } },
-    { name: "location", args: { action: "send", location: { latitude: 1, longitude: 1 } } },
-    { name: "delivery controls", args: { action: "send", delivery: { pin: { enabled: true } } } },
-    { name: "silent delivery", args: { action: "send", silent: true } },
-    { name: "dry run", args: { action: "send", dryRun: true } },
-    { name: "unknown plugin argument", args: { action: "send", pluginFile: "./AGENTS.md" } },
-    { name: "hidden text alias", args: { action: "send", text: "completion" } },
-    { name: "hidden content alias", args: { action: "send", content: "completion" } },
-    { name: "legacy send alias", args: { action: "send", SendMessage: "completion" } },
-    { name: "whitespace-only message", args: { action: "send", message: " \n\t " } },
-    { name: "silent reply token", args: { action: "send", message: "NO_REPLY" } },
-    { name: "silent reply envelope", args: { action: "send", message: '{"action":"NO_REPLY"}' } },
-    {
-      name: "inline reply route",
-      args: { action: "send", message: "[[reply_to:message-2]] stolen thread" },
-    },
-    {
-      name: "inline current reply directive",
-      args: { action: "send", message: "[[reply_to_current]] completion" },
-    },
-    {
-      name: "inline audio directive",
-      args: { action: "send", message: "[[audio_as_voice]] completion" },
-    },
-    {
-      name: "inline local media directive",
-      args: { action: "send", message: "completion\nMEDIA:./AGENTS.md" },
-    },
-    {
-      name: "inline remote media directive",
-      args: { action: "send", message: "completion\nmedia:https://other.example/file.png" },
-    },
-    {
-      name: "channel-extracted remote Markdown image",
-      args: { action: "send", message: "completion ![image](https://other.example/file.png)" },
-    },
-    {
-      name: "escaped-newline local media directive",
-      args: { action: "send", message: String.raw`completion\nMEDIA:./AGENTS.md` },
-    },
-    {
-      name: "citation-obfuscated local media directive",
-      args: { action: "send", message: "completion\nMEciteDIA:./AGENTS.md" },
-    },
-    {
-      name: "citation-obfuscated reply directive",
-      args: { action: "send", message: "[[reply_citeto:message-2]] completion" },
-    },
-    {
-      name: "reply directive inside citation marker",
-      args: { action: "send", message: "cite[[reply_to:message-2]]" },
-    },
-    {
-      name: "media escaping a tool-call-owned Markdown fence",
-      args: {
+    ["delete", { action: "delete" }],
+    ["ban", { action: "ban" }],
+    ["broadcast", { action: "broadcast" }],
+    ["other provider", { action: "send", channel: "telegram" }],
+    ["other target", { action: "send", target: "channel:other" }],
+    ["legacy recipient", { action: "send", to: "channel:other" }],
+    ["channel-id alias", { action: "send", channelId: "channel:other" }],
+    ["plugin target alias", { action: "send", destination: "channel:other" }],
+    ["other account", { action: "send", accountId: "other-account" }],
+    ["other thread", { action: "send", threadId: "thread-2" }],
+    ["hidden thread alias", { action: "send", thread_ts: "thread-2" }],
+    ["other reply", { action: "send", replyTo: "message-2" }],
+    ["multiple targets", { action: "send", targets: ["channel:other"] }],
+    ["remote gateway", { action: "send", gatewayUrl: "wss://other.example" }],
+    ["gateway token", { action: "send", gatewayToken: "other-token" }],
+    ["local media", { action: "send", media: "./AGENTS.md" }],
+    ["remote media", { action: "send", mediaUrl: "https://other.example/file" }],
+    ["media URL array", { action: "send", mediaUrls: ["file:///etc/passwd"] }],
+    ["local path", { action: "send", path: "./AGENTS.md" }],
+    ["file path", { action: "send", filePath: "./AGENTS.md" }],
+    ["file URL", { action: "send", fileUrl: "file:///etc/passwd" }],
+    ["image alias", { action: "send", image: "./AGENTS.md" }],
+    ["nested attachment", { action: "send", attachments: [{ path: "./AGENTS.md" }] }],
+    ["inline buffer", { action: "send", buffer: "c2VjcmV0" }],
+    ["filename", { action: "send", filename: "AGENTS.md" }],
+    ["content type", { action: "send", contentType: "text/plain" }],
+    ["MIME type", { action: "send", mimeType: "text/plain" }],
+    ["caption", { action: "send", caption: "secret" }],
+    ["presentation", { action: "send", presentation: { blocks: [] } }],
+    ["interactive controls", { action: "send", interactive: { buttons: [] } }],
+    ["location", { action: "send", location: { latitude: 1, longitude: 1 } }],
+    ["delivery controls", { action: "send", delivery: { pin: { enabled: true } } }],
+    ["silent delivery", { action: "send", silent: true }],
+    ["dry run", { action: "send", dryRun: true }],
+    ["unknown plugin argument", { action: "send", pluginFile: "./AGENTS.md" }],
+    ["hidden text alias", { action: "send", text: "completion" }],
+    ["hidden content alias", { action: "send", content: "completion" }],
+    ["legacy send alias", { action: "send", SendMessage: "completion" }],
+    ["whitespace-only message", { action: "send", message: " \n\t " }],
+    ["silent reply token", { action: "send", message: "NO_REPLY" }],
+    ["silent reply envelope", { action: "send", message: '{"action":"NO_REPLY"}' }],
+    ["inline reply route", { action: "send", message: "[[reply_to:message-2]] stolen thread" }],
+    [
+      "inline current reply directive",
+      { action: "send", message: "[[reply_to_current]] completion" },
+    ],
+    ["inline audio directive", { action: "send", message: "[[audio_as_voice]] completion" }],
+    ["inline local media directive", { action: "send", message: "completion\nMEDIA:./AGENTS.md" }],
+    [
+      "inline remote media directive",
+      { action: "send", message: "completion\nmedia:https://other.example/file.png" },
+    ],
+    [
+      "channel-extracted remote Markdown image",
+      { action: "send", message: "completion ![image](https://other.example/file.png)" },
+    ],
+    [
+      "escaped-newline local media directive",
+      { action: "send", message: String.raw`completion\nMEDIA:./AGENTS.md` },
+    ],
+    [
+      "citation-obfuscated local media directive",
+      { action: "send", message: "completion\nMEciteDIA:./AGENTS.md" },
+    ],
+    [
+      "citation-obfuscated reply directive",
+      { action: "send", message: "[[reply_citeto:message-2]] completion" },
+    ],
+    [
+      "reply directive inside citation marker",
+      { action: "send", message: "cite[[reply_to:message-2]]" },
+    ],
+    [
+      "media escaping a tool-call-owned Markdown fence",
+      {
         action: "send",
         message: [
           "<function=read><parameter=x>",
@@ -956,20 +949,20 @@ describe("completion source-reply authority", () => {
           "```",
         ].join("\n"),
       },
-    },
-    {
-      name: "sanitizer-assembled reply directive",
-      args: { action: "send", message: "[[reply_<final>to:message-2]] stolen thread" },
-    },
-    {
-      name: "sanitizer-assembled audio directive",
-      args: { action: "send", message: "[[audio_<final>as_voice]] completion" },
-    },
-    {
-      name: "sanitizer-assembled local media directive",
-      args: { action: "send", message: "completion\nME<final>DIA:./AGENTS.md" },
-    },
-  ])("rejects $name before resolving secrets or dispatching", async ({ args }) => {
+    ],
+    [
+      "sanitizer-assembled reply directive",
+      { action: "send", message: "[[reply_<final>to:message-2]] stolen thread" },
+    ],
+    [
+      "sanitizer-assembled audio directive",
+      { action: "send", message: "[[audio_<final>as_voice]] completion" },
+    ],
+    [
+      "sanitizer-assembled local media directive",
+      { action: "send", message: "completion\nME<final>DIA:./AGENTS.md" },
+    ],
+  ])("rejects %s before resolving secrets or dispatching", async (_name, args) => {
     const tool = createRestrictedTool();
 
     await expect(tool.execute("restricted", { message: "completion", ...args })).rejects.toThrow(
@@ -1139,10 +1132,10 @@ describe("poll vote echo guard", () => {
   });
 
   it.each([
-    { elapsedMs: 29_999, suppressed: true },
-    { elapsedMs: 30_000, suppressed: false },
-    { elapsedMs: 30_001, suppressed: false },
-  ])("expires the same-route vote after $elapsedMs ms", async ({ elapsedMs, suppressed }) => {
+    [29_999, true],
+    [30_000, false],
+    [30_001, false],
+  ])("expires the same-route vote after %s ms", async (elapsedMs, suppressed) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
     try {
       const sessionKey = `agent:test:imessage:direct:ttl-${elapsedMs}`;
@@ -1245,6 +1238,34 @@ describe("poll vote echo guard", () => {
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(6);
   });
 
+  it("keeps captured poll aliases when the active channel adapter changes", async () => {
+    const tool = createPollVoteTool();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createChannelPlugin({
+            id: "imessage",
+            label: "iMessage",
+            docsPath: "/channels/imessage",
+            blurb: "Replacement test plugin",
+            actions: ["poll-vote"],
+          }),
+        },
+      ]),
+    );
+    await castBlueVote(tool, { chatGuid: "iMessage;-;+15559998888" });
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue",
+    });
+
+    expect(result.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+  });
+
   it("consumes the guard on the first same-route visible send", async () => {
     const tool = createPollVoteTool();
     await castBlueVote(tool);
@@ -1294,7 +1315,7 @@ describe("message tool secret scoping", () => {
       toolOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "webchat",
-        agentSessionKey: "agent:main",
+        agentSessionKey: "agent:main:main",
       },
     });
 
@@ -3165,37 +3186,37 @@ describe("message tool explicit target guard", () => {
   });
 
   it.each([
-    {
-      action: "poll",
-      params: {
+    [
+      "poll",
+      {
         action: "poll",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
       },
-    },
-    {
-      action: "sticker",
-      params: {
+    ],
+    [
+      "sticker",
+      {
         action: "sticker",
         stickerId: "sticker-1",
       },
-    },
-    {
-      action: "thread-create",
-      params: {
+    ],
+    [
+      "thread-create",
+      {
         action: "thread-create",
         threadName: "Heartbeat follow-up",
       },
-    },
-    {
-      action: "edit",
-      params: {
+    ],
+    [
+      "edit",
+      {
         action: "edit",
         messageId: "message-1",
         message: "Corrected heartbeat alert",
       },
-    },
-  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    ],
+  ] as const)("requires an explicit target for %s when configured", async (_action, params) => {
     const tool = createMessageTool({
       runMessageAction: mocks.runMessageAction as never,
       requireExplicitTarget: true,
@@ -3418,122 +3439,107 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
-    {
-      provider: "telegram",
-      expectTelegramPollExtras: true,
-      expectedActions: ["send", "react", "poll", "poll-vote"],
-    },
-    {
-      provider: "discord",
-      expectTelegramPollExtras: true,
-      expectedActions: ["send", "poll", "poll-vote", "react"],
-    },
-    {
-      provider: "slack",
-      expectTelegramPollExtras: true,
-      expectedActions: ["send", "react", "poll", "poll-vote"],
-    },
-  ])(
-    "scopes schema fields for $provider",
-    ({ provider, expectTelegramPollExtras, expectedActions }) => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          { pluginId: "telegram", source: "test", plugin: telegramPlugin },
-          { pluginId: "discord", source: "test", plugin: discordPlugin },
-          { pluginId: "slack", source: "test", plugin: slackPlugin },
-        ]),
-      );
+    ["telegram", true, ["send", "react", "poll", "poll-vote"]],
+    ["discord", true, ["send", "poll", "poll-vote", "react"]],
+    ["slack", true, ["send", "react", "poll", "poll-vote"]],
+  ])("scopes schema fields for %s", (provider, expectTelegramPollExtras, expectedActions) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+        { pluginId: "slack", source: "test", plugin: slackPlugin },
+      ]),
+    );
 
-      const tool = createMessageTool({
-        config: {} as never,
-        currentChannelProvider: provider,
-      });
-      const properties = getToolProperties(tool);
-      const actionEnum = getActionEnum(properties);
-      const presentationSchemaJson = JSON.stringify(properties.presentation);
-      const presentationBlockItemSchema = (
-        properties.presentation as {
-          properties?: { blocks?: { items?: Record<string, unknown> } };
-        }
-      ).properties?.blocks?.items;
-      const presentationActionVariants = (
-        presentationBlockItemSchema as {
-          properties?: {
-            buttons?: {
-              items?: { properties?: { action?: { anyOf?: Array<Record<string, unknown>> } } };
-            };
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: provider,
+    });
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
+    const presentationSchemaJson = JSON.stringify(properties.presentation);
+    const presentationBlockItemSchema = (
+      properties.presentation as {
+        properties?: { blocks?: { items?: Record<string, unknown> } };
+      }
+    ).properties?.blocks?.items;
+    const presentationActionVariants = (
+      presentationBlockItemSchema as {
+        properties?: {
+          buttons?: {
+            items?: { properties?: { action?: { anyOf?: Array<Record<string, unknown>> } } };
           };
-        }
-      ).properties?.buttons?.items?.properties?.action?.anyOf;
-      const webAppRequiredFields = presentationActionVariants
-        ?.filter(
-          (variant) =>
-            (variant.properties as { type?: { const?: string } } | undefined)?.type?.const ===
-            "web-app",
-        )
-        .map((variant) => variant.required);
+        };
+      }
+    ).properties?.buttons?.items?.properties?.action?.anyOf;
+    const webAppRequiredFields = presentationActionVariants
+      ?.filter(
+        (variant) =>
+          (variant.properties as { type?: { const?: string } } | undefined)?.type?.const ===
+          "web-app",
+      )
+      .map((variant) => variant.required);
 
-      expect(properties).toHaveProperty("presentation");
-      expect(properties).toMatchObject({
-        voiceText: { type: "string" },
-        voiceProvider: { type: "string" },
-        voiceId: { type: "string" },
-      });
-      expect(JSON.stringify(properties.voiceText)).not.toContain("anyOf");
-      expect(JSON.stringify(properties.voiceProvider)).not.toContain("anyOf");
-      expect(JSON.stringify(properties.voiceId)).not.toContain("anyOf");
-      expect(presentationSchemaJson).toContain('"action"');
-      expect(presentationSchemaJson).toContain('"command"');
-      expect(presentationSchemaJson).toContain('"const":"url"');
-      expect(presentationSchemaJson).toContain('"const":"web-app"');
-      expect(presentationSchemaJson).toContain('"widgetId"');
-      expect(webAppRequiredFields).toEqual(
-        expect.arrayContaining([
-          ["type", "url"],
-          ["type", "widgetId"],
-        ]),
-      );
-      expect(presentationSchemaJson).not.toContain('"const":"approval"');
-      expect(presentationSchemaJson).not.toContain('"const":"question"');
-      expect(presentationSchemaJson).toContain('"chartType"');
-      expect(presentationSchemaJson).toContain('"pie"');
-      expect(presentationSchemaJson).toContain('"table"');
-      expect(presentationSchemaJson).toContain('"caption"');
-      expect(presentationSchemaJson).toContain('"headers"');
-      expect(presentationSchemaJson).toContain('"rows"');
-      expect(presentationSchemaJson).toContain('"rowHeaderColumnIndex"');
-      expect(presentationSchemaJson).not.toContain('"maxItems"');
-      expect(presentationSchemaJson).not.toContain('"maxLength"');
-      expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
-      expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
-      expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
-      expect(
-        (
-          presentationBlockItemSchema as {
-            properties?: { rows?: { items?: { items?: unknown } } };
-          }
-        ).properties?.rows?.items?.items,
-      ).toEqual({ type: ["string", "number"] });
-      expect(properties.components).toBeUndefined();
-      expect(properties.blocks).toBeUndefined();
-      expect(properties.buttons).toBeUndefined();
-      for (const action of expectedActions) {
-        expect(actionEnum).toContain(action);
-      }
-      if (expectTelegramPollExtras) {
-        expect(properties).toHaveProperty("pollDurationSeconds");
-        expect(properties).toHaveProperty("pollAnonymous");
-        expect(properties).toHaveProperty("pollPublic");
-      } else {
-        expect(properties.pollDurationSeconds).toBeUndefined();
-        expect(properties.pollAnonymous).toBeUndefined();
-        expect(properties.pollPublic).toBeUndefined();
-      }
-      expect(properties).toHaveProperty("pollId");
-      expect(properties).toHaveProperty("pollOptionIndex");
-      expect(properties).toHaveProperty("pollOptionId");
-    },
-  );
+    expect(properties).toHaveProperty("presentation");
+    expect(properties).toMatchObject({
+      voiceText: { type: "string" },
+      voiceProvider: { type: "string" },
+      voiceId: { type: "string" },
+    });
+    expect(JSON.stringify(properties.voiceText)).not.toContain("anyOf");
+    expect(JSON.stringify(properties.voiceProvider)).not.toContain("anyOf");
+    expect(JSON.stringify(properties.voiceId)).not.toContain("anyOf");
+    expect(presentationSchemaJson).toContain('"action"');
+    expect(presentationSchemaJson).toContain('"command"');
+    expect(presentationSchemaJson).toContain('"const":"url"');
+    expect(presentationSchemaJson).toContain('"const":"web-app"');
+    expect(presentationSchemaJson).toContain('"widgetId"');
+    expect(webAppRequiredFields).toEqual(
+      expect.arrayContaining([
+        ["type", "url"],
+        ["type", "widgetId"],
+      ]),
+    );
+    expect(presentationSchemaJson).not.toContain('"const":"approval"');
+    expect(presentationSchemaJson).not.toContain('"const":"question"');
+    expect(presentationSchemaJson).toContain('"chartType"');
+    expect(presentationSchemaJson).toContain('"pie"');
+    expect(presentationSchemaJson).toContain('"table"');
+    expect(presentationSchemaJson).toContain('"caption"');
+    expect(presentationSchemaJson).toContain('"headers"');
+    expect(presentationSchemaJson).toContain('"rows"');
+    expect(presentationSchemaJson).toContain('"rowHeaderColumnIndex"');
+    expect(presentationSchemaJson).not.toContain('"maxItems"');
+    expect(presentationSchemaJson).not.toContain('"maxLength"');
+    expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
+    expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
+    expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
+    expect(
+      (
+        presentationBlockItemSchema as {
+          properties?: { rows?: { items?: { items?: unknown } } };
+        }
+      ).properties?.rows?.items?.items,
+    ).toEqual({ type: ["string", "number"] });
+    expect(properties.components).toBeUndefined();
+    expect(properties.blocks).toBeUndefined();
+    expect(properties.buttons).toBeUndefined();
+    for (const action of expectedActions) {
+      expect(actionEnum).toContain(action);
+    }
+    if (expectTelegramPollExtras) {
+      expect(properties).toHaveProperty("pollDurationSeconds");
+      expect(properties).toHaveProperty("pollAnonymous");
+      expect(properties).toHaveProperty("pollPublic");
+    } else {
+      expect(properties.pollDurationSeconds).toBeUndefined();
+      expect(properties.pollAnonymous).toBeUndefined();
+      expect(properties.pollPublic).toBeUndefined();
+    }
+    expect(properties).toHaveProperty("pollId");
+    expect(properties).toHaveProperty("pollOptionIndex");
+    expect(properties).toHaveProperty("pollOptionId");
+  });
 
   it("includes poll in the action enum when the current channel supports poll actions", () => {
     setActivePluginRegistry(
@@ -3663,6 +3669,56 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("activityName");
     expect(properties).not.toHaveProperty("eventName");
   });
+
+  it.each([
+    { action: "channel-info", hasTeamId: true },
+    { action: "channel-list", hasTeamId: true },
+    { action: "conversation-open", hasTeamId: true },
+    { action: "send", hasTeamId: false },
+    { action: "read", hasTeamId: false },
+  ] as const)(
+    "limits teamId to consuming actions when only $action is allowed",
+    ({ action, hasTeamId }) => {
+      const plugin = createChannelPlugin({
+        id: "test-channel",
+        label: "Test Channel",
+        docsPath: "/channels/test-channel",
+        blurb: "Team and workspace action schema fixture.",
+        actions: ["send", "read", "channel-info", "channel-list", "conversation-open"],
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "test-channel", source: "test", plugin }]),
+      );
+
+      for (const currentChannelProvider of ["test-channel", undefined]) {
+        const tool = createMessageTool({
+          config: {
+            agents: {
+              list: [{ id: "schema-agent", tools: { message: { actions: { allow: [action] } } } }],
+            },
+          },
+          agentId: "schema-agent",
+          currentChannelProvider,
+        });
+        const properties = getToolProperties(tool);
+        expect(getActionEnum(properties)).toEqual([action]);
+        if (!hasTeamId) {
+          expect(properties).not.toHaveProperty("teamId");
+          continue;
+        }
+        expectStringSchema(properties.teamId);
+        expect(Value.Check(tool.parameters, { action })).toBe(true);
+        for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
+          expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
+        }
+        if (currentChannelProvider && action === "conversation-open") {
+          for (const field of ["channelId", "guildId", "userId", "roleId"]) {
+            expect(properties).not.toHaveProperty(field);
+          }
+        }
+      }
+    },
+  );
 
   it("prunes fields for action groups that discovery does not advertise", () => {
     const plugin = createChannelPlugin({
@@ -4132,7 +4188,7 @@ describe("message tool description", () => {
 
   it("describes userId as required directly for member-info, not via target", () => {
     const tool = createMessageTool({
-      config: {} as never,
+      config: { tools: { message: { actions: { allow: ["member-info"] } } } },
     });
     const properties = getToolProperties(tool);
     const userId = properties.userId as { description?: string } | undefined;
@@ -4400,65 +4456,47 @@ describe("message tool description", () => {
 
 describe("message tool reasoning tag sanitization", () => {
   it.each([
-    {
-      field: "text",
-      input: "<think>internal reasoning</think>Hello!",
-      expected: "Hello!",
-      target: "signal:+15551234567",
-      channel: "signal",
-    },
-    {
-      field: "content",
-      input: "<think>reasoning here</think>Reply text",
-      expected: "Reply text",
-      target: "discord:123",
-      channel: "discord",
-    },
-    {
-      field: "text",
-      input: "Normal message without any tags",
-      expected: "Normal message without any tags",
-      target: "signal:+15551234567",
-      channel: "signal",
-    },
-    {
-      field: "message",
-      input: "Thinking...\nI'll check that now",
-      expected: "Thinking...\nI'll check that now",
-      target: "telegram:123",
-      channel: "telegram",
-    },
-    {
-      field: "message",
-      input: "<internal>private reflection</internal>Visible answer",
-      expected: "Visible answer",
-      target: "telegram:123",
-      channel: "telegram",
-    },
-    {
-      field: "message",
-      input: "Thinking\n_internal plan_\n\nVisible answer",
-      expected: "Visible answer",
-      target: "telegram:123",
-      channel: "telegram",
-    },
-    {
-      field: "message",
-      input: "Thinking\n_internal plan_\n_more internal notes_",
-      expected: "",
-      target: "telegram:123",
-      channel: "telegram",
-    },
-    {
-      field: "message",
-      input: "Reasoning:\n_internal plan_\n\nVisible answer",
-      expected: "Visible answer",
-      target: "telegram:123",
-      channel: "telegram",
-    },
+    ["text", "<think>internal reasoning</think>Hello!", "Hello!", "signal:+15551234567", "signal"],
+    ["content", "<think>reasoning here</think>Reply text", "Reply text", "discord:123", "discord"],
+    [
+      "text",
+      "Normal message without any tags",
+      "Normal message without any tags",
+      "signal:+15551234567",
+      "signal",
+    ],
+    [
+      "message",
+      "Thinking...\nI'll check that now",
+      "Thinking...\nI'll check that now",
+      "telegram:123",
+      "telegram",
+    ],
+    [
+      "message",
+      "<internal>private reflection</internal>Visible answer",
+      "Visible answer",
+      "telegram:123",
+      "telegram",
+    ],
+    [
+      "message",
+      "Thinking\n_internal plan_\n\nVisible answer",
+      "Visible answer",
+      "telegram:123",
+      "telegram",
+    ],
+    ["message", "Thinking\n_internal plan_\n_more internal notes_", "", "telegram:123", "telegram"],
+    [
+      "message",
+      "Reasoning:\n_internal plan_\n\nVisible answer",
+      "Visible answer",
+      "telegram:123",
+      "telegram",
+    ],
   ])(
-    "sanitizes reasoning tags in $field before sending",
-    async ({ channel, target, field, input, expected }) => {
+    "sanitizes reasoning tags in %s before sending",
+    async (field, input, expected, target, channel) => {
       mockSendResult({ channel, to: target });
 
       const call = await executeSend({
@@ -4515,6 +4553,12 @@ describe("message tool reasoning tag sanitization", () => {
               xLabel: "<think>axis rationale</think>Day",
               yLabel: "<think>axis rationale</think>Milliseconds",
             },
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Traffic",
+              segments: [{ label: "<think>segment rationale</think>Primary", value: 1 }],
+            },
           ],
         },
       },
@@ -4548,9 +4592,85 @@ describe("message tool reasoning tag sanitization", () => {
           xLabel: "Day",
           yLabel: "Milliseconds",
         },
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Traffic",
+          segments: [{ label: "Primary", value: 1 }],
+        },
       ],
     });
   });
+
+  it.each([true, false])(
+    "sanitizes every presentation record array while retaining the first reason (option suppressed: %s)",
+    (suppressOption) => {
+      const internalContext =
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+      const inboundContext = [
+        markInboundContextLabel("Conversation info:"),
+        "```json",
+        '{"chat_id":"group:test","sender_id":"test-sender"}',
+        "```",
+      ].join("\n");
+      const metadata = { retained: true };
+      const option = { label: suppressOption ? internalContext : "  Choice  ", metadata };
+      const nonString = { label: 7 };
+      const invalidArray = ["<think>unchanged</think>"];
+      const presentation = {
+        blocks: [
+          {
+            options: [option, null, invalidArray, nonString],
+            categories: [inboundContext],
+            segments: [
+              { label: internalContext, value: 1 },
+              { label: "<think>segment rationale</think>Slice", value: 2 },
+            ],
+            series: [
+              { name: internalContext, values: [1] },
+              { name: "<think>series rationale</think>Trend", values: [2] },
+            ],
+          },
+        ],
+      };
+      const original = structuredClone(presentation);
+      const params = { presentation };
+
+      expect(sanitizeMessageToolVisiblePayload(params)).toBe(
+        suppressOption ? "internal_runtime_context_echo" : "inbound_metadata_echo",
+      );
+
+      const block = params.presentation.blocks[0];
+      expect(block).toEqual({
+        options: [
+          { label: suppressOption ? "" : "  Choice  ", metadata },
+          null,
+          invalidArray,
+          nonString,
+        ],
+        categories: [""],
+        segments: [
+          { label: "", value: 1 },
+          { label: "Slice", value: 2 },
+        ],
+        series: [
+          { name: "", values: [1] },
+          { name: "Trend", values: [2] },
+        ],
+      });
+      expect(params.presentation).not.toBe(presentation);
+      expect(block).not.toBe(presentation.blocks[0]);
+      for (const field of ["options", "segments", "series"] as const) {
+        expect(block?.[field]).not.toBe(presentation.blocks[0]?.[field]);
+      }
+      expect(block?.options[0]).not.toBe(option);
+      expect(block?.options[2]).toBe(invalidArray);
+      expect(block?.options[3]).not.toBe(nonString);
+      expect(block?.segments[0]).not.toBe(presentation.blocks[0]?.segments[0]);
+      expect(block?.series[0]).not.toBe(presentation.blocks[0]?.series[0]);
+      expect(presentation).toEqual(original);
+    },
+  );
 
   it("strips internal runtime context from visible presentation fields before sending (#53732)", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
@@ -4669,7 +4789,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   afterEach(() => {
-    clearBootEchoContextForSession("agent:main");
+    clearBootEchoContextForSession("agent:main:main");
   });
 
   it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
@@ -4716,7 +4836,7 @@ describe("message tool boot-echo guard", () => {
   ] as const)(
     "preserves %s after sanitizing boot echo in %s: %j",
     async (mediaField, textField, media) => {
-      setBootEchoContextForSession("agent:main", longBootPrompt);
+      setBootEchoContextForSession("agent:main:main", longBootPrompt);
       mockSendResult({ channel: "telegram", to: "telegram:123" });
 
       const echoedText =
@@ -4727,7 +4847,7 @@ describe("message tool boot-echo guard", () => {
           [textField]: echoedText,
           [mediaField]: structuredClone(media),
         },
-        toolOptions: { agentSessionKey: "agent:main" },
+        toolOptions: { agentSessionKey: "agent:main:main" },
       });
       expect(call?.params?.[textField]).toBe("");
       expect(call?.params?.[mediaField]).toEqual(media);
@@ -4735,7 +4855,7 @@ describe("message tool boot-echo guard", () => {
   );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     const call = await executeSend({
@@ -4743,7 +4863,7 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Good morning! Project status looks healthy today.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
   });
@@ -4756,13 +4876,13 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Any message goes through unchanged.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Any message goes through unchanged.");
   });
 
   it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedBootText =
@@ -4787,7 +4907,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.presentation).toEqual({
@@ -4808,7 +4928,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   it("sanitizes boot echo text from presentation button links before dispatch", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedText =
@@ -4847,7 +4967,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.message).toBe("Visible");
@@ -4873,41 +4993,37 @@ describe("message tool boot-echo guard", () => {
 
 describe("message tool internal-runtime-context sanitization", () => {
   it.each([
-    {
-      field: "text",
-      input:
-        "Here is the boot info:\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
-      expected: "Here is the boot info:\n\nDone.",
-      target: "signal:+15551234567",
-      channel: "signal",
-    },
-    {
-      field: "content",
-      input:
-        "Before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nAfter",
-      expected: "Before\n\nAfter",
-      target: "discord:123",
-      channel: "discord",
-    },
-    {
-      field: "message",
-      input:
-        "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
-      expected: "Here is the boot info:\n\nDone.",
-      target: "telegram:123",
-      channel: "telegram",
-    },
-    {
-      field: "SendMessage",
-      input:
-        "Alias\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
-      expected: "Alias\n\nDone.",
-      target: "telegram:123",
-      channel: "telegram",
-    },
+    [
+      "text",
+      "Here is the boot info:\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      "Here is the boot info:\n\nDone.",
+      "signal:+15551234567",
+      "signal",
+    ],
+    [
+      "content",
+      "Before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nAfter",
+      "Before\n\nAfter",
+      "discord:123",
+      "discord",
+    ],
+    [
+      "message",
+      "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
+      "Here is the boot info:\n\nDone.",
+      "telegram:123",
+      "telegram",
+    ],
+    [
+      "SendMessage",
+      "Alias\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      "Alias\n\nDone.",
+      "telegram:123",
+      "telegram",
+    ],
   ])(
-    "strips internal-runtime-context blocks in $field before sending so verbatim boot-prompt echoes do not leak (#53732)",
-    async ({ channel, target, field, input, expected }) => {
+    "strips internal-runtime-context blocks in %s before sending so verbatim boot-prompt echoes do not leak (#53732)",
+    async (field, input, expected, target, channel) => {
       mockSendResult({ channel, to: target });
 
       const call = await executeSend({
@@ -4950,29 +5066,22 @@ describe("message tool internal-runtime-context sanitization", () => {
   });
 
   it.each([
-    {
-      name: "delivery hint only",
-      message:
-        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-    },
-    {
-      name: "narration-aware delivery hint only",
-      message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
-    },
-    {
-      name: "room-event delivery hint only",
-      message: ROOM_EVENT_DELIVERY_HINT,
-    },
-    {
-      name: "inbound metadata only",
-      message: [
+    [
+      "delivery hint only",
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    ],
+    ["narration-aware delivery hint only", MESSAGE_TOOL_ONLY_DELIVERY_HINT],
+    ["room-event delivery hint only", ROOM_EVENT_DELIVERY_HINT],
+    [
+      "inbound metadata only",
+      [
         markInboundContextLabel("Conversation info:"),
         "```json",
         '{"chat_id":"group:abc","sender_id":"+15551234567"}',
         "```",
       ].join("\n"),
-    },
-  ])("suppresses outbound sends that contain only $name (#89100)", async ({ message }) => {
+    ],
+  ])("suppresses outbound sends that contain only %s (#89100)", async (_name, message) => {
     const { call, result } = await executeSendWithResult({
       action: {
         target: "signal:group-1",

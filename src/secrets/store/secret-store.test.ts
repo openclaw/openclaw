@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -12,12 +13,15 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../sentinel.js";
 import {
+  captureSecretStoreExpiryCutoffs,
+  purgeExpiredSecretStoreEntriesInDatabase,
+} from "./secret-store-expiry.kernel.js";
+import {
   consumeGitHubSetupHandoff,
   deleteHiddenGitHubSecretRecord,
   deleteSecretStoreEntry,
   listHiddenGitHubSecretRecordNames,
   listSecretStoreEntries,
-  purgeExpiredSecretStoreEntries,
   readHiddenGitHubSecretRecord,
   readSecretStoreExecEnvironment,
   readSecretStoreValue,
@@ -25,6 +29,15 @@ import {
   writeHiddenGitHubSecretRecord,
   writeSecretStoreEntry,
 } from "./secret-store.js";
+
+function purgeExpiredSecretStoreEntries(params: {
+  database: ReturnType<typeof createDatabaseOptions>;
+}) {
+  return purgeExpiredSecretStoreEntriesInDatabase(
+    captureSecretStoreExpiryCutoffs(),
+    params.database,
+  );
+}
 
 const roots: string[] = [];
 const team = { kind: "team" } as const;
@@ -449,6 +462,127 @@ describe("secret store", () => {
     expect(purgeExpiredSecretStoreEntries({ database })).toBe(0);
     expect(countStoredRows(database, oauthName)).toBe(1);
   });
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "does not materialize unrelated expiry metadata with %s storage",
+    (encoding) => {
+      const database = createDatabaseOptions();
+      const { DatabaseSync } = requireNodeSqlite();
+      const initial = new DatabaseSync(database.path);
+      // Encoding must be fixed before the canonical schema is created.
+      initial.exec(`PRAGMA encoding = '${encoding}'; CREATE TABLE fixture_encoding (value TEXT);`);
+      initial.close();
+      const { db } = openOpenClawStateDatabase(database);
+      expect(db.prepare("PRAGMA encoding").get()).toEqual({ encoding });
+      const now = Date.parse("2026-02-01T00:00:00.000Z");
+      const minute = 60_000;
+      const retention = 30 * 24 * 60 * minute;
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const fixtures: {
+        name: string;
+        ageMs: number;
+        expired?: boolean;
+        scopeKind?: "team" | "identity";
+        kind?: "secret" | "env";
+        deletedAgeMs?: number;
+      }[] = [];
+      for (const prefix of ["github-setup", "github-device"]) {
+        const deadline = (prefix === "github-setup" ? 10 : 15) * minute;
+        fixtures.push(
+          { name: `${prefix}-${"0".repeat(32)}`, ageMs: deadline - 1 },
+          {
+            name: `${prefix}-${"1".repeat(32)}`,
+            ageMs: deadline,
+            expired: prefix === "github-device",
+          },
+          { name: `${prefix}-${"2".repeat(32)}`, ageMs: deadline + 1, expired: true },
+          {
+            name: `${prefix}-${"f".repeat(32)}`,
+            ageMs: deadline + 1,
+            expired: true,
+            scopeKind: "identity",
+            kind: "env",
+          },
+          ...[
+            `${prefix}-${"A".repeat(32)}`,
+            `${prefix}-${"a".repeat(31)}`,
+            `${prefix}-${"a".repeat(33)}`,
+            `${prefix}-${"a".repeat(32)}\n`,
+            `${prefix}-${"a".repeat(32)}\0`,
+            `${prefix}-é${"a".repeat(31)}`,
+            `${prefix.toUpperCase()}-${"a".repeat(32)}`,
+            `${prefix}.`,
+          ].map((name) => ({ name, ageMs: 60 * minute })),
+        );
+      }
+      const unrelatedNames = [
+        ...Array.from({ length: 64 }, (_, index) => `UNRELATED_${index}`),
+        `github-oauth-${"a".repeat(32)}`,
+        "github-connection",
+      ];
+      fixtures.push(
+        ...unrelatedNames.map((name, index) => ({
+          name,
+          ageMs: 60 * minute,
+          kind: index % 2 ? ("env" as const) : ("secret" as const),
+          scopeKind: index % 2 ? ("identity" as const) : ("team" as const),
+        })),
+        { name: "DELETED_AT_BOUNDARY", ageMs: retention + 1, deletedAgeMs: retention },
+        {
+          name: "DELETED_BEFORE_BOUNDARY",
+          ageMs: retention + 1,
+          deletedAgeMs: retention + 1,
+          expired: true,
+        },
+      );
+      const insert = db.prepare(`
+        INSERT INTO secret_store_entries
+          (scope_kind, scope_id, name, kind, value, created_at_ms, updated_at_ms, deleted_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const fixture of fixtures) {
+        insert.run(
+          fixture.scopeKind ?? "team",
+          fixture.scopeKind === "identity" ? "fixture-identity" : "",
+          fixture.name,
+          fixture.kind ?? "secret",
+          `synthetic-expiry:${fixture.name}`,
+          now - fixture.ageMs,
+          now - fixture.ageMs,
+          fixture.deletedAgeMs === undefined ? null : now - fixture.deletedAgeMs,
+        );
+      }
+      const readRows = () => db.prepare("SELECT * FROM secret_store_entries ORDER BY name").all();
+      const before = readRows();
+      const expiredNames = new Set(
+        fixtures.filter((fixture) => fixture.expired).map(({ name }) => name),
+      );
+      const execute = vi.spyOn(kyselySync, "executeSqliteQuerySync");
+      try {
+        expect(purgeExpiredSecretStoreEntries({ database })).toBe(expiredNames.size);
+        expect(readRows()).toEqual(before.filter((row) => !expiredNames.has(String(row.name))));
+        const materialized = execute.mock.results.flatMap((result) =>
+          result.type === "return" && isRecord(result.value) && Array.isArray(result.value.rows)
+            ? result.value.rows.flatMap((row) =>
+                isRecord(row) && typeof row.name === "string" ? [row.name] : [],
+              )
+            : [],
+        );
+        expect(materialized).toEqual(
+          expect.arrayContaining([
+            `github-setup-${"1".repeat(32)}`,
+            `github-device-${"1".repeat(32)}`,
+            `github-setup-${"f".repeat(32)}`,
+            `github-device-${"f".repeat(32)}`,
+          ]),
+        );
+        expect(materialized.filter((name) => unrelatedNames.includes(name))).toEqual([]);
+      } finally {
+        execute.mockRestore();
+      }
+    },
+  );
 
   it("hard-deletes reserved setup names while ordinary secrets remain soft-deleted", () => {
     const database = createDatabaseOptions();

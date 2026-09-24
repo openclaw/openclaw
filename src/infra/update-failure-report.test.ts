@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { VERSION } from "../version.js";
 import type { GithubIssueSubmitHooks, PreparedGithubIssue } from "./github-issue.js";
@@ -18,7 +19,7 @@ import {
   mockFallbackIssue,
   mockFallbackAfterIssueCreateNoStart,
 } from "./update-failure-report.test-support.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -597,29 +598,28 @@ describe("update failure report", () => {
     const validationGate = new Promise<boolean>((resolve) => {
       finishValidation = () => resolve(false);
     });
+    const { promise: validationStarted, resolve: markValidationStarted } = createDeferred();
     const validateCurrentAttempt = vi
       .fn<() => boolean | Promise<boolean>>()
       .mockReturnValueOnce(true)
-      .mockReturnValueOnce(validationGate);
+      .mockImplementationOnce(() => {
+        markValidationStarted();
+        return validationGate;
+      });
     const oldCreateIssue = vi.fn();
     const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
       createIssue: oldCreateIssue,
       stateDir,
       validateCurrentAttempt,
     });
-    await vi.waitFor(() => expect(validateCurrentAttempt).toHaveBeenCalledTimes(2));
+    await validationStarted;
+    expect(validateCurrentAttempt).toHaveBeenCalledTimes(2);
     const oldReportPath = currentSavedReportArtifactPath(prepared, stateDir);
     expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
 
     const realRm = fs.rm.bind(fs);
-    let releaseFirstCleanup!: () => void;
-    const firstCleanupGate = new Promise<void>((resolve) => {
-      releaseFirstCleanup = resolve;
-    });
-    let firstCleanupStarted!: () => void;
-    const firstCleanupStart = new Promise<void>((resolve) => {
-      firstCleanupStarted = resolve;
-    });
+    const { promise: firstCleanupGate, resolve: releaseFirstCleanup } = createDeferred();
+    const { promise: firstCleanupStart, resolve: firstCleanupStarted } = createDeferred();
     let blockedFirstCleanup = false;
     const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (String(target) === oldReportPath && !blockedFirstCleanup) {
@@ -721,14 +721,8 @@ describe("update failure report", () => {
     );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    let releaseOldWrite!: () => void;
-    const oldWriteGate = new Promise<void>((resolve) => {
-      releaseOldWrite = resolve;
-    });
-    let oldWriteStarted!: () => void;
-    const oldWriteStartedGate = new Promise<void>((resolve) => {
-      oldWriteStarted = resolve;
-    });
+    const { promise: oldWriteGate, resolve: releaseOldWrite } = createDeferred();
+    const { promise: oldWriteStartedGate, resolve: oldWriteStarted } = createDeferred();
     let delayFirstStagedWrite = true;
     const writeFile = fs.writeFile;
     const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
@@ -844,14 +838,8 @@ describe("update failure report", () => {
       }),
     ).toBe(true);
 
-    let releaseExpiredSweep!: () => void;
-    const expiredSweepGate = new Promise<void>((resolve) => {
-      releaseExpiredSweep = resolve;
-    });
-    let expiredSweepClaimed!: () => void;
-    const expiredSweepClaimedGate = new Promise<void>((resolve) => {
-      expiredSweepClaimed = resolve;
-    });
+    const { promise: expiredSweepGate, resolve: releaseExpiredSweep } = createDeferred();
+    const { promise: expiredSweepClaimedGate, resolve: expiredSweepClaimed } = createDeferred();
     const staleListCandidates = vi.fn(async () => {
       throw new Error("an expired sweep holder must not scan after takeover");
     });
@@ -870,14 +858,9 @@ describe("update failure report", () => {
     await expiredSweepClaimedGate;
 
     nowMs += 10 * 60_000;
-    let releaseSuccessorTransport!: () => void;
-    const successorTransportGate = new Promise<void>((resolve) => {
-      releaseSuccessorTransport = resolve;
-    });
-    let successorPublished!: () => void;
-    const successorPublishedGate = new Promise<void>((resolve) => {
-      successorPublished = resolve;
-    });
+    const { promise: successorTransportGate, resolve: releaseSuccessorTransport } =
+      createDeferred();
+    const { promise: successorPublishedGate, resolve: successorPublished } = createDeferred();
     let transportCount = 0;
     const successorCreateIssue = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
@@ -943,10 +926,7 @@ describe("update failure report", () => {
     );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    let releaseOldFallback!: () => void;
-    const oldFallbackGate = new Promise<void>((resolve) => {
-      releaseOldFallback = resolve;
-    });
+    const { promise: oldFallbackGate, resolve: releaseOldFallback } = createDeferred();
     const oldFallback = vi.fn(
       async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
         await hooks.afterAuthPreflight?.();

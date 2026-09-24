@@ -108,6 +108,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
     },
     false,
+    "visible",
   );
 
   private readonly subscriptions = new SubscriptionsController(this)
@@ -278,7 +279,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
   }
 
@@ -651,44 +652,20 @@ class ChannelsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(
         renderChannels({
-          connected: channels.connected,
-          loading: channels.channelsLoading,
-          snapshot: channels.channelsSnapshot,
-          pluginCatalog: this.pluginPresentation.pluginCatalog,
-          pluginIconUrls: this.pluginPresentation.pluginIconUrls,
-          lastError: channels.channelsError,
-          lastSuccessAt: channels.channelsLastSuccess,
-          pairingLoading: channels.pairingLoading,
-          pairingSnapshot: channels.pairingSnapshot,
-          pairingError: channels.pairingError,
-          pairingLastSuccessAt: channels.pairingLastSuccess,
-          pairingBusyRequestId: channels.pairingBusyRequestId,
+          channels,
+          config,
+          presentation: this.pluginPresentation,
+          wizardHost: this.wizardHost,
           pairingChannelFilter: this.pairingChannelFilter,
           pairingAccountFilter: this.pairingAccountFilter,
           pairingPrompt: this.pairingPrompt,
           pairingNotice: this.pairingNotice,
           canManagePairing,
           canAdmin,
-          whatsappMessage: channels.whatsappLoginMessage,
-          whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
-          whatsappConnected: channels.whatsappLoginConnected,
-          whatsappBusy: channels.whatsappBusy,
-          configSchema: config.configSchema,
-          configSchemaLoading: config.configSchemaLoading,
-          configForm: config.configForm,
-          configUiHints: config.configUiHints,
-          configSaving: config.configSaving,
-          configError: config.lastError,
-          configFormDirty: config.configFormDirty,
           showAdvancedSettings: loadSettings().showAdvancedSettings === true,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
-          wizard: this.wizardHost.state,
-          wizardMultiselect: this.wizardHost.multiselect,
-          wizardTextValue: this.wizardHost.textValue,
-          wizardSecretVisible: this.wizardHost.secretVisible,
-          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
           onShowDetail: (channelId) => {
             this.selectedChannel = channelId;
           },
@@ -700,11 +677,6 @@ class ChannelsPage extends OpenClawLightDomElement {
               this.wizardHost.startSetup(channelId);
             }
           },
-          onWizardAnswer: (value) => this.wizardHost.answer(value),
-          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
-          onWizardTextInput: (value) => this.wizardHost.setTextValue(value),
-          onWizardToggleSecretVisibility: () => this.wizardHost.toggleSecretVisibility(),
-          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
           onPairingRefresh: () => void context.channels.refreshPairing(),
           onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),

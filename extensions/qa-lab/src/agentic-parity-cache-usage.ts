@@ -1,3 +1,4 @@
+import type { RuntimeParityCacheMiss } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeId, RuntimeParityUsage } from "./runtime-parity.js";
 
 export type QaRuntimeParityCacheUsage = {
@@ -105,4 +106,25 @@ export function formatRuntimeCacheHitPercent(value: number | null | undefined): 
 
 export function formatRuntimeCacheCount(value: number | null | undefined): string {
   return value === null || value === undefined ? "N/A" : String(value);
+}
+
+export function formatCacheMisses(
+  misses: readonly RuntimeParityCacheMiss[] | null,
+  unmeasuredPostWarmTurns: readonly number[] | null,
+  inputLabel: "input" | "uncached input",
+): string {
+  if (misses === null) {
+    return unmeasuredPostWarmTurns?.length
+      ? `N/A (unmeasured turns ${unmeasuredPostWarmTurns.join(", ")})`
+      : "N/A";
+  }
+  const measuredMisses =
+    misses.length === 0
+      ? "none"
+      : misses.map((miss) => `turn ${miss.turn} (${miss.inputTokens} ${inputLabel})`).join(", ");
+  if (!unmeasuredPostWarmTurns?.length) {
+    return measuredMisses;
+  }
+  const unknownTurns = `unmeasured turns ${unmeasuredPostWarmTurns.join(", ")}`;
+  return measuredMisses === "none" ? `N/A (${unknownTurns})` : `${measuredMisses}; ${unknownTurns}`;
 }

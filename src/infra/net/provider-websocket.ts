@@ -2,7 +2,7 @@
 import http from "node:http";
 import type { Agent as HttpAgent } from "node:http";
 import https from "node:https";
-import WebSocket from "ws";
+import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { resolveProviderTransportSsrFPolicy } from "../../agents/provider-transport-fetch.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { racePromiseWithAbortSignal } from "../abort-signal.js";

@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runSecretsCommand } from "../cli/secrets-cli-output.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,27 +17,24 @@ it.each([true, false])(
   async (storePresent) => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
       await state.writeConfig({});
-      const sharedStore = {
-        version: 1,
-        profiles: {
-          "openai:plaintext": {
-            type: "api_key",
-            provider: "openai",
-            key: "synthetic-plaintext-value",
-          },
-          "openai:residue": {
-            type: "api_key",
-            provider: "openai",
-            key: "synthetic-residue-value",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          },
-          "openai:reference": {
-            type: "api_key",
-            provider: "openai",
-            key: "$OPENAI_API_KEY",
-          },
+      const sharedStore = createAuthProfileStoreFixture({
+        "openai:plaintext": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-plaintext-value",
         },
-      };
+        "openai:residue": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-residue-value",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+        "openai:reference": {
+          type: "api_key",
+          provider: "openai",
+          key: "$OPENAI_API_KEY",
+        },
+      });
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
       if (storePresent) {
         const { db } = openOpenClawStateDatabase({ env: state.env });
@@ -51,10 +50,11 @@ it.each([true, false])(
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       let stdout = "";
       let stderr = "";
-      const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-        stdout += String(chunk);
-        return true;
-      });
+      const stdoutWrite = vi
+        .spyOn(defaultRuntime, "writeJson")
+        .mockImplementation((value, space) => {
+          stdout += `${JSON.stringify(value, null, space && space > 0 ? space : undefined)}\n`;
+        });
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
         stderr += String(chunk);
         return true;

@@ -13,6 +13,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,10 @@ const closure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-source.mjs",
   "scripts/lib/frozen-target-compat.sh",
@@ -487,7 +491,6 @@ describe("frozen admission upgrade Docker aliases", () => {
     "live-cli-backend-claude",
     "live-cli-backend-gemini",
     "update-first-hop-compat",
-    "update-run-package-self-upgrade",
     "release-user-journey",
     "release-upgrade-user-journey",
   ])("keeps unselected upgrade contracts inert for %s", (lane) => {
@@ -509,10 +512,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const result = f.run({ docker: { lanes: [lane] } });
+    const lanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes: [lane], omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,
@@ -548,6 +552,7 @@ describe("frozen admission bootstrap repairs", () => {
   it.each([
     entrypoint,
     "scripts/lib/official-external-channel-catalog.json",
+    "scripts/lib/upgrade-survivor-scenarios.json",
     `${recipeDirectory}/agents.json`,
     "package.json",
     "pnpm-lock.yaml",
@@ -795,6 +800,7 @@ describe("frozen admission entry", () => {
       expect(JSON.parse(result.stdout).contracts[0].files).toEqual([
         { source: "selected", path: scenario },
         { source: "tooling", path: "scripts/e2e/lib/release-scenarios/assertions.mjs" },
+        { source: "tooling", path: "scripts/e2e/lib/release-assertion-files.mjs" },
         { source: "tooling", path: "scripts/e2e/lib/fixtures/mock-openai-config.mjs" },
       ]);
     },
@@ -979,6 +985,41 @@ describe("frozen admission entry", () => {
       );
     },
   );
+
+  it("admits the current JSON catalog through the dependency-free cold entry", () => {
+    const catalogPath = "scripts/lib/upgrade-survivor-scenarios.json";
+    const assertionsPath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+    const policyPath = "scripts/lib/upgrade-survivor-policy.mjs";
+    const sentinelCode = '\nthrow new Error("selected module must not execute");\n';
+    const f = fixture({
+      "package.json": '{"version":"2026.9.9"}',
+      [catalogPath]: readFileSync(catalogPath, "utf8"),
+      [assertionsPath]: readFileSync(assertionsPath, "utf8") + sentinelCode,
+      [policyPath]: readFileSync(policyPath, "utf8") + sentinelCode,
+    });
+    writeFileSync(
+      join(f.selected.root, catalogPath),
+      "dirty data must not replace committed catalog",
+    );
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+    const result = f.run({
+      docker: { lanes: ["published-upgrade-survivor"], baselines: "2026.9.4", scenarios: "base" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.docker).toEqual({
+      lanes: ["published-upgrade-survivor-2026.9.4"],
+      omitted: [],
+      status: "ADMITTED",
+    });
+    expect(record.sources.selected).toContainEqual({
+      path: catalogPath,
+      oid: f.selected.git("rev-parse", `${f.selected.sha}:${catalogPath}`),
+    });
+    expect(existsSync(join(f.tooling.root, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.selected.root, "node_modules"))).toBe(false);
+  });
 
   it("shares the Codex and fs-safe cores while preserving source read errors", () => {
     const catalog = "extensions/codex/provider-catalog.ts";

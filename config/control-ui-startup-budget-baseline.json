@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 355143,
-  "reason": "Integrated Control UI changes since the 2026-09-11 baseline (initial catalog snapshot on connect, read-only session sharing, dashboard embedding, and dependency updates) now measure 355143 B on main (+603 B, 0.17%); an independent exact-head build measured 355143 B (within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained.",
-  "updatedAt": "2026-09-13"
+  "startupJsGzipBytes": 370756,
+  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
+  "updatedAt": "2026-09-22"
 }

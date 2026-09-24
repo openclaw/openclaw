@@ -174,14 +174,19 @@ describe("buildPromptSection", () => {
     [["sessions_history"], ["sessions_history"], ["sessions_search"]],
     [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
   ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
-    const prompt = buildMemoryPromptSection({
+    const { search, promptBuilder } = captureMemoryModelContract({
+      agents: { list: [{ id: "main", default: true }] },
+    });
+    const prompt = promptBuilder({
       availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
+      agentId: "main",
     }).join("\n");
+    const modelVisibleText = `${search.description}\n${prompt}`;
     for (const name of included) {
-      expect(prompt).toContain(name);
+      expect(modelVisibleText).toContain(name);
     }
     for (const name of excluded) {
-      expect(prompt).not.toContain(name);
+      expect(modelVisibleText).not.toContain(name);
     }
     expect(prompt).toContain("Session search line numbers are not history offsets");
     expect(prompt).toContain("Never read raw transcript files");
@@ -250,9 +255,8 @@ describe("buildPromptSection", () => {
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
       expect(text.length).toBeLessThan(3_000);
     }
-    expect(lazy.search.description.includes("indexed session transcripts")).toBe(
-      sourceCase.sessions,
-    );
+    const defaultSearchScope = lazy.search.description.split(" before answering", 1)[0] ?? "";
+    expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
     expect(lazy.search.description).toContain("results are partial");
@@ -359,8 +363,13 @@ describe("memory-core plugin runtime registration", () => {
         runtime: hostRuntime,
         logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
         registerTool(factory, options) {
-          if (options?.names?.includes("intent") && typeof factory === "function") {
-            intentFactory = factory as typeof intentFactory;
+          if (
+            options?.names?.includes("intent") &&
+            typeof factory !== "function" &&
+            "contextVersion" in factory
+          ) {
+            expect(factory.contextVersion).toBe(2);
+            intentFactory = (ctx) => factory.create({ ...ctx, assertInvocationCurrent: () => {} });
           }
         },
       }),

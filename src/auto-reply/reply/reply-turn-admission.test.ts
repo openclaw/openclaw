@@ -1,18 +1,13 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   replaceSessionEntry,
-  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import * as sessionEntryAccessor from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   resetDiagnosticRunActivityForTest,
@@ -20,7 +15,6 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
-  beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -33,7 +27,12 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
-import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import {
+  admitTestReplyTurn,
+  createSessionStore,
+  createSessionStoreFor,
+} from "./reply-turn-admission.test-support.js";
 
 const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
   beforeRelease: vi.fn(async () => {}),
@@ -69,20 +68,11 @@ vi.mock(
   }),
 );
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 function createTestReplyOperation(
   overrides: Omit<Parameters<typeof createReplyOperation>[0], "resetTriggered"> &
     Partial<Pick<Parameters<typeof createReplyOperation>[0], "resetTriggered">>,
 ) {
   return createReplyOperation({ resetTriggered: false, ...overrides });
-}
-
-function admitTestReplyTurn(
-  overrides: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered"> &
-    Partial<Pick<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered">>,
-) {
-  return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
 }
 
 async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyTurn>[0]) {
@@ -91,21 +81,6 @@ async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyT
     throw new Error("Fixture requires an admitted reply operation");
   }
   return admission.operation;
-}
-
-function createSessionStore(entries: Record<string, object>): string {
-  const root = tempDirs.make("openclaw-reply-admission-");
-  // The store handle stays a sessions.json path; the sqlite-backed accessor
-  // resolves it to the per-agent DB, so fixtures must seed through the accessor.
-  const storePath = path.join(root, "sessions.json");
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    replaceSessionEntrySync({ sessionKey, storePath }, entry as SessionEntry);
-  }
-  return storePath;
-}
-
-function createSessionStoreFor(sessionKey: string, sessionId: string) {
-  return createSessionStore({ [sessionKey]: { sessionId, updatedAt: Date.now() } });
 }
 
 async function readSessionEntry(
@@ -134,56 +109,6 @@ describe("reply turn admission", () => {
     if (admission.status === "owned") {
       expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
       admission.operation.complete();
-    }
-  });
-
-  it("waits for the named recovery owner before admitting a queued followup", async () => {
-    const sessionKey = "agent:main:queued-recovery-owner";
-    const sessionId = "queued-recovery-owner";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const owner = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-      assertAllowed: () => {},
-    });
-    const loadSpy = vi.spyOn(sessionEntryAccessor, "loadSessionEntryForAdmission");
-    const controller = new AbortController();
-    const admission = admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      storePath,
-      kind: "queued_followup",
-      upstreamAbortSignal: controller.signal,
-    });
-    let settled = false;
-    void admission.then(() => {
-      settled = true;
-    });
-    let result: Awaited<typeof admission> | undefined;
-    let completed = false;
-    try {
-      await vi.waitFor(() => expect(loadSpy.mock.calls.length).toBeGreaterThanOrEqual(2));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(settled).toBe(false);
-      owner.release();
-      result = await admission;
-      expect(result.status).toBe("owned");
-      if (result.status === "owned") {
-        result.operation.complete();
-        completed = true;
-      }
-    } finally {
-      controller.abort();
-      owner.release();
-      result ??= await admission;
-      if (!completed && result.status === "owned") {
-        result.operation.complete();
-      }
-      loadSpy.mockRestore();
     }
   });
 
@@ -607,9 +532,11 @@ describe("reply turn admission", () => {
         successorSettled = true;
       });
       await vi.advanceTimersByTimeAsync(100);
+      // Worker I/O settles on real turns, not fake-clock advancement. No later
+      // retry timer is advanced while joining the successor admission.
+      const admitted = await successor;
       expect(successorSettled).toBe(true);
       accessorSpy.mockRestore();
-      const admitted = await successor;
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
         admitted.operation.complete();
@@ -1357,7 +1284,7 @@ describe("reply turn admission", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      expectedActiveOperation: active,
+      expectedActiveOperations: [active],
       storePath,
     });
 
@@ -1467,7 +1394,7 @@ describe("reply turn admission", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      expectedActiveOperation: active,
+      expectedActiveOperations: [active],
       storePath,
     });
 

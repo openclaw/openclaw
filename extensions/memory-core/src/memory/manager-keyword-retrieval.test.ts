@@ -597,51 +597,45 @@ describe("memory index", () => {
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
-    try {
-      const manager = await getFtsSessionManager({
-        stateDirName: ".state-session-ranking",
-      });
-      if (!manager) {
-        return;
-      }
-
-      const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
-      await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
-      const staleAt = new Date("2020-01-01T00:00:00.000Z");
-      await fs.utimes(memoryPath, staleAt, staleAt);
-
-      const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-ranking",
-        messages: [
-          {
-            role: "user",
-            timestamp: new Date(now - 30_000).toISOString(),
-            content: "What is the current Project Nebula codename?",
-          },
-          {
-            role: "assistant",
-            timestamp: new Date(now).toISOString(),
-            content: "The current Project Nebula codename is ORBIT-10.",
-          },
-        ],
-      });
-
-      await manager.sync({ reason: "test", force: true });
-      const results = await manager.search("current Project Nebula codename ORBIT-10", {
-        minScore: 0,
-        maxResults: 3,
-      });
-
-      expect(results[0]?.source).toBe("sessions");
-      expect(results[0]?.snippet).toContain("ORBIT-10");
-      expect(results[0]?.provenance).toMatchObject({
-        originClass: "untrusted",
-        sessionKind: "interactive",
-      });
-    } finally {
-      fixture.restoreStateDir();
+    const manager = await getFtsSessionManager();
+    if (!manager) {
+      return;
     }
+
+    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+    const staleAt = new Date("2020-01-01T00:00:00.000Z");
+    await fs.utimes(memoryPath, staleAt, staleAt);
+
+    const now = Date.parse("2026-04-07T15:25:04.113Z");
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-ranking",
+      messages: [
+        {
+          role: "user",
+          timestamp: new Date(now - 30_000).toISOString(),
+          content: "What is the current Project Nebula codename?",
+        },
+        {
+          role: "assistant",
+          timestamp: new Date(now).toISOString(),
+          content: "The current Project Nebula codename is ORBIT-10.",
+        },
+      ],
+    });
+
+    await manager.sync({ reason: "test", force: true });
+    const results = await manager.search("current Project Nebula codename ORBIT-10", {
+      minScore: 0,
+      maxResults: 3,
+    });
+
+    expect(results[0]?.source).toBe("sessions");
+    expect(results[0]?.snippet).toContain("ORBIT-10");
+    expect(results[0]?.provenance).toMatchObject({
+      originClass: "untrusted",
+      sessionKind: "interactive",
+    });
   });
 
   it.each([

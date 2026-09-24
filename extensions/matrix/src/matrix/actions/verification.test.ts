@@ -245,8 +245,9 @@ describe("matrix verification actions", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
-  it("prepares local crypto before resolving authoritative verification status", async () => {
+  it("refreshes own-device keys before resolving authoritative verification status", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);
+    const refreshOwnDeviceKeys = vi.fn(async () => undefined);
     const start = vi.fn(async () => undefined);
     const getOwnDeviceVerificationStatus = vi.fn().mockResolvedValue({
       encryptionEnabled: true,
@@ -274,6 +275,7 @@ describe("matrix verification actions", () => {
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({
         prepareForOneOff,
+        refreshOwnDeviceKeys,
         crypto: {
           listVerifications: vi.fn(async () => []),
           getRecoveryKey: vi.fn(async () => ({
@@ -293,6 +295,12 @@ describe("matrix verification actions", () => {
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
     expectResolvedActionClientReadinessNone();
     expect(prepareForOneOff).toHaveBeenCalledTimes(1);
+    expect(refreshOwnDeviceKeys).toHaveBeenCalledTimes(1);
+    const finalStatusReadOrder = getOwnDeviceVerificationStatus.mock.invocationCallOrder[1];
+    if (finalStatusReadOrder === undefined) {
+      throw new Error("expected a final Matrix verification status read");
+    }
+    expect(refreshOwnDeviceKeys.mock.invocationCallOrder[0]).toBeLessThan(finalStatusReadOrder);
     expect(start).not.toHaveBeenCalled();
     expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
     expect(withStartedActionClientMock).not.toHaveBeenCalled();

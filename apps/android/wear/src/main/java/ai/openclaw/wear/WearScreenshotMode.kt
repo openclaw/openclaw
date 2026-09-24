@@ -30,7 +30,6 @@ internal object WearScreenshotFixture {
   val snapshot =
     WearConversationSnapshot(
       gatewayState = WearGatewayState.CONNECTED,
-      activeAgentId = "main",
       agents =
         listOf(
           WearAgentSummary(
@@ -43,13 +42,13 @@ internal object WearScreenshotFixture {
       agentControlsSupported = true,
       gatewayControlsSupported = true,
       activeSessionId = "release-planning",
+      activeSessionTitle = "Release planning",
       sessions =
         listOf(
           WearSessionSummary(
             id = "release-planning",
             title = "Release planning",
-            updatedAtEpochMillis = 1_783_555_320_000,
-            selected = true,
+            openOnWatch = true,
           ),
         ),
       models =

@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
-import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   resolveAuthProfileEligibility,
@@ -380,16 +383,15 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
     try {
       for (const key of ["sk-first-write", "sk-second-write"]) {
-        writePersistedAuthProfileStoreRaw({
-          version: 1,
-          profiles: {
+        writePersistedAuthProfileStoreRaw(
+          createAuthProfileStoreFixture({
             "anthropic:written": {
               type: "api_key",
               provider: "anthropic",
               key,
             },
-          },
-        });
+          }),
+        );
       }
       expect(legacyJsonProbes).toBe(1);
     } finally {
@@ -1031,13 +1033,12 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 
   it("keeps unpaired standalone rotation state from selecting a same-suffix credential", async () => {
     const state = await makeTestState();
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
+    await state.writeAuthProfiles(
+      createAuthProfileStoreFixture({
         "openai:alpha": createApiKeyCredential("openai", "unrelated-key"),
         "openai:default": createApiKeyCredential("openai", "configured-key"),
-      },
-    });
+      }),
+    );
     const statePath = await state.writeText(
       "agents/main/agent/auth-state.json",
       `${JSON.stringify({
@@ -1422,12 +1423,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
   it("keeps existing SQLite credentials when importing stale JSON", async () => {
     const state = await makeTestState();
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": createApiKeyCredential("openai", "sk-fresh-sqlite"),
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": createApiKeyCredential("openai", "sk-fresh-sqlite"),
+      }),
       state.agentDir(),
       { syncExternalCli: false },
     );
@@ -1542,10 +1540,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       prompter: makePrompter(true),
       now: () => 464,
       deps: {
-        loadPersistedAuthProfileStore: () => ({
-          version: 1,
-          profiles: {},
-        }),
+        loadPersistedAuthProfileStore: () => createAuthProfileStoreFixture({}),
       },
     });
 
@@ -1631,12 +1626,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     });
     let loadCount = 0;
     const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
-    const concurrentStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:default": createApiKeyCredential("anthropic", "fake-concurrent-key"),
-      },
-    };
+    const concurrentStore: AuthProfileStore = createAuthProfileStoreFixture({
+      "anthropic:default": createApiKeyCredential("anthropic", "fake-concurrent-key"),
+    });
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
       cfg: {},
@@ -1858,6 +1850,25 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
         now: 470,
       },
       {
+        profileId: "agent-work",
+        cfg: {
+          auth: { profiles: { "agent-work": { key: "sk-config" } } },
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: {
+                models: {
+                  "openai/gpt-5.5": {
+                    agentRuntime: { authProfileId: "agent-work" },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        now: 472,
+      },
+      {
         profileId: "ordered",
         cfg: {
           auth: {
@@ -1893,6 +1904,44 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       expect(fs.existsSync(authPath)).toBe(false);
       expectNoMigratedArchive(authPath);
     }
+  });
+
+  it("does not infer a credential provider from conflicting keyed-agent model hints", async () => {
+    const state = await makeTestState();
+    const cfg = {
+      auth: { profiles: { ambiguous: { key: "sk-config" } } },
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { authProfileId: "ambiguous" },
+              },
+            },
+          },
+          ops: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                agentRuntime: { authProfileId: "ambiguous" },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      now: () => 475,
+    });
+
+    expect(result.detected).toStrictEqual([]);
+    expect(result.configChanged).toBeUndefined();
+    expect(result.warnings).toStrictEqual([]);
+    expect(cfg.auth?.profiles?.ambiguous).toEqual({ key: "sk-config" });
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
   });
 
   it("imports missing config credentials while preserving legacy JSON precedence", async () => {
@@ -2068,12 +2117,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     for (const entry of cases) {
       const state = await makeTestState();
       saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openai:default": entry.existing,
-          },
-        },
+        createAuthProfileStoreFixture({
+          "openai:default": entry.existing,
+        }),
         state.agentDir(),
         { syncExternalCli: false },
       );
@@ -2148,18 +2194,15 @@ describe("legacy flat profiles through the canonical auth migration owner", () =
   it("preserves existing SQLite auth profiles when migrating a legacy flat store", async () => {
     const state = await makeTestState();
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "anthropic:default": {
-            type: "oauth",
-            provider: "anthropic",
-            access: "sk-access-live",
-            refresh: "sk-refresh-live",
-            expires: 9999999999999,
-          },
+      createAuthProfileStoreFixture({
+        "anthropic:default": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "sk-access-live",
+          refresh: "sk-refresh-live",
+          expires: 9999999999999,
         },
-      },
+      }),
       state.agentDir(),
     );
     const legacy = { openai: { apiKey: "sk-openai-flat" } };
@@ -2635,9 +2678,8 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
 
   it("keeps existing SQLite accounts when planning legacy Codex profile collisions", async () => {
     const state = await makeTestState();
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
+    await state.writeAuthProfiles(
+      createAuthProfileStoreFixture({
         "openai:default": {
           type: "oauth",
           provider: "openai",
@@ -2646,8 +2688,8 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
           expires: 9_999_999_999_999,
           accountId: "peter-account",
         },
-      },
-    });
+      }),
+    );
     await writeLegacyAuthProfilesJson(state, {
       version: 1,
       profiles: {

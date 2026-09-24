@@ -1,10 +1,10 @@
-/** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type {
   SessionsAssignOwnerResult,
   SessionsPatchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { SESSIONS_PATCH_MANY_MAX_TARGETS } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
@@ -44,6 +44,8 @@ import {
   resolveSessionToolAccess,
   runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
+/** Session self-service tool. */
+import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
@@ -53,6 +55,7 @@ import {
 } from "./sessions-tool-patch.js";
 
 const ACTIONS = [
+  "cloud_profiles",
   "patch",
   "reset",
   "delete",
@@ -90,6 +93,16 @@ function withBoundedSessionsResolved(
 const SessionsToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: "Action" }),
+    profileId: Type.Optional({
+      ...SessionMoveProfileTargetSchema.properties.profileId,
+      description: "cloud_profiles: return OS and machine choices for this configured profile.",
+    }),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "cloud_profiles: nextOffset from the previous profile-list page.",
+      }),
+    ),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
     targets: Type.Optional(
       Type.Array(
@@ -122,7 +135,7 @@ const SessionsToolSchema = Type.Object(
     ),
     icon: Type.Optional(
       Type.String({
-        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
+        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}, or custom SVG markup/data:image/svg+xml URL (max 16 KiB decoded; self-contained, no scripts or external references). Include xmlns="http://www.w3.org/2000/svg" and viewBox on SVGs. Empty string clears it. Distinct from temporary attention.`,
       }),
     ),
     color: Type.Optional(
@@ -158,7 +171,8 @@ const SessionsToolSchema = Type.Object(
     ),
     pinned: Type.Optional(
       Type.Boolean({
-        description: "Pin session (root sessions only; child/subagent sessions cannot be pinned)",
+        description:
+          "Pin session (root and Home-linked sessions only; spawned, subagent, and nested-child sessions cannot be pinned)",
       }),
     ),
     archived: Type.Optional(
@@ -334,7 +348,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
+      "cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -432,6 +446,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           targetSessionKey: key,
         });
         return jsonResult(result);
+      }
+      if (action === "cloud_profiles") {
+        return await listSessionCloudProfiles(params, gatewayRequest);
       }
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));

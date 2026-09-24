@@ -15,6 +15,24 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    public static func decodeSessionsList(_ data: Data, agentID: String?) throws -> OpenClawChatSessionsListResponse {
+        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        return OpenClawChatSessionsListResponse(
+            ts: decoded.ts,
+            path: decoded.path,
+            count: decoded.count,
+            totalCount: decoded.totalCount,
+            offset: decoded.offset,
+            nextOffset: decoded.nextOffset,
+            hasMore: decoded.hasMore,
+            defaults: decoded.defaults,
+            sessions: decoded.sessions.map { row in
+                var row = row
+                row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? agentID
+                return row
+            })
+    }
+
     public static func decodeAgentsList(_ data: Data) throws -> OpenClawChatAgentsListResponse {
         let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
         return OpenClawChatAgentsListResponse(
@@ -23,8 +41,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                 OpenClawChatAgentChoice(
                     id: $0.id,
                     name: $0.name,
+                    emoji: $0.identity?["emoji"]?.value as? String,
                     workspaceGit: $0.workspacegit)
-            })
+            },
+            sessionRoutingContract: OpenClawChatSessionRoutingContract.make(
+                scope: result.scope.value as? String,
+                mainKey: result.mainkey,
+                defaultAgentID: result.defaultid))
     }
 
     public static func decodeProgressCard(_ data: Data, agentID: String?) throws -> ProgressCard? {
@@ -88,7 +111,10 @@ public enum OpenClawChatGatewayPayloadCodec {
         return try OpenClawChatModelCatalogSnapshot(
             choices: decoded.models.map(self.modelChoice),
             availabilityIsSessionScoped: true,
-            refreshFailed: decoded.refreshfailed == true)
+            refreshFailed: decoded.refreshfailed == true,
+            modelSelectionPolicy: decoded.modelselectionpolicy.map {
+                try GatewayPayloadDecoding.decode(AnyCodable($0))
+            })
     }
 
     public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
@@ -108,6 +134,7 @@ public enum OpenClawChatGatewayPayloadCodec {
             name: name.isEmpty ? model.id : model.name,
             provider: model.provider,
             available: model.available,
+            manualSelectionAllowed: model.manualselectionallowed,
             unavailableReason: model.unavailablereason?.value as? String,
             unavailableUntil: model.unavailableuntil,
             contextWindow: model.contextwindow,
@@ -151,12 +178,21 @@ public enum OpenClawChatGatewayPayloadCodec {
             acceptsArgs: entry.acceptsargs)
     }
 
+    private struct MetadataChangedPayload: Decodable {
+        let modelSelectionChanged: Bool?
+    }
+
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
         switch frame.event {
         case "tick":
             return .tick
-        case "chat.metadata.changed", "config.changed":
-            return .chatMetadataChanged
+        case "chat.metadata.changed":
+            let payload = frame.payload.flatMap {
+                try? GatewayPayloadDecoding.decode($0, as: MetadataChangedPayload.self)
+            }
+            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged
+        case "config.changed":
+            return .modelSelectionChanged
         case "sessions.changed":
             guard let payload = frame.payload,
                   let change = try? GatewayPayloadDecoding.decode(

@@ -10,8 +10,30 @@ import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
+import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
+import { updateRecoverySchema } from "./update-recovery.js";
+import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
+
+const destinationPath = z.string().max(240);
+export const UpdateDestinationFailureSchema = z.strictObject({
+  ownership: z.enum(["foreign", "unknown"]),
+  cause: z.enum([
+    "package-mismatch",
+    "launcher-mismatch",
+    "permission",
+    "probe-failure",
+    "unreadable-layout",
+  ]),
+  destinationKind: z.enum(["npm-global", "unknown"]),
+  prefix: destinationPath.nullable(),
+  packageRoot: destinationPath.nullable(),
+  runningRoot: destinationPath,
+  runningPrefix: destinationPath.nullable(),
+  launcher: destinationPath.nullable(),
+  launcherTarget: destinationPath.nullable(),
+});
 
 export const UpdateFailureFactSchema = z.object({
   check: z.string().max(128),
@@ -19,7 +41,17 @@ export const UpdateFailureFactSchema = z.object({
   message: z.string().max(200).optional(),
   affectedKey: z.string().max(128).optional(),
   pluginId: z.string().max(80).optional(),
+  errorName: z.string().max(80).nullable().optional(),
+  location: z.string().max(160).nullable().optional(),
+  destination: UpdateDestinationFailureSchema.optional(),
 });
+
+const UpdateRollbackOutcomeSchema = z.object({
+  status: z.enum(["not-needed", "not-attempted", "succeeded", "failed"]),
+  reason: z.string().max(512),
+});
+
+export type UpdateRollbackOutcome = z.infer<typeof UpdateRollbackOutcomeSchema>;
 
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
@@ -34,6 +66,7 @@ const UpdateRunStepSchema = z.object({
   status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
+  exitCode: z.number().int().nullable().optional(),
   detail: text.optional(),
   failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
   configChange: z
@@ -63,12 +96,6 @@ const UpdateRunStepSchema = z.object({
   }).optional(),
 });
 
-const driver = z.object({
-  host: z.string().min(1).max(255),
-  pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  startIdentity: z.string().max(128).regex(/^\d+$/),
-});
-
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -78,13 +105,19 @@ export const UpdateRunRecordSchema = z.object({
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
   origin: z.object({
+    updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .object({
+        channel: text.optional(),
+        accountId: text.optional(),
+        senderId: text.optional(),
+        authorizationSource: text.optional(),
+      })
       .optional(),
     sessionKey: text.optional(),
     deliveryContext: z
@@ -105,11 +138,17 @@ export const UpdateRunRecordSchema = z.object({
     kind: z.enum(["package", "git"]).optional(),
     version: text.optional(),
     sha: text.optional(),
+    installationMethod: z
+      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"])
+      .nullable()
+      .optional(),
   }),
   before: version,
   after: version,
   steps: z.array(UpdateRunStepSchema).max(128),
   verification: z.object({
+    rollbackOutcome: UpdateRollbackOutcomeSchema.nullable().optional(),
+    recovery: updateRecoverySchema.nullable().optional(),
     booted: z.boolean().optional(),
     runningVersion: text.optional(),
     runningBuildId: text.optional(),

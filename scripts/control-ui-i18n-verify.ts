@@ -6,7 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
   loadControlUiTranslationMemory,
-  materializeControlUiLocaleCatalog,
+  materializePreparedControlUiLocaleCatalog,
+  prepareControlUiCatalogSource,
+  type PreparedControlUiCatalogSource,
 } from "./lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
@@ -14,6 +16,10 @@ import {
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  compareStringArrays,
+  extractTranslationPlaceholders,
+} from "./lib/control-ui-i18n-sync-plan.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -31,9 +37,6 @@ const AUTOMATIONS_FEATURE_KEYS =
   `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.tasks subtitles.automation memoryPage.dreaming.intro tasksPage.runtime.cron attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
     " ",
   );
-function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
 
 function toRepoPath(filePath: string): string {
   return path.relative(ROOT, filePath).split(path.sep).join("/");
@@ -44,12 +47,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-function extractPlaceholders(text: string): string[] {
-  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function flattenControlUiCatalog(
@@ -106,8 +103,8 @@ export function analyzeControlUiCatalogs(
         fallbackLocalesByKey.set(key, locales);
         continue;
       }
-      const sourcePlaceholders = extractPlaceholders(sourceFlat.get(key) ?? "");
-      const translatedPlaceholders = extractPlaceholders(translated);
+      const sourcePlaceholders = extractTranslationPlaceholders(sourceFlat.get(key) ?? "");
+      const translatedPlaceholders = extractTranslationPlaceholders(translated);
       if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
         errors.push(
           `${locale}:${key} expected {${sourcePlaceholders.join("},{")}} got {${translatedPlaceholders.join("},{")}}`,
@@ -199,24 +196,30 @@ async function buildCatalogFallbackBaseline(
   const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-    if (!existsSync(memoryPath)) {
-      throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+  {
+    let prepared: PreparedControlUiCatalogSource | undefined;
+    for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
+      const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+      if (!existsSync(memoryPath)) {
+        throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
+      }
+      const memory = loadControlUiTranslationMemory(memoryPath);
+      prepared ??= prepareControlUiCatalogSource(sourceFlat);
+      // Match the source + translation-memory materialization served by the runtime Vite module.
+      const localeMap = materializePreparedControlUiLocaleCatalog(prepared, memory);
+      if (index === CONTROL_UI_LOCALE_ENTRIES.length - 1) {
+        // Analysis retains locale flats, but no longer needs the prepared hashes.
+        prepared = undefined;
+      }
+      const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
+      const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
+        /\bcron\b/i.test(localeFlat.get(key) ?? ""),
+      );
+      if (invalid.length > 0) {
+        throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
+      }
+      localeFlats.set(entry.locale, localeFlat);
     }
-    // Match the source + translation-memory materialization served by the runtime Vite module.
-    const localeMap = materializeControlUiLocaleCatalog(
-      sourceFlat,
-      loadControlUiTranslationMemory(memoryPath),
-    );
-    const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
-    const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
-      /\bcron\b/i.test(localeFlat.get(key) ?? ""),
-    );
-    if (invalid.length > 0) {
-      throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
-    }
-    localeFlats.set(entry.locale, localeFlat);
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);

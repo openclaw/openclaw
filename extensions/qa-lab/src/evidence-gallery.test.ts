@@ -11,19 +11,15 @@ import {
   resolveQaEvidenceProducerFile,
 } from "./evidence-gallery.js";
 import {
+  createTempRepo,
+  vitestArtifactEvidence,
+  writeJson,
+} from "./evidence-gallery.test-support.js";
+import {
   QA_EVIDENCE_FILENAME,
   buildVitestEvidenceSummary,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-
-async function createTempRepo(prefix = "qa-evidence-gallery-") {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-async function writeJson(filePath: string, value: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 
 function producerRootLeakSegments(repoRoot: string) {
   if (process.platform !== "win32") {
@@ -40,37 +36,6 @@ function producerRootLeakSegments(repoRoot: string) {
 
 function repoRelativePath(repoRoot: string, filePath: string) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
-
-function vitestArtifactEvidence(params: {
-  id: string;
-  title: string;
-  artifact: { kind: string; path: string };
-}): QaEvidenceSummaryJson {
-  return {
-    kind: "openclaw.qa.evidence-summary",
-    schemaVersion: 2,
-    generatedAt: "2026-06-17T12:00:00.000Z",
-    evidenceMode: "full",
-    entries: [
-      {
-        test: { kind: "vitest-test", id: params.id, title: params.title },
-        coverage: [{ id: "qa.artifact", role: "primary" }],
-        execution: {
-          runner: "vitest",
-          environment: { ref: "gallery-test", os: "darwin", nodeVersion: "v24.0.0" },
-          provider: {
-            id: "mock-openai",
-            live: false,
-            model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
-          },
-          packageSource: { kind: "source-checkout" },
-          artifacts: [{ ...params.artifact, source: "vitest" }],
-        },
-        result: { status: "pass" },
-      },
-    ],
-  };
 }
 
 describe("evidence gallery", () => {
@@ -169,104 +134,41 @@ describe("evidence gallery", () => {
   });
 
   it.each([
-    {
-      kind: "gif-runner-log",
-      file: "artifact.LOG",
-      content: "runner passed\n",
-      mediaKind: "text",
-      preview: "runner passed\n",
-    },
-    {
-      kind: "video-report",
-      file: "artifact.json",
-      content: '{"ok":true}',
-      mediaKind: "json",
-      preview: '{\n  "ok": true\n}',
-    },
-    {
-      kind: "screenshot-validation",
-      file: "artifact.webm",
-      content: "video",
-      mediaKind: "video",
-      preview: null,
-    },
-    {
-      kind: "video-report",
-      file: "artifact.png",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "motion-preview-gif",
-      file: "artifact",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "video-capture",
-      file: "artifact.capture",
-      content: "video",
-      mediaKind: "video",
-      preview: null,
-    },
-    {
-      kind: "validation-result",
-      file: "artifact.data",
-      content: '{"ok":true}',
-      mediaKind: "json",
-      preview: '{\n  "ok": true\n}',
-    },
-    {
-      kind: "report",
-      file: "artifact.html",
-      content: "<p>report</p>",
-      mediaKind: "text",
-      preview: "<p>report</p>",
-    },
-    {
-      kind: "video-screenshot",
-      file: "artifact.data",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "attachment",
-      file: "artifact.data",
-      content: "opaque",
-      mediaKind: "file",
-      preview: null,
-    },
-  ])(
-    "classifies $file with $kind metadata",
-    async ({ kind, file, content, mediaKind, preview }) => {
-      const repoRoot = await createTempRepo();
-      try {
-        const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-        await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(path.join(outputDir, file), content, "utf8");
-        await writeJson(
-          path.join(outputDir, QA_EVIDENCE_FILENAME),
-          vitestArtifactEvidence({
-            id: "qa-lab.artifact-classification",
-            title: "Artifact classification",
-            artifact: { kind, path: file },
-          }),
-        );
-        const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
-        expect(model.entries[0]?.artifacts[0]).toMatchObject({
-          exists: true,
-          kind,
-          mediaKind,
-          preview,
-        });
-      } finally {
-        await fs.rm(repoRoot, { recursive: true, force: true });
-      }
-    },
-  );
+    ["artifact.LOG", "gif-runner-log", "runner passed\n", "text", "runner passed\n"],
+    ["artifact.json", "video-report", '{"ok":true}', "json", '{\n  "ok": true\n}'],
+    ["artifact.webm", "screenshot-validation", "video", "video", null],
+    ["artifact.png", "video-report", "image", "image", null],
+    ["artifact", "motion-preview-gif", "image", "image", null],
+    ["artifact.capture", "video-capture", "video", "video", null],
+    ["artifact.data", "validation-result", '{"ok":true}', "json", '{\n  "ok": true\n}'],
+    ["artifact.html", "report", "<p>report</p>", "text", "<p>report</p>"],
+    ["artifact.data", "video-screenshot", "image", "image", null],
+    ["artifact.data", "attachment", "opaque", "file", null],
+  ])("classifies $0 with $1 metadata", async (file, kind, content, mediaKind, preview) => {
+    const repoRoot = await createTempRepo();
+    try {
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(path.join(outputDir, file), content, "utf8");
+      await writeJson(
+        path.join(outputDir, QA_EVIDENCE_FILENAME),
+        vitestArtifactEvidence({
+          id: "qa-lab.artifact-classification",
+          title: "Artifact classification",
+          artifact: { kind, path: file },
+        }),
+      );
+      const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
+      expect(model.entries[0]?.artifacts[0]).toMatchObject({
+        exists: true,
+        kind,
+        mediaKind,
+        preview,
+      });
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
 
   it("sanitizes local roots from gallery failure reasons", async () => {
     const repoRoot = await createTempRepo();
@@ -300,6 +202,32 @@ describe("evidence gallery", () => {
       "Command failed at <repo-root>/openclaw.mjs and file://<repo-root>/trace.log",
     );
     expect(JSON.stringify(model)).not.toContain(repoRoot);
+  });
+
+  it("classifies a path-like artifact kind by its final segment", async () => {
+    // The repo root deliberately contains "gif". A path-valued kind must not let
+    // an unrelated directory name decide the media type and drop the preview.
+    const repoRoot = await createTempRepo("qa-evidence-gallery-gif-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+    // No file extension, so classification has to fall back to the kind label.
+    const artifactPath = path.join(outputDir, "absolute");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(artifactPath, "absolute artifact\n", "utf8");
+    const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
+      id: "qa-lab.path-like-kind",
+      title: "Path-like artifact kind",
+      artifact: { kind: `${repoRoot}/log`, path: artifactPath },
+    });
+    await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
+
+    const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
+
+    const artifact = model.entries[0]?.artifacts[0];
+    expect(artifact).toMatchObject({
+      exists: true,
+      mediaKind: "text",
+      preview: "absolute artifact\n",
+    });
   });
 
   it("normalizes absolute source and declared artifact paths for gallery links", async () => {
@@ -648,6 +576,7 @@ describe("evidence gallery", () => {
         status: "pass",
         surface: "web-ui",
         testId: "ux-matrix.web-ui.first-run",
+        entryKey: "0",
         title: "UX Matrix: web-ui / first-run at <repo-root>",
       },
       {
@@ -665,6 +594,7 @@ describe("evidence gallery", () => {
         status: "proof-gap",
         surface: "cli",
         testId: null,
+        entryKey: null,
         title: null,
       },
       {
@@ -676,6 +606,7 @@ describe("evidence gallery", () => {
         status: "blocked",
         surface: "cli",
         testId: "qa-lab.wrapper-cli-error",
+        entryKey: "1",
         title: "UX Matrix: cli / error-state",
       },
     ]);

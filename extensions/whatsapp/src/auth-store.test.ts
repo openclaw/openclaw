@@ -288,7 +288,7 @@ describe("auth-store", () => {
 
       const runtime = createRuntimeSpies();
 
-      await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(true);
+      await expect(logoutWeb({ authDir, runtime })).resolves.toBe(true);
       expect(fsSync.existsSync(authDir)).toBe(false);
     });
   });
@@ -328,9 +328,9 @@ describe("auth-store", () => {
 
     try {
       hoisted.oauthDir = authDir;
-      await expect(
-        logoutWeb({ authDir, isLegacyAuthDir: true, runtime: runtime as never }),
-      ).rejects.toThrow("EACCES");
+      await expect(logoutWeb({ authDir, isLegacyAuthDir: true, runtime })).rejects.toThrow(
+        "EACCES",
+      );
       expect(fsSync.existsSync(authDir)).toBe(true);
       expect(fsSync.existsSync(path.join(authDir, "oauth.json"))).toBe(true);
     } finally {
@@ -393,7 +393,7 @@ describe("auth-store", () => {
     fsSync.writeFileSync(path.join(authDir, "notes.txt"), "keep me", "utf-8");
     const runtime = createRuntimeSpies();
 
-    await expect(logoutWeb({ authDir, runtime: runtime as never })).resolves.toBe(false);
+    await expect(logoutWeb({ authDir, runtime })).resolves.toBe(false);
     expect(fsSync.existsSync(authDir)).toBe(true);
     expect(fsSync.existsSync(path.join(authDir, "notes.txt"))).toBe(true);
   });

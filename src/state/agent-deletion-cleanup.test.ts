@@ -24,6 +24,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const roots: string[] = [];
@@ -70,6 +71,7 @@ describe("agent deletion database cleanup authority", () => {
     async (retire) => {
       const f = fixture();
       closeOpenClawAgentDatabasesForTest(f.root);
+      clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
       const writer = openNodeSqliteDatabase(f.target.path);
       try {
         writer.exec("DROP INDEX idx_agent_cache_expiry");
@@ -140,6 +142,7 @@ describe("agent deletion database cleanup authority", () => {
   it("does not expose cleanup admission to a coalesced operation outside its scope", async () => {
     const f = fixture();
     closeOpenClawAgentDatabasesForTest(f.root);
+    clearOpenClawAgentIntegrityVerification(f.target.path, f.options.env);
     await f.withDeletion(async (deletion) => {
       const checked = createDeferred();
       const resume = createDeferred();
@@ -216,8 +219,8 @@ describe("agent deletion database cleanup authority", () => {
     closeOpenClawAgentDatabaseByPath(storePath, "kept");
     let retained: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     let closeCalls = 0;
-    const runAttempt = (deletion: AgentDeletionOperation, injectFailure: boolean) => {
-      prepareAgentDeleteDatabases(cfg, "worker", f.entry.agentDir, { env: f.options.env });
+    const runAttempt = async (deletion: AgentDeletionOperation, injectFailure: boolean) => {
+      await prepareAgentDeleteDatabases(cfg, "worker", f.entry.agentDir, { env: f.options.env });
       return purgeAgentSessionStoreEntries(cfg, "worker", {
         env: f.options.env,
         runDatabaseCleanup: (target, run) =>

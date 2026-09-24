@@ -1,8 +1,11 @@
 // Projects detached exec processes into the durable task ledger used by clients.
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
 
 const log = createSubsystemLogger("agents/bash-exec-task-tracking");
 
@@ -14,6 +17,7 @@ export type BackgroundExecTaskHandle = {
 
 export function createBackgroundExecTask(params: {
   processSessionId: string;
+  command: string;
   sessionKey?: string;
   agentId?: string;
   startedAt: number;
@@ -24,6 +28,16 @@ export function createBackgroundExecTask(params: {
   }
   const runId = `exec:${params.processSessionId}`;
   try {
+    // Redact the complete command before compacting it so truncated secrets cannot escape masking.
+    const command = stripAnsi(redactToolPayloadText(params.command))
+      .replace(/\p{Cc}/gu, (control) => ("\r\n\t".includes(control) ? control : ""))
+      .trim();
+    const label =
+      truncateWithMarker(command.replace(/\s+/gu, " "), 120, {
+        marker: "…",
+        reserve: 1,
+        trimEnd: true,
+      }) || "CLI command";
     const task = createRunningTaskRun({
       runtime: "cli",
       taskKind: BACKGROUND_EXEC_TASK_KIND,
@@ -34,13 +48,12 @@ export function createBackgroundExecTask(params: {
       agentId: params.agentId,
       requesterAgentId: params.agentId,
       runId,
-      label: "CLI command",
-      task: "Background CLI command",
+      label,
+      task: command || label,
       notifyPolicy: "silent",
       deliveryStatus: "not_applicable",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
-      progressSummary: "Command running",
     });
     if (!task) {
       return null;

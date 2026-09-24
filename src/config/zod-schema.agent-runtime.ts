@@ -416,6 +416,10 @@ const ToolExecBaseShape = {
     .object({
       /** Optional reviewer model override (provider/model or agent model config). */
       model: AgentModelSchema.optional(),
+      /** Optional reasoning effort for model-backed approval reviews. */
+      thinking: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+      /** Optional Fast processing for supported provider requests. */
+      fastMode: z.boolean().optional(),
       /** Reviewer timeout in milliseconds (default: 30000). */
       timeoutMs: z.number().int().positive().optional(),
     })
@@ -517,17 +521,15 @@ const CodeModeSchema = z
     z.literal("auto"),
     z
       .object({
-        /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
+        /** Explicit object-form activation. Omitted stays off; "auto" engages catalog-preferred models. A completely absent global codeMode setting defaults separately to auto. */
         enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
-        /** Guest runtime. Only quickjs-wasi is supported. */
-        runtime: z.literal("quickjs-wasi").optional(),
+        /** Executor. Node is the default; QuickJS provides a separate WASM guest. */
+        executor: z.enum(["node", "quickjs"]).optional(),
         /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
         mode: z.literal("only").optional(),
-        /** Accepted source languages. */
-        languages: z.array(z.enum(["javascript", "typescript"])).optional(),
         /** Wall-clock limit in milliseconds for one exec or wait call. */
         timeoutMs: z.number().int().positive().optional(),
-        /** QuickJS heap limit in bytes. */
+        /** QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes; excludes external buffers and process RSS. */
         memoryLimitBytes: z.number().int().positive().optional(),
         /** Maximum serialized output bytes. */
         maxOutputBytes: z.number().int().positive().optional(),
@@ -635,7 +637,7 @@ const MessageToolConfigSchema = z
       .object({
         /** Allow sends to other channels within the same provider (default: true). */
         allowWithinProvider: z.boolean().optional(),
-        /** Allow sends across different providers (default: false). */
+        /** Allow sends across different providers (default: true). */
         allowAcrossProviders: z.boolean().optional(),
         /** Cross-context marker configuration. */
         marker: z

@@ -102,8 +102,13 @@ it.each([
         stopped.serviceUpdateVerdict.refreshDefinition = false;
       }
       recovery?.beginMutation();
+      const activationTimeoutMs = 3_600_000;
       let enabledAtWorkerStart: boolean | undefined;
       vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
+        assert(typeof options === "object");
+        expect(options.timeoutMs).toBe(activationTimeoutMs);
+        const input = JSON.parse(String(options.input)) as MigratedUpdateFinalizationInput; // SAFETY: The real typed parent serializes this private worker input.
+        expect(input.params.opts.run?.activationTimeoutMs).toBe(activationTimeoutMs);
         enabledAtWorkerStart = mocks.enabled;
         if (outcome === "launch failure") {
           throw new Error("candidate finalizer unavailable");
@@ -116,8 +121,6 @@ it.each([
               : [...programArguments, "--port", "20000"];
           throw new Error("candidate finalizer disappeared");
         }
-        assert(typeof options === "object");
-        const input = JSON.parse(String(options.input)) as MigratedUpdateFinalizationInput; // SAFETY: The real typed parent serializes this private worker input.
         expect(input.windowsTaskAutoStartSuspended).toBe(true);
         expect(input.params.preManagedServiceStop).not.toHaveProperty(
           "windowsTaskAutoStartRecovery",
@@ -170,7 +173,7 @@ it.each([
           channel: "stable",
           downgradeRisk: false,
           shouldRestart: true,
-          opts: { json: true, run: { runId, env: { ...process.env } } },
+          opts: { json: true, run: { runId, env: { ...process.env }, activationTimeoutMs } },
           preManagedServiceStop: stopped,
           controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords: {},

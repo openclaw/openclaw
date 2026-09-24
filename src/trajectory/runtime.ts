@@ -1,5 +1,6 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import path from "node:path";
+import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
@@ -39,6 +40,7 @@ type TrajectoryRuntimeInit = {
   sessionKey?: string;
   sessionFile?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
@@ -174,11 +176,11 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
+  const record = createDiagnosticRecord();
+  record.truncated = true;
+  record.reason = reason;
+  Object.assign(record, details);
+  return record;
 }
 
 function limitTrajectoryPayloadValue(
@@ -224,7 +226,7 @@ function limitTrajectoryPayloadValue(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  const limited: Record<string, unknown> = {};
+  const limited = createDiagnosticRecord();
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
@@ -307,6 +309,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
 }): TrajectoryRuntimeSink | null {
   const target = params.sessionTarget
     ? {
@@ -398,6 +401,7 @@ function createSqliteTrajectoryRuntimeSink(params: {
             maxRuntimeBytes: params.maxRuntimeFileBytes,
             sessionId: marker.sessionId,
             storePath: database.path,
+            assertCommitAllowed: params.assertCommitAllowed,
           },
           events,
         );
@@ -456,6 +460,7 @@ export function createTrajectoryRuntimeRecorder(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
+        assertCommitAllowed: params.assertCommitAllowed,
       });
   if (!sink) {
     return null;

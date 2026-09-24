@@ -63,11 +63,11 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: (tokensAfter: number) => void;
+  private onContextReplaced?: (tokensAfter: number, tokensBefore: number) => void;
   private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
-    callback: ((tokensAfter: number) => void) | undefined,
+    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
     assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
@@ -434,6 +434,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // Revalidate after admission too. In-memory transcripts have no SQLite
       // writer fence, and cancellation must not publish a replaced context.
       assertContextReplacementActive?.();
+      const replacementMessages = sanitizeCompactionReplayMessages(
+        projectReplacement(completedCompaction, completedCompaction.summary),
+      );
+      const tokensAfter = requestBudget
+        ? estimateCompactedRequestTokens(replacementMessages, {
+            ...requestBudget,
+            pendingTokens: 0,
+          })
+        : estimateContextTokens(replacementMessages).tokens;
       const entryId = this.sessionManager.appendCompaction(
         completedCompaction.summary,
         completedCompaction.firstKeptEntryId,
@@ -441,18 +450,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         completedCompaction.details,
         fromExtension,
         { itemId: options.itemId },
+        tokensAfter,
       );
       const sessionContext = this.sessionManager.buildSessionContext();
       // Compaction replaces the prefix; sanitize replay and publish accounting
       // before any await can let cancellation hide the committed replacement.
       this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-      const tokensAfter = requestBudget
-        ? estimateCompactedRequestTokens(this.agent.state.messages, {
-            ...requestBudget,
-            pendingTokens: 0,
-          })
-        : estimateContextTokens(this.agent.state.messages).tokens;
-      onContextReplaced?.(tokensAfter);
+      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
       return { entryId, tokensAfter };
     });
     if (committed === undefined) {

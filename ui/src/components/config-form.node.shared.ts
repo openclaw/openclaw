@@ -2,6 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
@@ -14,10 +15,12 @@ import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
   hasSensitiveConfigData,
+  hintForPath,
+  pathKey as configPathKey,
   redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { renderSettingsSegmented } from "./settings-ui.ts";
+import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
 
 const META_KEYS = new Set([
   "title",
@@ -46,10 +49,16 @@ export type ConfigNodeRenderParams = {
   controlIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
+  /** Description rendered by the surrounding field layout. */
+  descriptionId?: string;
+  /** Compact editors show effective defaults and inline collection controls. */
+  compact?: boolean;
+  commitOnBlur?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
@@ -62,6 +71,7 @@ export type ConfigNodeRenderer = (
 
 type SensitiveRenderState = {
   isSensitive: boolean;
+  isMasked: boolean;
   isRedacted: boolean;
   isRevealed: boolean;
   canReveal: boolean;
@@ -111,7 +121,8 @@ export function getSensitiveRenderState(params: {
   path: Array<string | number>;
   value: unknown;
   hints: ConfigUiHints;
-  revealSensitive: boolean;
+  revealSensitive?: boolean;
+  maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
 }): SensitiveRenderState {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
@@ -125,6 +136,14 @@ export function getSensitiveRenderState(params: {
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
   return {
     isSensitive,
+    isMasked:
+      params.maskSensitive === true &&
+      !params.revealSensitive &&
+      !isRevealed &&
+      (params.value === undefined || typeof params.value === "string") &&
+      (hintForPath(params.path, params.hints)?.sensitive ||
+        isSensitiveConfigPath(configPathKey(params.path)) ||
+        isSensitive),
     isRedacted: isSensitive && !isRevealed,
     isRevealed,
     canReveal: isSensitive && !sentinel,
@@ -177,40 +196,27 @@ export function wrapSensitiveControl(
   return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
-export function renderTags(tags: string[]): TemplateResult | typeof nothing {
-  const visibleTags = tags.filter((tag) => tag !== "advanced");
-  if (visibleTags.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="cfg-tags">
-      ${visibleTags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
-    </div>
-  `;
-}
-
 export function renderFieldRow(params: {
   label: unknown;
   help?: unknown;
   helpId?: string;
   defaultDescription?: unknown;
-  tags: string[];
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
   stacked?: boolean;
   error?: unknown;
+  errorId?: string;
 }): TemplateResult {
   // Array/map item rows resolve their meta from the parent path (numeric and
   // wildcard segments collapse), so their help is the parent's. Showing it again
   // per item is noise; a row with no label of its own gets no help of its own.
   const help = params.showLabel ? params.help : undefined;
-  const defaultDescription = params.showLabel ? params.defaultDescription : undefined;
+  const defaultDescription =
+    params.showLabel && params.defaultDescription !== nothing
+      ? params.defaultDescription
+      : undefined;
   const hasText =
-    params.showLabel ||
-    Boolean(help) ||
-    Boolean(defaultDescription) ||
-    params.tags.length > 0 ||
-    Boolean(params.error);
+    params.showLabel || Boolean(help) || Boolean(defaultDescription) || Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
   const stacked = params.stacked || !hasText;
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
@@ -237,7 +243,6 @@ export function renderFieldRow(params: {
                     ? html`<span class="settings-row__desc">${defaultDescription}</span>`
                     : nothing
                 }
-                ${renderTags(params.tags)}
                 ${
                   params.error
                     ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
@@ -249,7 +254,19 @@ export function renderFieldRow(params: {
       }
       ${
         params.control !== nothing
-          ? html`<div class="settings-row__control">${params.control}</div>`
+          ? html`<div class="settings-row__control">
+              ${params.control}
+              ${
+                params.errorId
+                  ? html`<span
+                      id=${params.errorId}
+                      class="cfg-field__error settings-control__sr-label"
+                      role="alert"
+                      hidden
+                    ></span>`
+                  : nothing
+              }
+            </div>`
           : nothing
       }
     </div>
@@ -277,9 +294,10 @@ export function renderSchemaDefaultDescription(
   if (schema.default === undefined) {
     return nothing;
   }
-  return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
-    value: formatConfigValueText(schema.default),
-  })}`;
+  return (
+    renderSettingsDefaultDescription(formatConfigValueText(schema.default), value !== undefined) ??
+    nothing
+  );
 }
 
 export function renderSegmentedControl(params: {
@@ -287,6 +305,7 @@ export function renderSegmentedControl(params: {
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
+  descriptionId?: string;
   onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
@@ -300,6 +319,7 @@ export function renderSegmentedControl(params: {
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
+    descriptionId: params.descriptionId,
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {

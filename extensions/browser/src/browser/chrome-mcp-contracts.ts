@@ -3,7 +3,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpActionTimeouts } from "./cdp.js";
 
 export type ChromeMcpStructuredPage = {
@@ -33,7 +33,10 @@ export type ChromeMcpRoutingState = {
   withOperationLock: ReturnType<typeof createAsyncLock>;
   targetIdByPageId: Map<number, string>;
   nextTargetHandleId: number;
-  snapshotRefById: Map<string, { targetId: string; uid: string }>;
+  snapshotsByTarget: Map<
+    string,
+    { documentUid: string; refs: Map<string, { uid: string; documentUid?: string }> }
+  >;
   nextSnapshotRefId: number;
 };
 
@@ -64,7 +67,7 @@ export class ChromeMcpDocumentUnavailableError extends Error {
 export function rethrowChromeMcpDocumentError(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (
-    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
+    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Snapshot document (?:changed|disappeared)\. Take a new snapshot\.|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
       message,
     )
   ) {
@@ -104,36 +107,22 @@ export type ChromeMcpOptionsInput =
   | ChromeMcpProfileOptions
   | NormalizedChromeMcpProfileOptions;
 
+export type ChromeMcpSessionOwner = {
+  isCurrent: (session: ChromeMcpSession) => boolean;
+  close: (session: ChromeMcpSession) => Promise<void>;
+};
+
 export type ChromeMcpSessionLease = {
   session: ChromeMcpSession;
-  cacheKey: string;
+  owner: ChromeMcpSessionOwner;
   temporary: boolean;
+  release: () => Promise<void>;
 };
 
 export type ChromeMcpSessionFactory = (
   profileName: string,
   options?: NormalizedChromeMcpProfileOptions,
 ) => Promise<ChromeMcpSession>;
-
-export type PendingChromeMcpSession = {
-  cacheKey: string;
-  id: symbol;
-  promise: Promise<ChromeMcpSession>;
-  cleanup: Promise<void>;
-  abortController: AbortController;
-  state: {
-    waiters: number;
-    settled: boolean;
-    session?: ChromeMcpSession;
-    cancelled: boolean;
-    cleanupSettled: boolean;
-  };
-};
-
-export type PendingChromeMcpSessionLease = {
-  session: ChromeMcpSession;
-  release: (closeIfLastWaiter: boolean) => Promise<boolean>;
-};
 
 /** One OS snapshot row: ancestry and immutable birth identity from the same read. */
 export type ChromeMcpProcessSnapshot = {

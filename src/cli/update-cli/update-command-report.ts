@@ -9,7 +9,7 @@ import {
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 type UpdateFailureAction = "triage" | "report" | "dismiss";
@@ -66,7 +66,6 @@ export async function runInteractiveUpdateFailureAction(params: {
       const result: UpdateRunResult = params.result ?? {
         status: "error",
         mode: "unknown",
-        reason: "unexpected-error",
         steps: [],
         durationMs: 0,
       };
@@ -80,6 +79,7 @@ export async function runInteractiveUpdateFailureAction(params: {
       const prepared = await prepareUpdateFailureReport(
         {
           attemptId: params.attemptId,
+          action: "cli",
           ...(params.error ? { error: params.error } : {}),
           result,
           recordedRun,

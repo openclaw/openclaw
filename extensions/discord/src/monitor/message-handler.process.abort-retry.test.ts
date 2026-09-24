@@ -112,7 +112,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     expect(guildHistories.get("c1")).toHaveLength(1);
     expect(guildHistories.get("c1")?.[0]).toMatchObject({
       body: "hi",
-      messageId: "m1",
+      messageId: "1001",
     });
     sleepSpy.mockRestore();
   });
@@ -242,7 +242,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
 
     expect(getLastDispatchCtx()?.Body).not.toContain("[Chat messages since your last reply");
     expect(guildHistories.get("c1")).toHaveLength(1);
-    expect(guildHistories.get("c1")?.[0]?.messageId).toBe("m1");
+    expect(guildHistories.get("c1")?.[0]?.messageId).toBe("1001");
     sleepSpy.mockRestore();
   });
 

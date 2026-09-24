@@ -1,4 +1,3 @@
-// Bonjour tests cover advertiser plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";

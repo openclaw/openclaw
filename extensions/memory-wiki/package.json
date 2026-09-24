@@ -1,14 +1,13 @@
 {
   "name": "@openclaw/memory-wiki",
-  "version": "2026.9.4",
-  "private": true,
+  "version": "2026.9.5",
   "description": "OpenClaw persistent wiki plugin",
   "type": "module",
   "dependencies": {
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.27",
-    "yaml": "2.9.0",
-    "zod": "4.5.4"
+    "typebox": "1.3.32",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/memory-core": "workspace:*",
@@ -16,7 +15,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.4"
+    "openclaw": ">=2026.9.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,6 +25,27 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/memory-wiki",
+      "npmSpec": "@openclaw/memory-wiki",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.9.4"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.5"
+    },
+    "build": {
+      "bundledDist": true,
+      "openclawVersion": "2026.9.5"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   }
 }

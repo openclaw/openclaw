@@ -10,6 +10,7 @@ import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -25,6 +26,11 @@ import {
   UPDATE_RUN_ID_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import {
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildPostCoreHandoffEnv,
@@ -35,7 +41,12 @@ import {
   POST_CORE_UPDATE_STARTED_AT_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { UpdateFailureFactSchema } from "../../infra/update-run-schema.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createUpdateTimeoutHandoff,
+  isOmittedUpdateTimeout,
+} from "../../infra/update-timeout-provenance.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
@@ -43,10 +54,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
@@ -60,13 +68,49 @@ const POST_CORE_UPDATE_STOP_GRACE_MS = 1000;
 // Earlier targets can ignore the handoff and start another core update.
 const POST_CORE_CONFIG_WRITER_MIN_VERSION = "2026.4.29";
 
-type PostCoreUpdateFailure = { status: "failed"; error: string };
+type PostCoreUpdateFailure = {
+  status: "failed";
+  error: string;
+  failureFacts?: UpdateFailureFact[];
+};
+
+export async function postCoreUpdateParentOwnsCompletion(
+  resultPath: string | undefined,
+): Promise<boolean> {
+  if (!resultPath) {
+    return false;
+  }
+  // Transient handoff only; absent preserves the shipped child-owned completion contract.
+  const handoff = await readJsonIfExists<{ completionOwner?: string }>(
+    path.join(path.dirname(resultPath), "handoff.json"),
+  );
+  return handoff?.completionOwner === "parent";
+}
+
+/** Restore operator intent only when the private handoff matches this child command. */
+export async function resolvePostCoreUpdateOperatorOptions(params: {
+  opts: UpdateCommandOptions;
+  resultPath: string | undefined;
+}): Promise<UpdateCommandOptions> {
+  if (!params.resultPath || params.opts.timeout === undefined) {
+    return params.opts;
+  }
+  const handoff = await readJsonIfExists<unknown>(
+    path.join(path.dirname(params.resultPath), "handoff.json"),
+  );
+  if (!isOmittedUpdateTimeout(params.opts.timeout, handoff)) {
+    // Shipped parents have no provenance. Their received deadline remains explicit-looking.
+    return params.opts;
+  }
+  return { ...params.opts, timeout: undefined };
+}
 
 export async function writePostCoreUpdateFailureFile(
   filePath: string | undefined,
   error: unknown,
 ): Promise<void> {
   if (filePath) {
+    const failureFacts = collectUpdateDoctorFailureFacts(error);
     const failure = sanitizeTriageUpdateFailure(
       { error: formatErrorMessage(error) },
       {
@@ -76,8 +120,12 @@ export async function writePostCoreUpdateFailureFile(
     );
     await writeJson(
       filePath,
-      { status: "failed", error: failure.error },
-      { trailingNewline: true },
+      {
+        status: "failed",
+        error: failure.error,
+        ...(failureFacts.length ? { failureFacts } : {}),
+      },
+      { trailingNewline: true, dirMode: 0o700 },
     );
   }
 }
@@ -89,7 +137,7 @@ export async function writePostCorePluginUpdateResultFile(
   if (!filePath) {
     return;
   }
-  await writeJson(filePath, result, { trailingNewline: true });
+  await writeJson(filePath, result, { trailingNewline: true, dirMode: 0o700 });
 }
 
 /** @internal exported for focused handoff contract tests. */
@@ -131,7 +179,11 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
@@ -185,7 +237,14 @@ async function readPostCoreUpdateResultFile(
       filePath,
     );
     if (parsed?.status === "failed" && typeof parsed.error === "string") {
-      return parsed;
+      const facts = UpdateFailureFactSchema.array().safeParse(parsed.failureFacts);
+      return {
+        status: "failed",
+        error: parsed.error,
+        ...(facts.success && facts.data.length
+          ? { failureFacts: normalizeUpdateFailureFacts(facts.data) }
+          : {}),
+      };
     }
     if (
       parsed &&
@@ -283,6 +342,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   pluginUpdate?: PostCorePluginUpdateResult;
   exitCode?: number;
   error?: string;
+  failureFacts?: UpdateFailureFact[];
 }> {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -316,9 +376,11 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.acceptCapabilities) {
     argv.push("--accept-capabilities");
   }
-  if (params.opts.timeout) {
-    argv.push("--timeout", params.opts.timeout);
-  }
+  // Older targets need the existing allowance. New targets recover operator intent
+  // from the private handoff instead of treating this compatibility value as explicit.
+  const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs);
+  const serializedTimeout = handoff.timeout.serialized;
+  argv.push("--timeout", serializedTimeout);
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
   const resultPath = path.join(resultDir, "plugins.json");
   const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
@@ -359,6 +421,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
+    await writeJson(path.join(resultDir, "handoff.json"), handoff, { dirMode: 0o700 });
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const handoffEnv = buildPostCoreHandoffEnv({
@@ -496,7 +559,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       // A phase exception did not commit plugin convergence. Keep its original
       // rollback behavior and carry the child cause through the existing handoff.
       await restoreTentativePluginIndex();
-      return { resumed: false, exitCode: exitCode || 1, error: postCoreResult.error };
+      return {
+        resumed: false,
+        exitCode: exitCode || 1,
+        error: postCoreResult.error,
+        ...(postCoreResult.failureFacts ? { failureFacts: postCoreResult.failureFacts } : {}),
+      };
     }
     const pluginUpdate = postCoreResult;
     if (exitCode !== 0) {

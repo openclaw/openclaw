@@ -11,6 +11,11 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
 import {
+  readTranscriptEventRows,
+  readTranscriptStatsSync,
+  readTranscriptStorageRows,
+} from "./session-accessor.sqlite-read.js";
+import {
   readTranscriptGenerationInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
@@ -32,7 +37,7 @@ import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 const tempDirs: string[] = [];
 
@@ -83,6 +88,50 @@ describe("SQLite transcript append", () => {
     expect(message["__openclaw"]).toMatchObject({
       media: [expect.objectContaining({ path: "/media/a.png", contentType: "image/png" })],
     });
+
+    const generation = readTranscriptGenerationInTransaction(database, "append-session");
+    const next = {
+      type: "message",
+      id: "event-2",
+      parentId: "event-1",
+      timestamp: 1001,
+      message: { role: "assistant", content: "next" },
+    };
+    const policy = trackSqliteStatementExecutions(database.db, ["policy"], (sql) =>
+      sql.includes('"session_key_contract"') ? "policy" : null,
+    );
+    let nextJson: string | false;
+    try {
+      nextJson = runOpenClawAgentWriteTransaction(
+        (writer) =>
+          appendTranscriptEventInTransaction(
+            writer,
+            {
+              agentId: "main",
+              env,
+              sessionId: "append-session",
+              sessionKey: "agent:main:append-session",
+            },
+            next,
+          ),
+        { agentId: "main", env },
+      );
+    } finally {
+      policy.restore();
+    }
+    expect(nextJson).toBe(JSON.stringify(next));
+    expect(
+      database.db
+        .prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+        .all("append-session"),
+    ).toEqual([
+      { seq: 0, event_json: committedJson },
+      { seq: 1, event_json: nextJson },
+    ]);
+    expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
+    expect(policy.counts).toEqual({ policy: 1 });
+    expect(policy.rowCounts).toEqual({ policy: 1 });
+    expect(policy.textBytes).toEqual({ policy: 4 });
   });
 });
 
@@ -102,6 +151,7 @@ async function withRewriteFixture(
     db: DatabaseSync;
     snapshot: () => {
       raw: Array<Record<string, unknown>>;
+      storage: Array<Record<string, unknown>>;
       identities: unknown[];
       active: unknown[];
       search: unknown[];
@@ -111,6 +161,7 @@ async function withRewriteFixture(
     rewrite: (event: unknown, seq?: number) => void;
     scope: { agentId: string; sessionId: string; sessionKey: string; env: NodeJS.ProcessEnv };
   }) => void | Promise<void>,
+  events: readonly unknown[] = rewriteEvents,
 ) {
   await withOpenClawTestState({ label: "exact-rewrite" }, async (state) => {
     const scope = {
@@ -122,10 +173,16 @@ async function withRewriteFixture(
     const owner = openOpenClawAgentDatabase(scope);
     const { db } = owner;
     runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventsInTransaction(database, scope, rewriteEvents);
+      appendTranscriptEventsInTransaction(database, scope, events);
     }, scope);
     const snapshot = () => ({
-      raw: db
+      raw: readTranscriptStorageRows(owner, scope.sessionId).map((row) => ({
+        session_id: scope.sessionId,
+        seq: row.seq,
+        event_json: row.eventJson,
+        created_at: row.createdAt,
+      })),
+      storage: db
         .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
         .all(scope.sessionId),
       identities: db
@@ -143,13 +200,13 @@ async function withRewriteFixture(
       updatedAt: readTranscriptMutationStateInTransaction(owner, scope.sessionId).updatedAt,
     });
     const rewrite = (event: unknown, seq = 1) => {
-      const row = db
-        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = ?")
-        .get(scope.sessionId, seq);
-      if (typeof row?.event_json !== "string") {
+      const row = readTranscriptEventRows(owner, scope.sessionId).find(
+        (entry) => entry.seq === seq,
+      );
+      if (!row) {
         throw new Error("missing rewrite row");
       }
-      const expectedEventJson = row.event_json;
+      const expectedEventJson = row.eventJson;
       runOpenClawAgentWriteTransaction((database) => {
         rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
           { seq, event, expectedEventJson },
@@ -161,46 +218,88 @@ async function withRewriteFixture(
 }
 
 describe("SQLite exact transcript rewrite", () => {
-  it("applies distinct exact bindings in caller order, including repeated rows", async () => {
-    await withRewriteFixture(({ snapshot, scope }) => {
-      const before = snapshot();
-      const first = {
-        ...rewriteEvents[2],
-        message: { ...rewriteEvents[2].message, provenance: "first" },
-      };
-      const last = { ...first, message: { ...first.message, provenance: "last" } };
-      const user = {
-        ...rewriteEvents[1],
-        message: { ...rewriteEvents[1].message, provenance: "user" },
-      };
-      runOpenClawAgentWriteTransaction((database) => {
-        rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-          { seq: 2, expectedEventJson: JSON.stringify(rewriteEvents[2]), event: first },
-          { seq: 1, expectedEventJson: JSON.stringify(rewriteEvents[1]), event: user },
-          { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
+  it.each([false, true])(
+    "applies exact bindings across both storage arms, initially compressed=%s",
+    async (compressed) => {
+      const details = { opaque: "preserved metadata ".repeat(2048) };
+      const events = [
+        rewriteEvents[0],
+        {
+          ...rewriteEvents[1],
+          message: { ...rewriteEvents[1].message, ...(compressed ? { details } : {}) },
+        },
+        {
+          ...rewriteEvents[2],
+          message: { ...rewriteEvents[2].message, ...(compressed ? { details } : {}) },
+        },
+      ];
+      await withRewriteFixture(({ snapshot, scope }) => {
+        const before = snapshot();
+        const first = {
+          ...rewriteEvents[2],
+          message: {
+            ...rewriteEvents[2].message,
+            provenance: "first",
+            ...(!compressed ? { details } : {}),
+          },
+        };
+        const last = {
+          ...rewriteEvents[2],
+          message: {
+            ...rewriteEvents[2].message,
+            provenance: "last",
+            ...(compressed ? { details } : {}),
+          },
+        };
+        const user = {
+          ...rewriteEvents[1],
+          message: {
+            ...rewriteEvents[1].message,
+            provenance: "user",
+            ...(!compressed ? { details } : {}),
+          },
+        };
+        expect(before.storage[1]?.event_json === null).toBe(compressed);
+        expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(compressed);
+        runOpenClawAgentWriteTransaction((database) => {
+          rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
+            { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
+            { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
+            { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
+          ]);
+        }, scope);
+        const after = snapshot();
+        expect(after.raw).toEqual([
+          before.raw[0],
+          { ...before.raw[1], event_json: JSON.stringify(user) },
+          { ...before.raw[2], event_json: JSON.stringify(last) },
         ]);
-      }, scope);
-      const after = snapshot();
-      expect(after.raw).toEqual([
-        before.raw[0],
-        { ...before.raw[1], event_json: JSON.stringify(user) },
-        { ...before.raw[2], event_json: JSON.stringify(last) },
-      ]);
-      expect(after.identities).toEqual(before.identities);
-      expect(after.active).toEqual(before.active);
-      expect(after.search).toEqual(before.search);
-      expect(after.generation).not.toBe(before.generation);
-      expect(after.updatedAt).toBeGreaterThan(before.updatedAt!);
-    });
-  });
+        expect(after.identities).toEqual(before.identities);
+        expect(after.active).toEqual(before.active);
+        expect(after.search).toEqual(before.search);
+        expect(after.generation).not.toBe(before.generation);
+        expect(after.updatedAt).toBeGreaterThan(before.updatedAt!);
+        expect(after.storage[1]?.event_json === null).toBe(!compressed);
+        expect(after.storage[1]?.event_zstd instanceof Uint8Array).toBe(!compressed);
+        expect(after.storage[2]?.event_json === null).toBe(compressed);
+        expect(after.storage[2]?.event_zstd instanceof Uint8Array).toBe(compressed);
+        expect(readTranscriptStatsSync(scope)).toMatchObject({
+          eventCount: 3,
+          sizeBytes: Buffer.byteLength(
+            [rewriteEvents[0], user, last].map((event) => JSON.stringify(event)).join("\n"),
+          ),
+        });
+      }, events);
+    },
+  );
 
   it("preserves healthy derived rows without FTS access or size scans while raw mutation advances", async () => {
     await withRewriteFixture(({ db, snapshot, rewrite, scope }) => {
       const before = snapshot();
       const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        sql.includes("session_transcript_fts")
+        /\bsession_transcript_fts\b/i.test(sql)
           ? "fts"
-          : sql.includes("octet_length")
+          : sql.includes('from "transcript_events"') && sql.includes("octet_length")
             ? "size"
             : null,
       );
@@ -237,7 +336,7 @@ describe("SQLite exact transcript rewrite", () => {
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       const before = prepareSessionTranscriptProjection(db, scope.sessionId)!;
       const work = trackSqliteStatementExecutions(db, ["fts"], (sql) =>
-        sql.includes("session_transcript_fts") ? "fts" : null,
+        /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
       );
       try {
         rewrite({ ...rewriteEvents[1], message: { ...message, content: "changed" } });
@@ -260,24 +359,44 @@ describe("SQLite exact transcript rewrite", () => {
     });
   });
 
-  it("rolls back all exact writes and mutation state when a later expected row conflicts", async () => {
-    await withRewriteFixture(({ snapshot, scope }) => {
-      const before = snapshot();
-      expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
-          rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-            {
-              seq: 1,
-              expectedEventJson: JSON.stringify(rewriteEvents[1]),
-              event: { ...rewriteEvents[1], message: { role: "user", content: "edited" } },
-            },
-            { seq: 2, expectedEventJson: "stale", event: rewriteEvents[2] },
-          ]);
-        }, scope),
-      ).toThrow("changed before exact rewrite");
-      expect(snapshot()).toEqual(before);
-    });
-  });
+  it.each([false, true])(
+    "rolls back payload-arm changes and mutation state on later conflict, initially compressed=%s",
+    async (compressed) => {
+      const details = { opaque: "rollback metadata ".repeat(2048) };
+      const events = [
+        rewriteEvents[0],
+        {
+          ...rewriteEvents[1],
+          message: { ...rewriteEvents[1].message, ...(compressed ? { details } : {}) },
+        },
+        {
+          ...rewriteEvents[2],
+          message: { ...rewriteEvents[2].message, ...(compressed ? { details } : {}) },
+        },
+      ];
+      await withRewriteFixture(({ snapshot, scope }) => {
+        const before = snapshot();
+        const stats = readTranscriptStatsSync(scope);
+        expect(() =>
+          runOpenClawAgentWriteTransaction((database) => {
+            rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
+              {
+                seq: 1,
+                expectedEventJson: JSON.stringify(events[1]),
+                event: {
+                  ...rewriteEvents[1],
+                  message: { role: "user", content: "edited", ...(!compressed ? { details } : {}) },
+                },
+              },
+              { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
+            ]);
+          }, scope),
+        ).toThrow("changed before exact rewrite");
+        expect(snapshot()).toEqual(before);
+        expect(readTranscriptStatsSync(scope)).toEqual(stats);
+      }, events);
+    },
+  );
 
   it.each(["dirty", "missing", "lagging", "unclassified", "claimed"] as const)(
     "recovers %s projections on metadata rewrite and fences stale publication",
@@ -297,7 +416,7 @@ describe("SQLite exact transcript rewrite", () => {
         if (kind === "claimed") {
           expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(true);
           db.prepare("DELETE FROM session_transcript_active_events").run();
-          db.prepare("DELETE FROM session_transcript_fts").run();
+          db.prepare("DELETE FROM session_transcript_fts_rows").run();
         }
         expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
         rewrite({
@@ -368,7 +487,7 @@ describe("SQLite exact transcript rewrite", () => {
     async ({ event, seq, texts, messages, name }) => {
       await withRewriteFixture(({ db, rewrite, scope }) => {
         const work = trackSqliteStatementExecutions(db, ["deletes"], (sql) =>
-          /^delete from ["`]?session_transcript_fts["`]? /i.test(sql) ? "deletes" : null,
+          /^delete from ["`]?session_transcript_fts_rows["`]? /i.test(sql) ? "deletes" : null,
         );
         try {
           rewrite(event, seq);
@@ -414,7 +533,7 @@ describe("SQLite exact transcript rewrite", () => {
         },
       ] as const;
       const work = trackSqliteStatementExecutions(db, ["deletes"], (sql) =>
-        /^delete from ["`]?session_transcript_fts["`]? /i.test(sql) ? "deletes" : null,
+        /^delete from ["`]?session_transcript_fts_rows["`]? /i.test(sql) ? "deletes" : null,
       );
       try {
         runOpenClawAgentWriteTransaction(

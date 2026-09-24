@@ -22,6 +22,14 @@ const operations = {
   },
 } as const;
 
+const removalStages = [
+  ["preparation", "preparationMs"],
+  ["snapshot", "snapshotMs"],
+  ["checkoutRemoval", "checkoutRemovalMs"],
+  ["finalization", "bodyFinalizeMs"],
+] as const;
+type RemovalStage = (typeof removalStages)[number][0];
+
 export function startGitOperationTiming(
   kind: keyof typeof operations,
   log: Pick<SubsystemLogger, "isEnabled" | "info">,
@@ -35,12 +43,33 @@ export function startGitOperationTiming(
     const operation = operations[kind];
     let firstPhaseEnd: number | undefined;
     let secondPhaseEnd: number | undefined;
+    let removalStage: RemovalStage | undefined;
+    let removalStageStartedAt = 0;
+    let removalDurations: Partial<Record<RemovalStage, number>> | undefined;
     return {
       markPhase() {
         if (firstPhaseEnd === undefined) {
           firstPhaseEnd = performance.now();
         } else {
           secondPhaseEnd = performance.now();
+        }
+      },
+      markRemovalStage(next?: RemovalStage) {
+        if (kind !== "worktree-removal") {
+          return;
+        }
+        try {
+          const now = performance.now();
+          if (removalStage !== undefined) {
+            removalDurations ??= {};
+            removalDurations[removalStage] =
+              (removalDurations[removalStage] ?? 0) + now - removalStageStartedAt;
+          }
+          removalStage = next;
+          removalStageStartedAt = now;
+        } catch {
+          removalStage = undefined;
+          removalDurations = undefined;
         }
       },
       finish(outcome: "returned" | "threw") {
@@ -75,6 +104,12 @@ export function startGitOperationTiming(
                     [operation.phases[2]]: Math.round(endedAt - secondPhaseEnd),
                   }
                 : {}),
+              ...Object.fromEntries(
+                removalStages.flatMap(([stage, field]) => {
+                  const elapsed = removalDurations?.[stage];
+                  return elapsed === undefined ? [] : [[field, Math.round(elapsed)]];
+                }),
+              ),
               callbackEntered:
                 (kind === "ref-mutation" ? secondPhaseEnd : firstPhaseEnd) !== undefined,
               outcome,

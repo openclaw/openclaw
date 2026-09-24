@@ -95,22 +95,23 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
   }
   const compilerOptions = parsed.options;
   const files = new Map<string, string>();
+  const visited = new Set<string>();
 
-  const visit = (input: string) => {
+  const visit = (input: string, compilerSource = false) => {
     const requested = input.startsWith("file:") ? fileURLToPath(input) : input;
     const absolute = fs.realpathSync(path.resolve(root, requested));
     const id = portablePath(root, absolute);
-    if (files.has(id)) {
-      return;
-    }
     files.set(id, absolute);
     if (
+      compilerSource ||
+      visited.has(id) ||
       id === absolute ||
       id.split("/").includes("node_modules") ||
       !sourceFilePattern.test(absolute)
     ) {
       return;
     }
+    visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
     const sourceFile = ts.createSourceFile(absolute, source, ts.ScriptTarget.Latest, true);
     const expressions = dynamicEdgeExpressions(sourceFile);
@@ -123,7 +124,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     if (owner) {
       observedDynamicOwners.add(id);
-      owner.targets.forEach(visit);
+      owner.targets.forEach((target) => visit(target));
     }
     for (const reference of collectModuleReferencesFromSource(source, {
       fileName: absolute,
@@ -136,7 +137,16 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
             throw new Error(`Unowned import.meta directory in ${id}:${reference.line}`);
           }
         } else {
-          visit(target);
+          // The handoff config passes these files to the runtime compiler, not
+          // the declaration generator. Capture their bytes without interpreting
+          // staged runtime paths as files in the source checkout.
+          const targetIsCompilerSource =
+            id === "scripts/lib/managed-handoff-build-config.mts" &&
+            [
+              "../../src/shared/freebsd-process-identity.ts",
+              "../../src/infra/update-managed-service-handoff-native-loader.ts",
+            ].includes(reference.specifier);
+          visit(target, targetIsCompilerSource);
         }
         continue;
       }
@@ -170,7 +180,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
   };
 
-  [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"].forEach(visit);
+  [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"].forEach((entry) => visit(entry));
   for (const owner of dynamicOwners.keys()) {
     if (!observedDynamicOwners.has(owner)) {
       throw new Error(`Dynamic module owner is outside the generator closure: ${owner}`);
@@ -185,5 +195,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       .map(([, file]) => file),
     ...STATE_SCHEMA_GENERATOR_INPUTS,
     ...resolveWorkerDeployGeneratorInputs(root),
+    fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
   ];
 }

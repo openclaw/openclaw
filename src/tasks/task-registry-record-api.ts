@@ -1,52 +1,17 @@
-import crypto from "node:crypto";
-import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
-import {
-  appendTaskEvent,
-  assertTaskOwner,
-  normalizeTaskStatus,
-  normalizeTaskSummary,
-  resolveTaskTerminalOutcome,
-  shouldApplyRunScopedStatusUpdate,
-} from "./task-registry-common.js";
-import {
-  findExistingTaskForCreate,
-  mergeExistingTaskForCreate,
-} from "./task-registry-create-helpers.js";
-import {
-  maybeDeliverTaskStateChangeUpdate,
-  maybeDeliverTaskTerminalUpdate,
-} from "./task-registry-delivery.js";
+import { normalizeTaskSummary, resolveTaskTerminalOutcome } from "./task-registry-common.js";
 import { assertParentFlowLinkAllowed } from "./task-registry-flow-link.js";
-import { syncFlowFromTaskAfterTaskMutation, updateTask } from "./task-registry-mutation.js";
+import { updateTask } from "./task-registry-mutation.js";
+import { cloneTaskRecord } from "./task-registry-records.js";
+import { withTaskRegistryMutation, ensureTaskRegistryReady, tasks } from "./task-registry-state.js";
+import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
 import {
-  buildTaskRecordForCreate,
-  resolveTaskCreateIdentity,
-  type CreateTaskRecordParams,
-  cloneTaskRecord,
-  cloneTaskRecordForObserver,
-} from "./task-registry-records.js";
-import {
-  withTaskRegistryMutation,
-  addOwnerKeyIndex,
-  addParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
-  addRunIdIndex,
-  bumpTaskRegistryRevision,
-  emitTaskRegistryObserverEvent,
-  ensureTaskRegistryReady,
-  getTasksByRunScope,
-  taskDeliveryStates,
-  tasks,
-} from "./task-registry-state.js";
-import { tryPersistTaskUpsert } from "./task-registry.store.js";
-import {
-  isTerminalTaskStatus,
   parseTaskNotifyPolicy,
   type JsonValue,
   type TaskDeliveryStatus,
   type TaskNotifyPolicy,
   type TaskRecord,
   type TaskRuntime,
+  type TaskRunStateTransitionParams,
   type TaskStatus,
   type TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -121,221 +86,10 @@ export function markTaskLostById(params: {
   });
 }
 
-function updateTasksByRunId(params: {
-  runId: string;
-  patch: Partial<TaskRecord>;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-}): TaskRecord[] {
-  return withTaskRegistryMutation(
-    () => {
-      const matches = getTasksByRunScope(params);
-      if (matches.length === 0) {
-        return [];
-      }
-      const updated: TaskRecord[] = [];
-      for (const match of matches) {
-        if (!hasAuthoritativeTaskBacking(match)) {
-          continue;
-        }
-        const task = updateTask(match.taskId, params.patch);
-        if (task) {
-          updated.push(task);
-        }
-      }
-      return updated;
-    },
-    () => [],
-  );
-}
+export { createTaskRecord } from "./task-registry-create.native.js";
 
-export function createTaskRecord(params: CreateTaskRecordParams): TaskRecord | null {
-  return withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      const identity = resolveTaskCreateIdentity(params);
-      const { ownerKey, scopeKind, agentId } = identity;
-      assertTaskOwner({
-        ownerKey,
-        scopeKind,
-      });
-      assertParentFlowLinkAllowed({
-        ownerKey,
-        scopeKind,
-        parentFlowId: params.parentFlowId,
-      });
-      const existing = findExistingTaskForCreate({
-        runtime: params.runtime,
-        ownerKey,
-        scopeKind,
-        childSessionKey: params.childSessionKey,
-        parentFlowId: params.parentFlowId,
-        runId: params.runId,
-        label: params.label,
-        task: params.task,
-      });
-      if (existing) {
-        return mergeExistingTaskForCreate(existing, { ...params, agentId });
-      }
-      const now = Date.now();
-      const taskId = crypto.randomUUID();
-      const { record, deliveryState } = buildTaskRecordForCreate(params, identity, { now, taskId });
-      if (!tryPersistTaskUpsert(record, "create", deliveryState)) {
-        return null;
-      }
-      tasks.set(taskId, record);
-      bumpTaskRegistryRevision();
-      if (deliveryState) {
-        taskDeliveryStates.set(taskId, deliveryState);
-      }
-      addRunIdIndex(taskId, record.runId);
-      addOwnerKeyIndex(taskId, record);
-      addParentFlowIdIndex(taskId, record);
-      addRelatedSessionKeyIndex(taskId, record);
-      syncFlowFromTaskAfterTaskMutation(record, "create");
-      emitTaskRegistryObserverEvent(() => ({
-        kind: "upserted",
-        task: cloneTaskRecordForObserver(record),
-      }));
-      if (isTerminalTaskStatus(record.status)) {
-        void maybeDeliverTaskTerminalUpdate(taskId);
-      }
-      return cloneTaskRecord(record);
-    },
-    () => null,
-  );
-}
-
-export function updateTaskStateByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  status?: TaskStatus;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  error?: string;
-  clearError?: boolean;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  eventSummary?: string | null;
-  suppressDelivery?: boolean;
-}) {
-  return withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      const matches = getTasksByRunScope(params);
-      if (matches.length === 0) {
-        return [];
-      }
-      const updated: TaskRecord[] = [];
-      for (const current of matches) {
-        if (!hasAuthoritativeTaskBacking(current)) {
-          continue;
-        }
-        const patch: Partial<TaskRecord> = {};
-        const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
-        if (
-          params.status &&
-          !shouldApplyRunScopedStatusUpdate({
-            currentStatus: current.status,
-            currentRuntime: current.runtime,
-            currentChildSessionKey: current.childSessionKey,
-            currentError: current.error,
-            currentEndedAt: current.endedAt,
-            nextStatus,
-            nextError: params.error,
-            nextEndedAt: params.endedAt,
-          })
-        ) {
-          continue;
-        }
-        const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
-        if (params.status) {
-          patch.status = normalizeTaskStatus(params.status);
-        }
-        if (params.startedAt != null) {
-          patch.startedAt = params.startedAt;
-        }
-        if (params.endedAt != null) {
-          patch.endedAt = params.endedAt;
-        }
-        if (params.lastEventAt != null) {
-          patch.lastEventAt = params.lastEventAt;
-        }
-        if (params.childSessionKey !== undefined) {
-          patch.childSessionKey = params.childSessionKey?.trim() || undefined;
-        }
-        if (params.clearError) {
-          patch.error = undefined;
-        } else if (
-          current.status === "cancelled" &&
-          nextStatus !== "cancelled" &&
-          params.error === undefined
-        ) {
-          patch.error = undefined;
-        } else if (params.error !== undefined) {
-          patch.error = params.error;
-        }
-        if (params.progressSummary !== undefined) {
-          patch.progressSummary = normalizeTaskSummary(params.progressSummary);
-        }
-        if (params.terminalSummary !== undefined) {
-          patch.terminalSummary = params.preserveTerminalSummary
-            ? (params.terminalSummary ?? undefined)
-            : normalizeTaskSummary(params.terminalSummary);
-        }
-        if (params.terminalOutcome !== undefined) {
-          patch.terminalOutcome = resolveTaskTerminalOutcome({
-            status: nextStatus,
-            terminalOutcome: params.terminalOutcome,
-          });
-        }
-        if (params.detail !== undefined) {
-          patch.detail = params.detail;
-        }
-        if (params.suppressDelivery) {
-          // Teardown suppression must survive redundant lifecycle finalizers that
-          // arrive after queues are cleared, or they can repopulate the stopped session.
-          patch.deliveryStatus = "not_applicable";
-        }
-        const eventSummary =
-          normalizeTaskSummary(params.eventSummary) ??
-          (nextStatus === "failed"
-            ? normalizeTaskSummary(params.error ?? current.error)
-            : nextStatus === "succeeded"
-              ? normalizeTaskSummary(params.terminalSummary ?? current.terminalSummary)
-              : undefined);
-        const shouldAppendEvent =
-          (params.status && params.status !== current.status) ||
-          Boolean(normalizeTaskSummary(params.eventSummary));
-        const nextEvent = shouldAppendEvent
-          ? appendTaskEvent({
-              at: eventAt,
-              kind:
-                params.status && normalizeTaskStatus(params.status) !== current.status
-                  ? normalizeTaskStatus(params.status)
-                  : "progress",
-              summary: eventSummary,
-            })
-          : undefined;
-        const task = updateTask(current.taskId, patch);
-        if (task) {
-          updated.push(task);
-          if (!params.suppressDelivery) {
-            void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
-            void maybeDeliverTaskTerminalUpdate(task.taskId);
-          }
-        }
-      }
-      return updated;
-    },
-    () => [],
-  );
+export function updateTaskStateByRunId(params: TaskRunStateTransitionParams): TaskRecord[] {
+  return transitionTaskRecordsByRunNative({ kind: "state", params });
 }
 
 function updateTaskDeliveryByRunId(params: {
@@ -345,23 +99,12 @@ function updateTaskDeliveryByRunId(params: {
   deliveryStatus: TaskDeliveryStatus;
   error?: string;
 }) {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {
-    deliveryStatus: params.deliveryStatus,
-  };
-  if (params.error !== undefined) {
-    patch.error = params.error;
-  }
-  return updateTasksByRunId({
-    runId: params.runId,
-    runtime: params.runtime,
-    sessionKey: params.sessionKey,
-    patch,
-  });
+  return transitionTaskRecordsByRunNative({ kind: "delivery", params });
 }
 
 export function markTaskRunningByRunId(params: {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   startedAt?: number;
@@ -371,6 +114,7 @@ export function markTaskRunningByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    taskId: params.taskId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     status: "running",
@@ -383,18 +127,22 @@ export function markTaskRunningByRunId(params: {
 
 export function recordTaskProgressByRunId(params: {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    taskId: params.taskId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     childSessionKey: params.childSessionKey,
+    detail: params.detail,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
@@ -403,6 +151,7 @@ export function recordTaskProgressByRunId(params: {
 
 export function finalizeTaskRecordByRunId(params: {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   childSessionKey?: string | null;
@@ -421,6 +170,7 @@ export function finalizeTaskRecordByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    taskId: params.taskId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     childSessionKey: params.childSessionKey,

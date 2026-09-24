@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import {
-  resolveTelegramCommandAuthorization,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
@@ -154,15 +153,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     dmPolicy,
   });
 
-  const ownerAccess = resolveTelegramCommandAuthorization({
-    cfg: auth.cfg,
-    accountId: auth.accountId,
-    chatId: facts.chatId,
-    isGroup: facts.isGroup,
-    threadSpec,
-    senderId: facts.senderId,
-    ...(facts.senderUsername !== undefined ? { senderUsername: facts.senderUsername } : {}),
-  });
   const gate = await resolveTelegramCommandIngressAuthorization({
     accountId: auth.accountId,
     cfg: auth.cfg,
@@ -173,7 +163,6 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     senderId: facts.senderId,
     effectiveDmAllow: dmAllow.effectiveAllow,
     effectiveGroupAllow,
-    ownerAccess,
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: true,

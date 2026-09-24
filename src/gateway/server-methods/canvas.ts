@@ -10,6 +10,7 @@ import { buildSandboxHostPath } from "../../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../../canvas/config.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
+import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -24,6 +25,7 @@ async function respondWithCanvasHtml(
   invocation: GatewayRequestHandlerOptions,
   readHtml: () => string | Promise<string>,
   unavailableMessage: string,
+  sandboxUrl: string,
 ): Promise<void> {
   const { context, client, respond } = invocation;
   const resolveContext = context.resolveGatewayContext;
@@ -58,7 +60,7 @@ async function respondWithCanvasHtml(
     const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
-      sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+      sandboxUrl,
       sandboxPort,
       ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
     };
@@ -88,6 +90,7 @@ export const canvasHandlers: GatewayRequestHandlers = {
           return document.html;
         },
         CANVAS_WIDGET_UNAVAILABLE,
+        buildBoardWidgetSandboxPath({ grantState: "none" }),
       ),
   ),
   "canvas.document.preview": defineValidatedGatewayMethod(
@@ -102,12 +105,17 @@ export const canvasHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "invalid canvas.document.preview params: html must not exceed 256 KiB of UTF-8 data",
+            "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
           ),
         );
         return;
       }
-      await respondWithCanvasHtml(invocation, () => html, CANVAS_PREVIEW_UNAVAILABLE);
+      await respondWithCanvasHtml(
+        invocation,
+        () => html,
+        CANVAS_PREVIEW_UNAVAILABLE,
+        buildSandboxHostPath({ blockDescendantFrames: true }),
+      );
     },
   ),
 };

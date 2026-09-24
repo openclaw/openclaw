@@ -12,6 +12,7 @@ import {
   runDiskSpaceHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
+  runLegacyPluginSourceCapturesHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
@@ -21,8 +22,8 @@ import {
   runSessionTranscriptsHealth,
   runStateIntegrityHealth,
 } from "./doctor-health-contribution-runners.state.js";
-import { runActiveToolSchemaWarningsHealth } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -41,6 +42,11 @@ function legacyOwnedRepair(
   };
 }
 
+async function runStaleRuntimeBuildHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { runCoreContributionHealth } = await import("./doctor-health-contribution-core.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/stale-runtime-build"]);
+}
+
 async function runTelegramGeneralTopicConversationHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
@@ -51,6 +57,7 @@ async function runTelegramGeneralTopicConversationHealth(
 export function resolveInitialDoctorHealthContributions(params: {
   runStructuredHealthRepairs: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runGatewayConfigHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  runAuthProfileMigration: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runAuthProfileHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runGatewayAuthHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   runLegacyStateHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -67,10 +74,12 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Agent database admission",
       healthChecks: {
         description: "Agent databases with mismatched ownership are isolated until repaired.",
-        async detect(ctx) {
+        async detect(ctx: DoctorHealthCheckContext) {
           const { evaluateAgentDatabaseAdmissions } =
             await import("../state/agent-database-admission.js");
-          const refusals = await evaluateAgentDatabaseAdmissions(ctx.cfg, { env: ctx.env });
+          const refusals =
+            ctx.agentDatabaseRefusals ??
+            (await evaluateAgentDatabaseAdmissions(ctx.cfg, { env: ctx.env }));
           return refusals.map((refusal) => ({
             checkId: "core/doctor/agent-database-admission",
             severity: "warning" as const,
@@ -98,8 +107,15 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:auth-profile-migration",
+      label: "Auth profile migration",
+      updateWork: { kind: "startup" },
+      run: params.runAuthProfileMigration,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
         defaultEnabled: false,
@@ -113,6 +129,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:claude-cli",
       label: "Claude CLI",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
     }),
@@ -137,12 +154,14 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:command-owner",
       label: "Command owner",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/command-owner"],
       run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
-      label: "Structured health repairs",
+      label: "Plugin health inspection and repair",
+      updateWork: { kind: "inspection", scope: "agent" },
       run: params.runStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
@@ -292,19 +311,25 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runPluginRegistryHealth,
     }),
-    // Runtime tool discovery must follow plugin metadata repair; running it earlier
-    // scans each workspace again after the authoritative generation changes.
     createDoctorHealthContribution({
-      id: "doctor:active-tool-schema-warnings",
-      label: "Active tool schema warnings",
-      updatePolicy: "standalone",
-      run: runActiveToolSchemaWarningsHealth,
+      id: "doctor:legacy-plugin-source-captures",
+      label: "Legacy plugin captures",
+      updateWork: { kind: "startup" },
+      run: runLegacyPluginSourceCapturesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
       run: async () => {},
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:stale-runtime-build",
+      label: "Stale runtime build",
+      healthCheckIds: ["core/doctor/stale-runtime-build"],
+      // healthCheckIds only claims the check for structured selection, which runs
+      // under --lint/--fix; a plain `openclaw doctor` needs this runner to report.
+      run: runStaleRuntimeBuildHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:disk-space",
@@ -323,7 +348,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:project-clone-shape",
       label: "Project clones",
-      updatePolicy: "standalone",
+      updateWork: { kind: "standalone" },
       healthChecks: {
         description: "Partial and shallow registry-owned project clones need manual repair.",
         defaultEnabled: false,
@@ -341,12 +366,13 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
-      updatePolicy: "standalone",
+      updateWork: { kind: "standalone" },
       run: runDatabaseBloatHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:channel-ingress-dead-letters",
       label: "Channel ingress dead letters",
+      updateWork: { kind: "inspection", scope: "run" },
       run: runChannelIngressDeadLettersHealth,
     }),
     createDoctorHealthContribution({
@@ -399,8 +425,10 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
       label: "Session snapshots",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
-        description: "Stale cached session snapshot paths are represented as findings.",
+        description:
+          "Historical session snapshot paths are advisory findings; originals are preserved.",
         defaultEnabled: false,
         async detect(ctx) {
           const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
@@ -409,13 +437,6 @@ export function resolveInitialDoctorHealthContributions(params: {
             sessionSnapshotIssueToHealthFinding,
           );
         },
-        repair: legacyOwnedRepair(async (ctx) => {
-          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToRepairEffect } =
-            await import("../commands/doctor-session-snapshots.js");
-          return (await detectSessionSnapshotHealthIssues({ cfg: ctx.cfg, env: process.env })).map(
-            sessionSnapshotIssueToRepairEffect,
-          );
-        }, "legacy doctor session snapshot contribution owns snapshot rewrites"),
       },
       run: runSessionSnapshotsHealth,
     }),

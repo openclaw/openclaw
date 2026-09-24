@@ -1,22 +1,29 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
-import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionSnapshot,
-} from "./session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 
 it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
   const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
-  const previous = buildGatewaySessionEventFields({
+  const previous = buildGatewaySessionSnapshot({
     sessionRow: { ...sessionRow, autoLabel: "Device", displayName: "Device" },
   });
-  const cleared = buildGatewaySessionEventFields({ sessionRow });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
   expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
+});
+
+it("clears a saved dashboard default in subscribed session metadata", () => {
+  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: { ...sessionRow, boardPresentation: "expanded" },
+  });
+  expect(previous.boardPresentation).toBe("expanded");
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ boardPresentation: null });
 });
 
 it("projects session actors and explicitly clears absent attribution", () => {
   expect(
-    buildGatewaySessionEventFields({
+    buildGatewaySessionSnapshot({
       sessionRow: {
         key: "agent:main:owned",
         kind: "direct",
@@ -35,7 +42,7 @@ it("projects session actors and explicitly clears absent attribution", () => {
   });
 
   expect(
-    buildGatewaySessionEventFields({
+    buildGatewaySessionSnapshot({
       sessionRow: {
         key: "agent:main:archived",
         kind: "direct",
@@ -54,7 +61,7 @@ it("projects session actors and explicitly clears absent attribution", () => {
 });
 
 it("projects the prepared permission boundary only for an explicit mode", () => {
-  const ordinary = buildGatewaySessionEventFields({
+  const ordinary = buildGatewaySessionSnapshot({
     sessionRow: {
       key: "agent:main:ordinary",
       kind: "direct",
@@ -66,7 +73,7 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
   expect(ordinary).not.toHaveProperty("sessionRoot");
 
   expect(
-    buildGatewaySessionEventFields({
+    buildGatewaySessionSnapshot({
       sessionRow: {
         key: "agent:main:workspace",
         kind: "direct",
@@ -184,7 +191,7 @@ it.each(["user", "auto", null] as const)(
   "carries model override source %s into session change events",
   (source) => {
     expect(
-      buildGatewaySessionEventFields({
+      buildGatewaySessionSnapshot({
         sessionRow: {
           key: "agent:main:pinned",
           kind: "direct",
@@ -262,6 +269,10 @@ it.each([
         key: "agent:main:terminal",
         sessionId: "terminal-session",
         kind: "direct",
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
         updatedAt: 100,
         status: "running",
         startedAt: 100,
@@ -276,15 +287,25 @@ it.each([
         seq: 1,
         ts: 200,
         stream: "lifecycle",
+        controlUiVisible: true,
         data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
       },
     }),
   ).toMatchObject({
     status,
+    unread: true,
+    lastActivityAt: 200,
     hasActiveRun: true,
     endedAt: 200,
     runtimeMs: 100,
-    session: { status, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
   });
 });
 
@@ -292,9 +313,9 @@ it("publishes prompt budgets and their invalidation to subscribed sessions", () 
   const status = contextBudgetStatusFixture();
   const row = { key: "agent:main:main", kind: "direct" as const, updatedAt: 2 };
   expect(
-    buildGatewaySessionEventFields({ sessionRow: { ...row, contextBudgetStatus: status } }),
+    buildGatewaySessionSnapshot({ sessionRow: { ...row, contextBudgetStatus: status } }),
   ).toHaveProperty("contextBudgetStatus", status);
-  expect(buildGatewaySessionEventFields({ sessionRow: row })).toHaveProperty(
+  expect(buildGatewaySessionSnapshot({ sessionRow: row })).toHaveProperty(
     "contextBudgetStatus",
     null,
   );

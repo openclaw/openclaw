@@ -8,7 +8,10 @@ import {
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -176,18 +179,15 @@ describe("SQLite auth storage", () => {
   it("never overwrites a store that becomes unreadable during an OAuth refresh", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "test-oauth:default": {
-            type: "oauth",
-            provider: "test-oauth",
-            access: "fake-expired-access",
-            refresh: "fake-refresh",
-            expires: 1,
-          },
+      createAuthProfileStoreFixture({
+        "test-oauth:default": {
+          type: "oauth",
+          provider: "test-oauth",
+          access: "fake-expired-access",
+          refresh: "fake-refresh",
+          expires: 1,
         },
-      },
+      }),
       agentDir,
     );
     const storage = AuthStorage.forAgent(agentDir);
@@ -221,18 +221,15 @@ describe("SQLite auth storage", () => {
   it("does not commit a refresh when a legacy source appears during the provider call", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "test-oauth:default": {
-            type: "oauth",
-            provider: "test-oauth",
-            access: "not-a-real",
-            refresh: "not-a-real",
-            expires: 1,
-          },
+      createAuthProfileStoreFixture({
+        "test-oauth:default": {
+          type: "oauth",
+          provider: "test-oauth",
+          access: "not-a-real",
+          refresh: "not-a-real",
+          expires: 1,
         },
-      },
+      }),
       agentDir,
     );
     const storage = AuthStorage.forAgent(agentDir);
@@ -267,22 +264,19 @@ describe("SQLite auth storage", () => {
   it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "test-oauth:default": {
-            type: "oauth",
-            provider: "test-oauth",
-            access: "fake-expired-access",
-            refresh: "fake-refresh",
-            expires: 1,
-            accountId: "fake-account-id",
-            email: "fake-user@example.com",
-            subscriptionType: "max",
-            rateLimitTier: "default_max_20x",
-          },
+      createAuthProfileStoreFixture({
+        "test-oauth:default": {
+          type: "oauth",
+          provider: "test-oauth",
+          access: "fake-expired-access",
+          refresh: "fake-refresh",
+          expires: 1,
+          accountId: "fake-account-id",
+          email: "fake-user@example.com",
+          subscriptionType: "max",
+          rateLimitTier: "default_max_20x",
         },
-      },
+      }),
       agentDir,
     );
     const storage = PublicAuthStorage.forAgent(agentDir);
@@ -367,16 +361,13 @@ describe("SQLite auth storage", () => {
   it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_STORED_KEY" },
-          },
+      createAuthProfileStoreFixture({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_STORED_KEY" },
         },
-      },
+      }),
       agentDir,
     );
     vi.stubEnv("OPENAI_API_KEY", "fake-ambient-key");
@@ -394,17 +385,14 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const keyRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", keyRef },
-          "xai:default": {
-            type: "token",
-            provider: "xai",
-            tokenRef: { source: "env", provider: "default", id: "XAI_TOKEN" },
-          },
+      createAuthProfileStoreFixture({
+        "openai:default": { type: "api_key", provider: "openai", keyRef },
+        "xai:default": {
+          type: "token",
+          provider: "xai",
+          tokenRef: { source: "env", provider: "default", id: "XAI_TOKEN" },
         },
-      },
+      }),
       agentDir,
     );
     expect(() => AuthStorage.forAgent(agentDir)).toThrow(
@@ -413,23 +401,20 @@ describe("SQLite auth storage", () => {
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              keyRef,
-              key: "fake-materialized-key",
-            },
-            "xai:default": {
-              type: "token",
-              provider: "xai",
-              tokenRef: { source: "env", provider: "default", id: "XAI_TOKEN" },
-              token: "fake-materialized-token",
-            },
+        store: createAuthProfileStoreFixture({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef,
+            key: "fake-materialized-key",
           },
-        },
+          "xai:default": {
+            type: "token",
+            provider: "xai",
+            tokenRef: { source: "env", provider: "default", id: "XAI_TOKEN" },
+            token: "fake-materialized-token",
+          },
+        }),
       },
     ]);
 
@@ -458,44 +443,35 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const originalRef = { source: "env" as const, provider: "default", id: "QA_AUTH_REF_OLD" };
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", keyRef: originalRef },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": { type: "api_key", provider: "openai", keyRef: originalRef },
+      }),
       agentDir,
     );
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              keyRef: originalRef,
-              key: "not-a-real",
-            },
+        store: createAuthProfileStoreFixture({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: originalRef,
+            key: "not-a-real",
           },
-        },
+        }),
       },
     ]);
     const storage = AuthStorage.forAgent(agentDir);
     expect(await storage.getApiKey("openai")).toBe("not-a-real");
 
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "QA_AUTH_REF_NEW" },
-          },
+      createAuthProfileStoreFixture({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "QA_AUTH_REF_NEW" },
         },
-      },
+      }),
       agentDir,
     );
     clearRuntimeAuthProfileStoreSnapshots();
@@ -510,40 +486,31 @@ describe("SQLite auth storage", () => {
     const agentDir = makeAgentDir();
     const keyRef = { source: "env" as const, provider: "default", id: "QA_AUTH_REF" };
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", keyRef },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": { type: "api_key", provider: "openai", keyRef },
+      }),
       agentDir,
     );
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              keyRef,
-              key: "not-a-real",
-            },
+        store: createAuthProfileStoreFixture({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef,
+            key: "not-a-real",
           },
-        },
+        }),
       },
     ]);
     const storage = AuthStorage.forAgent(agentDir);
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
-        store: {
-          version: 1,
-          profiles: {
-            "openai:default": { type: "api_key", provider: "openai", keyRef },
-          },
-        },
+        store: createAuthProfileStoreFixture({
+          "openai:default": { type: "api_key", provider: "openai", keyRef },
+        }),
       },
     ]);
 
@@ -634,24 +601,21 @@ describe("SQLite auth storage", () => {
           const localKey = "synthetic-local-account-key";
           vi.stubEnv("OPENAI_API_KEY", "synthetic-other-account-key");
           writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                "openai:default": {
-                  type: "api_key",
-                  provider: "openai",
-                  ...(kind === "inline"
-                    ? { key: localKey }
-                    : {
-                        keyRef: {
-                          source: "env",
-                          provider: "default",
-                          id: "UNRESOLVED_LOCAL_OPENAI",
-                        },
-                      }),
-                },
+            createAuthProfileStoreFixture({
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                ...(kind === "inline"
+                  ? { key: localKey }
+                  : {
+                      keyRef: {
+                        source: "env",
+                        provider: "default",
+                        id: "UNRESOLVED_LOCAL_OPENAI",
+                      },
+                    }),
               },
-            },
+            }),
             agentDir,
           );
           await state.writeJson("agents/main/agent/auth-profiles.json", {
@@ -744,17 +708,14 @@ describe("SQLite auth storage", () => {
   it("ignores unresolved named profiles outside the provider-default facade", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:work": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
-          },
-          "anthropic:default": createApiKeyCredential("anthropic", "fake-anthropic-key"),
+      createAuthProfileStoreFixture({
+        "openai:work": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
         },
-      },
+        "anthropic:default": createApiKeyCredential("anthropic", "fake-anthropic-key"),
+      }),
       agentDir,
     );
 
@@ -766,18 +727,15 @@ describe("SQLite auth storage", () => {
   it("fails closed for an identityless SQLite peer until the owner commits its rotation", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "test-oauth:default": {
-            type: "oauth",
-            provider: "test-oauth",
-            access: "fake-expired-access",
-            refresh: "fake-refresh",
-            expires: 1,
-          },
+      createAuthProfileStoreFixture({
+        "test-oauth:default": {
+          type: "oauth",
+          provider: "test-oauth",
+          access: "fake-expired-access",
+          refresh: "fake-refresh",
+          expires: 1,
         },
-      },
+      }),
       agentDir,
     );
     const left = AuthStorage.forAgent(agentDir);
@@ -823,17 +781,14 @@ describe("SQLite auth storage", () => {
   it("falls back to environment auth when a stored token is expired", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "xai:default": {
-            type: "token",
-            provider: "xai",
-            token: "fake-expired-token",
-            expires: 1,
-          },
+      createAuthProfileStoreFixture({
+        "xai:default": {
+          type: "token",
+          provider: "xai",
+          token: "fake-expired-token",
+          expires: 1,
         },
-      },
+      }),
       agentDir,
     );
     vi.stubEnv("XAI_API_KEY", "fake-environment-key");

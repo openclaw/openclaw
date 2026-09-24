@@ -124,7 +124,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ? existingClaim
           : undefined;
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
-        throw new Error("card dependencies are not done.");
+        throw new Error(
+          guarded.status === "blocked"
+            ? "card is blocked; use workboard_unblock before claiming."
+            : "card dependencies are not done.",
+        );
       }
       if (guarded.status === "scheduled") {
         throw new Error("card is scheduled for later.");
@@ -157,7 +161,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         },
       );
       return { card, token };
-    });
+    }, options.assertOwnerCurrent);
   }
 
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {

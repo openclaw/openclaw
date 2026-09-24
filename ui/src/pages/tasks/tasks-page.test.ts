@@ -7,6 +7,9 @@ import {
 } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { formatMs } from "../../lib/format.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -18,9 +21,8 @@ type TasksPageTestElement = HTMLElement & {
   error: string | null;
   copyResultError: string | null;
   cancellingTaskIds: Set<string>;
-  cancelTask: (taskId: string) => Promise<void>;
   copyTaskResult: (taskId: string) => Promise<void>;
-  recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
+  mutateTask: (taskId: string, action: "cancel" | "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
 
@@ -173,20 +175,61 @@ afterEach(() => {
 });
 
 describe("TasksPage concurrent refresh events", () => {
-  it("identifies agents on each row in an all-agents task list", async () => {
-    const tasks = [createTask("home"), createTask("research", "running", { agentId: "research" })];
-    const request = vi.fn(async () => ({ tasks }));
-    const source = createGateway(createTestGatewayClient(request));
-    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
-    page.context = createContext(source.gateway, null);
-    document.body.append(page);
-    await waitForFast(() => {
-      const owners = [...page.querySelectorAll(".task-row .agent-row-chip")].map((chip) =>
-        chip.getAttribute("data-agent-id"),
-      );
-      expect(owners).toHaveLength(2);
-      expect(owners).toEqual(expect.arrayContaining(["main", "research"]));
-    });
+  it("identifies agents and refreshes row timestamps across events and locale changes", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 8, 12, 12, 30);
+    const tasks = [
+      createTask("home", "running", { updatedAt: timestamp }),
+      createTask("research", "running", { agentId: "research", updatedAt: timestamp }),
+      createTask("zero", "running", { updatedAt: 0 }),
+      createTask("invalid", "running", { updatedAt: "not-a-date" }),
+    ];
+    try {
+      await i18n.setLocale("en");
+      const request = vi.fn(async () => ({ tasks }));
+      const source = createGateway(createTestGatewayClient(request));
+      const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+      page.context = createContext(source.gateway, null);
+      document.body.append(page);
+      const timestampLabel = (id: string) =>
+        page.querySelector<HTMLElement>(`[data-task-id="${id}"] .task-row__links > span`);
+      await waitForFast(() => {
+        const owners = [...page.querySelectorAll(".task-row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        );
+        expect(owners).toHaveLength(4);
+        expect(owners).toEqual(expect.arrayContaining(["main", "research"]));
+        expect(timestampLabel("home")?.title).toBe(formatMs(timestamp));
+      });
+      const englishTitle = timestampLabel("home")?.title;
+      await i18n.setLocale("fr");
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(timestamp));
+        expect(timestampLabel("home")?.title).not.toBe(englishTitle);
+        for (const id of ["zero", "invalid"]) {
+          expect(timestampLabel(id)?.getAttribute("title")).toBeNull();
+          expect(timestampLabel(id)?.textContent).toBe(t("common.na"));
+        }
+      });
+      const updatedAt = timestamp + 2 * 60 * 60 * 1000;
+      source.emitTask({
+        action: "upserted",
+        task: { ...tasks[0], updatedAt, progressSummary: "Timestamp advanced with task progress" },
+      });
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(updatedAt));
+        expect(timestampLabel("research")?.title).toBe(formatMs(timestamp));
+        expect(page.textContent).toContain("Timestamp advanced with task progress");
+      });
+      await i18n.setLocale("en");
+      await waitForFast(() => {
+        expect(timestampLabel("home")?.title).toBe(formatMs(updatedAt));
+        expect(timestampLabel("home")?.title).not.toBe(englishTitle);
+        expect(timestampLabel("research")?.title).toBe(englishTitle);
+      });
+    } finally {
+      await restoreI18n();
+    }
   });
 
   it("keeps the later recent snapshot when a task transitions to terminal", async () => {
@@ -295,7 +338,7 @@ describe("TasksPage concurrent refresh events", () => {
     const refresh = await createDeferredTaskRefresh(initialTasks);
     const pending = refresh.startRefresh();
 
-    await refresh.page.cancelTask("task-cancelled");
+    await refresh.page.mutateTask("task-cancelled", "cancel");
     expect(refresh.page.tasks.map((task) => [task.id, task.status])).toEqual([
       ["task-cancelled", "cancelled"],
     ]);
@@ -706,7 +749,7 @@ describe("TasksPage cancellation lifecycle", () => {
 
     const copying = page.copyTaskResult(blocked.taskId);
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Retained result"));
-    await page.recoverTask(blocked.taskId, "retry");
+    await page.mutateTask(blocked.taskId, "retry");
     expect(page.error).toBe("Independent recovery failed");
 
     clipboardWrite.resolve(undefined);
@@ -839,7 +882,7 @@ describe("TasksPage cancellation lifecycle", () => {
       }),
     );
 
-    const cancelling = page.cancelTask("task-1");
+    const cancelling = page.mutateTask("task-1", "cancel");
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("tasks.cancel", { taskId: "task-1" }),
     );
@@ -885,7 +928,7 @@ describe("TasksPage cancellation lifecycle", () => {
     document.body.append(page);
     await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
-    await page.recoverTask(blocked.taskId, "retry");
+    await page.mutateTask(blocked.taskId, "retry");
 
     expect(request).toHaveBeenCalledWith("tasks.retry", { taskIds: [blocked.taskId] });
     expect(page.tasks[0]).toMatchObject({
@@ -914,7 +957,7 @@ describe("TasksPage cancellation lifecycle", () => {
     document.body.append(page);
     await waitForFast(() => expect(page.tasks).toHaveLength(1));
 
-    const recovery = page.recoverTask(blocked.taskId, "retry");
+    const recovery = page.mutateTask(blocked.taskId, "retry");
     await vi.waitFor(() => expect(page.cancellingTaskIds.has(blocked.taskId)).toBe(true));
     source.emitConnected(false);
     source.emitConnected(true);

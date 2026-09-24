@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConfigAuditRecord } from "../config/io.audit.js";
-import type { SequencedSqliteAuditRecordEntry } from "../infra/sqlite-audit-record-store.js";
+import type { SequencedSqliteAuditRecordEntry } from "../infra/sqlite-audit-record.kernel.js";
 import { SYSTEM_AGENT_GREETING_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import {
   acknowledgeSystemAgentGreetingDelivery,

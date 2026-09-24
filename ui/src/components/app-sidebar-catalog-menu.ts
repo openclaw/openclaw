@@ -1,16 +1,19 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import type { SessionsCatalogArchiveParams } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
+import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
-import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
-import "./catalog-session-menu.ts";
+import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
 import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
+import "./catalog-session-menu.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
+import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-types.ts";
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
 
@@ -24,13 +27,16 @@ export class SidebarCatalogMenuController {
       requestUpdate: () => void;
       terminalAvailable: () => boolean;
       openTerminal: (key: CatalogSessionKey, agentId: string) => void;
-      beginMutation: () => SidebarSessionMutationScope | null;
-      isMutationCurrent: (scope: SidebarSessionMutationScope) => boolean;
+      beginMutation: () => SidebarCatalogSessionMutationScope | null;
+      isMutationCurrent: (scope: SidebarCatalogSessionMutationScope) => boolean;
       archive: (
-        scope: SidebarSessionMutationScope,
+        scope: SidebarCatalogSessionMutationScope,
         params: SessionsCatalogArchiveParams,
       ) => Promise<unknown>;
-      afterDelete: (scope: SidebarSessionMutationScope, key: CatalogSessionKey) => Promise<void>;
+      afterDelete: (
+        scope: SidebarCatalogSessionMutationScope,
+        key: CatalogSessionKey,
+      ) => Promise<void>;
       navigate: (request: Pick<CatalogSessionMenuRequest, "navigation" | "routeId">) => void;
     },
   ) {}
@@ -44,7 +50,8 @@ export class SidebarCatalogMenuController {
     return (
       openKey?.catalogId === key.catalogId &&
       openKey.hostId === key.hostId &&
-      openKey.threadId === key.threadId
+      openKey.threadId === key.threadId &&
+      openKey.sourceHomeId === key.sourceHomeId
     );
   }
 
@@ -157,4 +164,46 @@ export class SidebarCatalogMenuController {
       ></openclaw-catalog-session-menu>
     `;
   }
+}
+
+export function createSidebarCatalogMenuController(
+  host: SidebarMenusControllerHost,
+  beforeOpen: () => void,
+): SidebarCatalogMenuController {
+  return new SidebarCatalogMenuController({
+    // Closing every transient menu keeps one popover at a time.
+    beforeOpen,
+    requestUpdate: () => host.requestUpdate(),
+    terminalAvailable: () => host.terminalAvailable,
+    openTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
+    beginMutation: () => {
+      const scope = host.sessionData.beginSessionMutation();
+      return scope
+        ? { ...scope, catalogGeneration: host.sessionData.sessionScopeGeneration }
+        : null;
+    },
+    isMutationCurrent: (scope) =>
+      host.sessionData.isSessionMutationScopeCurrent(scope) &&
+      scope.catalogGeneration === host.sessionData.sessionScopeGeneration,
+    archive: (scope, params) => host.sessionData.archiveSessionCatalog(scope, params),
+    afterDelete: async (scope, key) => {
+      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      const active = parseCatalogSessionKey(host.getRouteSessionKey());
+      if (
+        host.activeRouteId === "chat" &&
+        active?.catalogId === key.catalogId &&
+        active.hostId === key.hostId &&
+        active.threadId === key.threadId
+      ) {
+        host.onNavigate?.("chat", {
+          pathname: pathForRoute("chat", host.basePath),
+          search: "",
+          hash: "",
+        });
+      }
+    },
+    navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
+  });
 }

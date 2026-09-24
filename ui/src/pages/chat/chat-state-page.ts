@@ -11,6 +11,7 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
@@ -18,6 +19,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -31,11 +33,13 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   openSessionWorkspacePreview,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -62,15 +66,17 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
   closeSlot,
-  type SidebarSlotId,
   fitSidebarLayout,
   normalizeSidebarLayout,
+  type SidebarLayout,
   openSlot,
+  sidebarDashboardPresentation,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
+  sessionKey?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
@@ -141,9 +147,10 @@ export function createPageState(
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
+  const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
     { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
-    settings.sessionKey,
+    initialSessionKey,
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
@@ -176,7 +183,7 @@ export function createPageState(
     terminalAvailable: false,
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
-    sessionKey: settings.sessionKey,
+    sessionKey: initialSessionKey,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatSending: false,
@@ -219,6 +226,11 @@ export function createPageState(
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatModelCatalogInitialized: hasUnrestrictedModelCatalogSnapshot(
+      context.gateway.snapshot.client,
+    ),
+    chatModelSelectionPolicy: undefined,
+    chatModelCatalogRetired: false,
     chatModelCatalogError: null,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
@@ -236,7 +248,7 @@ export function createPageState(
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
-    chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
@@ -260,6 +272,7 @@ export function createPageState(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatReadingHistory: false,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
@@ -304,7 +317,7 @@ export function createPageState(
     });
     renderLifecycle.invalidate();
   };
-  attachChatRealtimeActions(state);
+  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
@@ -337,7 +350,7 @@ export function createPageState(
       renderLifecycle.invalidate();
       return;
     }
-    const outcome = removeQueuedMessage(state, id);
+    const outcome = removeQueuedMessage(state, id, { discard: true });
     if (outcome === "removed") {
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
@@ -361,6 +374,12 @@ export function createPageState(
   state.editQueuedChatMessage = (id) => {
     if (beginQueuedMessageEdit(state, id) === "unavailable") {
       setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+    } else {
+      for (const key of ["lastError", "chatError"] as const) {
+        if (state[key] === QUEUED_MESSAGE_EDIT_CONFLICT_ERROR) {
+          state[key] = null;
+        }
+      }
     }
     renderLifecycle.invalidate();
   };
@@ -391,50 +410,62 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  const transientSidebarSlots = new Set<SidebarSlotId>();
-  let transientSidebarScope = "";
+  const transientResources = new Set<"desktop" | "browser">();
+  let transientResourceScope = "";
   state.updateSidebarLayout = (layout, options) => {
-    const layoutSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
-    const scope = JSON.stringify([state.settings.gatewayUrl, layoutSessionKey]);
-    if (scope !== transientSidebarScope) {
-      transientSidebarSlots.clear();
-      transientSidebarScope = scope;
+    const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const scope = JSON.stringify([state.settings.gatewayUrl, layoutKey]);
+    if (scope !== transientResourceScope) {
+      transientResources.clear();
+      transientResourceScope = scope;
     }
     const normalized = normalizeSidebarLayout(layout);
     const previous = state.sidebarLayout;
-    const slots = new Set(
-      normalized.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    );
-    const previousSlots = new Set(
-      previous.columns.flatMap((column) => column.panels.map((panel) => panel.slot)),
-    );
-    if (options?.persist === false) {
-      for (const slot of slots) {
-        if (!previousSlots.has(slot)) {
-          transientSidebarSlots.add(slot);
-        }
+    const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
+      value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
+    if (
+      options?.automaticResource &&
+      !includesResource(previous, options.automaticResource) &&
+      includesResource(normalized, options.automaticResource)
+    ) {
+      transientResources.add(options.automaticResource);
+    }
+    for (const resource of transientResources) {
+      const panel = normalized.columns
+        .flatMap((column) => column.panels)
+        .find((entry) => entry.slot === resource);
+      // Explicit targets are saved choices, even when discovery first opened the tab.
+      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+        transientResources.delete(resource);
       }
     }
-    for (const slot of transientSidebarSlots) {
-      if (!slots.has(slot)) {
-        transientSidebarSlots.delete(slot);
-      }
-    }
-    const removedResource = previous.columns.some((column) =>
-      column.panels.some(
-        (panel) =>
-          (panel.slot === "browser" || panel.slot === "desktop") &&
-          !normalized.columns.some((next) =>
-            next.panels.some((entry) => entry.slot === panel.slot),
-          ),
-      ),
-    );
     if (
       previous.resourceAutoOpenDismissed ||
-      (previous.open && !normalized.open) ||
-      removedResource
+      (options?.persist !== false &&
+        ((previous.open && !normalized.open) ||
+          (includesResource(previous, "desktop") && !includesResource(normalized, "desktop")) ||
+          (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
     ) {
       normalized.resourceAutoOpenDismissed = true;
+    }
+    if (
+      state.sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")?.taskId !==
+      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
+        ?.taskId
+    ) {
+      resetTaskDetail(state);
+    }
+    const presentation =
+      options?.dashboardPresentation === "personal"
+        ? sidebarDashboardPresentation(normalized)
+        : undefined;
+    if (presentation) {
+      const row = selectedChatSessionRow(state);
+      // Unknown metadata cannot establish that the user chose the shared default.
+      normalized.dashboardPresentationOverride =
+        row && presentation === (row.boardPresentation ?? "split") ? null : presentation;
     }
     // Every close route commits here; tab switches retain the pending selection.
     if (
@@ -444,21 +475,31 @@ export function createPageState(
       state.sidebarContent = null;
     }
     state.sidebarLayout = normalized;
-    if (options?.persist !== false) {
-      // Resizing/docking another tool must not turn automatic discovery into a
-      // saved resource tab that mounts before ownership is revalidated on reload.
-      let persisted = normalized;
-      for (const slot of transientSidebarSlots) {
-        persisted = closeSlot(persisted, slot);
-      }
-      state.settings = patchSettings({
-        sidebarSessionLayouts: updateSidebarSessionLayout(
-          loadSettings().sidebarSessionLayouts,
-          layoutSessionKey,
-          persisted,
-        ),
-      });
+    if (options?.persist === false) {
+      renderLifecycle.invalidate();
+      return;
     }
+    // Other layout edits cannot persist an automatically discovered target before
+    // ownership is checked again on reload. Dashboard restoration has its own policy.
+    let persisted = normalized;
+    for (const resource of transientResources) {
+      persisted = closeSlot(persisted, resource);
+    }
+    state.settings = patchSettings({
+      sidebarSessionLayouts: updateSidebarSessionLayout(
+        loadSettings().sidebarSessionLayouts,
+        layoutKey,
+        persisted,
+        {
+          geometryOnly: options?.geometryOnly,
+          dashboardPresentationOverride: presentation
+            ? normalized.dashboardPresentationOverride
+            : undefined,
+        },
+      ),
+    });
+    normalized.dashboardPresentationOverride =
+      state.settings.sidebarSessionLayouts?.[layoutKey]?.dashboardPresentationOverride;
     renderLifecycle.invalidate();
   };
   state.updateSidebarActivePanel = (panelId) => {
@@ -468,10 +509,10 @@ export function createPageState(
     }
     state.sidebarFocusPanelId = normalizedPanelId;
     state.sidebarFocusVersion += 1;
-    const selectedSlot = state.sidebarLayout.columns
+    const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
-    if (selectedSlot && transientSidebarSlots.has(selectedSlot)) {
+    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
       renderLifecycle.invalidate();
       return;
     }

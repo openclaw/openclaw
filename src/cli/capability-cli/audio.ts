@@ -5,7 +5,6 @@ import { inspectLocalAudioSelection } from "../../media-understanding/local-audi
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { transcribeAudioFile } from "../../media-understanding/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
@@ -34,14 +33,13 @@ async function runAudioTranscribe(params: {
   });
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
   await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
+    agentDir: resolveAgentDir(cfg, agentId),
+    activeModel: requireProviderModelOverride(params.model),
     filePath: path.resolve(params.file),
     cfg,
-    agentDir,
+    agentId,
     language: params.language,
-    activeModel,
     prompt: params.prompt,
   });
   if (!result.text) {
@@ -56,6 +54,8 @@ async function runAudioTranscribe(params: {
     ok: true,
     capability: "audio.transcribe",
     transport: "local" as const,
+    provider: result.provider,
+    model: result.model,
     attempts: [],
     outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
   } satisfies CapabilityEnvelope;
@@ -101,10 +101,6 @@ export function registerAudioCapabilityCommands(capability: Command): void {
             cfg,
             providerId: provider.id,
             agentId,
-            envVars: getProviderEnvVars(provider.id, {
-              config: cfg,
-              includeUntrustedWorkspacePlugins: false,
-            }),
           }),
           selected: false,
           id: provider.id,

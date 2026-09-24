@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -37,18 +37,15 @@ type SandboxScriptInfo = {
   cwd: string;
 };
 
-function resolveSandboxScript(
-  scriptRel: string,
-  options: { argv1?: string; cwd?: string } = {},
-): SandboxScriptInfo | null {
+function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
   // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
   // global bins and version-manager links, but a published package root can resolve first and ship
   // without scripts/sandbox-setup.sh (the npm files allowlist drops scripts/); stopping at the
   // first root would then skip a valid source-checkout cwd that still has it.
   const roots = resolveOpenClawPackageRootsSync({
-    cwd: options.cwd ?? process.cwd(),
-    argv1: options.argv1 ?? process.argv[1],
+    cwd: process.cwd(),
+    argv1: process.argv[1],
   });
   for (const root of roots) {
     const scriptPath = path.join(root, scriptRel);
@@ -57,12 +54,6 @@ function resolveSandboxScript(
     }
   }
   return null;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorSandboxTestApi")] = {
-    resolveSandboxScript,
-  };
 }
 
 async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
@@ -442,7 +433,7 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const warnings: string[] = [];
 
-  for (const agent of listAgentEntries(cfg)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentId = agent.id;
     const agentSandbox = agent.sandbox;
     if (!agentSandbox) {
@@ -472,9 +463,11 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
       continue;
     }
 
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list (id "${agentId}")`;
     warnings.push(
       [
-        `- agents.entries.${agentId} sandbox ${overrides.join("/")} overrides ignored.`,
+        `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

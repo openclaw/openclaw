@@ -111,6 +111,47 @@ describe("LINE push retries", () => {
     });
   }
 
+  it("starts the request in the same turn as a synchronous authorization", async () => {
+    let active = true;
+    const authorize = () => {
+      queueMicrotask(() => {
+        active = false;
+      });
+      return active;
+    };
+    fetchMock.mockImplementationOnce(async () => {
+      expect(active).toBe(true);
+      return new Response(JSON.stringify({ sentMessages: [{ id: "authorized" }] }));
+    });
+
+    const result = await resolveRetryRun(
+      sendModule.pushMessageLine(LINE_TARGET, "hello", { cfg: LINE_TEST_CFG, authorize }),
+    );
+
+    expect(result.messageId).toBe("authorized");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(active).toBe(false);
+  });
+
+  it("checks authorization after request serialization", async () => {
+    let active = true;
+    const contents = {
+      type: "bubble" as const,
+      toJSON() {
+        active = false;
+        return { type: "bubble" };
+      },
+    };
+
+    await expect(
+      sendModule.pushFlexMessage(LINE_TARGET, "card", contents, {
+        cfg: LINE_TEST_CFG,
+        authorize: () => active,
+      }),
+    ).rejects.toThrow("LINE send authorization denied");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("retries a LINE server error under one retry key and delivers once", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ message: "Internal server error" }, 500))

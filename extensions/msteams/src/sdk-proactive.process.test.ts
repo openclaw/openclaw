@@ -3,14 +3,16 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 
 describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
   it("keeps root exports intact when quoted behavior is the first SDK access", async () => {
+    const nodeExecPath = resolveTestNodeExecPath();
     await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["scripts/lib/plugin-npm-runtime-build.mjs", "extensions/msteams"],
       { cwd: process.cwd() },
     );
@@ -146,7 +148,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
     `;
 
     const { stdout, stderr } = await execFileAsync(
-      process.execPath,
+      nodeExecPath,
       ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
         cwd: path.dirname(outDir),

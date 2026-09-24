@@ -160,7 +160,7 @@ describe("Gateway Control UI identity", () => {
           getRuntimeConfig: () => ({
             agents: {
               ownership: "explicit",
-              entries: { ops: { workspace }, research: {} },
+              entries: { ops: {}, research: { workspace } },
               defaults: { systemAgent: { agentId: "research" } },
             },
           }),
@@ -183,7 +183,7 @@ describe("Gateway Control UI identity", () => {
               method: "GET",
             });
             expect(JSON.parse(bootstrap.getBody())).toMatchObject({
-              assistantAgentId: "ops",
+              assistantAgentId: "research",
               assistantName: "Synthetic assistant",
             });
             expect(identityReads().length).toBeGreaterThan(0);

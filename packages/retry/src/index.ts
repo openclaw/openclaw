@@ -159,10 +159,17 @@ const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
   jitter: 0,
 };
 
-const defaultSleep = (ms: number) =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+const defaultSleep = async (ms: number): Promise<void> => {
+  let remainingMs = ms;
+  // Native timers overflow to a near-immediate wake; split rather than shorten a long wait.
+  do {
+    const delayMs = Math.min(remainingMs, MAX_TIMER_TIMEOUT_MS);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    remainingMs -= delayMs;
+  } while (remainingMs > 0);
+};
 
 function clampNumber(value: unknown, fallback: number, min?: number, max?: number): number {
   const next = Number.isFinite(value as number) ? (value as number) : undefined;

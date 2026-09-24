@@ -20,11 +20,18 @@ How the Gateway reports which nodes are connected, and which server-pushed event
   also report durable background presence via a trusted node event.
 
 Native macOS nodes can also send authenticated `node.presence.activity` events
-with bounded input idle time. The Gateway derives activity timestamps on its
-own clock, exposes the freshest connected Mac through `node.list` and
-`node.describe`, and broadcasts `node.presence` updates to read-scoped clients.
-The app sends `{ "action": "clear" }` when the user disables activity sharing;
-the Gateway clears timestamps only for that exact authenticated node connection.
+with bounded input idle time and an optional `source`: `app` for interaction
+with OpenClaw or `system` for system-wide physical activity. App-local reports
+do not require Accessibility; system-wide reports do. An omitted source retains
+the legacy system-wide permission requirement. The Gateway derives activity
+timestamps on its own clock, exposes the freshest connected Mac through
+`node.list` and `node.describe`, and broadcasts `node.presence` updates to
+read-scoped clients.
+
+The app sends `{ "action": "clear" }` when system-wide detection is disabled,
+then reports any observed app-local activity. When Accessibility is lost, it
+falls back to app-local activity or clears the sample if none has been observed.
+The Gateway clears timestamps only for that exact authenticated node connection.
 Gateways that predate this acknowledged action return it as unhandled, so the Mac
 node reconnects once and lets disconnect cleanup remove the old connection state.
 See [Active computer presence](/nodes/presence) for selection, privacy, model

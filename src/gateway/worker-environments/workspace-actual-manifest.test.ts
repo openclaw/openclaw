@@ -5,18 +5,19 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { prepareNodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import {
   readActualWorkspaceManifestImpl,
+  readWorkspaceFileContentsWithLimit,
   readWorkspaceFileSnapshotWithLimit,
 } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
   "rejects an empty inventory aborted %s",
@@ -56,7 +57,7 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
       signal: controller.signal,
       ...(phase === "before traversal" ? { includePaths: new Set<string>() } : {}),
     };
-    const scan = readActualWorkspaceManifest(params);
+    const scan = readActualWorkspaceManifestImpl(params);
     const rejected = expect(scan).rejects.toBe(reason);
     try {
       if (phase !== "before traversal") {
@@ -133,7 +134,7 @@ it.each(["metadata", "files"] as const)(
   },
 );
 
-const fileFailures = ["symlink replacement", "snapshot abort", "attachment abort"] as const;
+const fileFailures = ["symlink replacement", "caller abort"] as const;
 it.each(fileFailures)("drains admitted file reads after %s", async (failure) => {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-readers-"));
   const outside = await fs.realpath(tempDirs.make("workspace-inventory-outside-"));
@@ -142,31 +143,6 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
   await fs.writeFile(path.join(outside, "target.txt"), "outside");
   const controller = new AbortController();
   const reason = new Error("manifest scan aborted");
-  const service =
-    failure === "attachment abort"
-      ? createNodeWorkspaceTransferService({
-          temporaryRoot: tempDirs.make("workspace-inventory-transfers-"),
-          getOwner: () => ({
-            credential: { ownerEpoch: 1, sessionId: "session" },
-            environment: {
-              ownerEpoch: 1,
-              attachedSessionIds: ["session"],
-              destroyRequestedAtMs: null,
-              state: "attached",
-            },
-          }),
-        })
-      : undefined;
-  if (service) {
-    await service.prepareSync({
-      environmentId: "environment",
-      ownerEpoch: 1,
-      sessionId: "session",
-      generation: 1,
-      localPath: tempDirs.make("workspace-inventory-empty-source-"),
-      isAuthorized: () => true,
-    });
-  }
   const open = fs.open.bind(fs);
   const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
   const gatedPaths: string[] = [];
@@ -192,20 +168,12 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
     }
     return handle;
   });
-  const scan = service
-    ? service.prepareAttachments({
-        environmentId: "environment",
-        localPath: root,
-        isAuthorized: () => true,
-        signal: controller.signal,
-      })
-    : failure === "snapshot abort"
-      ? prepareNodeWorkspaceTransferSnapshot({
-          localPath: root,
-          temporaryRoot: tempDirs.make("workspace-inventory-snapshot-"),
-          signal: controller.signal,
-        })
-      : readActualWorkspaceManifest({ root, baseCommit: null, includePaths: new Set(files) });
+  const scan = readActualWorkspaceManifestImpl({
+    root,
+    baseCommit: null,
+    includePaths: new Set(files),
+    signal: controller.signal,
+  });
   let settled = false;
   void scan.then(
     () => {
@@ -233,7 +201,6 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
       gate.resolve();
     }
     await Promise.allSettled([scan]);
-    await service?.closeAll();
   }
   if (failure === "symlink replacement") {
     await expect(scan).rejects.toThrow();
@@ -288,7 +255,7 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     ...(walk ? {} : { includePaths: new Set(files) }),
     signal: controller.signal,
   };
-  const scan = readActualWorkspaceManifest(params);
+  const scan = readActualWorkspaceManifestImpl(params);
   let settled = false;
   void scan.then(
     () => {
@@ -366,7 +333,7 @@ it("stops an admitted directory enumeration on caller cancellation", async () =>
     includePaths: new Set(["directory"]),
     signal: controller.signal,
   };
-  const scan = readActualWorkspaceManifest(params);
+  const scan = readActualWorkspaceManifestImpl(params);
   const rejected = expect(scan).rejects.toBe(reason);
   try {
     await entered.promise;
@@ -451,7 +418,8 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
   expect(metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
 });
 
-it("bounds scratch memory across concurrent inventories and skips reads on memo hits", async () => {
+it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const roots = await Promise.all(
     [0, 1].map(() => fs.realpath(tempDirs.make("workspace-inventory-scratch-"))),
   );
@@ -472,7 +440,7 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
           };
         }),
       );
-      return { root, files, memo: new Map<string, string>(), buffers: new Set<Buffer>() };
+      return { root, files, memo: new Map<string, string>() };
     }),
   );
   const activeBuffers = new Set<Buffer>();
@@ -488,9 +456,18 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
         if (!Buffer.isBuffer(buffer)) {
           throw new Error("Expected a caller-owned inventory buffer");
         }
-        expect(activeBuffers.has(buffer)).toBe(false);
+        expect(
+          [...activeBuffers].every(
+            (active) =>
+              active.buffer !== buffer.buffer ||
+              active.byteOffset + active.byteLength <= buffer.byteOffset ||
+              buffer.byteOffset + buffer.byteLength <= active.byteOffset,
+          ),
+        ).toBe(true);
         activeBuffers.add(buffer);
-        fixture.buffers.add(buffer);
+        expect(
+          [...activeBuffers].reduce((bytes, active) => bytes + active.byteLength, 0),
+        ).toBeLessThanOrEqual(2 * 1024 * 1024);
         readCount++;
         try {
           return await read(...readArgs);
@@ -503,7 +480,7 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
   });
   const capture = (fixture: (typeof fixtures)[number]) =>
     withWorkspaceHashMemo(fixture.memo, () =>
-      readActualWorkspaceManifest({ root: fixture.root, baseCommit: null }),
+      readActualWorkspaceManifestImpl({ root: fixture.root, baseCommit: null }),
     );
   const manifests = await Promise.all(fixtures.map(capture));
   for (const [index, fixture] of fixtures.entries()) {
@@ -518,19 +495,41 @@ it("bounds scratch memory across concurrent inventories and skips reads on memo 
         }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
     );
-    expect(
-      [...fixture.buffers].reduce((bytes, buffer) => bytes + buffer.byteLength, 0),
-    ).toBeLessThanOrEqual(1024 * 1024);
   }
-  expect([...fixtures[0]!.buffers].some((buffer) => fixtures[1]!.buffers.has(buffer))).toBe(false);
   const coldReadCount = readCount;
   expect(coldReadCount).toBeGreaterThan(0);
   expect(await Promise.all(fixtures.map(capture))).toEqual(manifests);
   expect(readCount).toBe(coldReadCount);
 });
 
-it.each(["inventory", "fixed limit"] as const)(
-  "preserves the %s diagnosis when a file grows during its read",
+it.each(["", "\u0000binary\u00ff"])(
+  "returns independently owned captured bytes for %j",
+  async (content) => {
+    const root = tempDirs.make("workspace-captured-bytes-");
+    const target = path.join(root, "content.bin");
+    const expected = Buffer.from(content);
+    await fs.writeFile(target, expected);
+    const [first, second] = await Promise.all([
+      readWorkspaceFileContentsWithLimit(target, expected.length),
+      readWorkspaceFileContentsWithLimit(target, expected.length),
+    ]);
+    expect(first).toMatchObject({
+      type: "file",
+      size: expected.length,
+      sha256: createHash("sha256").update(expected).digest("hex"),
+    });
+    expect(second).toEqual(first);
+    if (first.type !== "file" || second.type !== "file") {
+      throw new Error("Supported file did not return its captured contents");
+    }
+    expect(first.content).toEqual(expected);
+    first.content.fill(0x58);
+    expect(second.content).toEqual(expected);
+  },
+);
+
+it.each(["inventory", "fixed limit", "captured contents"] as const)(
+  "preserves the %s diagnosis when a file grows after its opened size is captured",
   async (mode) => {
     const root = await fs.realpath(tempDirs.make("workspace-inventory-growing-file-"));
     const target = path.join(root, "growing.txt");
@@ -539,10 +538,11 @@ it.each(["inventory", "fixed limit"] as const)(
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await open(...args);
       if (String(args[0]) === target) {
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementationOnce(async (...readArgs) => {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async (...statArgs) => {
+          const opened = await stat(...statArgs);
           await fs.appendFile(target, "b");
-          return await read(...readArgs);
+          return opened;
         });
       }
       return handle;
@@ -552,7 +552,11 @@ it.each(["inventory", "fixed limit"] as const)(
         "file changed while it was being read",
       );
     } else {
-      await expect(readWorkspaceFileSnapshotWithLimit(target, 1, root)).resolves.toEqual({
+      const snapshot =
+        mode === "captured contents"
+          ? readWorkspaceFileContentsWithLimit(target, 1)
+          : readWorkspaceFileSnapshotWithLimit(target, 1, root);
+      await expect(snapshot).resolves.toEqual({
         type: "unsupported",
       });
     }

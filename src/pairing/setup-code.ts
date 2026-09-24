@@ -85,7 +85,7 @@ type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;
-      authLabel: "token" | "password";
+      authLabel: "token" | "password" | "trusted-proxy";
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
@@ -197,7 +197,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
 }
 
 type ResolveAuthLabelResult = {
-  label?: "token" | "password";
+  label?: "token" | "password" | "trusted-proxy";
   error?: string;
 };
 
@@ -323,7 +323,12 @@ function resolvePairingSetupAuthLabel(
   if (password) {
     return { label: "password" };
   }
-  if (mode === "none" || mode === "trusted-proxy") {
+  // Setup codes carry their own bounded bootstrap credential. Proxy-only
+  // ingress does not need an unrelated shared secret to issue that handoff.
+  if (mode === "trusted-proxy") {
+    return { label: "trusted-proxy" };
+  }
+  if (mode === "none") {
     return {
       error: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
     };

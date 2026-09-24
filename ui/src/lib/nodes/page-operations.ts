@@ -212,14 +212,19 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   }
 }
 
-export async function approveDevicePairing(state: DevicesState, requestId: string) {
+// Device results belong to the captured connection; node pairing refreshes the current inventory.
+async function runDevicePairingRequest(
+  state: DevicesState,
+  requestId: string,
+  method: "device.pair.approve" | "device.pair.reject",
+) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
   }
   const generation = state.requestGeneration;
   try {
-    await client.request("device.pair.approve", { requestId });
+    await client.request(method, { requestId });
     if (isCurrentNodesRequest(state, client, generation)) {
       await loadDevices(state);
     }
@@ -230,22 +235,12 @@ export async function approveDevicePairing(state: DevicesState, requestId: strin
   }
 }
 
-export async function rejectDevicePairing(state: DevicesState, requestId: string) {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  const generation = state.requestGeneration;
-  try {
-    await client.request("device.pair.reject", { requestId });
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
-  } catch (err) {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
-    }
-  }
+export function approveDevicePairing(state: DevicesState, requestId: string) {
+  return runDevicePairingRequest(state, requestId, "device.pair.approve");
+}
+
+export function rejectDevicePairing(state: DevicesState, requestId: string) {
+  return runDevicePairingRequest(state, requestId, "device.pair.reject");
 }
 
 /** Entry removal request resolved from the unified inventory row. */
@@ -355,28 +350,28 @@ export async function renameDevice(
   }
 }
 
-export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
+async function runNodePairingRequest(
+  state: InventoryState,
+  requestId: string,
+  method: "node.pair.approve" | "node.pair.reject",
+) {
   if (!state.client || !state.connected) {
     return;
   }
   try {
-    await state.client.request("node.pair.approve", { requestId });
+    await state.client.request(method, { requestId });
     await reloadInventory(state);
   } catch (err) {
     await reloadInventory(state, { error: formatUiError(err) });
   }
 }
 
-export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    await state.client.request("node.pair.reject", { requestId });
-    await reloadInventory(state);
-  } catch (err) {
-    await reloadInventory(state, { error: formatUiError(err) });
-  }
+export function approveNodePairingRequest(state: InventoryState, requestId: string) {
+  return runNodePairingRequest(state, requestId, "node.pair.approve");
+}
+
+export function rejectNodePairingRequest(state: InventoryState, requestId: string) {
+  return runNodePairingRequest(state, requestId, "node.pair.reject");
 }
 
 /**

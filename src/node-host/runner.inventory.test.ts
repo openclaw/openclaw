@@ -1,6 +1,7 @@
 /** Tests node-host capability discovery and inventory publication. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -24,27 +25,27 @@ async function withRunningNodeHost(runTest: () => Promise<void>): Promise<void> 
     aborted: false,
     elapsedMs: 0,
   });
-  const processOnceSpy = vi.spyOn(process, "once");
+  const processOnSpy = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
   const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
   try {
     await vi.waitFor(() =>
-      expect(processOnceSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
+      expect(processOnSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
     );
     await runTest();
   } finally {
-    const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     try {
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   }
 }
@@ -83,7 +84,7 @@ describe("runNodeHost", () => {
       caps: ["canvas"],
       commands: ["canvas.present"],
     };
-    const processOnceSpy = vi.spyOn(process, "once");
+    const processOnSpy = vi.spyOn(process, "on");
     const previousExitCode = process.exitCode;
     try {
       const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
@@ -106,17 +107,17 @@ describe("runNodeHost", () => {
         }),
       );
 
-      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   });
 
@@ -213,20 +214,32 @@ describe("runNodeHost", () => {
     await withRunningNodeHost(async () => {
       const options = mocks.capturedGatewayClientOptions[0];
       const client = mocks.capturedGatewayClients[0];
-
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-
-      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+      const inventory = {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
           capacity: { total: 5, available: 5 },
           bundlePrewarm: 1,
         },
+      };
+      const published = createDeferred();
+      client?.request.mockImplementation(async (method, params) => {
+        if (
+          method === NODE_RUNNER_INVENTORY_UPDATE_METHOD &&
+          expect.objectContaining(inventory).asymmetricMatch(params)
+        ) {
+          published.resolve();
+        }
+        return {};
       });
+
+      options?.onHelloOk?.({
+        protocol: 4,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+
+      await published.promise;
+      expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory);
     });
   });
 
@@ -361,7 +374,7 @@ describe("runNodeHost", () => {
       aborted: false,
       elapsedMs: 0,
     });
-    const processOnceSpy = vi.spyOn(process, "once");
+    const processOnSpy = vi.spyOn(process, "on");
     const previousExitCode = process.exitCode;
     try {
       const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
@@ -381,17 +394,17 @@ describe("runNodeHost", () => {
       await vi.waitFor(() => {
         expect(client?.request).toHaveBeenLastCalledWith("node.pluginTools.update", { tools: [] });
       });
-      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   });
 

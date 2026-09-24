@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -11,19 +11,19 @@
     "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
     "discord-api-types": "0.38.55",
-    "libopus-wasm": "0.2.0",
+    "libopus-wasm": "0.4.0",
     "mdast-util-from-markdown": "2.0.3",
-    "typebox": "1.3.27",
+    "typebox": "1.3.32",
     "undici": "8.10.2",
     "ws": "8.21.3",
-    "zod": "4.5.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.4"
+    "openclaw": ">=2026.9.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -99,11 +99,14 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.4"
+      "pluginApi": ">=2026.9.5"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.4",
+      "workerEntries": [
+        "./src/voice/audio-worker.runtime.ts"
+      ],
+      "openclawVersion": "2026.9.5",
       "staticAssets": [
         {
           "source": "./assets/embedded-app-sdk.mjs",

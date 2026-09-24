@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import type {
@@ -17,6 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.unstubAllEnvs();
 });
 
 function exited(stderr = ""): RunExit {
@@ -34,6 +36,15 @@ function exited(stderr = ""): RunExit {
 
 function createFakeSupervisor() {
   const inputs: SpawnInput[] = [];
+  const completedSpawns = new Map<number, ReturnType<typeof createDeferred<void>>>();
+  const spawnCompletion = (count: number) => {
+    let completion = completedSpawns.get(count);
+    if (!completion) {
+      completion = createDeferred();
+      completedSpawns.set(count, completion);
+    }
+    return completion;
+  };
   const runs: Array<{
     managed: ManagedRun;
     settle: (exit: RunExit) => void;
@@ -41,15 +52,18 @@ function createFakeSupervisor() {
     scopeKey?: string;
   }> = [];
   const supervisor: ProcessSupervisor = {
-    acquireScopeCleanup() {
-      throw new Error("Desktop fixture does not own a cleanup scope");
+    acquireScopeCleanup(scopeKey) {
+      return async () => {
+        supervisor.cancelScope(scopeKey);
+        await Promise.all(
+          runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.managed.wait()),
+        );
+      };
     },
     async spawn(input) {
+      input.assertCurrent?.();
       inputs.push(input);
-      let settle!: (exit: RunExit) => void;
-      const wait = new Promise<RunExit>((resolve) => {
-        settle = resolve;
-      });
+      const { promise: wait, resolve: settle } = createDeferred<RunExit>();
       const record = {
         managed: undefined as unknown as ManagedRun,
         settle,
@@ -75,6 +89,12 @@ function createFakeSupervisor() {
       };
       record.managed = managed;
       runs.push(record);
+      if (input.mode === "child" && input.argv[0] === "dbus-daemon") {
+        input.onStdout?.(`${input.env?.DBUS_SESSION_BUS_ADDRESS},guid=fixture\n`);
+      }
+      const completion = spawnCompletion(inputs.length);
+      // Notify after the spawn caller resumes; earlier native setup can await real filesystem work.
+      setImmediate(() => completion.resolve());
       return managed;
     },
     cancel(runId) {
@@ -92,6 +112,7 @@ function createFakeSupervisor() {
     inputs,
     runs,
     supervisor,
+    afterSpawn: (count: number) => spawnCompletion(count).promise,
     exit(index: number, stderr = "") {
       const run = runs[index];
       if (!run || run.settled) {
@@ -137,23 +158,14 @@ async function createFixture() {
       x11SocketDir,
     },
   });
+  cleanups.push(() => desktop.stop());
   return { desktop, fake, probeRfb, root, runPasswordTool, x11SocketDir };
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-  throw new Error("condition did not settle");
 }
 
 describe("managed Linux desktop", () => {
   it("starts lazily with the exact TigerVNC recipe and a private ephemeral password", async () => {
+    vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+    vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/unrelated/bus");
     const { desktop, fake, probeRfb, root, runPasswordTool } = await createFixture();
     expect(fake.inputs).toHaveLength(0);
 
@@ -171,8 +183,13 @@ describe("managed Linux desktop", () => {
     );
 
     const vncInput = fake.inputs[0];
-    const sessionInput = fake.inputs[1];
-    if (vncInput?.mode !== "child" || sessionInput?.mode !== "child") {
+    const busInput = fake.inputs[1];
+    const sessionInput = fake.inputs[2];
+    if (
+      vncInput?.mode !== "child" ||
+      busInput?.mode !== "child" ||
+      sessionInput?.mode !== "child"
+    ) {
       throw new Error("expected child process inputs");
     }
     const passwordFile = vncInput.argv[vncInput.argv.indexOf("-PasswordFile") + 1];
@@ -209,6 +226,23 @@ describe("managed Linux desktop", () => {
       ]
     `);
     expect(sessionInput.env?.DISPLAY).toBe(":99");
+    expect(busInput.argv).toEqual([
+      "dbus-daemon",
+      "--session",
+      "--nofork",
+      "--nopidfile",
+      "--print-address=1",
+      `--address=unix:path=${path.join(path.dirname(passwordFile), "bus")}`,
+    ]);
+    const computer = await desktop.acquireComputer({ onStop: async () => undefined });
+    expect(computer.env).toEqual(sessionInput.env);
+    expect(computer.env.DBUS_SESSION_BUS_ADDRESS).toBe(
+      `unix:path=${path.join(path.dirname(passwordFile), "bus")}`,
+    );
+    expect(computer.env.WAYLAND_DISPLAY).toBeUndefined();
+    expect(computer.env.XDG_SESSION_TYPE).toBe("x11");
+    expect(Object.isFrozen(computer.env)).toBe(true);
+    expect(process.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/unrelated/bus");
     expect((await fs.stat(passwordFile)).mode & 0o777).toBe(0o600);
     await expect(fs.stat(path.join(path.dirname(passwordFile), "password.txt"))).rejects.toThrow();
 
@@ -230,7 +264,7 @@ describe("managed Linux desktop", () => {
     await desktop.stop();
   });
 
-  it.each(["Xtigervnc", "startxfce4", "tigervncpasswd"] as const)(
+  it.each(["Xtigervnc", "startxfce4", "tigervncpasswd", "dbus-daemon"] as const)(
     "names a missing %s binary and the install command",
     async (missingBinary) => {
       const fixture = await createFixture();
@@ -275,7 +309,8 @@ describe("managed Linux desktop", () => {
   );
 
   it("restarts the pair three times, then reports the last stderr line as failed", async () => {
-    const onFailed = vi.fn();
+    const failed = createDeferred();
+    const onFailed = vi.fn(() => failed.resolve());
     const fixture = await createFixture();
     const desktop = createManagedLinuxDesktop({
       supervisor: fixture.fake.supervisor,
@@ -291,14 +326,15 @@ describe("managed Linux desktop", () => {
     await desktop.acquire();
     for (const [crash, inputIndex] of [
       [0, 0],
-      [1, 2],
-      [2, 4],
+      [1, 3],
+      [2, 6],
     ] as const) {
       fixture.fake.exit(inputIndex, `restart ${crash}\n`);
-      await waitFor(() => fixture.fake.inputs.length === inputIndex + 4);
+      await fixture.fake.afterSpawn(inputIndex + 6);
+      expect(fixture.fake.inputs).toHaveLength(inputIndex + 6);
     }
-    fixture.fake.exit(6, "detail line\nlast stderr line\n");
-    await waitFor(() => desktop.status().state === "failed");
+    fixture.fake.exit(9, "detail line\nlast stderr line\n");
+    await failed.promise;
     expect(desktop.status()).toMatchObject({
       state: "failed",
       error: expect.stringContaining("last stderr line"),
@@ -308,6 +344,61 @@ describe("managed Linux desktop", () => {
     expect(onFailed).toHaveBeenCalledWith(expect.stringContaining("3 restarts within 5 minutes"));
     await desktop.stop();
   });
+
+  it("joins computer cleanup before stopping its display and bus", async () => {
+    const { desktop, fake } = await createFixture();
+    await desktop.acquire();
+    const cleanup = createDeferred();
+    cleanups.push(async () => cleanup.resolve());
+    const stopStarted = createDeferred();
+    const onStop = vi.fn(async () => {
+      stopStarted.resolve();
+      await cleanup.promise;
+    });
+    const computer = await desktop.acquireComputer({ onStop });
+    const stopped = desktop.stop();
+    expect(desktop.stop()).toBe(stopped);
+    expect(computer.isCurrent()).toBe(false);
+    await stopStarted.promise;
+    expect(fake.runs.every((run) => !run.settled)).toBe(true);
+    await expect(desktop.acquireComputer({ onStop })).rejects.toThrow("unavailable");
+    cleanup.resolve();
+    await stopped;
+    expect(fake.runs.every((run) => run.settled)).toBe(true);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 1, 2])(
+    "retires computer references before replacing a crashed desktop process %s",
+    async (crashedProcess) => {
+      const { desktop, fake } = await createFixture();
+      await desktop.acquire();
+      const cleanup = createDeferred();
+      cleanups.push(async () => cleanup.resolve());
+      const stopStarted = createDeferred();
+      const onStop = vi.fn(async () => {
+        stopStarted.resolve();
+        await cleanup.promise;
+      });
+      const previous = await desktop.acquireComputer({ onStop });
+      fake.exit(crashedProcess);
+      await stopStarted.promise;
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(previous.isCurrent()).toBe(false);
+      expect(fake.runs.filter((run) => !run.settled)).toHaveLength(2);
+      expect(fake.inputs).toHaveLength(3);
+      await expect(desktop.acquireComputer({ onStop })).rejects.toThrow("unavailable");
+      cleanup.resolve();
+      await fake.afterSpawn(6);
+      expect(fake.inputs).toHaveLength(6);
+      expect(desktop.status().state).toBe("running");
+      const next = await desktop.acquireComputer({ onStop: async () => undefined });
+      expect(next.isCurrent()).toBe(true);
+      expect(previous.isCurrent()).toBe(false);
+      previous.release();
+      expect(next.isCurrent()).toBe(true);
+    },
+  );
 
   it("stops and removes its session when the registry linger expires", async () => {
     const { desktop } = await createFixture();

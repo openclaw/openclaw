@@ -38,6 +38,7 @@ export function buildSubagentTaskMessage(params: {
 
 export function buildSubagentSpawnEnvelope(params: {
   completionMode: SubagentCompletionMode;
+  completionTarget?: "parent";
   soleCollectorChild?: boolean;
   spawnMode: "run" | "session";
   task: string;
@@ -55,7 +56,10 @@ export function buildSubagentSpawnEnvelope(params: {
   const maxSpawnDepth = params.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const canSpawn = isSubagentSpawnDepthAllowed(childDepth, maxSpawnDepth);
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
-  const completionNote = COMPLETION_NOTES[params.completionMode];
+  const completionNote =
+    params.completionTarget === "parent"
+      ? "The result returns privately to the requester. No result is automatically sent to a channel; the requester may review, continue work, or remain silent."
+      : COMPLETION_NOTES[params.completionMode];
   const persistentNote = params.spawnMode === "session" ? PERSISTENT_SESSION_NOTE : undefined;
   const lines = [
     "# Subagent Context",
@@ -80,7 +84,7 @@ export function buildSubagentSpawnEnvelope(params: {
     "## What You DON'T Do",
     "- No unrelated conversation or external message unless explicitly tasked to message a specific recipient/channel.",
     "- No automations/persistent state.",
-    "- Do not use outbound messaging to report results.",
+    "- Return results through the accepted completion path, without separate progress or acknowledgment messages. Never substitute exec, CLI, or direct RPC for missing messaging tools; ask the parent to relay needed coordination in your result.",
     "",
   ];
 
@@ -141,9 +145,11 @@ export function buildSubagentSpawnEnvelope(params: {
           params.completionMode === "collector" && params.soleCollectorChild
             ? "This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered."
             : undefined,
-          params.completionMode === "announce"
-            ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY."
-            : undefined,
+          params.completionTarget === "parent"
+            ? "Continue independent work; completion will trigger a private requester turn. Never busy-poll."
+            : params.completionMode === "announce"
+              ? "Continue any independent work. Wait for completion events for ALL required children before your final answer; never busy-poll. If a completion arrives after your final answer, reply ONLY with NO_REPLY."
+              : undefined,
           persistentNote,
         ]
           .filter(Boolean)

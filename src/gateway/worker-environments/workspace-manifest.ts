@@ -44,9 +44,12 @@ export type WorkerWorkspaceReconciliationJournalAdapter = {
   abort(): void;
 };
 
-export const MAX_RECONCILIATION_ENTRIES = 25_000;
+// A complete rebase can replace every entry in both valid inventories.
+export const MAX_RECONCILIATION_ENTRIES = MAX_WORKSPACE_INVENTORY_ENTRIES * 2;
 export const MAX_RECONCILIATION_FILE_BYTES = 64 * 1024 * 1024;
-export const MAX_RECONCILIATION_TOTAL_BYTES = 256 * 1024 * 1024;
+export const MAX_RECONCILIATION_TOTAL_BYTES = 768 * 1024 * 1024;
+// Keep the durable SQLite rollback blob bounded independently of raw file bytes.
+export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 

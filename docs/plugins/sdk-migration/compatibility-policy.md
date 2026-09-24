@@ -66,6 +66,17 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Gateway worker environment creation
+
+`GatewayRequestHandlerOptions` from `core` and `gateway-runtime` retains the
+worker-environment creation contract shipped in OpenClaw 2026.9.5. When
+`context.workerEnvironmentService` is available, its `create` method accepts
+positional arguments in this order: `profileId`, `idempotencyKey`, `machineClass?`,
+`executionMode?`, `projectPath?`, `signal?`, `os?`, and `runSetupScript?`.
+Idempotent retries and caller cancellation keep their existing behavior across
+host upgrades. Changing this contract requires an explicitly approved SDK
+migration.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
@@ -162,6 +173,19 @@ Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
+
+Migrations may supply a read-only `collectBackupResources` callback, including
+through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
+kind `sqlite`, `file`, or `directory`, including destinations that do not exist
+yet. Never open a writable store or run the migration during inventory. When
+`requireLocalResources` is true, reject remote or unlisted data rather than
+reporting an incomplete inventory as complete.
+
+The recovery inventory collector reports one typed
+`undeclared-migration-resources` warning per plugin without a callback; its
+private state is not included in the recovery set. Malformed declarations and
+invalid inventories still fail. Collection does not capture or restore data,
+authorize a migration, or replace an updater's required capture checks.
 
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read

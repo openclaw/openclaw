@@ -2,6 +2,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -100,18 +101,35 @@ suite.define(() => {
       { width: 1280, staleRoster: false, reclaimOnReload: false, swapOnReload: true },
       {
         width: 1280,
+        staleRoster: false,
+        reclaimOnReload: false,
+        swapOnReload: false,
+        explicitTargetOnReload: true,
+      },
+      {
+        width: 1280,
         staleRoster: true,
         reclaimOnReload: false,
         swapOnReload: false,
         closeOtherPanel: true,
       },
-    ].map((scenario) => Object.assign({ closeOtherPanel: false }, scenario)),
+    ].map((scenario) =>
+      Object.assign({ closeOtherPanel: false, explicitTargetOnReload: false }, scenario),
+    ),
   )(
-    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload, close another: $closeOtherPanel) and respects reload",
-    async ({ width, staleRoster, reclaimOnReload, swapOnReload, closeOtherPanel }) => {
+    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload, close another: $closeOtherPanel, explicit target: $explicitTargetOnReload) and respects reload",
+    async ({
+      width,
+      staleRoster,
+      reclaimOnReload,
+      swapOnReload,
+      closeOtherPanel,
+      explicitTargetOnReload,
+    }) => {
       await suite.withPage(
         { serviceWorkers: "block", viewport: { width, height: 900 } },
         async ({ page }) => {
+          const explicitEnvironmentId = "manual-desktop";
           const gateway = await installMockGateway(page, {
             sessionKey: key,
             featureMethods,
@@ -121,7 +139,20 @@ suite.define(() => {
               "sessions.list": list(!staleRoster),
               ...(staleRoster ? { "sessions.describe": { session: row } } : {}),
               "environments.list": inventory,
-              "environments.status": inventory.environments[0],
+              "environments.status": explicitTargetOnReload
+                ? {
+                    cases: [
+                      {
+                        match: { environmentId: explicitEnvironmentId },
+                        response: { ...inventory.environments[0], id: explicitEnvironmentId },
+                      },
+                      {
+                        match: { environmentId: "worker-desktop" },
+                        response: inventory.environments[0],
+                      },
+                    ],
+                  }
+                : inventory.environments[0],
               "desktop.observe": {
                 transport: "rfb",
                 wsPath: "/desktop/observe?proof=1",
@@ -151,9 +182,48 @@ suite.define(() => {
             expect(desktopBox!.y).toBeGreaterThan(chatBox!.y);
           }
           await page.screenshot({
-            path: path.join(suite.artifactDir, `direct-desktop-${width}.png`),
+            path: path.join(suite.artifactDir, `direct-desktop-${String(width)}.png`),
             animations: "disabled",
           });
+          if (explicitTargetOnReload) {
+            const explicitSource = { kind: "environment", environmentId: explicitEnvironmentId };
+            await gateway.deferNext("desktop.observe", { source: explicitSource });
+            await page.evaluate(
+              ({ eventName, sessionKey, environmentId }) => {
+                window.dispatchEvent(
+                  new CustomEvent(eventName, {
+                    detail: { open: true, sessionKey, environmentId },
+                  }),
+                );
+              },
+              {
+                eventName: DESKTOP_PANEL_TOGGLE_EVENT,
+                sessionKey: key,
+                environmentId: explicitEnvironmentId,
+              },
+            );
+            const explicitObserve = await gateway.waitForRequest("desktop.observe", {
+              match: { source: explicitSource },
+            });
+            expect(explicitObserve.params).toEqual({ source: explicitSource, control: false });
+            await gateway.resolveDeferred("desktop.observe");
+            await pane(page).locator(".desktop-surface canvas").waitFor();
+            await expect.poll(rfb.events).toContain("authenticated:2");
+            await assertNoProvisioning(gateway);
+
+            await page.reload();
+            await ready(page);
+            await desktopTab(page).waitFor();
+            const restoredObserve = await gateway.waitForRequest("desktop.observe");
+            expect(restoredObserve.params).toEqual({ source: explicitSource, control: false });
+            const restoredRfb = await installScriptedRfbServer(page);
+            await gateway.resolveDeferred("desktop.observe");
+            await pane(page).locator(".desktop-surface canvas").waitFor();
+            await expect.poll(restoredRfb.events).toEqual(["authenticated:1"]);
+            expect(await desktopTab(page).count()).toBe(1);
+            await assertNoProvisioning(gateway);
+            return;
+          }
           if (closeOtherPanel) {
             await pane(page).locator(".chat-panel-swap").click();
             await pane(page).locator(".desktop-surface canvas").waitFor();
@@ -214,96 +284,120 @@ suite.define(() => {
     },
   );
 
-  it("discovers a desktop starting while viewed and isolates another session", async () => {
-    await suite.withPage(
-      { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          featureMethods,
-          historyMessages: [{ role: "assistant", content: "Waiting for the session desktop." }],
-          methodResponses: {
-            "sessions.list": list(false),
-            "environments.list": inventory,
-            "environments.status": inventory.environments[0],
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?proof=1",
-              expiresAtMs: 60000,
-              control: false,
+  it.each([false, true])(
+    "discovers a desktop starting while viewed (runner availability: %s) and isolates another session",
+    async (runnerAvailability) => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            sessionKey: key,
+            featureMethods,
+            historyMessages: [{ role: "assistant", content: "Waiting for the session desktop." }],
+            methodResponses: {
+              "sessions.list": list(runnerAvailability),
+              "environments.list": inventory,
+              "environments.status": runnerAvailability
+                ? { ...inventory.environments[0], status: "unavailable" }
+                : inventory.environments[0],
+              "desktop.observe": {
+                transport: "rfb",
+                wsPath: "/desktop/observe?proof=1",
+                expiresAtMs: 60000,
+                control: false,
+              },
             },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
-        await ready(page);
-        await gateway.waitForRequest("sessions.describe");
-        expect(await desktopTab(page).count()).toBe(0);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "before-active.png"),
-          animations: "disabled",
-        });
-        await installScriptedRfbServer(page);
-        const composer = pane(page).locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Keep my draft and focus");
-        await gateway.deferNext("environments.status");
-        await gateway.setSessionsListResponse(list(true));
-        await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-        await gateway.waitForRequest("environments.status");
-        const pendingInventoryCount = (await gateway.getRequests("environments.status")).length;
-        for (const cursor of [1, 2, 3]) {
-          await gateway.setSessionsListResponse({
-            ...list(true),
-            sessions: [
-              {
-                ...row,
-                placement: {
-                  ...row.placement,
-                  updatedAtMs: cursor,
-                  lastTranscriptAckCursor: cursor,
-                  lastLiveEventAckCursor: cursor * 2,
-                  diskSpace: {
-                    status: "ok",
-                    availableBytes: 100 - cursor,
-                    totalBytes: 100,
-                    observedAtMs: cursor,
+          });
+          await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
+          await ready(page);
+          await gateway.waitForRequest("sessions.describe");
+          if (runnerAvailability) {
+            await gateway.waitForRequest("environments.status");
+          }
+          expect(await desktopTab(page).count()).toBe(0);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "before-active.png"),
+            animations: "disabled",
+          });
+          const rfb = await installScriptedRfbServer(page);
+          const composer = pane(page).locator(".agent-chat__composer-combobox textarea");
+          await composer.fill("Keep my draft and focus");
+          const inventoryBeforeActivation = (await gateway.getRequests("environments.status"))
+            .length;
+          await gateway.deferNext("environments.status");
+          await gateway.setSessionsListResponse(list(true));
+          await gateway.setMethodResponse("environments.status", inventory.environments[0]);
+          await gateway.emitGatewayEvent(
+            "sessions.changed",
+            runnerAvailability ? { reason: "runner-availability" } : { key, reason: "patch" },
+          );
+          await gateway.waitForRequest("environments.status", { after: inventoryBeforeActivation });
+          const pendingInventoryCount = (await gateway.getRequests("environments.status")).length;
+          for (const cursor of [1, 2, 3]) {
+            await gateway.setSessionsListResponse({
+              ...list(true),
+              sessions: [
+                {
+                  ...row,
+                  placement: {
+                    ...row.placement,
+                    updatedAtMs: cursor,
+                    lastTranscriptAckCursor: cursor,
+                    lastLiveEventAckCursor: cursor * 2,
+                    diskSpace: {
+                      status: "ok",
+                      availableBytes: 100 - cursor,
+                      totalBytes: 100,
+                      observedAtMs: cursor,
+                    },
                   },
                 },
-              },
-              notes,
-            ],
+                notes,
+              ],
+            });
+            await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+            await expect
+              .poll(() =>
+                pane(page).evaluate((element, sessionKey) => {
+                  const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                  return state.sessionsResult?.sessions.find(
+                    (session) => session.key === sessionKey,
+                  )?.placement?.updatedAtMs;
+                }, key),
+              )
+              .toBe(cursor);
+          }
+          await expectRequestCountStable(gateway, "environments.status", pendingInventoryCount);
+          expect(await desktopTab(page).count()).toBe(0);
+          await gateway.resolveDeferred("environments.status", inventory.environments[0]);
+          await desktopTab(page).waitFor();
+          await pane(page).locator(".desktop-surface canvas").waitFor();
+          expect(await composer.inputValue()).toBe("Keep my draft and focus");
+          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "newly-active.png"),
+            animations: "disabled",
           });
-          await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-          await expect
-            .poll(() =>
-              pane(page).evaluate((element, sessionKey) => {
-                const state = (element as HTMLElement & { state: ChatPageHost }).state;
-                return state.sessionsResult?.sessions.find((session) => session.key === sessionKey)
-                  ?.placement?.updatedAtMs;
-              }, key),
-            )
-            .toBe(cursor);
-        }
-        await expectRequestCountStable(gateway, "environments.status", pendingInventoryCount);
-        expect(await desktopTab(page).count()).toBe(0);
-        await gateway.resolveDeferred("environments.status", inventory.environments[0]);
-        await desktopTab(page).waitFor();
-        await pane(page).locator(".desktop-surface canvas").waitFor();
-        expect(await composer.inputValue()).toBe("Keep my draft and focus");
-        expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "newly-active.png"),
-          animations: "disabled",
-        });
-        await page.getByRole("link", { name: "Notes", exact: true }).click();
-        await ready(page);
-        expect(await desktopTab(page).count()).toBe(0);
-        await page.goBack();
-        await desktopTab(page).waitFor();
-        expect(await desktopTab(page).count()).toBe(1);
-        await assertNoProvisioning(gateway);
-      },
-    );
-  });
+          const observationCount = (await gateway.getRequests("desktop.observe")).length;
+          await page.getByRole("link", { name: "Notes", exact: true }).click();
+          await ready(page);
+          expect(await desktopTab(page).count()).toBe(0);
+          await gateway.emitGatewayEvent("presence", []);
+          await expectRequestCountStable(gateway, "desktop.observe", observationCount);
+          expect(await rfb.events()).not.toContain("closed:1");
+          await page.goBack();
+          await desktopTab(page).waitFor();
+          await pane(page).locator(".desktop-surface canvas").waitFor();
+          await expectRequestCountStable(gateway, "desktop.observe", observationCount);
+          expect(await rfb.events()).not.toContain("closed:1");
+          expect(await desktopTab(page).count()).toBe(1);
+          await assertNoProvisioning(gateway);
+        },
+      );
+    },
+  );
 
   it.each([
     { filtered: false, unfocused: false },
@@ -350,9 +444,8 @@ suite.define(() => {
           await gateway.setSessionsListResponse(list(true));
           await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
           await gateway.waitForRequest("environments.status");
-          const listReads = (await gateway.getRequests("sessions.list", { includeGlobal: true }))
-            .length;
-          await gateway.deferNext("sessions.list", { includeGlobal: true });
+          const descriptorReads = (await gateway.getRequests("sessions.describe")).length;
+          await gateway.deferNext("sessions.describe");
           await gateway.setSessionsListResponse(
             filtered ? { ...list(false), sessions: [notes] } : list(false),
           );
@@ -362,11 +455,8 @@ suite.define(() => {
           expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(
             0,
           );
-          await gateway.waitForRequest("sessions.list", {
-            after: listReads,
-            match: { includeGlobal: true },
-          });
-          await gateway.resolveDeferred("sessions.list");
+          await gateway.waitForRequest("sessions.describe", { after: descriptorReads });
+          await gateway.resolveDeferred("sessions.describe");
           await expect
             .poll(() =>
               ownerPane.evaluate((element, sessionKey) => {

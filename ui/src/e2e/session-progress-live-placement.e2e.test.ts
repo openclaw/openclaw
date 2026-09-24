@@ -50,7 +50,7 @@ async function expectInsideProgressBody(item: Locator): Promise<void> {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("collapses each enabled run, expands its final, and preserves manual disclosure", async () => {
+  it("collapses enabled runs and preserves manual disclosure through finals", async () => {
     const sessionKey = "agent:main:progress-final-expand";
     const proofDir = captureUiProofEnabled
       ? path.join(suite.artifactDir, "session-progress-live-placement")
@@ -133,7 +133,7 @@ suite.define(() => {
         .locator(".settings-row")
         .filter({
           has: page.locator(".settings-row__title", {
-            hasText: "Collapse task progress by default",
+            hasText: "Collapse task progress by default on desktop",
           }),
         })
         .first();
@@ -181,11 +181,8 @@ suite.define(() => {
       await page
         .locator(".chat-bubble p", { hasText: "The first progress cycle is complete." })
         .waitFor();
-      await expect.poll(() => card.getAttribute("open")).toBe("");
-      await captureLifecycleState("05-run-one-final-auto-expanded.png");
-
-      await card.locator("summary").click();
       await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("05-run-one-final-keeps-manual-collapse.png");
       await setProgressCard(3, "Run one final card revision", [
         { status: "completed", step: "Inspect first run" },
         { status: "completed", step: "Verify first run" },
@@ -198,14 +195,14 @@ suite.define(() => {
       await captureLifecycleState("07-run-one-manual-reopen-before-next-run.png");
 
       await send("Run the second progress cycle");
-      await expect.poll(() => card.getAttribute("open")).toBeNull();
-      await captureLifecycleState("08-run-two-active-collapsed.png");
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("08-run-two-manual-open.png");
       await setProgressCard(4, "Run two started", [
         { status: "in_progress", step: "Inspect second run" },
         { status: "pending", step: "Verify second run" },
       ]);
-      await expect.poll(() => card.getAttribute("open")).toBeNull();
-      await captureLifecycleState("09-run-two-progress-collapsed.png");
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("09-run-two-progress-manual-open.png");
     } finally {
       await page.close();
       if (proofDir && video) {

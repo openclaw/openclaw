@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements model catalog behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";

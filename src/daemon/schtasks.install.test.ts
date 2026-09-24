@@ -15,10 +15,12 @@ import {
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
+const taskProbe = vi.hoisted(() => vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })));
+
 // Install tests control registration separately; runtime probes never inspect host tasks.
 vi.mock("node:child_process", async () => ({
   ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
-  spawnSync: vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })),
+  spawnSync: taskProbe,
 }));
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
@@ -59,7 +61,22 @@ vi.mock("./schtasks-exec.js", () => ({
         }
       }
     }
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    if (
+      argv[0] === "/Query" &&
+      argv.includes("/XML") &&
+      response.code !== 0 &&
+      response.stderr.includes("cannot find the file")
+    ) {
+      taskProbe.mockReturnValueOnce({ status: 1, stdout: "-2147024894", stderr: "" });
+    }
+    return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
+      ? {
+          ...response,
+          stdout:
+            "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
+        }
+      : response;
   },
 }));
 
@@ -67,6 +84,7 @@ beforeEach(() => {
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   xmlPayloadCaptures.length = 0;
+  taskProbe.mockReset().mockReturnValue({ status: 0, stdout: '{"state":4}', stderr: "" });
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
@@ -105,7 +123,7 @@ describe("installScheduledTask", () => {
   }
 
   function expectInitialTaskQuery(taskName = "OpenClaw Gateway"): void {
-    expect(schtasksCalls[0]).toEqual(["/Query", "/TN", taskName]);
+    expect(schtasksCalls[0]).toEqual(["/Query", "/TN", taskName, "/XML"]);
   }
 
   function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
@@ -266,7 +284,7 @@ describe("installScheduledTask", () => {
         sourcePath: scriptPath,
       });
 
-      expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
       expect(schtasksCalls[1]?.[0]).toBe("/Change");
       // Battery-flag XML re-apply runs between /Change and /Run on upgrades.
       expect(schtasksCalls[2]?.slice(0, 5)).toEqual([
@@ -276,7 +294,7 @@ describe("installScheduledTask", () => {
         "OpenClaw Gateway",
         "/XML",
       ]);
-      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[4]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
 
@@ -320,7 +338,7 @@ describe("installScheduledTask", () => {
 
       expectInitialTaskQuery();
       expect(schtasksCalls[1]?.[0]).toBe("/Create");
-      expectTaskRunCall(2);
+      expectTaskRunCall(3);
     });
   });
 
@@ -366,7 +384,7 @@ describe("installScheduledTask", () => {
       expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
       expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-      expectTaskRunCall(xmlIndex + 1);
+      expectTaskRunCall(xmlIndex + 2);
     });
   });
 
@@ -463,7 +481,7 @@ describe("installScheduledTask", () => {
       );
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-      expectTaskRunCall(2, "OpenClaw Custom Gateway");
+      expectTaskRunCall(3, "OpenClaw Custom Gateway");
     });
   });
 
@@ -513,7 +531,7 @@ describe("installScheduledTask", () => {
       domain: "WORKSTATION",
       user: "WORKSTATION\\alice",
       query: missingTaskResponse,
-      commands: ["/Query", "/Create", "/Run"],
+      commands: ["/Query", "/Create", "/Query", "/Run"],
       xmlIndex: 1,
     },
     {
@@ -521,7 +539,7 @@ describe("installScheduledTask", () => {
       domain: "WORKGROUP",
       user: "alice",
       query: missingTaskResponse,
-      commands: ["/Query", "/Create", "/Run"],
+      commands: ["/Query", "/Create", "/Query", "/Run"],
       xmlIndex: 1,
     },
     {
@@ -529,7 +547,7 @@ describe("installScheduledTask", () => {
       domain: "WORKSTATION",
       user: "WORKSTATION\\alice",
       query: okSchtasksResponse,
-      commands: ["/Query", "/Change", "/Create", "/Run"],
+      commands: ["/Query", "/Change", "/Create", "/Query", "/Run"],
       xmlIndex: 2,
     },
   ])(
@@ -551,7 +569,7 @@ describe("installScheduledTask", () => {
         ]);
         expect(createCall).not.toContain("/RU");
         expect(createCall).not.toContain("/NP");
-        expectTaskRunCall(xmlIndex + 1);
+        expectTaskRunCall(xmlIndex + 2);
         const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
         expect(xml).toContain("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
         expect(xml).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
@@ -577,31 +595,66 @@ describe("installScheduledTask", () => {
       expectInitialTaskQuery();
       expect(schtasksCalls[1]?.[0]).toBe("/Change");
       expect(schtasksCalls[2]?.[0]).toBe("/Create");
-      expectTaskRunCall(3);
+      expectTaskRunCall(4);
+    });
+  });
+
+  it("warns and activates an existing task when an ordinary policy refresh fails", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);
+      const warn = vi.fn();
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        warn,
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Access is denied"));
+      expect(schtasksCalls.map((call) => call[0])).toEqual([
+        "/Query",
+        "/Change",
+        "/Create",
+        "/Query",
+        "/Run",
+      ]);
+      expectTaskRunCall(4);
     });
   });
 
   it.each([
     {
       kind: "existing",
-      responses: [okSchtasksResponse, okSchtasksResponse, okSchtasksResponse, accessDeniedResponse],
-      commands: ["/Query", "/Change", "/Create", "/Run"],
-      runIndex: 3,
+      responses: [
+        okSchtasksResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        accessDeniedResponse,
+      ],
+      commands: ["/Query", "/Change", "/Create", "/Query", "/Run", "/Query", "/Change", "/End"],
+      runIndex: 4,
     },
     {
       kind: "new",
-      responses: [missingTaskResponse, okSchtasksResponse, accessDeniedResponse],
-      commands: ["/Query", "/Create", "/Run"],
-      runIndex: 2,
+      responses: [
+        missingTaskResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        accessDeniedResponse,
+      ],
+      commands: ["/Query", "/Create", "/Query", "/Run", "/Query", "/Change", "/End"],
+      runIndex: 3,
     },
   ])(
     "propagates /Run failure after registering a $kind task",
     async ({ responses, commands, runIndex }) => {
       await withUserProfileDir(async (_tmpDir, env) => {
         schtasksResponses.push(...responses);
-        await expect(installDefaultGatewayTask(env)).rejects.toThrow(
-          "schtasks run failed: ERROR: Access is denied.",
-        );
+        await expect(installDefaultGatewayTask(env)).rejects.toMatchObject({
+          errors: expect.arrayContaining([
+            expect.objectContaining({ message: "schtasks run failed: ERROR: Access is denied." }),
+          ]),
+        });
         expectInitialTaskQuery();
         expect(schtasksCalls.map((call) => call[0])).toEqual(commands);
         expectTaskRunCall(runIndex);

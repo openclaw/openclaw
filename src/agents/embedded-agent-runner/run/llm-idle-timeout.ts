@@ -11,12 +11,15 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { areDiagnosticsEnabledForProcess } from "../../../infra/diagnostic-events.js";
 import { toErrorObject } from "../../../infra/errors.js";
+import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
+import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import type { EmbeddedRunTrigger } from "./params.js";
 import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 /**
@@ -405,6 +408,7 @@ export function streamWithIdleTimeout(
   const guardIterationGaps = opts?.scope !== "creation-only";
   const runId = opts?.runId;
   return (model, context, options) => {
+    const trackCleanup = captureAsyncWorkTracker();
     const createIdleTimeoutError = () =>
       new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
 
@@ -458,6 +462,18 @@ export function streamWithIdleTimeout(
       (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
         function () {
           const iterator = originalAsyncIterator();
+          let returning: Promise<IteratorResult<AssistantMessageEvent>> | undefined;
+          const returnIterator = (value?: unknown) => {
+            // Defer invocation until the promise is stored: plugin return hooks
+            // can reenter cleanup synchronously.
+            returning ??= trackCleanup(() =>
+              Promise.resolve().then(
+                () => iterator.return?.(value) ?? { done: true as const, value: undefined },
+              ),
+            );
+            void returning.catch(() => recordAgentCleanupFailure());
+            return returning;
+          };
           const producerCompletion = getEventStreamCompletion(stream);
           let idleTimer: NodeJS.Timeout | null = null;
           let rejectIdleTimeout: ((error: Error) => void) | undefined;
@@ -533,6 +549,7 @@ export function streamWithIdleTimeout(
           return createStreamIteratorWrapper({
             iterator,
             next: async (streamIterator) => {
+              let pendingNext: ReturnType<typeof streamIterator.next> | undefined;
               try {
                 const timeoutPromise = new Promise<never>((_, reject) => {
                   rejectIdleTimeout = reject;
@@ -541,9 +558,8 @@ export function streamWithIdleTimeout(
                 });
                 // Providers may ignore their mirrored abort signal, so caller
                 // cancellation must also settle this exact iterator wait.
-                const result = await withSourceAbort(
-                  Promise.race([streamIterator.next(), timeoutPromise]),
-                );
+                pendingNext = streamIterator.next();
+                const result = await withSourceAbort(Promise.race([pendingNext, timeoutPromise]));
 
                 if (result.done) {
                   settle();
@@ -557,12 +573,17 @@ export function streamWithIdleTimeout(
                 return result;
               } catch (error) {
                 settle();
+                // The caller's race can finish before the iterator's admitted
+                // work. Its owner retains both operations through settlement.
+                void trackCleanup(() => Promise.allSettled([pendingNext, returnIterator()])).catch(
+                  () => recordAgentCleanupFailure(),
+                );
                 throw error;
               }
             },
-            onReturn(streamIterator) {
+            onReturn(_streamIterator, value) {
               settle();
-              return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
+              return returnIterator(value);
             },
             onThrow(streamIterator, error) {
               settle();
@@ -578,6 +599,7 @@ export function streamWithIdleTimeout(
     };
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      const source = Promise.resolve(maybeStream);
       let streamPromiseTimer: NodeJS.Timeout | null = null;
       const clearStreamPromiseTimer = () => {
         if (streamPromiseTimer) {
@@ -591,9 +613,7 @@ export function streamWithIdleTimeout(
       const timeoutPromise = createTimeoutPromise((timer) => {
         streamPromiseTimer = timer;
       });
-      const streamPromise = withSourceAbort(
-        Promise.race([Promise.resolve(maybeStream), timeoutPromise]),
-      );
+      const streamPromise = withSourceAbort(Promise.race([source, timeoutPromise]));
       return streamPromise.then(
         (stream) => {
           clearStreamPromiseTimer();
@@ -602,6 +622,14 @@ export function streamWithIdleTimeout(
         (error: unknown) => {
           clearStreamPromiseTimer();
           cleanupSourceSignal();
+          // Cancellation can win before an iterator exists. Retain late setup
+          // and close its eventual stream through the same captured work owner.
+          void trackCleanup(async () => {
+            const late = await source.catch(() => undefined);
+            if (late) {
+              await late[Symbol.asyncIterator]().return?.();
+            }
+          }).catch(() => recordAgentCleanupFailure());
           throw error;
         },
       );

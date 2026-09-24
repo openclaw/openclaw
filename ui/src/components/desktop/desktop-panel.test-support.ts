@@ -28,6 +28,7 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
   return {
     disconnect: vi.fn(),
     disableInput: vi.fn(),
+    setPresented: vi.fn(() => true),
     sendBackspace: vi.fn(),
     sendKeyboardEvent: vi.fn(),
     sendText: vi.fn(),

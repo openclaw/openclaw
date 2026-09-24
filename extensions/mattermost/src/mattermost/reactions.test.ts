@@ -1,10 +1,9 @@
-// Mattermost tests cover reactions plugin behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addMattermostReaction, removeMattermostReaction } from "./reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
-  requestUrl,
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {

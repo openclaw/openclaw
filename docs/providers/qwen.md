@@ -270,6 +270,9 @@ included here because they use different APIs.
 
 ## Thinking controls
 
+Agent runs and standalone completions use the same model-specific thinking
+controls, including Token Plan tool-choice and reasoning-replay requirements.
+
 `qwen3.8-max` and `qwen3.8-flash` support `off`, `low`, `medium`, and `xhigh`
 thinking, with `xhigh` as the default. `minimal` maps to `low`; `high` and `max`
 map to `xhigh`. This applies to Standard and Token Plan. Both models support

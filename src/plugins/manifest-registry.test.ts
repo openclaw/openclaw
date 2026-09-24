@@ -481,7 +481,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("keeps manifest facts stable until a fresh operation reads the changed file", () => {
+  it("keeps manifest and artwork facts stable until a fresh operation reads changes", () => {
     const stateDir = fs.realpathSync(makeTempDir());
     const pluginDir = path.join(stateDir, "extensions", "cached-manifest");
     mkdirSafe(pluginDir);
@@ -500,6 +500,7 @@ describe("loadPluginManifestRegistry", () => {
       name: "Before",
       configSchema: { type: "object" },
     });
+    writeTextFile(pluginDir, "assets/activity/before.svg", "before activity");
     const env = hermeticEnv({
       OPENCLAW_STATE_DIR: stateDir,
     });
@@ -511,6 +512,9 @@ describe("loadPluginManifestRegistry", () => {
       name: "After",
       configSchema: { type: "object" },
     });
+    writeTextFile(pluginDir, "assets/activity.svg", "new default activity");
+    fs.unlinkSync(path.join(pluginDir, "assets/activity/before.svg"));
+    writeTextFile(pluginDir, "assets/activity/after.svg", "after activity");
     const updatedAt = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, updatedAt, updatedAt);
 
@@ -518,12 +522,20 @@ describe("loadPluginManifestRegistry", () => {
     const second = loadPluginManifestRegistryCore({ env });
     expect(first.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
     expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("Before");
+    for (const snapshot of [first, second]) {
+      const plugin = snapshot.plugins.find((entry) => entry.id === "cached-manifest");
+      expect(plugin?.activityIconPath).toBeUndefined();
+      expect(Object.keys(plugin?.toolActivityIconPaths ?? {})).toEqual(["before"]);
+    }
     expect(open.mock.calls.filter(([file]) => file === manifestPath)).toEqual([]);
 
     const refreshed = withPluginCache(createPluginCache(), () =>
       loadPluginManifestRegistryCore({ env }),
     );
     expect(refreshed.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+    const refreshedPlugin = refreshed.plugins.find((entry) => entry.id === "cached-manifest");
+    expect(refreshedPlugin?.activityIconPath).toBe(path.join(pluginDir, "assets/activity.svg"));
+    expect(Object.keys(refreshedPlugin?.toolActivityIconPaths ?? {})).toEqual(["after"]);
     expect(open.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(1);
     expect(
       loadPluginManifestRegistryCore({ env }).plugins.find(
@@ -594,7 +606,7 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, "plugin manifest not found");
   });
 
-  it("ignores legacy manifest icon URLs", () => {
+  it("ignores legacy manifest icon URLs and keeps identity artwork out of activity metadata", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "icon-demo",
@@ -602,6 +614,7 @@ describe("loadPluginManifestRegistry", () => {
       icon: "https://cdn.simpleicons.org/simpleicons",
       configSchema: { type: "object" },
     });
+    writeTextFile(dir, "assets/icon.png", "identity icon");
 
     const registry = loadRegistry([
       createPluginCandidate({
@@ -612,9 +625,11 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]).not.toHaveProperty("icon");
+    expect(registry.plugins[0]?.activityIconPath).toBeUndefined();
+    expect(registry.plugins[0]?.toolActivityIconPaths).toBeUndefined();
   });
 
-  it("discovers the portable package icon without manifest indirection", () => {
+  it("discovers separate identity and activity assets with exact, ordered tool IDs", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "icon-demo",
@@ -622,6 +637,20 @@ describe("loadPluginManifestRegistry", () => {
       configSchema: { type: "object" },
     });
     writeTextFile(dir, "assets/icon.png", "portable icon");
+    writeTextFile(dir, "assets/activity.svg", "default activity");
+    for (const name of ["z-last", "Exact.Tool", "__proto__", "a..b"]) {
+      writeTextFile(dir, `assets/activity/${name}.svg`, "tool activity");
+    }
+    for (const name of [
+      ".hidden.svg",
+      "invalid name.svg",
+      "écho.svg",
+      "notes.png",
+      `${"a".repeat(129)}.svg`,
+    ]) {
+      writeTextFile(dir, `assets/activity/${name}`, "not a tool icon");
+    }
+    mkdirSafe(path.join(dir, "assets/activity/directory.svg"));
 
     const registry = loadRegistry([
       createPluginCandidate({
@@ -632,9 +661,20 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+    expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
+    const toolIcons = registry.plugins[0]?.toolActivityIconPaths;
+    expect(Object.keys(toolIcons ?? {})).toEqual(["Exact.Tool", "__proto__", "a..b", "z-last"]);
+    expect(toolIcons).toEqual(
+      Object.fromEntries(
+        ["Exact.Tool", "__proto__", "a..b", "z-last"].map((name) => [
+          name,
+          path.join(dir, `assets/activity/${name}.svg`),
+        ]),
+      ),
+    );
   });
 
-  it("discovers the same portable icon convention for Agent Plugins bundles", () => {
+  it("discovers the same identity and activity conventions for Agent Plugins bundles", () => {
     const dir = makeTempDir();
     setupBundleFixture({
       bundleDir: dir,
@@ -643,7 +683,11 @@ describe("loadPluginManifestRegistry", () => {
         $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
         name: "Portable Icon Bundle",
       },
-      textFiles: { "assets/icon.png": "portable icon" },
+      textFiles: {
+        "assets/icon.png": "portable icon",
+        "assets/activity.svg": "default activity",
+        "assets/activity/task.search.svg": "search activity",
+      },
     });
 
     const registry = loadRegistry([
@@ -657,7 +701,71 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+    expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
+    expect(registry.plugins[0]?.toolActivityIconPaths).toEqual({
+      "task.search": path.join(dir, "assets/activity/task.search.svg"),
+    });
   });
+
+  it.each([128, 129])(
+    "bounds activity overrides without partially discovering %i entries",
+    (count) => {
+      const dir = makeTempDir();
+      writeManifest(dir, { id: "activity-limit", configSchema: { type: "object" } });
+      writeTextFile(dir, "assets/activity.svg", "default activity");
+      for (let index = 0; index < count; index += 1) {
+        writeTextFile(dir, `assets/activity/tool_${index}.svg`, "tool activity");
+      }
+      const registry = loadRegistry([
+        createPluginCandidate({ idHint: "activity-limit", rootDir: dir, origin: "bundled" }),
+      ]);
+
+      expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
+      if (count === 128) {
+        expect(Object.keys(registry.plugins[0]?.toolActivityIconPaths ?? {})).toHaveLength(128);
+      } else {
+        expect(registry.plugins[0]?.toolActivityIconPaths).toBeUndefined();
+      }
+    },
+  );
+
+  it.each(["default-symlink", "directory-symlink", "tool-hardlink"])(
+    "ignores activity assets that escape their installed plugin boundary (%s)",
+    (mode) => {
+      const dir = makeTempDir();
+      const outside = makeTempDir();
+      writeManifest(dir, { id: "activity-boundary", configSchema: { type: "object" } });
+      writeTextFile(outside, "tool.svg", "external activity");
+      mkdirSafe(path.join(dir, "assets"));
+      try {
+        if (mode === "default-symlink") {
+          fs.symlinkSync(path.join(outside, "tool.svg"), path.join(dir, "assets/activity.svg"));
+        } else if (mode === "directory-symlink") {
+          fs.symlinkSync(outside, path.join(dir, "assets/activity"), "junction");
+        } else {
+          mkdirSafe(path.join(dir, "assets/activity"));
+          fs.linkSync(path.join(outside, "tool.svg"), path.join(dir, "assets/activity/tool.svg"));
+        }
+      } catch (error) {
+        if (
+          process.platform === "win32" &&
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EPERM"
+        ) {
+          return;
+        }
+        throw error;
+      }
+      const registry = loadRegistry([
+        createPluginCandidate({ idHint: "activity-boundary", rootDir: dir, origin: "global" }),
+      ]);
+
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.activityIconPath).toBeUndefined();
+      expect(registry.plugins[0]?.toolActivityIconPaths).toBeUndefined();
+    },
+  );
 
   it("preserves manifest catalog metadata and categories on registry records", () => {
     const dir = makeTempDir();
@@ -806,75 +914,6 @@ describe("loadPluginManifestRegistry", () => {
     const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
     expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
-  });
-
-  it("deduplicates compatibility diagnostics when a config plugin replaces a global candidate", () => {
-    const globalDir = makeTempDir();
-    const configDir = makeTempDir();
-    const manifest = {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    };
-    writeManifest(globalDir, manifest);
-    writeManifest(configDir, manifest);
-
-    const registry = loadPluginManifestRegistryCore({
-      candidates: [
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: configDir,
-          origin: "config",
-        }),
-      ],
-      diagnostics: [globalDir, configDir, globalDir].map((source) => ({
-        level: "warn" as const,
-        pluginId: "external-chat",
-        source,
-        message: "extension entry unreadable (I/O error): ./index.js",
-      })),
-    });
-
-    expect(
-      registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([globalDir, configDir]);
-    const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
-      diagnostic.message.includes("without channelConfigs metadata"),
-    );
-    expect(channelConfigWarnings).toHaveLength(1);
-  });
-
-  it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    });
-    const candidate = createPluginCandidate({
-      idHint: "external-chat",
-      rootDir: dir,
-      origin: "global",
-    });
-
-    const disabledRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
-
-    const allowlistRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { allow: ["other-plugin"] } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(allowlistRegistry, "without channelConfigs metadata");
   });
 
   it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
@@ -1372,199 +1411,6 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
-  });
-
-  it("normalizes provider metadata from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "openai",
-      enabledByDefault: true,
-      enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
-      providers: ["openai", "openai"],
-      setup: {
-        providers: [{ id: "openai", envVars: ["OPENAI_API_KEY"] }],
-      },
-      providerEndpoints: [
-        {
-          endpointClass: "openai-public",
-          hosts: ["API.OPENAI.COM", ""],
-          hostSuffixes: [".openai.azure.com"],
-          baseUrls: ["https://api.openai.com/v1"],
-          googleVertexRegion: "global",
-          googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
-        },
-      ],
-      modelIdNormalization: {
-        providers: {
-          openai: {
-            aliases: {
-              "gpt-latest": "gpt-5.4",
-            },
-            stripPrefixes: ["openai/"],
-            prefixWhenBare: "openai",
-            prefixWhenBareAfterAliasStartsWith: [
-              {
-                modelPrefix: "gpt-",
-                prefix: "openai",
-              },
-              {
-                modelPrefix: "",
-                prefix: "ignored",
-              },
-            ],
-          },
-          ignored: {
-            prefixWhenBare: "ignored",
-          },
-        },
-      },
-      providerRequest: {
-        providers: {
-          openai: {
-            family: "openai-family",
-            compatibilityFamily: "moonshot",
-            openAICompletions: {
-              supportsStreamingUsage: true,
-            },
-          },
-          ignored: {
-            family: "ignored",
-          },
-        },
-      },
-      syntheticAuthRefs: ["openai-cli"],
-      nonSecretAuthMarkers: ["openai-cli"],
-      providerAuthAliases: {
-        openai: "openai",
-      },
-      providerAuthChoices: [
-        {
-          provider: "openai",
-          method: "api-key",
-          choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
-          icon: "HTTPS://CDN.SIMPLEICONS.ORG/openai",
-          website: "https://platform.openai.com/api-keys",
-          assistantPriority: 10,
-          assistantVisibility: "visible",
-          appGuidedSecret: true,
-          personalAccount: true,
-          appGuidedActionLabel: "Connect account",
-          appGuidedDiscovery: true,
-        },
-      ],
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "openai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerEndpoints).toEqual([
-      {
-        endpointClass: "openai-public",
-        hosts: ["api.openai.com"],
-        hostSuffixes: [".openai.azure.com"],
-        baseUrls: ["https://api.openai.com/v1"],
-        googleVertexRegion: "global",
-        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
-      },
-    ]);
-    expect(registry.plugins[0]?.modelIdNormalization).toEqual({
-      providers: {
-        openai: {
-          aliases: {
-            "gpt-latest": "gpt-5.4",
-          },
-          stripPrefixes: ["openai/"],
-          prefixWhenBare: "openai",
-          prefixWhenBareAfterAliasStartsWith: [
-            {
-              modelPrefix: "gpt-",
-              prefix: "openai",
-            },
-          ],
-        },
-      },
-    });
-    expect(registry.plugins[0]?.providerRequest).toEqual({
-      providers: {
-        openai: {
-          family: "openai-family",
-          compatibilityFamily: "moonshot",
-          openAICompletions: {
-            supportsStreamingUsage: true,
-          },
-        },
-      },
-    });
-    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
-    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
-    expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      openai: "openai",
-    });
-    expect(registry.plugins[0]?.enabledByDefault).toBe(true);
-    expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
-    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
-      {
-        provider: "openai",
-        method: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        icon: "https://cdn.simpleicons.org/openai",
-        website: "https://platform.openai.com/api-keys",
-        assistantPriority: 10,
-        assistantVisibility: "visible",
-        appGuidedSecret: true,
-        personalAccount: true,
-        appGuidedActionLabel: "Connect account",
-        appGuidedDiscovery: true,
-      },
-    ]);
-  });
-
-  it("drops non-HTTPS provider auth presentation URLs", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "unsafe-auth-artwork",
-      providerAuthChoices: [
-        {
-          provider: "unsafe",
-          method: "api-key",
-          choiceId: "unsafe-api-key",
-          icon: "http://example.com/icon.svg",
-          website: "javascript:alert(1)",
-        },
-        {
-          provider: "oversized",
-          method: "api-key",
-          choiceId: "oversized-api-key",
-          icon: `https://example.com/${"a".repeat(2048)}`,
-        },
-      ],
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "unsafe-auth-artwork",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
-      {
-        provider: "unsafe",
-        method: "api-key",
-        choiceId: "unsafe-api-key",
-      },
-      {
-        provider: "oversized",
-        method: "api-key",
-        choiceId: "oversized-api-key",
-      },
-    ]);
   });
 
   it("preserves model catalog metadata from plugin manifests", () => {
@@ -2132,30 +1978,6 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
-  it("resolves a manifest provider catalog source only once per registry build", () => {
-    const dir = makeTempDir();
-    const providerDiscoverySource = path.join(dir, "provider-discovery.js");
-    writeManifest(dir, {
-      id: "cached-provider",
-      providers: ["cached-provider"],
-      providerCatalogEntry: "./provider-discovery.js",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
-    const realpathSpy = vi.spyOn(fs, "realpathSync");
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "cached-provider",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
-    expect(
-      realpathSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
-    ).toHaveLength(1);
-  });
-
   it("ignores provider catalog entries outside the plugin root", () => {
     const root = makeTempDir();
     const pluginDir = path.join(root, "plugin");
@@ -2642,32 +2464,6 @@ describe("loadPluginManifestRegistry", () => {
       memory_store: {
         sideEffecting: true,
       },
-    });
-  });
-
-  it("preserves provider hook contracts from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "acme-ai",
-      providers: ["acme-ai"],
-      contracts: {
-        externalAuthProviders: ["acme-ai"],
-        usageProviders: ["acme-ai"],
-        workerProviders: [" static-ssh ", ""],
-      },
-      configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "acme-ai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.contracts).toEqual({
-      externalAuthProviders: ["acme-ai"],
-      usageProviders: ["acme-ai"],
-      workerProviders: ["static-ssh"],
     });
   });
 

@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { CostUsageSummary } from "../api/types.ts";
+import type { SessionsUsageResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -47,18 +47,8 @@ function today(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function costSummary(cacheStatus?: CostUsageSummary["cacheStatus"], usageTotals = totals) {
-  return {
-    updatedAt: Date.now(),
-    days: 1,
-    daily: [{ date: today(), ...usageTotals }],
-    totals: usageTotals,
-    ...(cacheStatus ? { cacheStatus } : {}),
-  };
-}
-
 function sessionsUsage(
-  cacheStatus?: ReturnType<typeof costSummary>["cacheStatus"],
+  cacheStatus?: SessionsUsageResult["cacheStatus"],
   label = "Proxy proof",
   usageTotals = totals,
 ) {
@@ -104,6 +94,7 @@ function sessionsUsage(
       byProvider: [],
       byAgent: [{ agentId: "main", totals: usageTotals }],
       byChannel: [],
+      costDaily: [{ date: today(), ...usageTotals }],
       daily: [
         {
           date: today(),
@@ -148,7 +139,7 @@ async function proxyReconnect(
   await gateway.closeLatest(1001, "proxy idle timeout");
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
   await waitForControlUiGatewayReady(page);
-  expect(await page.locator(".sidebar-footer-bar__status").count()).toBe(0);
+  await expect.poll(() => page.locator(".gateway-status").count()).toBe(0);
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -178,92 +169,73 @@ async function usageBadges(page: Page): Promise<string[]> {
 }
 
 suite.define(() => {
-  it.each(["sessions", "cost"] as const)(
-    "automatically replaces incomplete %s cache snapshots after a rebuild",
-    async (incompleteSource) => {
-      const context = await createContext();
-      const page = await context.newPage();
-      const partialTotals = { ...totals, input: 80, totalTokens: 100 };
-      const freshTotals = { ...totals, input: 300, totalTokens: 320 };
-      const refreshing = {
-        status: "refreshing" as const,
-        cachedFiles: 1,
-        pendingFiles: 1,
-        staleFiles: 1,
-      };
-      const fresh = { status: "fresh" as const, cachedFiles: 2, pendingFiles: 0, staleFiles: 0 };
-      const partialSessions = sessionsUsage(
-        incompleteSource === "sessions" ? refreshing : fresh,
-        "Historical lineage",
-        partialTotals,
-      );
-      const partialCost = costSummary(
-        incompleteSource === "cost" ? refreshing : fresh,
-        partialTotals,
-      );
-      const freshSessions = sessionsUsage(fresh, "Historical lineage", freshTotals);
-      const freshCost = costSummary(fresh, freshTotals);
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "sessions.usage": partialSessions,
-          "usage.cost": partialCost,
-          "usage.status": { updatedAt: Date.now(), providers: [] },
-        },
-      });
+  it("automatically replaces incomplete usage snapshots after a rebuild", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const partialTotals = { ...totals, input: 80, totalTokens: 100 };
+    const freshTotals = { ...totals, input: 300, totalTokens: 320 };
+    const refreshing = {
+      status: "refreshing" as const,
+      cachedFiles: 1,
+      pendingFiles: 1,
+      staleFiles: 1,
+    };
+    const fresh = { status: "fresh" as const, cachedFiles: 2, pendingFiles: 0, staleFiles: 0 };
+    const partialSessions = sessionsUsage(refreshing, "Historical lineage", partialTotals);
+    const freshSessions = sessionsUsage(fresh, "Historical lineage", freshTotals);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.usage": partialSessions,
+        "usage.status": { updatedAt: Date.now(), providers: [] },
+      },
+    });
 
-      try {
-        const response = await page.goto(`${suite.server.baseUrl}usage`);
-        expect(response?.status()).toBe(200);
-        await expect
-          .poll(() =>
-            page.evaluate(() => ({
-              visibility: document.visibilityState,
-              focused: document.hasFocus(),
-            })),
-          )
-          .toEqual({ visibility: "visible", focused: true });
-        const refresh = page
-          .locator("openclaw-usage-page")
-          .getByRole("button", { name: "Refresh", exact: true });
-        for (const entry of ["route", "manual"] as const) {
-          if (entry === "manual") {
-            await gateway.setMethodResponse("sessions.usage", partialSessions);
-            await gateway.setMethodResponse("usage.cost", partialCost);
-            await refresh.click();
-          }
-          await expect
-            .poll(() => usageBadges(page))
-            .toEqual(["100 Tokens", "$0.01 Cost", "1 session"]);
-          await expect.poll(() => refresh.isEnabled()).toBe(true);
-          expect(await page.locator(".usage-callout.danger").count()).toBe(0);
-
-          const sessionsBefore = await requestCount(gateway, "sessions.usage");
-          const costBefore = await requestCount(gateway, "usage.cost");
-          // Only server data changes. Publish it before optional slow media capture so
-          // recording cannot spend the production retry budget on old fixture data.
-          await gateway.setMethodResponse("sessions.usage", freshSessions);
-          await gateway.setMethodResponse("usage.cost", freshCost);
-          await expect
-            .poll(() => requestCount(gateway, "sessions.usage"), { timeout: 10_000 })
-            .toBeGreaterThan(sessionsBefore);
-          await expect
-            .poll(() => requestCount(gateway, "usage.cost"), { timeout: 10_000 })
-            .toBeGreaterThan(costBefore);
-          await expect
-            .poll(() => usageBadges(page))
-            .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);
-          await expect.poll(() => refresh.isEnabled()).toBe(true);
-          expect(await page.locator(".usage-callout.danger").count()).toBe(0);
-          await captureProof(page, `usage-${incompleteSource}-cache-${entry}-fresh.png`);
+    try {
+      const response = await page.goto(`${suite.server.baseUrl}usage`);
+      expect(response?.status()).toBe(200);
+      await expect
+        .poll(() =>
+          page.evaluate(() => ({
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+          })),
+        )
+        .toEqual({ visibility: "visible", focused: true });
+      const refresh = page
+        .locator("openclaw-usage-page")
+        .getByRole("button", { name: "Refresh", exact: true });
+      for (const entry of ["route", "manual"] as const) {
+        if (entry === "manual") {
+          await gateway.setMethodResponse("sessions.usage", partialSessions);
+          await refresh.click();
         }
-      } catch (error) {
-        await captureProof(page, `usage-${incompleteSource}-cache-failed.png`);
-        throw error;
-      } finally {
-        await context.close();
+        await expect
+          .poll(() => usageBadges(page))
+          .toEqual(["100 Tokens", "$0.01 Cost", "1 session"]);
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await page.locator(".usage-callout.danger").count()).toBe(0);
+
+        const sessionsBefore = await requestCount(gateway, "sessions.usage");
+        // Only server data changes. Publish it before optional slow media capture so
+        // recording cannot spend the production retry budget on old fixture data.
+        await gateway.setMethodResponse("sessions.usage", freshSessions);
+        await expect
+          .poll(() => requestCount(gateway, "sessions.usage"), { timeout: 10_000 })
+          .toBeGreaterThan(sessionsBefore);
+        await expect
+          .poll(() => usageBadges(page))
+          .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await page.locator(".usage-callout.danger").count()).toBe(0);
+        await captureProof(page, `usage-cache-${entry}-fresh.png`);
       }
-    },
-  );
+    } catch (error) {
+      await captureProof(page, "usage-cache-failed.png");
+      throw error;
+    } finally {
+      await context.close();
+    }
+  });
 
   it("avoids a reload storm but retries Usage work interrupted by a proxy drop", async () => {
     const context = await createContext();
@@ -271,7 +243,6 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.usage": sessionsUsage(),
-        "usage.cost": costSummary(),
         "usage.status": { updatedAt: Date.now(), providers: [] },
       },
     });
@@ -286,14 +257,12 @@ suite.define(() => {
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
-      await waitForRequestCount(gateway, "usage.cost", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
       await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
 
       for (const socketCount of [2, 3, 4]) {
         await proxyReconnect(page, gateway, socketCount);
         expect(await requestCount(gateway, "sessions.usage")).toBe(1);
-        expect(await requestCount(gateway, "usage.cost")).toBe(1);
       }
 
       await page.evaluate((ttlMs) => {
@@ -311,7 +280,6 @@ suite.define(() => {
       }, USAGE_PAYLOAD_TTL_MS);
       await proxyReconnect(page, gateway, 5);
       expect(await requestCount(gateway, "sessions.usage")).toBe(1);
-      expect(await requestCount(gateway, "usage.cost")).toBe(1);
 
       await page.evaluate(() => {
         Object.defineProperty(document, "visibilityState", {
@@ -326,20 +294,16 @@ suite.define(() => {
         window.dispatchEvent(new Event("focus"));
       });
       await waitForRequestCount(gateway, "sessions.usage", 2);
-      await waitForRequestCount(gateway, "usage.cost", 2);
 
       await gateway.deferNext("sessions.usage");
-      await gateway.deferNext("usage.cost");
       await page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true })
         .click();
       await waitForRequestCount(gateway, "sessions.usage", 3);
-      await waitForRequestCount(gateway, "usage.cost", 3);
 
       await proxyReconnect(page, gateway, 6);
       await waitForRequestCount(gateway, "sessions.usage", 4);
-      await waitForRequestCount(gateway, "usage.cost", 4);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
       await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
       await captureProof(page, "usage-after-interrupted-retry.png");
@@ -356,7 +320,6 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.usage": staleFamilyResult,
-        "usage.cost": costSummary(),
         "usage.status": { updatedAt: Date.now(), providers: [] },
       },
     });
@@ -368,18 +331,15 @@ suite.define(() => {
       await page.getByText("Family stale result", { exact: true }).waitFor();
 
       await gateway.deferNext("sessions.usage");
-      await gateway.deferNext("usage.cost");
       await page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true })
         .click();
       await waitForRequestCount(gateway, "sessions.usage", 2);
-      await waitForRequestCount(gateway, "usage.cost", 2);
 
       await gateway.setMethodResponse("sessions.usage", currentInstanceResult);
       await page.getByRole("button", { name: "Current instance", exact: true }).click();
       await gateway.resolveDeferred("sessions.usage", staleFamilyResult);
-      await gateway.resolveDeferred("usage.cost", costSummary());
       await expect
         .poll(() =>
           page

@@ -1,4 +1,3 @@
-// Slack plugin module implements account surface fields behavior.
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export type SlackAccountSurfaceFields = {

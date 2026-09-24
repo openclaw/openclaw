@@ -1,4 +1,3 @@
-// Slack plugin module implements channel behavior.
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -68,6 +67,7 @@ import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { normalizeSlackReplyPayload, resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
+import type { SlackScopesResult } from "./scopes.js";
 import { slackSecurityAdapter } from "./security.js";
 import { setSlackSessionStatus } from "./session-status.js";
 import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
@@ -283,15 +283,6 @@ function matchSlackAcpConversation(params: {
   return null;
 }
 
-function buildSlackBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "slack" });
-}
-
 function shouldRecoverSlackThreadFromCurrentSession(params: {
   cfg: OpenClawConfig;
   peerKind: RoutePeer["kind"];
@@ -377,7 +368,8 @@ async function resolveSlackOutboundSessionRoute(params: {
     kind: peerKind,
     id: peerId,
   };
-  const unpartitionedBaseSessionKey = buildSlackBaseSessionKey({
+  const unpartitionedBaseSessionKey = buildOutboundBaseSessionKey({
+    channel: "slack",
     cfg: params.cfg,
     agentId: params.agentId,
     accountId: params.accountId,
@@ -415,18 +407,9 @@ async function resolveSlackOutboundSessionRoute(params: {
   });
 }
 
-// Mirrors `SlackScopesResult` in ./scopes.ts so the type does not pull the
-// scopes module back in at module-load time. Keep the two in sync.
-type SlackScopesResultShape = {
-  ok: boolean;
-  scopes?: string[];
-  source?: string;
-  error?: string;
-};
-
 function formatSlackScopeDiagnostic(params: {
   tokenType: "bot" | "user";
-  result: SlackScopesResultShape;
+  result: SlackScopesResult;
 }) {
   const source = params.result.source ? ` (${params.result.source})` : "";
   const label = params.tokenType === "user" ? "User scopes" : "Bot scopes";
@@ -610,7 +593,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         return normalizeSlackMessagingTarget(`channel:${id}`);
       },
       inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
-      resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveSlackOutboundSessionRoute,
       hasStructuredReplyPayload: ({ payload }) => {
         try {
           return Boolean(resolveSlackReplyBlocks(payload)?.length);
@@ -780,13 +763,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const userToken = account.userToken?.trim();
         const { fetchSlackScopes } = await loadSlackScopesModule();
         if (account.identity === "user") {
-          const userScopes: SlackScopesResultShape = userToken
+          const userScopes: SlackScopesResult = userToken
             ? await fetchSlackScopes(userToken, timeoutMs)
             : { ok: false, error: "Slack user token missing." };
           lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
           details.userScopes = userScopes;
         } else {
-          const botScopes: SlackScopesResultShape = botToken
+          const botScopes: SlackScopesResult = botToken
             ? await fetchSlackScopes(botToken, timeoutMs)
             : { ok: false, error: "Slack bot token missing." };
           lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
@@ -803,17 +786,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const mode = account.config.mode ?? "socket";
         const identity = account.config.postAs ?? "bot";
         const credentialConfigured =
-          mode === "http"
+          mode === "http" || mode === "socket"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                 identity === "user" ? "userTokenStatus" : "botTokenStatus",
-                "signingSecretStatus",
+                mode === "http" ? "signingSecretStatus" : "appTokenStatus",
               ])
-            : mode === "socket"
-              ? resolveConfiguredFromRequiredCredentialStatuses(account, [
-                  identity === "user" ? "userTokenStatus" : "botTokenStatus",
-                  "appTokenStatus",
-                ])
-              : undefined;
+            : undefined;
         const configured = credentialConfigured ?? isSlackPluginAccountConfigured(account);
         return {
           accountId: account.accountId,
@@ -900,7 +878,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
     },
     allowExplicitReplyTagsWhenOff: false,
-    buildToolContext: (params) => buildSlackThreadingToolContext(params),
+    buildToolContext: buildSlackThreadingToolContext,
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
       normalizeSlackThreadTsCandidate(replyToId)
         ? undefined

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createBackgroundTaskRecord } from "../../../acp/control-plane/manager.background-task.js";
 import {
   getAcpSessionManager,
   testing as managerTesting,
@@ -27,6 +28,7 @@ import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { getSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -34,13 +36,16 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
+import { getActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { listTasksForRelatedSessionKey } from "../../../tasks/task-registry-query.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -51,6 +56,7 @@ import {
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -61,12 +67,14 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle:
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
+}));
 
 const parentSessionKey = "agent:main:main";
 const parentRunId = "acp-spawn-parent";
@@ -93,7 +101,7 @@ beforeEach(async () => {
   await writeFile(
     path.join(stateDir, "openclaw.json"),
     JSON.stringify({
-      logging: { audit: { enabled: false } },
+      logging: { file: path.join(stateDir, "gateway.log"), audit: { enabled: false } },
       acp: { enabled: true, backend: backendId, allowedAgents: ["fixture"] },
       agents: {
         ownership: "explicit",
@@ -112,15 +120,9 @@ beforeEach(async () => {
   managerTesting.resetAcpSessionManagerForTests();
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
-  registryTesting.setDepsForTest({
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    callGateway: async (request) => {
-      if (request.method !== "agent.wait") {
-        throw new Error(`Unexpected registry RPC ${request.method}`);
-      }
-      return await new Promise<never>(() => {});
-    },
-  });
+  vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
+    () => getActivePluginRegistry() ?? createTestRegistry([]),
+  );
 });
 
 afterEach(async () => {
@@ -133,8 +135,8 @@ afterEach(async () => {
     resetTaskRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
-    registryTesting.setDepsForTest();
-    setSubagentSpawnDepsForTest();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    spawnTesting.setDepsForTest();
     vi.restoreAllMocks();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -229,12 +231,12 @@ describe("pending ACP spawn authority", () => {
         const run = vi.spyOn(SessionActorQueue.prototype, "run");
         run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
           run.mockRestore();
-          return this.run(key, async () => {
+          return this.run(key, async (isCurrent) => {
             if (!childKey) {
               throw new Error("ACP actor started before its child entry existed");
             }
             await pause(childKey);
-            return await op();
+            return await op(isCurrent);
           });
         });
       } else if (stage === "initialized" || stage === "metadata") {
@@ -319,7 +321,8 @@ describe("pending ACP spawn authority", () => {
       };
       registerAcpRuntimeBackend({ id: backendId, runtime });
       const dispatch = vi.fn();
-      setSubagentSpawnDepsForTest({
+      let acceptedTaskId: string | undefined;
+      spawnTesting.setDepsForTest({
         dispatchGatewayMethodInProcess: async <T>(
           method: string,
           params: Record<string, unknown>,
@@ -328,12 +331,34 @@ describe("pending ACP spawn authority", () => {
             throw new Error(`Unexpected spawn RPC ${method}`);
           }
           dispatch(params);
+          if (typeof params.sessionKey !== "string" || typeof params.idempotencyKey !== "string") {
+            throw new Error("Accepted ACP work requires session and run identities");
+          }
+          const task = createBackgroundTaskRecord(
+            {
+              agentId: "fixture",
+              requesterAgentId: "main",
+              requesterSessionKey: parentSessionKey,
+              childSessionKey: params.sessionKey,
+              runId: params.idempotencyKey,
+              task: "bounded child",
+            },
+            Date.now(),
+            `accepted:${params.idempotencyKey}`,
+          );
+          if (!task) {
+            throw new Error("The accepting Gateway must own its ACP task");
+          }
+          acceptedTaskId = task.taskId;
           return { runId: params.idempotencyKey, status: "accepted" } as T;
         },
       });
-      const socket = vi
-        .spyOn(gatewayCall, "callGateway")
-        .mockRejectedValue(new Error("Raw WebSocket transport is unavailable"));
+      const socket = vi.spyOn(gatewayCall, "callGateway").mockImplementation(async (request) => {
+        if (request.method === "agent.wait") {
+          return await new Promise<never>(() => {});
+        }
+        throw new Error("Raw WebSocket transport is unavailable");
+      });
       const source = createSessionsSpawnTool({
         config: cfg,
         agentSessionKey: parentSessionKey,
@@ -448,6 +473,12 @@ describe("pending ACP spawn authority", () => {
           expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
           expect(dispatch).toHaveBeenCalledOnce();
           expect(subagentRuns.size).toBe(1);
+          expect(
+            listTasksForRelatedSessionKey(childSessionKey).map((task) => ({
+              taskId: task.taskId,
+              runtime: task.runtime,
+            })),
+          ).toEqual([{ taskId: acceptedTaskId, runtime: "acp" }]);
           expect(closeRuntime).not.toHaveBeenCalled();
         } else {
           expect
@@ -476,6 +507,9 @@ describe("pending ACP spawn authority", () => {
         admission.close();
         parent.cleanup();
         await work.drain();
+        const projection = getSessionRowProjection(context);
+        projection?.dispose();
+        await projection?.ensureMaterialized();
         if (stage === "thread") {
           unregisterSessionBindingAdapter({
             channel: "discord",

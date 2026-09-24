@@ -1,5 +1,7 @@
-// Control UI module owns transient operator question state.
-import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import {
+  asSafeIntegerInRange,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -12,6 +14,7 @@ import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
+  invalidateQuestionList,
   publishQuestionClientResolution,
   registerQuestionClientOwner,
   requestQuestionGateway,
@@ -26,7 +29,7 @@ import {
   prepareQuestionSecretStoreSubmission,
 } from "./question-prompt-secret-store.ts";
 
-type QuestionDraft = {
+export type QuestionDraft = {
   selected: Set<string>;
   freeText: string;
 };
@@ -59,7 +62,7 @@ type QuestionPromptState = QuestionClientResolutionOwner & {
   prompts: Map<string, QuestionPrompt>;
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
-  tickTimer: ReturnType<typeof globalThis.setTimeout> | null;
+  expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   onChange: () => void;
 };
@@ -125,10 +128,10 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
     return null;
   }
   const questions = payload.questions.map(parseQuestion);
-  if (questions.some((question) => question === null)) {
+  if (!questions.every((question) => question !== null)) {
     return null;
   }
-  const questionIds = new Set(questions.map((question) => question?.questionId));
+  const questionIds = new Set(questions.map((question) => question.questionId));
   if (questionIds.size !== questions.length) {
     return null;
   }
@@ -145,7 +148,7 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   }
   const base = {
     id,
-    questions: questions as Question[],
+    questions,
     ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
@@ -196,7 +199,7 @@ export function createQuestionPromptState(onChange: () => void): QuestionPromptS
     prompts: new Map(),
     unmatchedResolutions: new Map(),
     revision: 0,
-    tickTimer: null,
+    expiryTimer: null,
     refreshRetryTimer: null,
     onChange,
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
@@ -204,33 +207,43 @@ export function createQuestionPromptState(onChange: () => void): QuestionPromptS
   return state;
 }
 
-function scheduleTick(state: QuestionPromptState): void {
-  if (
-    state.tickTimer ||
-    ![...state.prompts.values()].some((prompt) => prompt.status === "pending")
-  ) {
+function scheduleExpiry(state: QuestionPromptState): void {
+  if (state.expiryTimer) {
+    globalThis.clearTimeout(state.expiryTimer);
+    state.expiryTimer = null;
+  }
+  let nextExpiry = Infinity;
+  for (const prompt of state.prompts.values()) {
+    if (prompt.status === "pending") {
+      nextExpiry = Math.min(nextExpiry, prompt.expiresAtMs);
+    }
+  }
+  if (nextExpiry === Infinity) {
     return;
   }
-  state.tickTimer = globalThis.setTimeout(() => {
-    state.tickTimer = null;
-    const now = Date.now();
-    let changed = false;
-    for (const prompt of state.prompts.values()) {
-      if (prompt.status === "pending" && prompt.expiresAtMs <= now) {
-        prompt.status = "expired";
-        clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
-        prompt.locallyExpired = true;
-        prompt.submitting = false;
-        prompt.error = null;
-        prompt.revision = ++state.revision;
-        changed = true;
+  state.expiryTimer = globalThis.setTimeout(
+    () => {
+      state.expiryTimer = null;
+      const now = Date.now();
+      let changed = false;
+      for (const prompt of state.prompts.values()) {
+        if (prompt.status === "pending" && prompt.expiresAtMs <= now) {
+          prompt.status = "expired";
+          clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
+          prompt.locallyExpired = true;
+          prompt.submitting = false;
+          prompt.error = null;
+          prompt.revision = ++state.revision;
+          changed = true;
+        }
       }
-    }
-    state.onChange();
-    if (changed || [...state.prompts.values()].some((prompt) => prompt.status === "pending")) {
-      scheduleTick(state);
-    }
-  }, 1_000);
+      scheduleExpiry(state);
+      if (changed) {
+        state.onChange();
+      }
+    },
+    resolveTimerTimeoutMs(nextExpiry - Date.now(), 0, 0),
+  );
 }
 
 function promptFromRecord(
@@ -302,9 +315,13 @@ function recordQuestionResolution(
   state: QuestionPromptState,
   resolved: QuestionResolvedEvent,
 ): void {
+  if (state.client) {
+    invalidateQuestionList(state.client);
+  }
   const prompt = state.prompts.get(resolved.id);
   if (prompt) {
     applyQuestionResolution(state, prompt, resolved);
+    scheduleExpiry(state);
   } else {
     // Broadcasts and same-client results own one fact. Gateway list/resolve are
     // synchronous; WebSocket FIFO delivers it before any later empty list response,
@@ -324,6 +341,9 @@ export function handleQuestionPromptEvent(
     if (!record) {
       return false;
     }
+    if (state.client) {
+      invalidateQuestionList(state.client);
+    }
     const previous = state.prompts.get(record.id);
     if (previous && previous.status !== "pending") {
       return true;
@@ -335,7 +355,7 @@ export function handleQuestionPromptEvent(
       applyQuestionResolution(state, prompt, unmatched);
     }
     state.prompts.set(record.id, prompt);
-    scheduleTick(state);
+    scheduleExpiry(state);
     state.onChange();
     return true;
   }
@@ -355,7 +375,7 @@ function parseQuestionListResult(value: unknown): QuestionRecord[] | null {
     return null;
   }
   const questions = value.questions.map(parseQuestionRequestedEvent);
-  return questions.some((question) => question === null) ? null : (questions as QuestionRecord[]);
+  return questions.every((question) => question !== null) ? questions : null;
 }
 
 function parseQuestionGetResult(value: unknown): QuestionRecord | null {
@@ -392,7 +412,11 @@ async function refreshPendingQuestions(
   const startedAtRevision = state.revision;
   const listResult = await requestQuestionGateway(client, "question.list", {});
   const records = parseQuestionListResult(listResult);
-  if (!records || !isCurrentClient()) {
+  if (!records) {
+    invalidateQuestionList(client);
+    return false;
+  }
+  if (!isCurrentClient()) {
     return false;
   }
   const refreshedIds = new Set(records.map((record) => record.id));
@@ -408,7 +432,7 @@ async function refreshPendingQuestions(
       state.prompts.set(record.id, prompt);
     }
   }
-  scheduleTick(state);
+  scheduleExpiry(state);
   state.onChange();
   const missing: Array<{
     id: string;
@@ -460,6 +484,7 @@ async function refreshPendingQuestions(
         }
         if (current) {
           markRecoveryUnavailable(state, current);
+          scheduleExpiry(state);
         }
         // An aged-out tombstone cannot hydrate an unmatched resolution;
         // retaining it would retry an already-final reconnect forever.
@@ -478,7 +503,7 @@ async function refreshPendingQuestions(
         applyQuestionResolution(state, prompt, unmatched);
       }
       state.prompts.set(candidate.id, prompt);
-      scheduleTick(state);
+      scheduleExpiry(state);
       // Publish each settled recovery immediately; a hung sibling must never
       // withhold an already-authoritative answer until its own deadline.
       state.onChange();
@@ -546,9 +571,9 @@ export function setQuestionPromptClient(
 
   if (ownerChanged) {
     const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
-    if (state.tickTimer) {
-      globalThis.clearTimeout(state.tickTimer);
-      state.tickTimer = null;
+    if (state.expiryTimer) {
+      globalThis.clearTimeout(state.expiryTimer);
+      state.expiryTimer = null;
     }
     state.prompts.clear();
     state.unmatchedResolutions.clear();
@@ -560,9 +585,9 @@ export function setQuestionPromptClient(
   }
 
   if (client) {
-    // Disposal stops the projection clock; same-owner remount must restart it
+    // Disposal cancels expiry; same-owner remount must reschedule it
     // before async hydration so an expired question cannot strand the surface.
-    scheduleTick(state);
+    scheduleExpiry(state);
   }
   let changed = false;
   for (const prompt of state.prompts.values()) {
@@ -584,9 +609,9 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
   if (state.client) {
     unregisterQuestionClientOwner(state.client, state);
   }
-  if (state.tickTimer) {
-    globalThis.clearTimeout(state.tickTimer);
-    state.tickTimer = null;
+  if (state.expiryTimer) {
+    globalThis.clearTimeout(state.expiryTimer);
+    state.expiryTimer = null;
   }
   if (state.refreshRetryTimer) {
     globalThis.clearTimeout(state.refreshRetryTimer);

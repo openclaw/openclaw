@@ -12,7 +12,10 @@ import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
 } from "./auth-profiles.js";
-import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -305,12 +308,9 @@ const writeAuthStore = async (
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
   saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        "github-copilot:github": { type: "token", provider: "github-copilot", token },
-      },
-    },
+    createAuthProfileStoreFixture({
+      "github-copilot:github": { type: "token", provider: "github-copilot", token },
+    }),
     agentDir,
   );
 };

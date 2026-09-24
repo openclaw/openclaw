@@ -43,7 +43,6 @@ import memoryPlugin, {
   sanitizeForMemoryCapture,
   shouldCapture,
 } from "./index.js";
-import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const moduleMocks = vi.hoisted(() => ({
@@ -138,14 +137,6 @@ type MemoryPluginTestConfig = {
   storageOptions?: Record<string, string>;
 };
 
-type LanceDbModule = typeof import("@lancedb/lancedb");
-
-function createMockModule(): LanceDbModule {
-  return {
-    connect: vi.fn(),
-  } as unknown as LanceDbModule;
-}
-
 function invokeEmbeddingCreate(mock: ReturnType<typeof vi.fn>, body: unknown) {
   return (mock as unknown as (body: unknown) => unknown)(body);
 }
@@ -155,24 +146,6 @@ function resetMemoryModuleMocks(): void {
   moduleMocks.createOpenAiClient.mockReset();
   moduleMocks.getMemoryEmbeddingProvider.mockReset();
   moduleMocks.loadLanceDbModule.mockReset();
-}
-
-function createRuntimeLoader(
-  overrides: {
-    importBundled?: () => Promise<LanceDbModule>;
-    platform?: NodeJS.Platform;
-    arch?: NodeJS.Architecture;
-  } = {},
-) {
-  return createLanceDbRuntimeLoader({
-    platform: overrides.platform,
-    arch: overrides.arch,
-    importBundled:
-      overrides.importBundled ??
-      (async () => {
-        throw new Error("Cannot find package '@lancedb/lancedb'");
-      }),
-  });
 }
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -4800,55 +4773,6 @@ describe("memory plugin e2e", () => {
     expect(
       escapeMemoryForPrompt("Photo [media attached: media://inbound/abc123.jpg] was attached"),
     ).toBe("Photo [media attached: media://inbound/abc123.jpg] was attached");
-  });
-});
-
-describe("lancedb runtime loader", () => {
-  test("uses the bundled module when it is already available", async () => {
-    const bundledModule = createMockModule();
-    const importBundled = vi.fn(async () => bundledModule);
-    const loader = createRuntimeLoader({
-      importBundled,
-    });
-
-    await expect(loader.load()).resolves.toBe(bundledModule);
-
-    expect(importBundled).toHaveBeenCalledTimes(1);
-  });
-
-  test("fails clearly on Intel macOS instead of attempting an unsupported native install", async () => {
-    const loader = createRuntimeLoader({
-      platform: "darwin",
-      arch: "x64",
-    });
-
-    await expect(loader.load()).rejects.toThrow(
-      "memory-lancedb: LanceDB runtime is unavailable on darwin-x64.",
-    );
-  });
-
-  test("fails fast when package dependencies are missing", async () => {
-    const loader = createRuntimeLoader();
-
-    await expect(loader.load()).rejects.toThrow(
-      "memory-lancedb: bundled @lancedb/lancedb dependency is unavailable.",
-    );
-  });
-
-  test("clears the cached failure so later calls can retry the package import", async () => {
-    const runtimeModule = createMockModule();
-    const importBundled = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce(runtimeModule);
-    const loader = createRuntimeLoader({
-      importBundled,
-    });
-
-    await expect(loader.load()).rejects.toThrow("network down");
-    await expect(loader.load()).resolves.toBe(runtimeModule);
-
-    expect(importBundled).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -770,7 +770,7 @@ extension OnboardingView {
                     systemImage: "link",
                     buttonTitle: "Open Dashboard → Settings → Channels")
                 {
-                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.channelsSettingsPath) }
+                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
                 }
                 self.featureRow(
                     title: "Try Voice Wake",
@@ -788,7 +788,7 @@ extension OnboardingView {
                     systemImage: "sparkles",
                     buttonTitle: "Open Dashboard → Skills")
                 {
-                    Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.skillsPagePath) }
+                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
                 }
                 if AppProfile.current.isActive {
                     LabeledContent("Launch at login", value: "Unavailable under profile")

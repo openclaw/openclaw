@@ -89,11 +89,9 @@ describe("plugin-sdk qa-runtime", () => {
 
   it("stays cold until the runtime seam is used", async () => {
     vi.resetModules();
-    const module = await import("./qa-runtime.js");
+    await import("./qa-runtime.js");
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(module.loadQaRuntimeModule).toBeTypeOf("function");
-    expect(module.isQaRuntimeAvailable).toBeTypeOf("function");
   });
 
   it("loads the qa-lab runtime public surface through the generic seam", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -6,10 +7,213 @@ import YAML, { YAMLParseError } from "yaml";
 import {
   readQaMaturityTaxonomySource,
   qaMaturityTaxonomyIdentity,
+  qaMaturityScoreObjectForScore,
+  qaProofRequirementsSchema,
+  type QaMaturityScores,
   type QaMaturityTaxonomy,
   readQaScorecardProfileOptions,
   readValidatedQaMaturityScoreSources,
 } from "./scorecard-taxonomy.js";
+
+function decision<T extends number | boolean | string>(value: T) {
+  return {
+    value,
+    rationale: "Synthetic review rationale",
+    reviewer: "Fixture reviewer",
+    evidence_refs: ["qa/fixture-evidence"],
+    revalidate_when: "The reviewed behavior changes",
+  };
+}
+
+async function withDecisionFixture(
+  run: (fixture: {
+    scores: QaMaturityScores;
+    taxonomy: QaMaturityTaxonomy;
+    read: () => ReturnType<typeof readValidatedQaMaturityScoreSources>;
+  }) => void,
+) {
+  await withTempDir("qa-maturity-decisions-", async (dir) => {
+    const taxonomyPath = path.join(dir, "taxonomy.yaml");
+    const scoresPath = path.join(dir, "scores.yaml");
+    fs.writeFileSync(
+      taxonomyPath,
+      YAML.stringify({
+        version: 1,
+        title: "Synthetic decision fixture",
+        levels: [{ id: "experimental" }, { id: "stable" }],
+        surfaces: [
+          {
+            id: "tools",
+            name: "Tools",
+            family: "core",
+            level: "experimental",
+            categories: [{ id: "review", name: "Review", category_note: "Fixture" }],
+          },
+        ],
+      }),
+    );
+    const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+    const bundle = () => ({
+      quality: qaMaturityScoreObjectForScore(70),
+      completeness: qaMaturityScoreObjectForScore(80),
+    });
+    const scores: QaMaturityScores = {
+      version: 1,
+      process_version: 1,
+      counts: { active_surfaces: 1, category_scores: 1 },
+      rollups: { surface_average: bundle(), category_average: bundle() },
+      surfaces: [
+        {
+          id: "tools",
+          name: "Tools",
+          level: "experimental",
+          scores: bundle(),
+          categories: [
+            { name: "Review", ...bundle(), lts: { supported: false, human_override: false } },
+          ],
+          lts: { supported_categories: 0, total_categories: 1, status: "none" },
+        },
+      ],
+    };
+    run({
+      scores,
+      taxonomy,
+      read: () => {
+        fs.writeFileSync(taxonomyPath, YAML.stringify(taxonomy));
+        fs.writeFileSync(scoresPath, YAML.stringify(scores));
+        return readValidatedQaMaturityScoreSources({ taxonomyPath, scoresPath });
+      },
+    });
+  });
+}
+
+describe("maturity decision context", () => {
+  it("preserves record-free input without synthesizing history", async () => {
+    await withDecisionFixture(({ scores, taxonomy, read }) => {
+      expect(read()).toEqual({ scores, taxonomy, warnings: [] });
+    });
+  });
+
+  it("retains every authored decision and non-gating mismatch without changing aggregates", async () => {
+    await withDecisionFixture(({ scores, taxonomy, read }) => {
+      const identity = qaMaturityTaxonomyIdentity(taxonomy);
+      const surface = scores.surfaces[0]!;
+      const category = surface.categories[0]!;
+      surface.scores.quality.decision = decision(70);
+      surface.scores.completeness.decision = decision(79);
+      category.quality.decision = decision(69);
+      category.completeness.decision = decision(80);
+      category.lts.decision = decision(true);
+      taxonomy.surfaces[0]!.level_decision = decision("stable");
+      const result = read();
+      expect(result).toEqual({ scores, taxonomy, warnings: [] });
+      expect(qaMaturityTaxonomyIdentity(result.taxonomy)).toEqual(identity);
+      expect(result.scores.rollups.surface_average).toEqual({
+        quality: { score: 70, label: "Beta" },
+        completeness: { score: 80, label: "Stable" },
+      });
+      expect(result.scores.surfaces[0]!.lts.status).toBe("none");
+    });
+  });
+
+  it.each([
+    { value: true },
+    { value: "70" },
+    { value: 70.5 },
+    { value: -1 },
+    { value: 101 },
+    { rationale: "" },
+    { reviewer: "" },
+    { evidence_refs: [] },
+    { evidence_refs: [""] },
+    { revalidate_when: "" },
+    { confidence: 1 },
+  ])("rejects malformed score decision fields: %j", async (invalid) => {
+    await withDecisionFixture(({ scores, read }) => {
+      Object.assign(scores.surfaces[0]!.scores.quality, {
+        decision: { ...decision(70), ...invalid },
+      });
+      expect(read).toThrow();
+    });
+  });
+
+  it.each(["value", "rationale", "reviewer", "evidence_refs", "revalidate_when"])(
+    "requires %s when a decision is recorded",
+    async (field) => {
+      await withDecisionFixture(({ scores, read }) => {
+        const record = Object.fromEntries(
+          Object.entries(decision(70)).filter(([key]) => key !== field),
+        );
+        Object.assign(scores.surfaces[0]!.categories[0]!.quality, { decision: record });
+        expect(read).toThrow();
+      });
+    },
+  );
+
+  it.each([
+    [
+      "surface Coverage",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!.scores, {
+          coverage: { ...qaMaturityScoreObjectForScore(70), decision: decision(70) },
+        }),
+    ],
+    [
+      "category Coverage",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!.categories[0]!, {
+          coverage: { ...qaMaturityScoreObjectForScore(70), decision: decision(70) },
+        }),
+    ],
+    [
+      "surface rollup",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.rollups.surface_average.quality, { decision: decision(70) }),
+    ],
+    [
+      "category rollup",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.rollups.category_average.completeness, { decision: decision(80) }),
+    ],
+    [
+      "surface LTS",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!.lts, { decision: decision(false) }),
+    ],
+    [
+      "copied level",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!, {
+          level: { id: "experimental", decision: decision("experimental") },
+        }),
+    ],
+    [
+      "LTS numeric value",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!.categories[0]!.lts, { decision: decision(0) }),
+    ],
+    [
+      "score label mismatch",
+      (scores: QaMaturityScores) =>
+        Object.assign(scores.surfaces[0]!.scores.quality, {
+          label: "Stable",
+          decision: decision(70),
+        }),
+    ],
+  ] as const)("keeps %s outside the decision contract", async (_name, mutate) => {
+    await withDecisionFixture(({ scores, read }) => {
+      mutate(scores);
+      expect(read).toThrow();
+    });
+  });
+
+  it.each([42, true, "", "undeclared"])("rejects invalid level decision %j", async (value) => {
+    await withDecisionFixture(({ taxonomy, read }) => {
+      Object.assign(taxonomy.surfaces[0]!, { level_decision: decision(value) });
+      expect(read).toThrow();
+    });
+  });
+});
 
 describe("QA maturity YAML readers", () => {
   it("returns trimmed, defaulted taxonomy data without unknown keys", async () => {
@@ -124,6 +328,80 @@ describe("QA maturity YAML readers", () => {
 });
 
 describe("semantic taxonomy identity", () => {
+  it("orders proof alternatives by code units across case and Unicode", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const profile = taxonomy.profiles[0]!;
+    const requirements = qaProofRequirementsSchema.parse([
+      {
+        id: "synthetic-proof",
+        coverageId: "channels.dm",
+        obligation: "advisory",
+        owner: "synthetic-owner",
+        acceptedRef: "qa/fixtures/acceptance",
+        alternatives: ["Ω", "a", "😀", "ä", "Z", "A"].map((protocol) => ({ protocol })),
+        retryAcceptance: "selected-attempt",
+      },
+    ]);
+    profile.proofRequirements = requirements;
+    taxonomy.profiles = [profile];
+    taxonomy.surfaces = [];
+    const expectedProjection = {
+      profiles: [
+        {
+          id: profile.id,
+          description: profile.description,
+          includeAllCategories: profile.includeAllCategories,
+          categoryIds: [...new Set(profile.categoryIds)].toSorted(),
+          coverageIds: [...new Set(profile.coverageIds)].toSorted(),
+          channelDriver: profile.channelDriver,
+          evidenceMode: profile.evidenceMode ?? "full",
+          proofRequirements: [
+            {
+              ...requirements[0],
+              alternatives: ["A", "Z", "a", "ä", "Ω", "😀"].map((protocol) => ({ protocol })),
+            },
+          ],
+        },
+      ],
+      surfaces: [],
+    };
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual({
+      version: 1,
+      sha256: createHash("sha256").update(JSON.stringify(expectedProjection)).digest("hex"),
+    });
+  });
+
+  it("includes explicit proof meaning without assigning requirements to other profiles", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const profile = taxonomy.profiles[0]!;
+    profile.proofRequirements = qaProofRequirementsSchema.parse([
+      {
+        id: "synthetic-proof",
+        coverageId: "channels.dm",
+        obligation: "advisory",
+        owner: "synthetic-owner",
+        acceptedRef: "qa/fixtures/acceptance",
+        alternatives: [
+          { protocol: "local-http", proofClass: "fixture-only" },
+          { proofClass: "native-host" },
+        ],
+        retryAcceptance: "selected-attempt",
+      },
+    ]);
+    const captured = qaMaturityTaxonomyIdentity(taxonomy);
+    expect(captured).not.toEqual(before);
+    profile.proofRequirements[0]!.alternatives.reverse();
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(captured);
+    profile.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(captured);
+    delete profile.proofRequirements;
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(before);
+  });
   const source = path.resolve(import.meta.dirname, "../../../taxonomy.yaml");
   const read = () => readQaMaturityTaxonomySource(source);
   const category = (taxonomy: QaMaturityTaxonomy) =>

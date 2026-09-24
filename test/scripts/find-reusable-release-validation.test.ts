@@ -1363,7 +1363,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
       changed_path_count: "1",
       changed_paths: '["CHANGELOG.md"]',
       evidence_policy: "changelog-only-release-v1",
@@ -1425,7 +1425,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(parseOutput(result.stdout).reuse).toBe(delta === "selected" ? "true" : "false");
+    expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
+      delta === "selected" ? "true" : "false",
+    );
     if (delta === "selected") {
       expect(parseOutput(result.stdout)).toMatchObject({
         changed_paths: JSON.stringify(changedPaths),

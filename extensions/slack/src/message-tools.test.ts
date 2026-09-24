@@ -25,8 +25,9 @@ function requireSchemaProperty(
 }
 
 describe("Slack message tools", () => {
-  it("forwards trusted current-conversation and requester-account context", async () => {
+  it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
     const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const assertDirectAdapterHandoff = vi.fn();
     const actions = createSlackActions("slack", { invoke });
     if (!actions.handleAction) {
       throw new Error("Slack message actions must provide an executor.");
@@ -43,6 +44,7 @@ describe("Slack message tools", () => {
       params: { channelId: "C_CURRENT" },
       requesterAccountId: "work",
       requesterSenderId: "U123",
+      assertDirectAdapterHandoff,
       toolContext,
     });
 
@@ -57,6 +59,7 @@ describe("Slack message tools", () => {
         currentChannelId: "C_CURRENT",
         requesterAccountId: "work",
         requesterSenderId: "U123",
+        assertDirectAdapterHandoff,
       }),
     );
   });
@@ -175,6 +178,7 @@ describe("Slack message tools", () => {
         conversationReadOrigin: "direct-operator",
         requesterAccountId: "default",
         requesterSenderId: "U999",
+        assertDirectAdapterHandoff: vi.fn(),
       } as never,
     });
 
@@ -187,6 +191,7 @@ describe("Slack message tools", () => {
         conversationReadOrigin: undefined,
         requesterAccountId: undefined,
         requesterSenderId: undefined,
+        assertDirectAdapterHandoff: undefined,
       }),
     );
   });

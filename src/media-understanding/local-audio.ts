@@ -81,7 +81,10 @@ const libraryCache = new Map<string, Promise<string | null>>();
 const observedBackendCache = new Map<string, "cpu" | "cuda" | "metal">();
 
 function commandId(command: string): string {
-  return path.basename(command.trim()).toLowerCase();
+  return path
+    .basename(command.trim())
+    .replace(/\.(?:exe|com|cmd|bat)$/i, "")
+    .toLowerCase();
 }
 
 export function resolveRequestedLocalAudioBackend(params: {
@@ -139,13 +142,6 @@ export function recordLocalAudioBackendObservation(params: {
     observedBackendCache.set(observationKey(params), backend);
   }
   return backend;
-}
-
-function getObservedBackend(params: {
-  command: string;
-  args: readonly string[];
-}): "cpu" | "cuda" | "metal" | undefined {
-  return observedBackendCache.get(observationKey(params));
 }
 
 async function isExecutable(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
@@ -318,10 +314,12 @@ export async function inspectLocalAudioSelection(
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const whisperModel =
-    envModel && (await optionalPathExists(envModel))
-      ? envModel
-      : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries);
-  const whisperReady = Boolean(whisperCommand) && Boolean(whisperModel);
+    whisperCommand !== null
+      ? envModel && (await optionalPathExists(envModel))
+        ? envModel
+        : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries)
+      : null;
+  const whisperReady = whisperCommand !== null && Boolean(whisperModel);
   const whisperBackend = whisperCommand
     ? await inspectWhisperBackend({
         command: whisperCommand,
@@ -341,10 +339,10 @@ export async function inspectLocalAudioSelection(
       )
     : [];
   const sherpaReady =
-    Boolean(sherpaCommand) &&
+    sherpaCommand !== null &&
     sherpaFiles.length === 4 &&
     (await Promise.all(sherpaFiles.map(optionalPathExists))).every(Boolean);
-  const parakeetReady = Boolean(parakeetCommand) && platform === "darwin" && arch === "arm64";
+  const parakeetReady = parakeetCommand !== null && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
     "{{AttachmentPath}}",
     "--output-format",
@@ -383,97 +381,62 @@ export async function inspectLocalAudioSelection(
     "{{AttachmentPath}}",
   ];
 
+  // Execute discovered files; shell-free spawn does not expand home shorthand in PATH.
   const candidates: LocalAudioCandidate[] = [
     {
-      id: "parakeet-mlx",
-      command: "parakeet-mlx",
+      id: "parakeet-mlx" as const,
       resolvedCommand: parakeetCommand ?? undefined,
-      available: Boolean(parakeetCommand),
       ready: parakeetReady,
-      capableBackend: parakeetReady ? "mlx" : undefined,
+      capableBackend: parakeetReady ? ("mlx" as const) : undefined,
       evidence: parakeetReady
         ? "parakeet-mlx is an MLX runtime on Apple Silicon; device use is unobserved"
         : "parakeet-mlx acceleration is only supported on Apple Silicon",
-      selected: false,
-      reason: parakeetCommand
-        ? parakeetReady
-          ? undefined
-          : "unsupported platform for MLX acceleration"
-        : "command not found",
-      entry: parakeetReady
-        ? {
-            type: "cli",
-            command: "parakeet-mlx",
-            args: parakeetArgs,
-          }
-        : undefined,
+      reason: parakeetReady ? undefined : "unsupported platform for MLX acceleration",
+      args: parakeetArgs,
     },
     {
-      id: "whisper-cli",
-      command: "whisper-cli",
+      id: "whisper-cli" as const,
       resolvedCommand: whisperCommand ?? undefined,
-      available: Boolean(whisperCommand),
       ready: whisperReady,
       ...whisperBackend,
       requestedBackend: resolveRequestedLocalAudioBackend({
         command: "whisper-cli",
         args: whisperArgs,
       }),
-      observedBackend: getObservedBackend({ command: "whisper-cli", args: whisperArgs }),
-      selected: false,
-      reason: whisperCommand
-        ? whisperReady
-          ? undefined
-          : "model file not found"
-        : "command not found",
-      entry: whisperReady
-        ? {
-            type: "cli",
-            command: "whisper-cli",
-            args: whisperArgs,
-          }
+      observedBackend: whisperCommand
+        ? observedBackendCache.get(observationKey({ command: whisperCommand, args: whisperArgs }))
         : undefined,
+      reason: whisperReady ? undefined : "model file not found",
+      args: whisperArgs,
     },
     {
-      id: "sherpa-onnx-offline",
-      command: "sherpa-onnx-offline",
+      id: "sherpa-onnx-offline" as const,
       resolvedCommand: sherpaCommand ?? undefined,
-      available: Boolean(sherpaCommand),
       ready: sherpaReady,
       requestedBackend: "cpu",
       evidence: "OpenClaw auto args omit --provider, so sherpa-onnx uses its CPU default",
-      selected: false,
-      reason: sherpaCommand
-        ? sherpaReady
-          ? undefined
-          : "SHERPA_ONNX_MODEL_DIR is missing required model files"
-        : "command not found",
-      entry: sherpaReady
-        ? {
-            type: "cli",
-            command: "sherpa-onnx-offline",
-            args: sherpaArgs,
-          }
-        : undefined,
+      reason: sherpaReady ? undefined : "SHERPA_ONNX_MODEL_DIR is missing required model files",
+      args: sherpaArgs,
     },
     {
-      id: "whisper",
-      command: "whisper",
+      id: "whisper" as const,
       resolvedCommand: pythonCommand ?? undefined,
-      available: Boolean(pythonCommand),
       ready: Boolean(pythonCommand),
       evidence: "Python Whisper chooses its runtime device when the model loads",
-      selected: false,
-      reason: pythonCommand ? undefined : "command not found",
-      entry: pythonCommand
-        ? {
-            type: "cli",
-            command: "whisper",
-            args: pythonArgs,
-          }
-        : undefined,
+      reason: undefined,
+      args: pythonArgs,
     },
-  ];
+  ].map(({ args, reason, ...candidate }) =>
+    Object.assign(candidate, {
+      command: candidate.id,
+      available: Boolean(candidate.resolvedCommand),
+      selected: false,
+      reason: candidate.resolvedCommand ? reason : "command not found",
+      entry: candidate.ready
+        ? { type: "cli", command: candidate.resolvedCommand, args }
+        : undefined,
+    } satisfies Partial<LocalAudioCandidate>),
+  );
   candidates.sort((left, right) => rank(left) - rank(right));
   const selected = candidates.find((candidate) => candidate.ready && candidate.entry);
   if (selected) {

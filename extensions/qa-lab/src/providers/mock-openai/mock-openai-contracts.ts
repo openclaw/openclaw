@@ -7,7 +7,11 @@ import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
-export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockOpenAiRequestKind =
+  | "agent-initial"
+  | "compaction-summary"
+  | "tool-continuation"
+  | "activity-summary";
 export type MockCompactionSummaryFaultMode =
   | "none"
   | "empty-output-once"
@@ -26,6 +30,7 @@ export type QaMockProviderFailure = {
   type: string;
   code?: string;
   message: string;
+  retryAfterSeconds?: number;
   presentation?: "anthropic-thinking";
 };
 
@@ -198,6 +203,8 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   return "unknown";
 }
 
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
+
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
   raw: string;
@@ -208,6 +215,7 @@ export type MockOpenAiRequestSnapshot = {
   toolOutput: string;
   model: string;
   providerVariant: MockOpenAiProviderVariant;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
@@ -224,6 +232,20 @@ export type MockOpenAiRequestSnapshot = {
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
+
+/** Snapshot fields known before the mock decides an outcome or plans a tool. */
+export type MockOpenAiRequestSnapshotBase = Omit<
+  MockOpenAiRequestSnapshotInput,
+  | "outcome"
+  | "errorCode"
+  | "plannedToolCallId"
+  | "plannedToolItemId"
+  | "plannedToolName"
+  | "plannedWireToolName"
+  | "plannedToolArgs"
+  | "toolOutputCallId"
+  | "toolOutputStructuredError"
+>;
 
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
@@ -345,9 +367,13 @@ export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback w
 export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
 export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
-  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|private)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
   /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
+export const QA_SUBAGENT_PRIVATE_WORKER_RE =
+  /subagent private completion qa worker:\s*(first|second)/i;
+export const QA_SUBAGENT_PRIVATE_RESULT_RE = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u;
+export const QA_SUBAGENT_PRIVATE_SECOND_RESULT = "QA-PARENT-PRIVATE-CHILD2-DONE";
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE = /reply to the requester after spawning/i;
 export const QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE =
   /return no assistant output after the write/i;

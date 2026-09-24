@@ -10,7 +10,7 @@ import {
 import type { HealthSummary } from "../gateway/health/types.js";
 import { getHealthCache } from "../gateway/server/health-state.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
-import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-startup.js";
+import { getUpdateAvailable, type UpdateAvailable } from "../infra/update-status-state.js";
 import { formatSystemAgentStartupMessage, type SystemAgentOverview } from "./overview.js";
 
 const SYSTEM_AGENT_GREETING_SCOPE = "system-agent-greeting";
@@ -251,6 +251,8 @@ export function systemAgentGreetingFactsHash(
     },
     defaultAgentId: overview.defaultAgentId,
     defaultModel: overview.defaultModel ?? null,
+    setupModel: overview.setupModel ?? null,
+    utilityModel: overview.utilityModel ?? null,
     gateway: {
       reachable: overview.gateway.reachable,
       url: overview.gateway.url,
@@ -607,7 +609,12 @@ export function buildSystemAgentGreetingQuestion(
   } else if (!overview.defaultModel) {
     // A valid config without verified inference cannot hand off to an agent;
     // setup is the canonical path to establish a model.
-    addQuickAction(exceptional, { label: "Set up inference", reply: "setup" });
+    addQuickAction(
+      exceptional,
+      overview.setupModel
+        ? { label: "Choose agent model", reply: "model setup" }
+        : { label: "Set up inference", reply: "setup" },
+    );
   }
   if (!overview.gateway.reachable) {
     addQuickAction(exceptional, { label: "Run gateway status", reply: "gateway status" });

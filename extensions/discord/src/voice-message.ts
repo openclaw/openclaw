@@ -272,15 +272,15 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
 }
 
 /**
- * Get voice message metadata (duration and waveform)
+ * Wait for waveform cleanup before callers can release the audio input.
  */
 export async function getVoiceMessageMetadata(filePath: string): Promise<VoiceMessageMetadata> {
-  const [durationSecs, waveform] = await Promise.all([
-    getAudioDuration(filePath),
-    generateWaveform(filePath),
-  ]);
-
-  return { durationSecs, waveform };
+  const waveform = generateWaveform(filePath);
+  try {
+    return { durationSecs: await getAudioDuration(filePath), waveform: await waveform };
+  } finally {
+    await waveform;
+  }
 }
 
 type UploadUrlResponse = {

@@ -98,7 +98,10 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  * drain lane, so a hold that only its own pane could see would let the other one
  * deliver the text an operator is visibly rewriting.
  */
-export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
+export function isQueuedMessageBeingEdited(
+  host: ChatQueueScopedSessionHost & Pick<QueuedMessageEditHost, "chatQueuedEdit">,
+  id: string,
+): boolean {
   // Credentials fence edit actions, but a pane still on the captured conversation
   // holds its source against a peer drain until the correction is released.
   const gatewayOwner = storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner;

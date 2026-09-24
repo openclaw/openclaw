@@ -910,14 +910,17 @@ suite.define(() => {
       });
       await workboardCard.waitFor();
       await workboardCard.click();
-      const cardDashboard = page.locator("openclaw-plugin-session-dashboard");
-      await cardDashboard.waitFor();
-      await expect
-        .poll(() =>
-          cardDashboard.locator(".plugin-session-dashboard__toggle").getAttribute("aria-expanded"),
-        )
-        .toBe("true");
-      await cardDashboard.locator("openclaw-board-view").waitFor();
+      await gateway.setMethodResponse("chat.history", {
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "Dashboard stitch progress" }] },
+        ],
+      });
+      await page.getByRole("tab", { name: "Session", exact: true }).click();
+      const cardSummary = page.locator("openclaw-plugin-session-summary");
+      await cardSummary.getByText("Dashboard stitch progress", { exact: true }).waitFor();
+      expect((await gateway.getRequests("chat.history")).at(-1)?.params).toMatchObject({
+        sessionKey,
+      });
       if (recordProof) {
         await page.screenshot({
           path: path.join(
@@ -928,14 +931,16 @@ suite.define(() => {
         });
       }
 
-      await gateway.setMethodResponse("board.get", {
-        sessionKey,
-        revision: 3,
-        tabs: [],
-        widgets: [],
+      await gateway.setMethodResponse("chat.history", {
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "Dashboard stitch complete" }] },
+        ],
       });
-      await gateway.emitGatewayEvent("board.changed", { sessionKey });
-      await cardDashboard.getByText("This session has no dashboard widgets yet.").waitFor();
+      await gateway.emitGatewayEvent("session.message", { sessionKey });
+      await cardSummary.getByText("Dashboard stitch complete", { exact: true }).waitFor();
+      expect(
+        await cardSummary.getByText("Dashboard stitch progress", { exact: true }).count(),
+      ).toBe(0);
     } finally {
       const video = page.video();
       await context.close();

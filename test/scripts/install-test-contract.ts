@@ -27,6 +27,45 @@ type InstallerContract = {
   createTempDir: (prefix: string) => string;
 };
 
+export function defineInstallerShellIsolationContract({
+  runShell,
+  createTempDir,
+}: InstallerContract) {
+  it.each(["0", "1"])(
+    "isolates installer shell startup and logout files at SHLVL=%s",
+    (shellLevel) => {
+      const root = createTempDir("openclaw-install-shell-env-");
+      const home = join(root, "fixture home");
+      const calls = join(root, "startup-calls");
+      mkdirSync(home);
+      for (const file of [
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".profile",
+        ".bash_logout",
+        "bash_env",
+        "env",
+      ]) {
+        writeFileSync(
+          join(home, file),
+          `printf '%s\\n' '${file}' >> "$INSTALLER_STARTUP_CALLS"\n${file === ".bash_logout" ? "exit 71\n" : ""}`,
+        );
+      }
+      const result = runShell("printf 'home=%s\\n' \"$HOME\"\nexit 0", {
+        HOME: home,
+        SHLVL: shellLevel,
+        BASH_ENV: join(home, "bash_env"),
+        ENV: join(home, "env"),
+        INSTALLER_STARTUP_CALLS: calls,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(`home=${home}\n`);
+      expect(existsSync(calls)).toBe(false);
+    },
+  );
+}
+
 export function defineInstallerPnpmContract({
   scriptPath: SCRIPT_PATH,
   runShell,

@@ -599,6 +599,7 @@ metadata:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
+      Archive extraction does not require a system `tar` command.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -717,6 +718,7 @@ File-backed skills refresh mid-session when:
 - The Gateway restarts, including when `skills.load.watch` is `false`.
 - A new eligible remote node connects.
 - Native file-watch capacity is exhausted and the next agent turn starts.
+- A previously idle or evicted workspace resumes watching on its next agent turn.
 
 The refreshed list is picked up on the next agent turn in the same session.
 If the effective agent allowlist changes, OpenClaw refreshes the snapshot to
@@ -727,10 +729,20 @@ the skills watchers. With watching enabled, later agent turns refresh file-backe
 skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
+Watcher subscriptions are retained for the 128 most recently used combinations of
+agent, configured workspace, and execution workspace. Subscriptions idle for an
+hour are also retired when another workspace prepares its skills. Shared skill
+roots remain watched while a retained subscription needs them. The next watching
+turn reacquires retired roots and refreshes file-backed skills before using them;
+managed library revisions remain pinned. This bounds retained subscriptions, not
+the total number of operating-system file watches.
+
 <AccordionGroup>
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
     `SKILL.md` files change, including skill roots first created after startup.
+    Removing and recreating a skill folder or its parent keeps discovery on the
+    configured path, including on Windows.
     Configure under `skills.load`:
 
     ```json5
@@ -745,7 +757,20 @@ restoring watch capacity to enable native watching again.
     }
     ```
 
-    Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
+    Watcher events use a built-in 250 ms debounce. Unrelated file writes are
+    ignored by snapshot refresh. Supporting-file events still invalidate sandbox
+    copies without rescanning skills or notifying chat metadata consumers.
+    Directory changes, installed source-origin metadata changes, and watcher
+    reconciliation recheck the resolved skills; unchanged names, configuration
+    keys, sources, precedence winners, and `SKILL.md` content
+    keep the same snapshot version and do not notify chat metadata consumers.
+    Idle worktree watcher cleanup does not invalidate other workspaces.
+    Copies with identical `SKILL.md` content and declared metadata do not produce
+    precedence collision warnings. Different content warns once per ordered
+    winner/loser content pair during a Gateway process, across workspaces and
+    rebuilds. Editing either copy can produce a new warning; precedence stays the same.
+
+    Use `allowSymlinkTargets`
     for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/path/to/skills`.
@@ -760,6 +785,10 @@ restoring watch capacity to enable native watching again.
 
     Offline nodes do **not** make remote-only skills visible. If a node stops
     answering bin probes, OpenClaw clears its cached bin matches.
+
+    Connect-time bin probes wait briefly for the node's command handlers.
+    Gateway shutdown cancels this readiness wait and still joins probes that
+    have already started.
 
   </Accordion>
 </AccordionGroup>

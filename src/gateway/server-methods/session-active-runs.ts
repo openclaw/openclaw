@@ -34,6 +34,7 @@ type VisibleActiveSessionRunState = {
 function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
   includeTerminalPersistence = false,
+  selection?: { requestedKey: string; canonicalKey: string; sessionId?: string },
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
   if (!(context.chatAbortControllers instanceof Map)) {
@@ -51,6 +52,14 @@ function collectTrackedActiveSessionRuns(
       const sessionKey = active.sessionKey?.trim();
       const sessionId = active.sessionId?.trim();
       if (!sessionKey && !sessionId) {
+        continue;
+      }
+      if (
+        selection &&
+        sessionKey !== selection.requestedKey &&
+        sessionKey !== selection.canonicalKey &&
+        (selection.sessionId === undefined || sessionId !== selection.sessionId)
+      ) {
         continue;
       }
       runs.push({
@@ -200,7 +209,11 @@ export function resolveVisibleActiveSessionRunState(params: {
       ));
   const matchingTrackedRuns = (
     params.trackedActiveRuns ??
-    collectTrackedActiveSessionRuns(params.context, params.includeTerminalPersistence)
+    collectTrackedActiveSessionRuns(params.context, params.includeTerminalPersistence, {
+      requestedKey: params.requestedKey,
+      canonicalKey: params.canonicalKey,
+      sessionId,
+    })
   ).filter(matchesRequestedSession);
   const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
   const runIds = matchingTrackedRuns
@@ -283,6 +296,7 @@ export function resolveVisibleActiveSessionRunState(params: {
 /** Request-scoped index; candidate selection must not rescan all controllers per row. */
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+  projectedAgentRunIndex = buildProjectedAgentRunIndex(),
 ) {
   const byKey = new Map<string, TrackedActiveSessionRun[]>();
   const byId = new Map<string, TrackedActiveSessionRun[]>();
@@ -298,7 +312,6 @@ export function createVisibleActiveSessionRunProjector(
       }
     }
   }
-  const projectedAgentRunIndex = buildProjectedAgentRunIndex();
   return (
     params: Omit<
       Parameters<typeof resolveVisibleActiveSessionRunState>[0],

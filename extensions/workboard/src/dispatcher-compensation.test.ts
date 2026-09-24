@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
+
+const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
 describe("Workboard dispatcher compensation", () => {
   it.each([
@@ -34,8 +38,8 @@ describe("Workboard dispatcher compensation", () => {
   ])("compensates a materialized workspace after a concurrent $edit edit", async (testCase) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-dispatch-rollback-"));
     const dbPath = path.join(dir, "workboard.sqlite");
-    const dispatchStores = createWorkboardSqliteStores({ dbPath });
-    const hostStores = createWorkboardSqliteStores({ dbPath });
+    const dispatchStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
+    const hostStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     const store = new WorkboardStore(dispatchStores.cards, sqliteTestAuxStores(dispatchStores));
     const host = new WorkboardStore(hostStores.cards, sqliteTestAuxStores(hostStores));
     try {
@@ -80,8 +84,8 @@ describe("Workboard dispatcher compensation", () => {
       });
       expect(persisted?.metadata?.automation?.workspace).toEqual(testCase.expectedWorkspace);
     } finally {
-      hostStores.close();
-      dispatchStores.close();
+      await hostStores.close();
+      await dispatchStores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

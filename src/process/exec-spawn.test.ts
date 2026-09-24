@@ -4,6 +4,7 @@ import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 
 type ScopeCase = {
@@ -34,6 +35,117 @@ endings.push(
     identity: "reused-after-exit",
   },
 );
+
+describe("command process scope cancellation", () => {
+  it.each([false, true])(
+    "cancels a running command through its scope (nested: %s)",
+    async (nested) => {
+      const controller = new AbortController();
+      const caller = new AbortController();
+      let child: ChildProcess | undefined;
+      let childResult: Promise<unknown> | undefined;
+      const run = async () => {
+        const command = spawnCommand(
+          [process.execPath, "-e", "process.send('ready');setInterval(()=>{},1000)"],
+          {
+            cancelSignal: caller.signal,
+            ipc: true,
+            reject: false,
+            stdio: "ignore",
+            timeout: 3_000,
+          },
+        );
+        child = command.nodeChildProcess;
+        childResult = command;
+        await once(child, "message", { signal: AbortSignal.timeout(3_000) });
+        controller.abort();
+        expect(await command).toMatchObject({ isCanceled: true, timedOut: false });
+        expect(caller.signal.aborted).toBe(false);
+        expect(processIdentity.isPidAlive(child.pid!)).toBe(false);
+        expect(() => spawnCommand([process.execPath, "-e", ""])).toThrow(
+          "Command process scope is closed",
+        );
+      };
+      try {
+        await withCommandProcessScope(
+          () => (nested ? withCommandProcessScope(run) : run()),
+          controller.signal,
+        );
+      } finally {
+        killPidIfAlive(child?.pid);
+        await childResult;
+      }
+    },
+  );
+
+  it("preserves caller cancellation without stopping a sibling command", async () => {
+    const controller = new AbortController();
+    const caller = new AbortController();
+    await withCommandProcessScope(async () => {
+      const sibling = spawnCommand([process.execPath, "-e", "setInterval(()=>{},1000)"], {
+        reject: false,
+        stdio: "ignore",
+      });
+      const child = spawnCommand(
+        [process.execPath, "-e", "process.send('ready');setInterval(()=>{},1000)"],
+        { cancelSignal: caller.signal, ipc: true, reject: false, stdio: "ignore", timeout: 3_000 },
+      );
+      try {
+        await once(child.nodeChildProcess, "message", { signal: AbortSignal.timeout(3_000) });
+        caller.abort();
+        expect(await child).toMatchObject({ isCanceled: true, timedOut: false });
+        expect(controller.signal.aborted).toBe(false);
+        expect(processIdentity.isPidAlive(sibling.pid!)).toBe(true);
+      } finally {
+        killPidIfAlive(child.pid);
+        killPidIfAlive(sibling.pid);
+        await Promise.all([child, sibling]);
+      }
+    }, controller.signal);
+  });
+
+  it.each(["scope", "caller"] as const)(
+    "joins command-runner termination after nested %s cancellation",
+    async (source) => {
+      const controller = new AbortController();
+      const caller = new AbortController();
+      let childPid: number | undefined;
+      try {
+        await withCommandProcessScope(
+          () =>
+            withCommandProcessScope(async () => {
+              let output = "";
+              const result = await runCommandWithTimeout(
+                [
+                  process.execPath,
+                  "-e",
+                  "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000)",
+                ],
+                {
+                  signal: caller.signal,
+                  killProcessTree: true,
+                  timeoutMs: 3_000,
+                  onOutputChunk: (chunk) => {
+                    output += chunk.toString();
+                    if (output.includes("\n") && childPid === undefined) {
+                      childPid = Number(output.trim());
+                      (source === "scope" ? controller : caller).abort();
+                    }
+                  },
+                },
+              );
+              expect(result).toMatchObject({ termination: "signal", cleanup: "forced" });
+              expect(Number.isSafeInteger(childPid)).toBe(true);
+              expect(processIdentity.isPidAlive(childPid!)).toBe(false);
+            }),
+          controller.signal,
+        );
+      } finally {
+        killPidIfAlive(childPid);
+      }
+    },
+  );
+});
 
 describe.skipIf(process.platform === "win32")("terminal command process ownership", () => {
   it.each(endings)("$name", async ({ exitParent, completion, identity }) => {
@@ -90,7 +202,11 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
           throw failure;
         }
       });
-      if (completion === "reject") {
+      if (identity === "reused-after-exit") {
+        await expect(running).rejects.toMatchObject({
+          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
+        });
+      } else if (completion === "reject") {
         await expect(running).rejects.toBe(failure);
       } else {
         await running;

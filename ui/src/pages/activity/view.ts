@@ -2,11 +2,14 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders activity screen content.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
-import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import "../../styles/activity.css";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
@@ -152,8 +155,10 @@ function renderToolFilter(props: ActivityProps, toolNames: string[]) {
       ${icons.listFilter}
     </button>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="activity-live-filter-popover"
       for="activity-live-filter-trigger"
+      aria-label=${t("activity.filters")}
       placement="bottom-end"
       without-arrow
       @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
@@ -230,7 +235,6 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
   return html`
     <details
       class="activity-entry activity-entry--${entry.status}"
-      role="listitem"
       .open=${open}
       @toggle=${(event: Event) =>
         props.onEntryToggle(entry.id, (event.currentTarget as HTMLDetailsElement).open)}
@@ -345,7 +349,7 @@ export function renderActivity(props: ActivityProps) {
         ${renderLiveToolbar(props, toolNames)}
         <div
           class="activity-stream"
-          role="list"
+          role="group"
           aria-label=${t("activity.streamLabel")}
           @scroll=${props.onScroll}
         >

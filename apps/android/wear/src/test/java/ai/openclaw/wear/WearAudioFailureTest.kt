@@ -111,6 +111,9 @@ class WearAudioFailureTest {
       assertFalse(fixture.client.isCapturing.value)
       assertFalse(state.value.realtimeTalk.active)
       assertFalse(state.value.talkBusy)
+      assertTrue("failed initial start must signal the production error owner", fixture.client.channelFailed.value)
+      // Voice renders realtimePlaybackFailed, not the general failure field.
+      assertTrue("failed initial start must reach the Voice audio error", state.value.realtimePlaybackFailed)
       assertEquals(WearConversationFailure.INTERNAL_ERROR, state.value.failure)
       assertEquals(1, FailingRestartAudioRecord.releases)
       assertEquals(0, FailingRestartAudioRecord.reads)

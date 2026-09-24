@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type ts from "typescript";
+import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -168,12 +169,16 @@ export function probeBuiltPluginControlPlaneModules(
   }
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   const encodedTargets = Buffer.from(JSON.stringify(modules), "utf8").toString("base64url");
-  const result = spawnSync(process.execPath, ["-e", REQUIRE_PROBE_SOURCE, encodedTargets], {
-    cwd: rootDir,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  const result = spawnSync(
+    resolveNodeRuntimeExecutable() ?? process.execPath,
+    ["-e", REQUIRE_PROBE_SOURCE, encodedTargets],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
+  );
   if (result.error) {
     throw new Error(
       `built plugin control-plane native-require probe failed: ${result.error.message}`,

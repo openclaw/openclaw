@@ -1,6 +1,5 @@
 // Feishu tests cover doctor plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -13,7 +12,8 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuDoctor } from "./doctor.js";
 
@@ -168,19 +168,18 @@ async function runDoctor(shouldRepair: boolean, cfg: OpenClawConfig = feishuConf
 }
 
 describe("Feishu doctor state repair", () => {
-  let tempHome = "";
+  let testState: OpenClawTestState | undefined;
 
-  beforeEach(() => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-doctor-"));
-    vi.stubEnv("HOME", tempHome);
-    vi.stubEnv("OPENCLAW_HOME", tempHome);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
-    fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 });
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-feishu-doctor-",
+      layout: "home",
+    });
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    fs.rmSync(tempHome, { recursive: true, force: true });
+  afterEach(async () => {
+    await testState?.cleanup();
+    testState = undefined;
   });
 
   const healthyStateCases = [

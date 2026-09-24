@@ -84,6 +84,7 @@ vi.mock("./github-cli-preflight.js", async (importOriginal) => {
 });
 
 import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
+import { configuredOAuthIdentities } from "./github-oauth-lifecycle-helpers.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -776,6 +777,44 @@ describe("GitHub OAuth authorization lifecycle", () => {
 });
 
 describe("GitHub OAuth refresh and maintenance", () => {
+  it("bounds roster reads while preserving ordered identities and fresh configuration", () => {
+    const count = 128;
+    const entries: Record<string, { tools: { github?: GitHubToolIdentityConfig } }> = {};
+    for (let index = count; index > 0; index -= 1) {
+      entries[`agent-${String(index).padStart(3, "0")}`] = { tools: {} };
+    }
+    let reads = 0;
+    const observed = new Proxy(entries, {
+      get(target, key, receiver) {
+        reads += typeof key === "string" && Object.hasOwn(target, key) ? 1 : 0;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const config: OpenClawConfig = { agents: { entries: observed } };
+    expect(configuredOAuthIdentities(config)).toEqual([]);
+    // Idle maintenance should traverse a large roster a bounded number of times.
+    expect(reads).toBeLessThanOrEqual(count * 4);
+
+    const system = identity(OLD_PROFILE, { oauth: true, author: true });
+    const agent = identity(NEW_PROFILE, { oauth: true, author: true });
+    config.tools = { github: system };
+    entries["agent-128"] = { tools: { github: agent } };
+    entries["agent-064"] = { tools: { github: system } };
+    entries["agent-001"] = { tools: { github: identity(OTHER_PROFILE) } };
+    expect(configuredOAuthIdentities(config)).toEqual([
+      { scope: "system", agentId: "system", identity: system },
+      { scope: "agent", agentId: "agent-064", identity: system },
+      { scope: "agent", agentId: "agent-128", identity: agent },
+    ]);
+    entries["agent-001"] = { tools: { github: agent } };
+    delete entries["agent-128"];
+    expect(configuredOAuthIdentities(config)).toEqual([
+      { scope: "system", agentId: "system", identity: system },
+      { scope: "agent", agentId: "agent-001", identity: agent },
+      { scope: "agent", agentId: "agent-064", identity: system },
+    ]);
+  });
+
   it("respects refresh skew and marks transient and terminal refresh failures", async () => {
     const configured = identity(OLD_PROFILE, { oauth: true, author: true });
     currentConfig = configForScope("system", configured);

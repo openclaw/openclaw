@@ -29,6 +29,11 @@ export type ToastOptions = {
 const DEFAULT_TOAST_DURATION_MS = 6_000;
 const TOAST_EXIT_FALLBACK_MS = 450;
 
+function resolveToastAnchorRect(anchor: Element | undefined) {
+  const rect = anchor?.isConnected ? anchor.getBoundingClientRect() : null;
+  return rect && rect.width > 0 ? rect : null;
+}
+
 function activeModalToastLayer() {
   return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
 }
@@ -51,6 +56,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitReason: ToastDismissReason | null = null;
+  private remainingMs = 0;
+  private deadline = 0;
+  private hovered = false;
 
   private syncPlacement() {
     this.dataset.toastPlacement = this.parentElement?.matches(".shell") ? "shell" : "overlay";
@@ -59,6 +67,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   override connectedCallback() {
     super.connectedCallback();
     this.syncPlacement();
+    // Moving the light-DOM host can drop focus without a focusout event.
+    this.hovered = this.querySelector(".app-toast")?.matches(":hover") ?? false;
+    this.syncDismissTimer();
     const pending = queuedToast;
     queuedToast = null;
     if (pending) {
@@ -90,10 +101,37 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     this.toast = options;
     this.active = true;
     this.exitReason = null;
-    this.dismissTimer = globalThis.setTimeout(
-      () => this.dismiss("timeout"),
-      options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
-    );
+    this.remainingMs = options.durationMs ?? DEFAULT_TOAST_DURATION_MS;
+    this.syncDismissTimer();
+  }
+
+  override updated() {
+    // Lit can retain a focused child on replacement, or remove the action that
+    // held focus. Reconcile after rendering rather than inheriting stale focus.
+    if (!this.toast) {
+      this.hovered = false;
+    }
+    this.syncDismissTimer();
+  }
+
+  private syncDismissTimer(focused?: boolean) {
+    if (!this.toast || !this.active || !this.isConnected) {
+      return;
+    }
+    const root = this.getRootNode();
+    const active =
+      root instanceof ShadowRoot ? root.activeElement : this.ownerDocument.activeElement;
+    const hasFocus = focused ?? this.contains(active);
+    if (this.hovered || hasFocus) {
+      if (this.dismissTimer !== null) {
+        this.remainingMs = Math.max(0, this.deadline - performance.now());
+        globalThis.clearTimeout(this.dismissTimer);
+        this.dismissTimer = null;
+      }
+    } else if (this.dismissTimer === null) {
+      this.deadline = performance.now() + this.remainingMs;
+      this.dismissTimer = globalThis.setTimeout(() => this.dismiss("timeout"), this.remainingMs);
+    }
   }
 
   private clearDismissTimer() {
@@ -114,7 +152,13 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     this.exitReason = null;
     this.toast = null;
     toast?.onDismiss?.(reason);
-    if (reason !== "replaced") {
+    if (reason === "disconnected") {
+      this.hovered = false;
+      const queued = this.toastQueue.splice(0);
+      for (const pending of queued) {
+        pending.onDismiss?.("disconnected");
+      }
+    } else if (reason !== "replaced") {
       const next = this.toastQueue.shift();
       if (next) {
         this.show(next);
@@ -128,14 +172,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
       return;
     }
     this.clearDismissTimer();
-    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
-    const anchored = anchorRect !== null && anchorRect.width > 0;
     if (
       (reason !== "dismiss" && reason !== "timeout") ||
-      reducedMotion ||
       !this.isConnected ||
-      !anchored
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
+      !resolveToastAnchorRect(toast.anchor)
     ) {
       this.finishDismiss(reason);
       return;
@@ -154,14 +195,13 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!toast) {
       return nothing;
     }
-    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
-    const anchored = anchorRect !== null && anchorRect.width > 0;
+    const anchorRect = resolveToastAnchorRect(toast.anchor);
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
+        class="app-toast ${anchorRect ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
         data-active=${this.active ? "true" : "false"}
         style=${styleMap(
-          anchored
+          anchorRect
             ? {
                 "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
                 "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
@@ -172,6 +212,21 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
         role="status"
         aria-live="polite"
         aria-atomic="true"
+        @pointerenter=${() => {
+          this.hovered = true;
+          this.syncDismissTimer();
+        }}
+        @pointerleave=${() => {
+          this.hovered = false;
+          this.syncDismissTimer();
+        }}
+        @focusin=${() => this.syncDismissTimer(true)}
+        @focusout=${(event: FocusEvent) => {
+          // relatedTarget keeps transfers between Undo, links, and Dismiss paused.
+          this.syncDismissTimer(
+            event.relatedTarget instanceof Node && this.contains(event.relatedTarget),
+          );
+        }}
         @transitionend=${(event: TransitionEvent) => {
           if (
             event.target === event.currentTarget &&

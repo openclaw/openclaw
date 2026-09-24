@@ -1,10 +1,15 @@
 import "../styles/gateway-vitals.css";
 import { html, nothing, svg } from "lit";
 import { property, state as litState } from "lit/decorators.js";
-import { formatDurationCompact } from "../lib/format.ts";
+import { formatDurationCompact } from "../lib/format-duration.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 
-export type SparklineSample = { value: number; at: number };
+export type SparklineSample = {
+  value: number;
+  at: number;
+  secondary?: string;
+  stack?: readonly number[];
+};
 
 // Chart geometry in viewBox units; the svg stretches (preserveAspectRatio="none"),
 // so hover/now markers are positioned with percentages in HTML instead.
@@ -28,6 +33,7 @@ class SparklineTile extends OpenClawLightDomElement {
   @property({ attribute: false }) format: (value: number) => string = String;
   /** Lower bound for the y-axis top, so quiet metrics keep a calm scale. */
   @property({ attribute: false }) floorMax = 0;
+  @property({ attribute: false }) stackColors: readonly string[] = [];
   /** Auto-range the baseline near the series minimum instead of zero, so
    * large-but-steady metrics (RSS) still show their trend shape. */
   @property({ type: Boolean }) autorange = false;
@@ -60,8 +66,7 @@ class SparklineTile extends OpenClawLightDomElement {
     return { min: base, span: Math.max(max - base, 1e-9) };
   }
 
-  private toY(value: number): number {
-    const { min, span } = this.yRange;
+  private toY(value: number, { min, span }: { min: number; span: number }): number {
     const usable = CHART_HEIGHT - CHART_TOP_PAD;
     const ratio = Math.min(Math.max((value - min) / span, 0), 1);
     return CHART_HEIGHT - ratio * usable;
@@ -84,20 +89,51 @@ class SparklineTile extends OpenClawLightDomElement {
     this.hoverIndex = null;
   };
 
+  private renderStack(step: number, range: { min: number; span: number }) {
+    return this.stackColors.map((color, layer) => {
+      const polygons: string[] = [];
+      let upper: string[] = [];
+      let lower: string[] = [];
+      const finish = () => {
+        if (upper.length > 1) {
+          polygons.push([...upper, ...lower.toReversed()].join(" "));
+        }
+        upper = [];
+        lower = [];
+      };
+      for (const [index, sample] of this.samples.entries()) {
+        if (sample.stack?.length !== this.stackColors.length) {
+          finish();
+          continue;
+        }
+        const base = sample.stack.slice(0, layer).reduce((sum, value) => sum + value, 0);
+        lower.push(`${index * step},${this.toY(base, range)}`);
+        upper.push(`${index * step},${this.toY(base + sample.stack[layer]!, range)}`);
+      }
+      finish();
+      return polygons.map(
+        (points) =>
+          svg`<polygon class="sparkline-tile__stack" points=${points} fill=${color}></polygon>`,
+      );
+    });
+  }
+
   private renderChart() {
     const samples = this.samples;
     if (samples.length < 2) {
       return nothing;
     }
+    // All points share one scale; scanning history per point makes rendering quadratic.
+    const range = this.yRange;
     const step = CHART_WIDTH / (samples.length - 1);
     const points = samples
-      .map((sample, index) => `${index * step},${this.toY(sample.value)}`)
+      .map((sample, index) => `${index * step},${this.toY(sample.value, range)}`)
       .join(" ");
     const last = samples.at(-1);
     if (!last) {
       return nothing;
     }
-    const lastY = this.toY(last.value);
+    const lastY = this.toY(last.value, range);
     const hover = this.hoverIndex !== null ? samples[this.hoverIndex] : undefined;
     const hoverLeft = this.hoverIndex !== null ? (this.hoverIndex / (samples.length - 1)) * 100 : 0;
     return html`
@@ -122,6 +158,7 @@ class SparklineTile extends OpenClawLightDomElement {
               points="0,${CHART_HEIGHT} ${points} ${CHART_WIDTH},${CHART_HEIGHT}"
               fill="url(#${this.gradientId})"
             ></polygon>
+            ${this.renderStack(step, range)}
             <polyline points=${points}></polyline>
           `}
         </svg>
@@ -131,7 +168,7 @@ class SparklineTile extends OpenClawLightDomElement {
                 <div class="sparkline-tile__hairline" style="left: ${hoverLeft}%"></div>
                 <div
                   class="sparkline-tile__dot sparkline-tile__dot--hover"
-                  style="left: ${hoverLeft}%; top: ${(this.toY(hover.value) / CHART_HEIGHT) * 100}%"
+                  style="left: ${hoverLeft}%; top: ${(this.toY(hover.value, range) / CHART_HEIGHT) * 100}%"
                 ></div>
               `
             : html`
@@ -163,6 +200,7 @@ class SparklineTile extends OpenClawLightDomElement {
         ${shown ? this.format(shown.value) : "–"}
         ${age ? html`<span class="sparkline-tile__age">−${age}</span>` : nothing}
       </div>
+      ${shown?.secondary ? html`<div class="sparkline-tile__secondary">${shown.secondary}</div>` : nothing}
       ${this.renderChart()}
     `;
   }

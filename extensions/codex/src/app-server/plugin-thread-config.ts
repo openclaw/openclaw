@@ -3,7 +3,9 @@
  * for native Codex turns.
  */
 import crypto from "node:crypto";
+import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
@@ -112,7 +114,7 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 6;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -179,45 +181,44 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
+  const readInventory = (suppressAppInventoryRefresh?: true) =>
+    readCodexPluginInventory({
+      pluginConfig: params.pluginConfig,
+      policy,
+      request: threadRequest,
+      appCache,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
+      configCwd: params.configCwd,
+      metadataCache: params.metadataCache,
+      nowMs: params.nowMs,
+      suppressAppInventoryRefresh,
+    });
   let inventory =
     policy.pluginPolicies.length > 0
-      ? await readCodexPluginInventory({
-          pluginConfig: params.pluginConfig,
-          policy,
-          request: threadRequest,
-          appCache,
-          appCacheKey: threadAppCacheKey,
-          configCwd: params.configCwd,
-          metadataCache: params.metadataCache,
-          nowMs: params.nowMs,
-          suppressAppInventoryRefresh: true,
-        })
+      ? await readInventory(true)
       : emptyCodexPluginInventory(policy);
+  const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
+    await refreshCodexPluginAppInventory(params, appCache, {
+      ...options,
+      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
+    });
+    inventory = await readInventory();
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig: params.pluginConfig,
+      appCacheKey: params.appCacheKey,
+    });
+  };
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       // OpenClaw is missing its process-local snapshot, but Codex may already
       // have a current inventory. Avoid rebuilding the entire remote catalog
       // during thread startup; post-install and readiness repair still force.
       forceRefetch: false,
       reason: "initial_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
@@ -230,7 +231,8 @@ export async function buildCodexPluginThreadConfig(
       identity: record.policy,
       request: threadRequest,
       appCache,
-      appCacheKey: threadAppCacheKey,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
@@ -255,52 +257,22 @@ export async function buildCodexPluginThreadConfig(
     !postInstallRefreshRequired &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
   if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
-    await refreshCodexPluginAppInventory(params, appCache, {
+    await refreshInventory({
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
-      targetAppIds: collectCodexPluginOwnedAppIds(inventory),
-    });
-    inventory = await readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
-      policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
-      nowMs: params.nowMs,
-    });
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
     });
   }
 
   const accountAppsResult: Awaited<ReturnType<typeof readCodexThreadAdmissibleAccountApps>> =
     policy.allowAllPlugins
       ? await readCodexThreadAdmissibleAccountApps(params, appCache)
-      : { apps: [] };
+      : { apps: [], installedApps: [] };
   // A deny-all thread needs no native settings; read them only before admitting an app.
   let appAdmissionConfig: Promise<CodexPluginThreadAppAdmissionConfig> | undefined;
   const getAdmissionConfig = () => (appAdmissionConfig ??= readCodexConfigForAppAdmission(params));
@@ -315,12 +287,12 @@ export async function buildCodexPluginThreadConfig(
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
   const pluginOwnedAppIds = collectCodexReservedPluginAppIds({
-    policy,
+    policy: inventory.policy,
     inventory,
     accountApps: accountAppsResult.apps,
   });
   const unresolvedDisabledPluginOwnership = policy.allowAllPlugins
-    ? policy.pluginPolicies.find((pluginPolicy) => {
+    ? inventory.policy.pluginPolicies.find((pluginPolicy) => {
         const record = inventory.records.find(
           (candidate) => candidate.policy.configKey === pluginPolicy.configKey,
         );
@@ -402,14 +374,17 @@ export async function buildCodexPluginThreadConfig(
     // An explicit plugin policy is more specific than the account-wide policy.
     // Reserve proven ownership even when activation/readiness fails so a broad
     // account policy cannot re-admit an app that the explicit path excluded.
-    if (pluginOwnedAppIds.has(app.id)) {
+    if (pluginOwnedAppIds.has(codexAppIdentityKey(app.id))) {
       continue;
     }
     const admissionConfig = await getAdmissionConfig();
     if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
       continue;
     }
-    const accountApp = toCodexPluginOwnedAccountApp(app);
+    const accountApp = toCodexPluginOwnedAccountApp(
+      app,
+      accountAppsResult.installedApps.find((installed) => installed.id === app.id),
+    );
     // Global callability does not prove this thread's workspace/managed policy.
     provisionalAppIds.add(app.id);
     apps[app.id] = buildEnabledAppConfig(
@@ -604,7 +579,13 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
     admissionConfig.config,
   );
   const currentApps = new Map(
-    inventory?.apps.map((app) => [app.id, toCodexPluginOwnedAccountApp(app)]),
+    inventory?.apps.map((app) => [
+      app.id,
+      toCodexPluginOwnedAccountApp(
+        app,
+        inventory.installedApps.find((installed) => installed.id === app.id),
+      ),
+    ]),
   );
   const apps = { ...params.policyContext.apps };
   for (const [id, policy] of targetApps) {
@@ -714,20 +695,5 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
 }
 
 function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
-}
-
-export function stringifyCodexPluginPolicy(value: unknown): string {
-  // Fingerprints must be process-stable across object insertion order so prompt
-  // cache and thread-binding comparisons do not churn between runs.
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+  return crypto.createHash("sha256").update(stringifyCodexPolicy(value)).digest("hex");
 }

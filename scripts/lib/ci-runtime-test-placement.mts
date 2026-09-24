@@ -8,22 +8,34 @@ export function rebalanceRuntimeTestJobs(
     cost,
     admits,
     runnerRank,
+    prepareRecipient,
   }: {
     cost: (groups: NodeTestShardGroup[]) => number;
     admits: (groups: NodeTestShardGroup[]) => boolean;
     runnerRank: (job: Pick<CompactNodeTestShard, "runner">) => number;
+    prepareRecipient: (job: CompactNodeTestShard) => NodeTestShardGroup[] | undefined;
   },
 ) {
-  for (const donor of jobs.toSorted((a, b) => cost(b.groups) - cost(a.groups))) {
+  const donors = jobs.filter((job) => job.pretestBuildMode === "runtime");
+  for (const donor of donors.toSorted((a, b) => cost(b.groups) - cost(a.groups))) {
     if (admits(donor.groups)) {
       continue;
     }
     let best:
-      | { recipient: CompactNodeTestShard; group: NodeTestShardGroup; maximum: number }
+      | {
+          recipient: CompactNodeTestShard;
+          group: NodeTestShardGroup;
+          groups: NodeTestShardGroup[];
+          maximum: number;
+          recipientSeconds: number;
+        }
       | undefined;
     for (const group of donor.groups) {
       // An inherited job allowance could increase on a different host.
-      if (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined) {
+      if (
+        group.pretestBuildMode !== "runtime" ||
+        group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+      ) {
         continue;
       }
       const remaining = donor.groups.filter((entry) => entry !== group);
@@ -35,22 +47,41 @@ export function rebalanceRuntimeTestJobs(
         if (recipient === donor || runnerRank(recipient) < runnerRank(donor)) {
           continue;
         }
-        const combined = [...recipient.groups, group];
-        const maximum = Math.max(cost(remaining), cost(combined));
-        if (admits(combined) && (!best || maximum < best.maximum)) {
-          best = { recipient, group, maximum };
+        const prepared = prepareRecipient(recipient);
+        if (!prepared) {
+          continue;
+        }
+        const combined = [...prepared, group];
+        const recipientSeconds = cost(combined);
+        const maximum = Math.max(cost(remaining), recipientSeconds);
+        // When the retained donor dominates both choices, keep more receiver
+        // headroom instead of selecting whichever job happened to appear first.
+        if (
+          admits(combined) &&
+          (!best ||
+            maximum < best.maximum ||
+            (maximum === best.maximum &&
+              (recipientSeconds < best.recipientSeconds ||
+                (recipientSeconds === best.recipientSeconds &&
+                  recipient.checkName.localeCompare(best.recipient.checkName) < 0))))
+        ) {
+          best = { recipient, group, groups: combined, maximum, recipientSeconds };
         }
       }
     }
     if (best) {
-      const { recipient, group } = best;
+      const { recipient, group, groups } = best;
       donor.groups = donor.groups.filter((entry) => entry !== group);
-      recipient.groups = [...recipient.groups, group];
+      recipient.groups = groups;
+      recipient.pretestBuildMode = "runtime";
+      recipient.planConcurrency = 1;
     }
   }
   for (const job of jobs) {
     // An over-budget unchanged plan is still runnable; estimates are not gates
     // for test coverage. Only proposed replacements must satisfy admission.
-    job.predictedSeconds = Math.ceil(cost(job.groups));
+    if (job.pretestBuildMode === "runtime") {
+      job.predictedSeconds = Math.ceil(cost(job.groups));
+    }
   }
 }

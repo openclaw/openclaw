@@ -9,6 +9,7 @@ import type {
 } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
+  FastMode,
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
@@ -21,6 +22,7 @@ import {
   isMonitoredAuthProvider,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -33,7 +35,7 @@ type ModelProviderAuthSummary = {
 type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
-  sessionCount: number;
+  messageCount: number;
 };
 
 export type ModelProviderLogoutTarget = {
@@ -231,6 +233,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
+  for (const provider of input.pendingProviders ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id)).card.checkingModels = true;
+    }
+  }
+
   for (const outcome of input.providerOutcomes ?? []) {
     const id = canonicalProviderId(outcome.provider);
     if (!id) {
@@ -377,14 +386,14 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     const addition: ModelProviderLocalCost = {
       totalCost: entry.totals.totalCost,
       totalTokens: entry.totals.totalTokens,
-      sessionCount: entry.count,
+      messageCount: entry.count,
     };
     const current = draft.card.localCost;
     draft.card.localCost = current
       ? {
           totalCost: current.totalCost + addition.totalCost,
           totalTokens: current.totalTokens + addition.totalTokens,
-          sessionCount: current.sessionCount + addition.sessionCount,
+          messageCount: current.messageCount + addition.messageCount,
         }
       : addition;
   }
@@ -397,6 +406,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
+        draft.card.checkingModels ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {
@@ -404,11 +414,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       return Object.assign(
         {},
         draft.card,
-        {
-          checkingModels: input.pendingProviders?.some(
-            (id) => canonicalProviderId(id) === draft.card.id,
-          ),
-        },
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -421,9 +426,45 @@ export type DefaultModelSelection = {
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
   utilityModel: string | null;
+  /** Unset or null disables decisions globally. */
+  decisionModel?: string | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
+export type ModelBehaviorConfig = {
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
+  fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
+};
+export type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
+
+export function resolveDefaultModelPresentation(
+  catalog: ModelCatalogPresentation,
+  configured: DefaultsDraft,
+  draft: DefaultsDraft | null,
+): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
+  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+    return {
+      defaults: {
+        ...configured,
+        primary: catalog.modelSelectionPolicy?.defaultModel ?? "",
+        fallbacks: [],
+        utilityModel: null,
+        decisionModel: null,
+      },
+      configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
+    };
+  }
+  const defaults = draft ?? configured;
+  return {
+    defaults,
+    configuredModels: buildSelectableDefaultModels(
+      catalog.hasSnapshot ? catalog.models : null,
+      defaults,
+    ),
+  };
+}
 
 export function modelCatalogRef(model: ModelPickerEntry): string {
   if (model.selectionRef !== undefined) {
@@ -432,7 +473,7 @@ export function modelCatalogRef(model: ModelPickerEntry): string {
   return model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
 }
 
-export function buildSelectableDefaultModels(
+function buildSelectableDefaultModels(
   models: ModelCatalogEntry[] | null,
   selection: DefaultModelSelection,
 ): ModelPickerEntry[] {
@@ -521,6 +562,9 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       primary,
       fallbacks,
       utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      ...(typeof defaults?.decisionModel === "string"
+        ? { decisionModel: defaults.decisionModel }
+        : {}),
     },
   };
 }

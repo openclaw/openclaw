@@ -24,23 +24,34 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -72,6 +83,7 @@ class ChatCompletedWorkLayoutTest {
   private lateinit var app: NodeApp
   private lateinit var runtime: NodeRuntime
   private lateinit var model: MainViewModel
+  private lateinit var controller: ChatController
   private var previousRuntime: NodeRuntime? = null
   private var restoreAnimatorScale: (() -> Unit)? = null
 
@@ -120,7 +132,7 @@ class ChatCompletedWorkLayoutTest {
     drainWithMainLooper {
       ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
     }
-    val controller = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+    controller = ReflectionHelpers.getField(runtime, "chat")
     val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
@@ -133,6 +145,13 @@ class ChatCompletedWorkLayoutTest {
             .jsonObject["sessionKey"]
             ?.jsonPrimitive
             ?.content == SESSION -> historyResponse
+
+        method == "chat.history" &&
+          Json
+            .parseToJsonElement(checkNotNull(params))
+            .jsonObject["sessionKey"]
+            ?.jsonPrimitive
+            ?.content == OTHER_SESSION -> OTHER_HISTORY
 
         method == "question.list" -> """{"questions":[]}"""
 
@@ -167,6 +186,53 @@ class ChatCompletedWorkLayoutTest {
           model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.pendingRunCount.value == 0
       }
     }
+  }
+
+  @Test
+  fun liveToolActivityStartsCollapsed() {
+    showToolResults(emptyList())
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"start","name":"read","toolCallId":"live-read","args":{"path":"README.md"}}}""",
+      )
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"live-exec","args":{"command":"pnpm test"}}}""",
+      )
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatToolActivities.value.size == 2 } }
+    capture("live-tools-collapsed")
+    composeRule
+      .onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+      .assertIsDisplayed()
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("pnpm test", useUnmergedTree = true).assertDoesNotExist()
+    val group = composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+    group.performClick()
+    val command = composeRule.onNode(hasText("pnpm test") and hasClickAction())
+    command.performClick()
+    capture("live-tools-expanded")
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent("agent", """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"result","name":"exec","toolCallId":"live-exec"}}""")
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatPendingToolCalls.value.size == 1 } }
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    command.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    capture("completed-before-history")
+    showToolResults(listOf(toolResult("live-read", "read", "Project ready", false), toolResult("live-exec", "exec", "All tests passed", false)))
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    command.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    composeRule.onNodeWithText("All tests passed").assertIsDisplayed()
+    capture("durable-tool-output")
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent("agent", """{"sessionKey":"$SESSION","stream":"item","data":{"itemId":"tool:live-read","kind":"tool","phase":"end","title":"Read project","toolCallId":"live-read","name":"read","status":"blocked"}}""")
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatToolActivities.value.any { it.activity?.status == "blocked" } } }
+    group.performClick()
+    group.assert(hasText(nativeString("Blocked")))
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    capture("blocked-tools-collapsed")
   }
 
   @Test
@@ -214,6 +280,7 @@ class ChatCompletedWorkLayoutTest {
     }
 
     worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
     capture("expanded")
     assertions.checkSucceeds {
       worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
@@ -262,6 +329,256 @@ class ChatCompletedWorkLayoutTest {
     }
   }
 
+  @Test
+  fun earlierTextAndToolResultReplacementRefreshesAnUnchangedTail() {
+    val original = composeRule.runOnIdle { model.chatMessages.value }
+    val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
+    val command = composeRule.onNode(hasText(COMMAND) and hasClickAction())
+    worked.performClick()
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
+    command.performClick()
+    composeRule.onNodeWithText(OUTPUT).assertIsDisplayed()
+    capture("replacement-before")
+
+    val response = Json.parseToJsonElement(HISTORY).jsonObject
+    val revised =
+      response.getValue("messages").jsonArray.mapIndexed { index, message ->
+        when (index) {
+          1 -> JsonObject(message.jsonObject + ("content" to JsonPrimitive(REVISED_EARLIER)))
+          3 -> JsonObject(message.jsonObject + ("content" to JsonPrimitive(REVISED_OUTPUT)))
+          else -> message
+        }
+      }
+    historyResponse = JsonObject(response + ("messages" to JsonArray(revised))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value &&
+          model.chatMessages.value
+            .getOrNull(1)
+            ?.content
+            ?.singleOrNull()
+            ?.text == REVISED_EARLIER &&
+          model.chatMessages.value
+            .getOrNull(3)
+            ?.content
+            ?.singleOrNull()
+            ?.toolActivity
+            ?.result == REVISED_OUTPUT
+      }
+    }
+    composeRule.runOnIdle {
+      val replacement = model.chatMessages.value
+      assertEquals(original.map { it.id }, replacement.map { it.id })
+      assertEquals(original.map { it.entryId }, replacement.map { it.entryId })
+      assertEquals(original.size, replacement.size)
+      assertEquals(original.last(), replacement.last())
+    }
+    capture("replacement-after")
+    worked.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    composeRule.onNodeWithText(REVISED_EARLIER).assertIsDisplayed()
+    composeRule.onNodeWithText(REVISED_OUTPUT).assertIsDisplayed()
+    composeRule.onNodeWithText(EARLIER, useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText(OUTPUT, useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+  }
+
+  @Test
+  fun earlierCompletedDisclosureSurvivesLaterLiveUpdates() {
+    val response = Json.parseToJsonElement(HISTORY).jsonObject
+    val nextUser =
+      Json.parseToJsonElement(
+        """{"role":"user","content":"Check the next item.","timestamp":1783555005000,"__openclaw":{"id":"next-user"}}""",
+      )
+    historyResponse =
+      JsonObject(response + ("messages" to JsonArray(response.getValue("messages").jsonArray + nextUser))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle { !model.chatHistoryLoading.value && model.chatMessages.value.size == 6 }
+    }
+    val workedMatcher = hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction()
+    composeRule.onNode(workedMatcher).performClick()
+    for (text in listOf("Checking next.", "Checking the next result.")) {
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent("agent", """{"sessionKey":"$SESSION","stream":"assistant","data":{"text":"$text"}}""")
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"$SESSION","stream":"tool","data":{"phase":"start","name":"read","toolCallId":"next-tool"}}""",
+        )
+      }
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatStreamingAssistantText.value == text && model.chatPendingToolCalls.value.size == 1 }
+      }
+      composeRule.onNode(hasScrollToIndexAction()).performScrollToNode(workedMatcher)
+      composeRule.onNode(workedMatcher).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+      composeRule.onNodeWithText(EARLIER).assertIsDisplayed()
+    }
+    capture("earlier-expanded-during-stream")
+    composeRule.onNode(workedMatcher).performClick()
+    composeRule.onNode(workedMatcher).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(EARLIER, useUnmergedTree = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun sessionSwitchResetsDisclosureEvenWhenHistoryKeysMatch() {
+    val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
+    worked.performClick()
+    val tools = composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction())
+    tools.performClick()
+    worked.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Expanded")))
+    for (session in listOf(OTHER_SESSION, SESSION)) {
+      composeRule.runOnIdle { model.switchChatSession(session, "main") }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          model.chatSessionKey.value == session && !model.chatHistoryLoading.value &&
+            model.chatMessages.value.size == 5 && model.chatMessages.value
+              .last()
+              .entryId == "work-final"
+        }
+      }
+      worked.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+      composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+      composeRule.onNodeWithText(EARLIER, useUnmergedTree = true).assertDoesNotExist()
+      worked.performClick()
+      tools.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+      tools.performClick()
+      worked.performClick()
+    }
+    capture("session-disclosure-reset")
+  }
+
+  @Test
+  fun chatErrorNoticeShowsTheRecoveryInstructionWithoutEllipsis() {
+    val error =
+      "The requested operation could not finish because the selected resource is unavailable. " +
+        "Open the resource settings, select an available resource, then retry your message."
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "chat",
+        buildJsonObject {
+          put("sessionKey", SESSION)
+          put("state", "error")
+          put("errorMessage", error)
+        }.toString(),
+      )
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatError.value == error } }
+    capture("recovery-notice")
+    val notice = composeRule.onNodeWithText(error, useUnmergedTree = true).assertIsDisplayed()
+    val layouts = mutableListOf<TextLayoutResult>()
+    notice.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    val layout = layouts.single()
+    assertTrue("Recovery instructions must wrap, not disappear after the first line", layout.lineCount > 1)
+    assertTrue("Every recovery line must be laid out", !layout.hasVisualOverflow)
+    assertEquals(error.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+    assertTrue((0 until layout.lineCount).none(layout::isLineEllipsized))
+  }
+
+  @Test
+  fun collapsedCommandFailureIsVisibleWithoutOpeningItsOutput() {
+    showToolResults(listOf(toolResult("command-error", "exec", "Command could not finish.", isError = true)))
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
+    val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")))
+    capture("failed-command-collapsed")
+    row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+    row.performClick()
+    composeRule.onNodeWithText("Command could not finish.").assertIsDisplayed()
+    row.performClick()
+    row.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun collapsedBlankReadFailureRemainsInspectable() {
+    showToolResults(listOf(toolResult("read-error", "read", "", isError = true)))
+    composeRule.onNode(hasText(nativeString("Tool activity")) and hasClickAction()).performClick()
+    val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")) and hasText("Read"))
+    capture("failed-read-collapsed")
+    row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("No output — tool failed."), useUnmergedTree = true).assertDoesNotExist()
+    row.performClick()
+    composeRule.onNodeWithText(nativeString("No output — tool failed.")).assertIsDisplayed()
+  }
+
+  @Test
+  fun collapsedMixedToolGroupExposesFailureAndKeepsSuccessfulRowsNeutral() {
+    showToolResults(
+      listOf(
+        toolResult("read-ok", "read", "Read succeeded.", isError = false),
+        toolResult("command-error", "exec", "Command could not finish.", isError = true),
+      ),
+    )
+    val group = composeRule.onNode(hasClickAction() and hasText(nativeString("Tool error")))
+    capture("failed-group-collapsed")
+    group.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+    group.performClick()
+    val failed = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")))
+    failed.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNode(hasClickAction() and hasText("Read")).assert(hasText(nativeString("Failed")).not())
+    failed.performClick()
+    composeRule.onNodeWithText("Command could not finish.").assertIsDisplayed()
+    failed.performClick()
+    group.performClick()
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun successfulToolGroupDoesNotClaimFailure() {
+    showToolResults(
+      listOf(
+        toolResult("read-ok", "read", "Read succeeded.", isError = false),
+        toolResult("command-ok", "exec", "Command succeeded.", isError = false),
+      ),
+    )
+    val group = composeRule.onNode(hasClickAction() and hasText(nativeString("Tool details")))
+    group.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Tool error"), useUnmergedTree = true).assertDoesNotExist()
+    group.performClick()
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNode(hasClickAction() and hasText("Read")).performClick()
+    composeRule.onNodeWithText("Read succeeded.").assertIsDisplayed()
+  }
+
+  private fun showToolResults(results: List<JsonObject>) {
+    val history = Json.parseToJsonElement(HISTORY).jsonObject
+    // No later answer: exercise the retained failure rows through the real timeline owner.
+    historyResponse = JsonObject(history + ("messages" to JsonArray(results))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } ==
+          results.map {
+            it
+              .getValue("__openclaw")
+              .jsonObject
+              .getValue("id")
+              .jsonPrimitive
+              .content
+          }
+      }
+    }
+  }
+
+  private fun toolResult(
+    id: String,
+    name: String,
+    output: String,
+    isError: Boolean,
+  ): JsonObject =
+    buildJsonObject {
+      put("role", "toolResult")
+      put("toolCallId", id)
+      put("toolName", name)
+      put("content", output)
+      put("isError", isError)
+      put("timestamp", 1783555002500L)
+      put("__openclaw", buildJsonObject { put("id", id) })
+    }
+
   private fun capture(name: String) {
     val directory = System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR") ?: return
     val folder = File(directory)
@@ -275,10 +592,13 @@ class ChatCompletedWorkLayoutTest {
 
   private companion object {
     const val SESSION = "agent:main:dashboard:completed-work-proof"
+    const val OTHER_SESSION = "agent:main:dashboard:completed-work-other"
     const val EARLIER = "I will check the dashboard."
     const val MIXED = "I am checking the build status."
     const val COMMAND = "printf dashboard-ready"
     const val OUTPUT = "dashboard-ready"
+    const val REVISED_EARLIER = "I checked the dashboard configuration."
+    const val REVISED_OUTPUT = "dashboard-rechecked"
     const val FINAL = "The dashboard is ready."
     const val FIRST_FINAL = "The first check is complete."
     const val SECOND_FINAL = "The second check is complete."
@@ -301,7 +621,7 @@ class ChatCompletedWorkLayoutTest {
         "sessionInfo":{"key":"$SESSION","sessionId":"completed-work-proof","displayName":"Dashboard check","ownerAgentId":"main","archived":false},
         "messages":[
           {"role":"user","content":"Check the dashboard status.","timestamp":1783555000000,"__openclaw":{"id":"work-user"}},
-          {"role":"assistant","content":"$EARLIER","timestamp":1783555001000,"__openclaw":{"id":"work-earlier"}},
+          {"role":"assistant","content":"$EARLIER","timestamp":1783555001000,"idempotencyKey":"work-earlier:assistant","__openclaw":{"id":"work-earlier"}},
           {
             "role":"assistant","timestamp":1783555002000,"__openclaw":{"id":"work-mixed"},
             "content":[
@@ -314,5 +634,19 @@ class ChatCompletedWorkLayoutTest {
         ]
       }
       """.trimIndent()
+    val OTHER_HISTORY =
+      Json.parseToJsonElement(HISTORY).jsonObject.let { history ->
+        JsonObject(
+          history +
+            mapOf(
+              "sessionId" to JsonPrimitive("completed-work-other"),
+              "sessionInfo" to
+                JsonObject(
+                  history.getValue("sessionInfo").jsonObject +
+                    mapOf("key" to JsonPrimitive(OTHER_SESSION), "sessionId" to JsonPrimitive("completed-work-other")),
+                ),
+            ),
+        ).toString()
+      }
   }
 }

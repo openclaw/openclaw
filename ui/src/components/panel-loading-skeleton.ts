@@ -8,6 +8,8 @@ export type PanelLoadingSkeletonVariant =
   | "chat"
   | "desktop"
   | "discussion"
+  | "document"
+  | "file-list"
   | "files"
   | "review"
   | "tasks"
@@ -20,6 +22,8 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
   @property({ type: Boolean, reflect: true }) compact = false;
 
   @property({ type: Boolean, reflect: true }) overlay = false;
+
+  @property() label = "";
 
   static override styles = css`
     :host {
@@ -34,6 +38,32 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     :host([compact]) {
       min-height: 0;
       padding: 8px;
+    }
+
+    :host([data-panel-skeleton="desktop"]) {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .desktop-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .desktop-spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--border);
+      border-top-color: var(--muted);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
     }
 
     :host([overlay]) {
@@ -99,7 +129,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     .row,
     .toolbar,
     .bubble,
-    .card,
     .summary {
       display: flex;
       gap: 10px;
@@ -152,13 +181,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       width: 28px;
       height: 28px;
       flex: 0 0 auto;
-    }
-
-    .card {
-      min-height: 58px;
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
     }
 
     .summary {
@@ -278,10 +300,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       }
     }
 
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
+      .desktop-spinner,
       .skeleton::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
+        animation: none;
       }
     }
   `;
@@ -350,8 +378,10 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
         `;
       case "desktop":
         return html`
-          <div class="toolbar">${this.line("medium")}</div>
-          <div class="rows">${this.rows(3).map((row) => html`<div class="card">${row}</div>`)}</div>
+          <div class="desktop-loading">
+            <span class="desktop-spinner" aria-hidden="true"></span>
+            <span>${this.label}</span>
+          </div>
         `;
       case "discussion":
         return html`
@@ -359,6 +389,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             <div class="conversation">
               ${this.line("medium")} ${this.line()} ${this.line("long")} ${this.line("short")}
             </div>
+          </div>
+        `;
+      case "file-list":
+        return html`<div class="rows">${this.rows(5)}</div>`;
+      case "document":
+        return html`
+          <div class="skeleton file-heading medium"></div>
+          <div class="code">
+            ${this.line()} ${this.line()} ${this.line("medium")} ${this.line()}
+            ${this.line("short")}
           </div>
         `;
       case "review":
@@ -413,6 +453,7 @@ export function renderPanelLoadingSkeleton(
   return html`
     <openclaw-panel-loading-skeleton
       .variant=${variant}
+      .label=${label}
       ?compact=${compact}
       ?overlay=${overlay}
       role="status"

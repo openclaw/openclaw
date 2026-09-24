@@ -7,7 +7,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureFullEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 const cleanupTasks: Array<() => Promise<void>> = [];
 const model = "fixture-model";
@@ -20,10 +20,13 @@ afterEach(async () => {
 type Scenario = {
   protocol: "openai" | "openai-responses" | "anthropic";
   secretRef?: boolean;
+  unavailableSecretRef?: boolean;
+  preparationFailure?: "unexpected" | "abort";
   authless?: boolean;
   outcome?: "fail" | "cancel" | "prompt-cancel";
   surface?: "cli" | "gateway";
   isLocalGateway?: boolean;
+  revokeDuringPreparation?: boolean;
 };
 
 async function runCustomSetup(scenario: Scenario) {
@@ -135,6 +138,13 @@ async function runCustomSetup(scenario: Scenario) {
     "skip",
   ];
   const prompter = createWizardPrompter({
+    confirm: vi.fn(async ({ message }) => {
+      if (message === "Does this model support image input?") {
+        return false;
+      }
+      expect(message).toBe("Connection verified. Activate this saved sign-in?");
+      return true;
+    }),
     text: vi.fn(async (params) => {
       if (scenario.outcome === "prompt-cancel" && textAnswers.length === 2) {
         throw new WizardCancelledError("cancelled");
@@ -161,6 +171,84 @@ async function runCustomSetup(scenario: Scenario) {
   const { activateSetupInference } = await import("../system-agent/setup-inference.js");
   const { runManualStage } = await import("./onboard-guided-manual.js");
   const activationResults: unknown[] = [];
+  const replaceSelectedCredential = async () => {
+    const { upsertAuthProfileWithLock } = await import("../agents/auth-profiles.js");
+    const { getRuntimeAuthProfileStoreCredentialsRevision } =
+      await import("../agents/auth-profiles/runtime-snapshots.js");
+    const agentDir = resolveAgentDir(initialConfig, "main");
+    const selected = Object.entries(
+      loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles,
+    ).find(([, profile]) => profile.provider === "fixture-custom");
+    if (!selected || selected[1].type !== "api_key") {
+      throw new Error("Expected the saved fixture credential");
+    }
+    const [profileId, source] = selected;
+    const revision = getRuntimeAuthProfileStoreCredentialsRevision();
+    expect(
+      await upsertAuthProfileWithLock({
+        agentDir,
+        profileId,
+        credential: {
+          ...source,
+          type: "api_key",
+          keyRef: { source: "env", provider: "default", id: "UNREAD_REPLACEMENT_FIXTURE" },
+        },
+      }),
+    ).not.toBeNull();
+    expect(
+      await upsertAuthProfileWithLock({ agentDir, profileId, credential: source }),
+    ).not.toBeNull();
+    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
+      source,
+    );
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBeGreaterThan(revision);
+  };
+  if (
+    scenario.revokeDuringPreparation ||
+    scenario.unavailableSecretRef ||
+    scenario.preparationFailure
+  ) {
+    const secrets = await import("../secrets/runtime.js");
+    const prepare = secrets.prepareSecretsRuntimeSnapshot;
+    const spy = vi
+      .spyOn(secrets, "prepareSecretsRuntimeSnapshot")
+      .mockImplementationOnce(async (params) => {
+        if (scenario.preparationFailure === "unexpected") {
+          throw Object.assign(new Error("fixture unexpected preparation failure"), {
+            name: "SecretRefResolutionError",
+            code: "SECRET_REF_NOT_FOUND",
+            source: "env",
+            provider: "default",
+            refId: "CUSTOM_SETUP_FIXTURE_KEY",
+          });
+        }
+        if (scenario.unavailableSecretRef) {
+          const saved = loadAuthProfileStoreWithoutExternalProfiles(
+            resolveAgentDir(initialConfig, "main"),
+          );
+          expect(Object.values(saved.profiles)).toEqual([
+            expect.objectContaining({
+              type: "api_key",
+              provider: "fixture-custom",
+              keyRef: { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" },
+            }),
+          ]);
+          deleteTestEnvValue("CUSTOM_SETUP_FIXTURE_KEY");
+          if (scenario.revokeDuringPreparation) {
+            await replaceSelectedCredential();
+          }
+          if (scenario.preparationFailure === "abort") {
+            controller.abort();
+          }
+        } else {
+          await replaceSelectedCredential();
+        }
+        return await prepare(params);
+      });
+    cleanupTasks.push(async () => {
+      spy.mockRestore();
+    });
+  }
   const resultPromise = runManualStage({
     detection: {
       candidates: [],
@@ -191,7 +279,11 @@ async function runCustomSetup(scenario: Scenario) {
       ? await resultPromise.catch((error: unknown) => error)
       : await resultPromise;
   expect(serverErrors).toEqual([]);
+  const authProfiles = Object.values(
+    loadAuthProfileStoreWithoutExternalProfiles(resolveAgentDir(initialConfig, "main")).profiles,
+  ).filter((profile) => profile.provider === "fixture-custom");
   return {
+    authProfiles,
     result,
     credential,
     cancelled: result instanceof WizardCancelledError,
@@ -200,9 +292,6 @@ async function runCustomSetup(scenario: Scenario) {
     activationResults,
     textPrompts: vi.mocked(prompter.text).mock.calls,
     config: JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig,
-    authProfiles: loadAuthProfileStoreWithoutExternalProfiles(
-      resolveAgentDir(initialConfig, "main"),
-    ).profiles,
     output: JSON.stringify([
       runtime.log.mock.calls,
       runtime.error.mock.calls,
@@ -212,9 +301,26 @@ async function runCustomSetup(scenario: Scenario) {
 }
 
 describe("guided custom provider activation", () => {
+  it(
+    "refuses a SecretRef source whose generation changes before preparation",
+    { timeout: 300_000 },
+    async () => {
+      const setup = await runCustomSetup({
+        protocol: "openai-responses",
+        secretRef: true,
+        revokeDuringPreparation: true,
+      });
+      expect(setup.activationResults).toEqual([expect.objectContaining({ ok: false })]);
+      expect(setup.requests).toEqual([]);
+      expect(setup.config.agents?.defaults?.model).toBe("prior/working-model");
+      expect(setup.authProfiles[0]?.setup).toBeDefined();
+      expect(setup.output).not.toContain(setup.credential);
+    },
+  );
+
   it.each<Scenario>([
     { protocol: "openai" as const },
-    { protocol: "openai-responses" as const },
+    { protocol: "openai-responses" as const, secretRef: true },
     { protocol: "anthropic" as const },
     { protocol: "openai" as const, authless: true },
     { protocol: "openai", surface: "gateway", isLocalGateway: true },
@@ -224,30 +330,23 @@ describe("guided custom provider activation", () => {
     { timeout: 300_000 },
     async (scenario) => {
       const setup = await runCustomSetup(scenario);
-      expect(setup.result).toEqual(
+      expect(setup.result, JSON.stringify(setup.activationResults)).toEqual(
         expect.arrayContaining(["Inference verified: fixture-custom/fixture-model"]),
       );
       expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
       expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toBeUndefined();
-      expect(Object.values(setup.authProfiles)).toEqual(
-        scenario.authless
-          ? []
-          : [
-              expect.objectContaining({
-                type: "api_key",
-                provider: "fixture-custom",
-                ...(scenario.secretRef
-                  ? {
-                      keyRef: {
-                        source: "env",
-                        provider: "default",
-                        id: "CUSTOM_SETUP_FIXTURE_KEY",
-                      },
-                    }
-                  : { key: setup.credential }),
-              }),
-            ],
-      );
+      expect(JSON.stringify(setup.config)).not.toContain(setup.credential);
+      expect(setup.authProfiles).toHaveLength(scenario.authless ? 0 : 1);
+      if (!scenario.authless) {
+        expect(setup.authProfiles[0]).toMatchObject({
+          type: "api_key",
+          provider: "fixture-custom",
+          ...(scenario.secretRef
+            ? { keyRef: { source: "env", provider: "default", id: "CUSTOM_SETUP_FIXTURE_KEY" } }
+            : { key: setup.credential }),
+        });
+        expect(setup.authProfiles[0]?.setup).toBeUndefined();
+      }
       expect(setup.config.agents?.defaults?.model).toContain("fixture-custom/fixture-model");
       expect(setup.config.agents?.defaults?.models?.["fixture-custom/fixture-model"]?.alias).toBe(
         "fixture-alias",
@@ -259,8 +358,52 @@ describe("guided custom provider activation", () => {
     },
   );
 
+  it("does not normalize an untrusted preparer error as a missing SecretRef", async () => {
+    await expect(
+      runCustomSetup({
+        protocol: "openai-responses",
+        secretRef: true,
+        preparationFailure: "unexpected",
+      }),
+    ).rejects.toThrow("fixture unexpected preparation failure");
+  });
+
+  it("keeps cancellation ahead of a missing SecretRef refusal", async () => {
+    const setup = await runCustomSetup({
+      protocol: "openai-responses",
+      secretRef: true,
+      unavailableSecretRef: true,
+      preparationFailure: "abort",
+    });
+    expect(setup.requests).toEqual([]);
+    expect(setup.config).toEqual(setup.initialConfig);
+    expect(setup.activationResults).toEqual([
+      expect.objectContaining({ ok: false, status: "unavailable" }),
+    ]);
+    expect(setup.output).not.toContain(setup.credential);
+  });
+
+  it("keeps credential-generation drift ahead of a missing SecretRef refusal", async () => {
+    const setup = await runCustomSetup({
+      protocol: "openai-responses",
+      secretRef: true,
+      unavailableSecretRef: true,
+      revokeDuringPreparation: true,
+    });
+    expect(setup.requests).toEqual([]);
+    expect(setup.config).toEqual(setup.initialConfig);
+    expect(setup.activationResults).toEqual([
+      expect.objectContaining({ ok: false, status: "auth" }),
+    ]);
+    expect(setup.output).not.toContain(setup.credential);
+  });
+
   it("saves an unresolved SecretRef without promoting the prior route", async () => {
-    const setup = await runCustomSetup({ protocol: "openai-responses", secretRef: true });
+    const setup = await runCustomSetup({
+      protocol: "openai-responses",
+      secretRef: true,
+      unavailableSecretRef: true,
+    });
     expect(setup.requests).toEqual([]);
     expect(setup.result).toBeNull();
     expect(setup.config).toEqual(setup.initialConfig);
@@ -295,7 +438,7 @@ describe("guided custom provider activation", () => {
     { timeout: 300_000 },
     async (scenario) => {
       const setup = await runCustomSetup(scenario);
-      expect(setup.requests).toHaveLength(1);
+      expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
       expect(setup.result).toBeNull();
       expect(setup.config).toEqual(setup.initialConfig);
       expect(setup.output).not.toContain(setup.credential);
@@ -308,7 +451,7 @@ describe("guided custom provider activation", () => {
     },
   );
 
-  it("preserves the prior route when custom prompts are cancelled before deferred verification", async () => {
+  it("preserves the prior route when custom prompts are cancelled before activation", async () => {
     const setup = await runCustomSetup({ protocol: "openai", outcome: "prompt-cancel" });
     expect(setup.requests).toEqual([]);
     expect(setup.cancelled).toBe(true);

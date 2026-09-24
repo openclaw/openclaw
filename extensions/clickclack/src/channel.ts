@@ -68,6 +68,7 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
         deliveryQueueId: ctx.deliveryQueueId,
         deliveryPartIndex: ctx.deliveryPartIndex,
         onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
@@ -96,6 +97,8 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
         deliveryQueueId: ctx.deliveryQueueId,
         deliveryPartIndex: ctx.deliveryPartIndex,
         onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        onDeliveryResult: ctx.onDeliveryResult,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
@@ -228,6 +231,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
         deliveryQueueId,
         deliveryPartIndex,
         onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
       }) => {
         const messageId = await sendClickClackText({
           cfg: cfg as CoreConfig,
@@ -239,6 +243,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           deliveryQueueId,
           deliveryPartIndex,
           onPlatformSendDispatch,
+          assertDirectAdapterHandoff,
         });
         // Legacy outbound results use an empty id to report an intentional no-send.
         return { messageId: messageId ?? "" };
@@ -257,6 +262,8 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
         deliveryQueueId,
         deliveryPartIndex,
         onPlatformSendDispatch,
+        assertDirectAdapterHandoff,
+        onDeliveryResult,
       }) => {
         if (!mediaUrl) {
           throw new Error("ClickClack media send requires mediaUrl");
@@ -275,6 +282,11 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
           deliveryQueueId,
           deliveryPartIndex,
           onPlatformSendDispatch,
+          assertDirectAdapterHandoff,
+          onDeliveryResult: onDeliveryResult
+            ? ({ messageId: acceptedMessageId, receipt }) =>
+                onDeliveryResult({ channel: CHANNEL_ID, messageId: acceptedMessageId, receipt })
+            : undefined,
         });
         return { messageId };
       },

@@ -127,7 +127,7 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
     expect(final).toMatchObject({ config: { count: 9 } });
     expect(store.submissions).toHaveLength(1);
   } finally {
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   }
 });

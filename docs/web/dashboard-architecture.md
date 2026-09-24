@@ -43,15 +43,15 @@ Principles:
 
 ## Concepts
 
-| Concept             | Definition                                                                                                                                                                         |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                                         |
-| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                                 |
-| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                                                           |
-| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                                                  |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                                       |
-| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                                          |
-| Pin (session)       | Only root sessions can be pinned. Child/subagent sessions live in their parent's tree and reject pin requests. Opening a pinned session restores that browser's saved task layout. |
+| Concept             | Definition                                                                                                                                                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                                                                                                                                                              |
+| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                                                                                                                                                      |
+| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                                                                                                                                                                                |
+| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                                                                                                                                                                       |
+| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                                                                                                                                                            |
+| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                                                                                                                                                               |
+| Pin (session)       | Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in transcript activity and Tasks views, outside sidebar navigation. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
 
@@ -74,8 +74,9 @@ Principles:
   changing the main view.
 - **Layout ownership:** the browser stores the arrangement per session, including
   the main view, active side tab, dock position, dimensions, and focus state.
-  Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly
-  make Dashboard main and focus it. Placement changes reuse the mounted content
+  Ordinary revisits and gallery opens use personal presentation overrides before
+  the shared session default. Explicit links with `?dashboard=expanded` make
+  Dashboard main and focus it for that visit without creating a personal override. Placement changes reuse the mounted content
   so widget frames, browser views, terminals, and chat drafts survive a swap.
   The task toolbar and side-panel tab header align above their respective panes
   in left/right layouts. Stacked layouts keep each header above its own pane.
@@ -215,6 +216,11 @@ Shared hosting infrastructure:
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
   fetches its API directly from the sandbox, no gateway involvement.
+- **Static assets.** The shared widget CDN allowlist permits public scripts,
+  stylesheets, and fonts in the document, proxy, and direct-response policies.
+  This is independent of `connect-src` and host-tool grants. Third-party code
+  runs with the widget's content and granted capabilities; asset URLs must not
+  contain private data. See [Libraries and fonts](/tools/show-widget#libraries-and-fonts).
 - **Grants.** HTML and registered widgets declaring nothing render immediately
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
@@ -391,7 +397,10 @@ rechecks the live Gateway, ticket generation, widget revision and grant across
 awaits for both data and action paths. GitHub selects the agent override, System,
 or native identity using the existing credential owner and OAuth refresh
 service. Read authority additionally revalidates selection and credential
-rotation before fetch and before returning data. This does not change the
+rotation before fetch and before returning data. Native `gh auth token` reads
+can reuse a successful lookup for up to 60 seconds, so host login, logout, and
+account switching can take that long to appear. Environment tokens, managed
+credentials, and caller authority remain live checks. This does not change the
 personal publication broker or its admitted credential-snapshot semantics.
 
 Authenticated reads never use preview authentication or anonymous retry.
@@ -487,6 +496,20 @@ The canonical table definitions, constraints, and indexes are in
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
+Ordinary disk data mutations borrow the canonical per-agent SQLite worker connection.
+The Boards backend runs the existing synchronous transaction kernels and checks
+current caller authority at transaction entry and commit. Committed changes
+invalidate the host's exact session projection before the mutation returns;
+cleanup failures do not turn a completed write into a retryable failure.
+Existing-session preflight, source-handle acquisition, schema/bootstrap/migration,
+protected reads, and cold
+`hasBoard` projection remain with their existing native owners. Protected read turns
+join the same per-agent FIFO before checking the current widget and starting
+consumption. They release the queue before awaiting external consumer work, so
+queued revocation cannot be overtaken by a later protected publication. Incognito writes
+continue on their process-held connection. The worker never owns a second agent
+database actor, and this cut does not change board schemas or protocol payloads.
+
 Board existence = any rows for the `sessionKey`. Deleting a session deletes its
 board rows. `/new`/`/reset` does not touch them.
 
@@ -496,7 +519,7 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 
 - `canvas.document.preview { html }` → unchanged caller-owned HTML and the same
   isolated sandbox connection metadata as `canvas.document.view` — `operator.read`.
-  It accepts at most 256 KiB of UTF-8 data (including empty HTML), rejects extra
+  It accepts at most 2 MiB of UTF-8 data (including empty HTML), rejects extra
   fields, and never reads or creates a stored document. It honors Canvas host
   disablement and returns no capability ticket or prompt/tool/host access. File-tab
   clients use the default SandboxHost policy with descendant frames blocked, not
@@ -548,7 +571,13 @@ presentation?, capabilities? }` — create/update by name. `kind` defaults to `h
   target, and is unavailable to detached cron-run sessions.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
   `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
-  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
+  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`,
+  `set_default_presentation`. The shared `boardPresentation` default belongs to
+  session metadata (`session_nodes.entry_json`), not board layout state. UI and
+  agent writes use `sessions.patch`; existing session read/change projections,
+  authority, reset retention, and deletion own its lifecycle. Browser layouts
+  cache presentation separately from explicit personal overrides. Shared changes
+  apply on the next dashboard open, not to active viewers.
   Presentation is `split` or `expanded`. `expanded` makes Dashboard main and
   focuses it, while `split` reveals Dashboard using the current arrangement and
   brings chat alongside when Dashboard is main. The Control UI owns the side

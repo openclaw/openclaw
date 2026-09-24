@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 
 const confirmMock = vi.hoisted(() => vi.fn());
 const selectMock = vi.hoisted(() => vi.fn());
@@ -203,9 +204,9 @@ describe("runSecretsConfigureInteractive", () => {
     // the selected agent's local store, so neither is migratable here.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    writeSharedAuthProfileStoreRaw(env, {
-      version: 1,
-      profiles: {
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
         "openai:shared": {
           type: "api_key",
           provider: "openai",
@@ -217,14 +218,11 @@ describe("runSecretsConfigureInteractive", () => {
           key: "sk-leftover-plaintext", // pragma: allowlist secret
           keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
-      },
-    });
+      }),
+    );
     // Agent store empty + no config secret targets → no configurable candidates.
     // The shared-plaintext warning fires before the empty-candidate guard.
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
     createSecretsConfigIOMock.mockReturnValue({
       readConfigFileSnapshotForWrite: async () => ({
         snapshot: {
@@ -262,9 +260,9 @@ describe("runSecretsConfigureInteractive", () => {
     // counter would miscount them as plaintext.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    writeSharedAuthProfileStoreRaw(env, {
-      version: 1,
-      profiles: {
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
         "openai:ref": {
           type: "api_key",
           provider: "openai",
@@ -280,12 +278,9 @@ describe("runSecretsConfigureInteractive", () => {
           provider: "openai",
           key: "${OPENAI_API_KEY}", // pragma: allowlist secret
         },
-      },
-    });
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
+      }),
+    );
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
     createSecretsConfigIOMock.mockReturnValue({
       readConfigFileSnapshotForWrite: async () => ({
         snapshot: {
@@ -316,10 +311,7 @@ describe("runSecretsConfigureInteractive", () => {
     // No shared store row committed → no plaintext to report.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
     createSecretsConfigIOMock.mockReturnValue({
       readConfigFileSnapshotForWrite: async () => ({
         snapshot: {

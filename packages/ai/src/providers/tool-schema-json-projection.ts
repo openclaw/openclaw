@@ -1,6 +1,7 @@
 import { types as utilTypes } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
@@ -27,7 +28,11 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   return !Number.isFinite(Number.prototype.valueOf.call(value));
 }
 
-function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInputSchemaProjection {
+function serializeToolInputSchema(
+  value: unknown,
+  path: string,
+  captureJson?: (text: string) => void,
+): RuntimeToolInputSchemaProjection {
   const nonFiniteNumber = {
     path: null as string | null,
   };
@@ -84,8 +89,10 @@ function serializeToolInputSchema(value: unknown, path: string): RuntimeToolInpu
       violations: [`${violationPath} is not JSON-serializable`],
     };
   }
+  const schema = JSON.parse(text) as RuntimeToolInputSchemaJson;
+  captureJson?.(text);
   return {
-    schema: JSON.parse(text) as RuntimeToolInputSchemaJson,
+    schema,
     violations: [],
   };
 }
@@ -161,7 +168,35 @@ export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
 ): RuntimeToolInputSchemaProjection {
-  const projection = serializeToolInputSchema(schema, path);
+  return projectToolInputSchema(schema, path);
+}
+
+/** Package-private preparation; public projections never carry normalization provenance. */
+export function prepareRuntimeToolInputSchema(
+  schema: unknown,
+  path: string,
+): {
+  projection: RuntimeToolInputSchemaProjection;
+  normalization?: PreparedToolSchemaNormalization;
+} {
+  let inputJson: string | undefined;
+  const projection = projectToolInputSchema(schema, path, (text) => {
+    inputJson = text;
+  });
+  return {
+    projection,
+    ...(schema && typeof schema === "object" && inputJson && projection.violations.length === 0
+      ? { normalization: { source: schema, inputJson } }
+      : {}),
+  };
+}
+
+function projectToolInputSchema(
+  schema: unknown,
+  path: string,
+  captureJson?: (text: string) => void,
+): RuntimeToolInputSchemaProjection {
+  const projection = serializeToolInputSchema(schema, path, captureJson);
   const violations = [...projection.violations];
   if (!isJsonObject(projection.schema)) {
     violations.push(`${path} must be a JSON object schema`);

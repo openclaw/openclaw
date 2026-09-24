@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TestSpecification } from "vitest/node";
+import type { CiTestTimings } from "../scripts/lib/ci-test-timings-schema.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
@@ -49,8 +50,10 @@ function timingFile(fileSeconds: Record<string, number>, perFileOverheadSeconds 
     source: "fixture measurements",
     uiE2e: { fileSeconds, perFileOverheadSeconds },
     compactGroupSeconds: { blacksmith: {}, github: {} },
+    runtimePlacementTimings: { blacksmith: [], github: [] },
     repoE2eFileSeconds: {},
-  });
+    toolingFileSeconds: { blacksmith: {}, github: {} },
+  } satisfies CiTestTimings);
 }
 
 function specifications(
@@ -110,14 +113,17 @@ const qaLabFiles = [
 const realGatewayFiles = [
   "agent-file-lifecycle.real-gateway",
   "chat-agent-avatar.real-gateway",
+  "chat-collaborator-scroll.real-gateway",
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-flow.catalog-bootstrap",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-thinking-metadata.real-gateway",
+  "chat-tts-supplement.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
+  "command-palette-search.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
   "desktop-resize.real-gateway",
@@ -129,7 +135,9 @@ const realGatewayFiles = [
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
   "profile-page.real-gateway",
+  "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
+  "session-pr-reader-lifetime.real-gateway",
   "session-progress-hovercard.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
@@ -138,6 +146,7 @@ const realGatewayFiles = [
   .concat(qaLabFiles);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
+const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
 
 type OwnershipProbe = {
   files: Array<{
@@ -151,12 +160,14 @@ type OwnershipProbe = {
     name: string;
     chromium?: { available: boolean };
     url?: string | null;
+    buildInfo?: typeof prebuiltBuildInfo | null;
     bridge: boolean;
   }>;
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
-  steps: Array<{ builds: number; closes: number }>;
+  steps: Array<{ builds: number; previews: number; closes: number }>;
   admissions: string[];
+  canonicalAssetsIntact: boolean;
   rootWorkers: number;
   setupError?: string;
 };
@@ -171,13 +182,16 @@ function probeOwnership(
     skipRealGateway?: boolean;
     available?: boolean;
     initialize?: string[][];
-    failure?: "build" | "provide" | "admission";
+    failure?: "build" | "preview" | "provide" | "admission" | "preflight";
   } = {},
 ): OwnershipProbe {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-ui-ownership-")));
   tempDirs.push(directory);
   const eventsFile = path.join(directory, "leases.jsonl");
   const admissionsFile = path.join(directory, "admissions.jsonl");
+  const canonicalRoot = path.join(directory, "canonical-ui");
+  fs.mkdirSync(canonicalRoot);
+  fs.writeFileSync(path.join(canonicalRoot, "bundle.html"), "canonical fixture");
   const resourceFile = path.join(directory, "resources.mjs");
   fs.writeFileSync(
     resourceFile,
@@ -185,16 +199,33 @@ function probeOwnership(
     import fs from "node:fs";
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
+    export const assertUiE2ePreflight = async () => {
+      if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
+    };
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
       if (${JSON.stringify(options.failure)} === "admission") throw new Error("fixture admission failed");
+      project.vitest.getRootProject().provide("controlUiE2ePrebuiltAssets", {
+        root: ${JSON.stringify(canonicalRoot)}, buildInfo: ${JSON.stringify(prebuiltBuildInfo)},
+      });
+    }
+    function lease(outDir, built) {
+      const record = (closed) => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ outDir, closed, built }) + "\\n");
+      record(false);
+      const failure = built ? "build" : "preview";
+      if (${JSON.stringify(options.failure)} === failure) throw new Error("fixture " + failure + " failed");
+      return { baseUrl: "http://127.0.0.1:12345/", close: async () => record(true) };
     }
     export async function startBundledControlUiE2eServer(outDir) {
       fs.writeFileSync(outDir + "/bundle.html", "fixture");
-      const record = (closed) => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ outDir, closed }) + "\\n");
-      record(false);
-      if (${JSON.stringify(options.failure)} === "build") throw new Error("fixture build failed");
-      return { baseUrl: "http://127.0.0.1:12345/", close: async () => record(true) };
+      return lease(outDir, true);
+    }
+    export async function startBuiltControlUiE2eServer(outDir) {
+      if (!fs.existsSync(${JSON.stringify(admissionsFile)})) throw new Error("preview preceded admission");
+      if (outDir !== ${JSON.stringify(canonicalRoot)} || fs.readFileSync(outDir + "/bundle.html", "utf8") !== "canonical fixture") {
+        throw new Error("preview did not borrow admitted artifacts");
+      }
+      return lease(outDir, false);
     }
   `,
   );
@@ -207,6 +238,7 @@ function probeOwnership(
       return { ...config, resolve: { ...config.resolve, alias: [
         { find: /^.*\\/control-ui-e2e\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
         { find: /^.*\\/vitest\\.ui-e2e-prebuilt\\.global-setup\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
+        { find: /^.*vitest[.]ui-e2e-preflight[.]ts$/, replacement: ${JSON.stringify(resourceFile)} },
         ...(config.resolve?.alias ?? []),
       ] }, test: { ...config.test,
         ...(config.test?.projects ? { projects: config.test.projects.map(instrument) } : {}),
@@ -260,7 +292,8 @@ function probeOwnership(
           await ctx.initializeGlobalSetup(selected);
         } catch (error) { setupError = error.message; }
         const events = readEvents();
-        steps.push({ builds: events.filter(event => !event.closed).length,
+        steps.push({ builds: events.filter(event => !event.closed && event.built).length,
+          previews: events.filter(event => !event.closed).length,
           closes: events.filter(event => event.closed).length });
       }
       const projects = [...new Set(specs.map(spec => spec.project))];
@@ -282,6 +315,7 @@ function probeOwnership(
         contexts: projects.map(project => ({ name: project.name,
           chromium: project.getProvidedContext().controlUiE2eChromium,
           url: project.getProvidedContext().controlUiE2eServerBaseUrl,
+          buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
         admissions: fs.existsSync(${JSON.stringify(admissionsFile)})
@@ -290,9 +324,11 @@ function probeOwnership(
     } finally { await ctx.close(); }
     const events = readEvents();
     report.leases = events.filter(event => !event.closed).map(event => ({
-      ...event, closed: events.filter(other => other.outDir === event.outDir && other.closed).length === 1,
+      outDir: event.outDir, closed: events.filter(other => other.outDir === event.outDir && other.closed).length === 1,
       removed: !fs.existsSync(event.outDir),
     }));
+    report.canonicalAssetsIntact = fs.existsSync(${JSON.stringify(canonicalRoot)}) &&
+      fs.readFileSync(${JSON.stringify(path.join(canonicalRoot, "bundle.html"))}, "utf8") === "canonical fixture";
     console.log("OWNERSHIP " + JSON.stringify(report));
   `,
     {
@@ -313,6 +349,13 @@ function probeOwnership(
 }
 
 describe("Control UI E2E resource ownership", () => {
+  it("refuses a selected project before acquiring fixtures when environment preflight fails", () => {
+    const result = probeOwnership({ filters: [bundledFile], failure: "preflight" });
+    expect(result.setupError).toBe("fixture preflight failed");
+    expect(result.leases).toEqual([]);
+    expect(result.steps).toEqual([{ builds: 0, previews: 0, closes: 0 }]);
+  });
+
   it.each([
     { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
     ...["control-ui-retained-assets", "service-worker-update"].map((name) => {
@@ -333,7 +376,14 @@ describe("Control UI E2E resource ownership", () => {
       leases: 1,
     },
     { filters: [standaloneFile, bundledFile], files: [standaloneFile, bundledFile], leases: 1 },
-    { filters: ["ui/src/pages/tasks"], files: ["ui/src/pages/tasks/tasks.e2e.test.ts"], leases: 1 },
+    {
+      filters: ["ui/src/pages/tasks"],
+      files: [
+        "ui/src/pages/tasks/tasks-transcript.e2e.test.ts",
+        "ui/src/pages/tasks/tasks.e2e.test.ts",
+      ],
+      leases: 1,
+    },
     {
       include: [standaloneFile, bundledFile],
       files: [standaloneFile, bundledFile],
@@ -387,8 +437,17 @@ describe("Control UI E2E resource ownership", () => {
         files.toSorted(compareFiles),
       );
       expect(result.leases).toHaveLength(leases);
-      expect(result.leases.every((lease) => lease.closed && lease.removed)).toBe(true);
+      expect(
+        result.leases.every((lease) => lease.closed && lease.removed === !options.prebuilt),
+      ).toBe(true);
+      expect(result.steps).toEqual([
+        { builds: options.prebuilt ? 0 : leases, previews: leases, closes: 0 },
+      ]);
+      expect(result.canonicalAssetsIntact).toBe(true);
       for (const context of result.contexts) {
+        expect(context.buildInfo ?? null).toEqual(
+          options.prebuilt && leases > 0 ? prebuiltBuildInfo : null,
+        );
         expect(context.chromium?.available).toBe(options.available !== false);
         const consumesBundle = ["ui-e2e-bundled", "ui-e2e-serial", "ui-e2e-real-gateway"].includes(
           context.name,
@@ -419,9 +478,9 @@ describe("Control UI E2E resource ownership", () => {
       });
       expect(result.setupError).toBeUndefined();
       expect(result.steps).toEqual([
-        { builds: 0, closes: 0 },
-        { builds: available ? 1 : 0, closes: 0 },
-        { builds: available ? 1 : 0, closes: 0 },
+        { builds: 0, previews: 0, closes: 0 },
+        { builds: available ? 1 : 0, previews: available ? 1 : 0, closes: 0 },
+        { builds: available ? 1 : 0, previews: available ? 1 : 0, closes: 0 },
       ]);
       expect(result.leases).toEqual(
         available ? [{ outDir: expect.any(String), closed: true, removed: true }] : [],
@@ -435,14 +494,24 @@ describe("Control UI E2E resource ownership", () => {
     },
   );
 
-  it.each(["build", "provide"] as const)(
-    "cleans the private bundle after native %s failure",
-    (failure) => {
-      const result = probeOwnership({ filters: [bundledFile], failure });
+  it.each([
+    { failure: "build", prebuilt: false },
+    { failure: "provide", prebuilt: false },
+    { failure: "preview", prebuilt: true },
+    { failure: "provide", prebuilt: true },
+  ] as const)(
+    "cleans owned resources after native $failure failure (prebuilt: $prebuilt)",
+    ({ failure, prebuilt }) => {
+      const result = probeOwnership({
+        filters: [prebuilt ? qaLabFiles[0] : bundledFile],
+        failure,
+        prebuilt,
+      });
       expect(result.setupError).toBe(`fixture ${failure} failed`);
       expect(result.leases).toEqual([
-        { outDir: expect.any(String), closed: failure === "provide", removed: true },
+        { outDir: expect.any(String), closed: failure === "provide", removed: !prebuilt },
       ]);
+      expect(result.canonicalAssetsIntact).toBe(true);
     },
   );
 
@@ -531,6 +600,27 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
         {
+          file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -552,22 +642,22 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
-          file: "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
+          file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
           fileParallelism: false,
         },
         {
-          file: "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
+          file: "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
           phase: 1,
           workers: 1,
           fileParallelism: false,
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(24);
+      expect(parallel).toHaveLength(26);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {
@@ -580,7 +670,14 @@ describe("Control UI E2E resource ownership", () => {
       expect(result.admissions.toSorted()).toEqual(
         result.contexts.map((entry) => entry.name).toSorted(),
       );
-      expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
+      expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: false }]);
+      expect(result.steps).toEqual([{ builds: 0, previews: 1, closes: 0 }]);
+      expect(result.canonicalAssetsIntact).toBe(true);
+      expect(
+        result.contexts.every(
+          (context) => context.buildInfo?.buildId === prebuiltBuildInfo.buildId,
+        ),
+      ).toBe(true);
     },
   );
 
@@ -591,14 +688,15 @@ describe("Control UI E2E resource ownership", () => {
     });
     expect(result.setupError).toBeUndefined();
     expect(result.steps).toEqual([
-      { builds: 0, closes: 0 },
-      { builds: 0, closes: 0 },
-      { builds: 1, closes: 0 },
-      { builds: 1, closes: 0 },
+      { builds: 0, previews: 0, closes: 0 },
+      { builds: 0, previews: 0, closes: 0 },
+      { builds: 0, previews: 1, closes: 0 },
+      { builds: 0, previews: 1, closes: 0 },
     ]);
     expect(result.admissions).toHaveLength(3);
     expect(new Set(result.admissions).size).toBe(3);
-    expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
+    expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: false }]);
+    expect(result.canonicalAssetsIntact).toBe(true);
   });
 
   it("propagates prebuilt admission failure before acquiring the preview", () => {
@@ -609,8 +707,9 @@ describe("Control UI E2E resource ownership", () => {
     });
     expect(result.setupError).toBe("fixture admission failed");
     expect(result.admissions).toEqual(["ui-e2e-real-gateway"]);
-    expect(result.steps).toEqual([{ builds: 0, closes: 0 }]);
+    expect(result.steps).toEqual([{ builds: 0, previews: 0, closes: 0 }]);
     expect(result.leases).toEqual([]);
+    expect(result.canonicalAssetsIntact).toBe(true);
     expect(result.contexts.every((context) => context.url === undefined)).toBe(true);
   });
 });
@@ -738,7 +837,8 @@ describe("Control UI E2E Vitest sharding", () => {
     ];
     expect(files.length).toBeGreaterThan(0);
     useTimings(committed);
-    const original = await partition(files);
+    const original = await partition(files, 12);
+    expect(original).toHaveLength(12);
     // Validate via the production loader before adding a stale but valid weight.
     const { readUiE2eFileTimings } = await import("../scripts/lib/ci-test-timings.mts");
     const timings = readUiE2eFileTimings();
@@ -752,7 +852,7 @@ describe("Control UI E2E Vitest sharding", () => {
         timings.perFileOverheadSeconds,
       ),
     );
-    expect(await partition(files.toReversed())).toEqual(original);
+    expect(await partition(files.toReversed(), 12)).toEqual(original);
     expect(original.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
     expect(new Set(original.flat()).size).toBe(files.length);
   });

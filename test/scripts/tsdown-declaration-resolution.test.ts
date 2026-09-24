@@ -162,9 +162,10 @@ describe("tsdown checkout declaration resolution", () => {
           fs.symlinkSync(target, alias, "junction");
         }
         if (kind.startsWith("directory alias targeting")) {
-          // Keep all three spellings distinct so native fixture roots cannot mask the bug.
-          expect(fs.realpathSync(alias)).not.toBe(alias);
-          expect(fs.realpathSync(alias)).not.toBe(root);
+          // Keep all three inputs distinct even when the runtime canonicalizes the
+          // case-only target before realpath returns it.
+          expect(alias).not.toBe(target);
+          expect(target).not.toBe(root);
         }
         const result = runFixtureModule(
           root,

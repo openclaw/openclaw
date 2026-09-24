@@ -15,6 +15,7 @@ import {
 } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { memoizeSanitizedToolResult } from "./embedded-agent-tool-result-cache.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -34,6 +35,30 @@ const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
   "x-api-key",
   "x-auth-token",
 ]);
+
+/** Recognize work accepted by a tool whose background task owns completion. */
+export function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  return details?.async === true && details.status === "started";
+}
+
+/** Preserve the accepted task's identity independently of result presentation. */
+export function readAsyncStartedTaskIds(result: unknown): {
+  asyncTaskRunId?: string;
+  asyncTaskId?: string;
+} {
+  const details = readToolResultDetails(result);
+  if (!details) {
+    return {};
+  }
+  const nestedTask = readRecord(details.task);
+  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
+  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
+  return {
+    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
+    ...(asyncTaskId ? { asyncTaskId } : {}),
+  };
+}
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -253,11 +278,15 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
     return redactModelVisibleToolPayloadText(result);
   }
-  if (Array.isArray(result)) {
-    return redactModelVisibleSecrets(result);
-  }
   if (!result || typeof result !== "object") {
     return result;
+  }
+  return memoizeSanitizedToolResult(result, () => sanitizeStructuredToolResult(result));
+}
+
+function sanitizeStructuredToolResult(result: object): object {
+  if (Array.isArray(result)) {
+    return redactModelVisibleSecrets(result);
   }
   const record = result as Record<string, unknown>;
   // Strip image data first so the deep redaction pass doesn't waste work

@@ -3,11 +3,8 @@ import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import {
-  getCronJobPayload,
-  resolveConfiguredCronModelSuggestions,
-  type CronState,
-} from "../../lib/cron/index.ts";
+import { getCronJobPayload, resolveConfiguredCronModelSuggestions } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { resolveCronTimezoneSuggestions } from "./timezone-suggestions.ts";
 
 export const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];

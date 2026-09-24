@@ -382,6 +382,71 @@ a.activity-current-work__row:hover {
   position: relative;
 }
 
+.activity-feed__recap {
+  min-width: 0;
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.activity-feed__recap-text {
+  max-width: 88ch;
+  margin: 0;
+}
+
+.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
+  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 2.4s ease-in-out infinite;
+}
+
+.activity-feed__recap-skeleton {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 88ch;
+}
+
+.activity-feed__loading-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.activity-feed__loading-meta {
+  width: 30%;
+  height: 11px;
+  margin-top: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
+    animation: none;
+    background: none;
+    color: var(--text);
+  }
+}
+
+.activity-feed__recap-feedback {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__recap-retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+}
+
 .activity-feed__git {
   display: flex;
   align-items: center;
@@ -500,9 +565,9 @@ a.activity-current-work__row:hover {
   transform: rotate(90deg);
 }
 
-.activity-feed__session:hover,
+.activity-feed__session[href]:hover,
 .activity-feed__session:focus-visible,
-.activity-feed__session-row:hover .activity-feed__session,
+.activity-feed__session-row:hover .activity-feed__session[href],
 .activity-feed__session-row:focus-within .activity-feed__session {
   background: var(--bg-hover);
 }
@@ -590,6 +655,10 @@ a.activity-current-work__row:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-feed__session-meta .agent-row-chip {
+  font: inherit;
 }
 
 .activity-feed__session-source {

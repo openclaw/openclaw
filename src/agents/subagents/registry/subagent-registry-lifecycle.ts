@@ -1,25 +1,32 @@
 import pLimit from "p-limit";
+import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  runWithGatewayDetachedWorkContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
   getDeliveryLastError,
 } from "./subagent-delivery-state.js";
+import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   finalizeResumedAnnounceGiveUp,
-  retryDeferredCompletedAnnounces,
+  resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
   CleanupBookkeepingParams,
+  PendingRequesterSettleWakeCommit,
   ScheduledRequesterSettleWake,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
+  cancelRequesterSettleWake,
   completeCleanupBookkeeping,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -34,6 +41,10 @@ export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-con
 const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
 
 export class SubagentLifecycleController {
+  readonly pendingRequesterSettleWakeCommits = new WeakMap<
+    SubagentRunRecord,
+    PendingRequesterSettleWakeCommit
+  >();
   private readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
   private pendingRequesterSettleWakeRearms = new WeakSet<SubagentRunRecord>();
   private readonly scheduledRequesterSettleWakeRuns = new WeakSet<SubagentRunRecord>();
@@ -48,6 +59,7 @@ export class SubagentLifecycleController {
   >();
   private readonly terminalCompletionLocks = new Map<string, Promise<void>>();
   private readonly terminalGenerations = new WeakMap<SubagentRunRecord, number>();
+  private readonly terminalSessionEffects = new WeakMap<SubagentRunRecord, () => boolean>();
   private readonly cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
   private readonly progressEndedEntries = new WeakSet<SubagentRunRecord>();
   private readonly cleanupFailureCounts = new WeakMap<SubagentRunRecord, number>();
@@ -55,14 +67,26 @@ export class SubagentLifecycleController {
   constructor(readonly options: SubagentLifecycleOptions) {}
 
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean {
+    if (entry.killReconciliation?.supersededAt !== undefined) {
+      return true;
+    }
+    const latest = this.options.getLatestRunForChildSession(
+      entry.childSessionKey,
+      (candidate) => candidate.runId !== entry.runId,
+    );
+    return latest !== null && compareSubagentRunGeneration(latest, entry) > 0;
+  }
+
+  bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void {
+    if (isCurrent) {
+      this.terminalSessionEffects.set(entry, isCurrent);
+    }
+  }
+
+  shouldSuppressSessionEffects(entry: SubagentRunRecord): boolean {
     return (
-      entry.killReconciliation?.supersededAt !== undefined ||
-      Array.from(this.options.runs.values()).some(
-        (candidate) =>
-          candidate.runId !== entry.runId &&
-          candidate.childSessionKey === entry.childSessionKey &&
-          compareSubagentRunGeneration(candidate, entry) > 0,
-      )
+      shouldSuppressSubagentRecoverySessionEffects(entry) ||
+      this.terminalSessionEffects.get(entry)?.() === false
     );
   }
 
@@ -178,6 +202,7 @@ export class SubagentLifecycleController {
   markProgressEnded = (entry: SubagentRunRecord): void => void this.progressEndedEntries.add(entry);
   clearCleanupFailureCount = (entry: SubagentRunRecord): void =>
     void this.cleanupFailureCounts.delete(entry);
+  hasCleanupFailure = (entry: SubagentRunRecord): boolean => this.cleanupFailureCounts.has(entry);
 
   incrementCleanupFailureCount(entry: SubagentRunRecord): number {
     const count = (this.cleanupFailureCounts.get(entry) ?? 0) + 1;
@@ -201,10 +226,10 @@ export class SubagentLifecycleController {
   ): Promise<unknown> => {
     const runCurrent = async () =>
       this.options.runs.get(entry.runId) === entry ? run() : undefined;
-    // Reserve the independent Gateway root before entering the limiter. The
-    // queue wait counts during restart drain, but may outlive this exact row;
-    // validate its ownership only when the execution slot actually opens.
-    return runWithGatewayIndependentRootWorkContinuation(() => {
+    // Retry timers can outlive their original async scope. Reserve a detached
+    // Gateway root before the limiter, then revalidate row ownership when the
+    // execution slot opens; the queued wait still counts during restart drain.
+    return runWithGatewayDetachedWorkContinuation(() => {
       if (!this.restoredRequesterSettleWakeRuns.has(entry.runId)) {
         return runCurrent();
       }
@@ -246,10 +271,11 @@ export class SubagentLifecycleController {
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {
-    completeCleanupBookkeeping(this, params, (excludeRunId) =>
-      retryDeferredCompletedAnnounces(this, excludeRunId),
-    );
+    completeCleanupBookkeeping(this, params);
   };
+
+  resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
+    resumeAncestorCleanup(this, settledEntry);
 
   static discardTerminalDelivery(
     this: void,
@@ -306,6 +332,9 @@ export class SubagentLifecycleController {
     scheduleRequesterSettleWake(this, runId, entry);
   };
 
+  cancelRequesterSettleWake = (entry: SubagentRunRecord, assertCurrent: () => void) =>
+    cancelRequesterSettleWake(this, entry, assertCurrent);
+
   settleRequesterTurnAfterSessionSpawns = (
     args: {
       requesterSessionKey: string;
@@ -313,6 +342,7 @@ export class SubagentLifecycleController {
       requesterTurnRunId: string;
       requesterYielded: boolean;
       acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+      progressPresentation?: ProgressContinuationState;
     },
     source: "live" | "restore" = "live",
   ) =>
@@ -320,7 +350,14 @@ export class SubagentLifecycleController {
       ...args,
       runs: this.options.runs,
       persistOrThrow: (...runIds) => this.options.persistOrThrow(...runIds),
-      schedule: (runId, entry) => {
+      schedule: (runId, entry, kind) => {
+        if (kind === "completion") {
+          if (!this.hasCleanupFailure(entry)) {
+            this.options.resumedRuns.delete(runId);
+            this.options.resumeSubagentRun(runId);
+          }
+          return;
+        }
         if (this.hasScheduledRequesterSettleWakeRun(entry)) {
           this.markRequesterSettleWakeRearm(entry);
           return;

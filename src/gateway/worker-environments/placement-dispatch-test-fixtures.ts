@@ -1,4 +1,5 @@
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -15,7 +16,9 @@ type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
 >[0];
 export type PlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
-type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentService["create"]>>;
+type DispatchEnvironmentRecord = Awaited<
+  ReturnType<WorkerDispatchEnvironmentService["createWithRequest"]>
+>;
 export type DispatchStage =
   | "barrier"
   | "workspace"
@@ -112,7 +115,10 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
   const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
-    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    protocolFeatures: [
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+    ],
   };
   const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",

@@ -4,6 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
+  PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
+  PORTABLE_PLUGIN_ICON_PATH,
+} from "../../src/plugins/portable-icon-paths.ts";
+import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
   pluginRuntimeExtension,
@@ -12,11 +17,15 @@ import {
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module-refs.mts";
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
+import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
 
 const env = {
   NODE_ENV: "production",
 };
+
+// Supported hosts lack this binding; publish the canonical pure implementation with the plugin.
+const BUNDLED_GRAPHEME_SDK_IMPORT = "openclaw/plugin-sdk/text-grapheme";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -94,6 +103,9 @@ function getStringRecord(value: unknown) {
 function createNeverBundleDependencyMatcher(packageJson: PluginPackageJson) {
   const externalDependencies = collectExternalDependencyNames(packageJson);
   return (id: string) => {
+    if (id === BUNDLED_GRAPHEME_SDK_IMPORT) {
+      return false;
+    }
     if (id === "openclaw" || id.startsWith("openclaw/")) {
       return true;
     }
@@ -229,6 +241,7 @@ function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
 function resolvePluginNpmRuntimePackageFiles(plan: {
   packageJson: PluginPackageJson;
   packageDir: string;
+  manifest: JsonRecord;
 }) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
@@ -236,13 +249,25 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
       : [],
   );
   merged.add("dist/**");
-  for (const file of ["openclaw.plugin.json", "README.md", "SKILL.md", "assets/icon.png"]) {
+  for (const file of [
+    "openclaw.plugin.json",
+    "README.md",
+    "SKILL.md",
+    PORTABLE_PLUGIN_ICON_PATH,
+    PLUGIN_ACTIVITY_ICON_PATH,
+  ]) {
     if (packageRelativePathExists(plan.packageDir, file)) {
       merged.add(file);
     }
   }
+  if (packageRelativePathExists(plan.packageDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR)) {
+    merged.add(`${PLUGIN_TOOL_ACTIVITY_ICON_DIR}/*.svg`);
+  }
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
+  }
+  for (const file of collectPluginThemeAssetPaths(plan.manifest)) {
+    merged.add(file);
   }
   return [...merged];
 }
@@ -368,7 +393,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   return {
     ...plan,
     runtimeBuildOutputs: listPluginNpmRuntimeBuildOutputs(plan),
-    packageFiles: resolvePluginNpmRuntimePackageFiles(plan),
+    packageFiles: resolvePluginNpmRuntimePackageFiles({ ...plan, manifest }),
     packagePeerMetadata: resolvePluginNpmRuntimePackagePeerMetadata(plan),
   };
 }
@@ -394,12 +419,24 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     clean: false,
     config: false,
     dts: false,
+    alias: {
+      [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
+        plan.repoRoot,
+        "packages/normalization-core/src/grapheme.ts",
+      ),
+    },
     deps: {
+      alwaysBundle: (id) => id === BUNDLED_GRAPHEME_SDK_IMPORT,
       neverBundle: createNeverBundleDependencyMatcher(plan.packageJson),
     },
     entry: plan.entry,
     plugins: [createPluginInventoryModuleRefsPlugin(plan.packageDir)],
     outputOptions: {
+      // Published plugins still support hosts predating these private source facades.
+      paths: {
+        "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
+        "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
+      },
       chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
       entryFileNames: (chunk) =>
         Object.hasOwn(plan.entry, chunk.name)
@@ -468,7 +505,7 @@ async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
   const dependency = resolveOpenClawHostDependency(manifest.value);
   if (!dependency) {
     throw new Error(
-      `${params.packageDir} does not declare openclaw in peerDependencies or dependencies; no host link to prepare.`,
+      `${params.packageDir} does not declare openclaw in peerDependencies, optionalDependencies, or dependencies; no host link to prepare.`,
     );
   }
   if (

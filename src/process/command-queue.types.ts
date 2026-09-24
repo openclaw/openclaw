@@ -6,6 +6,9 @@ export type CommandLaneSnapshot = {
   queuedCount: number;
   activeCount: number;
   maxConcurrent: number;
+  /** Aggregate counts with a concurrency limit applied independently per session. */
+  concurrencyScope?: "session";
+  saturatedLaneCount?: number;
   draining: boolean;
   generation: number;
   /** Group this lane belongs to, if any. */

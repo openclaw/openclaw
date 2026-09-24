@@ -103,7 +103,10 @@ describe("agent-runtime model catalog compatibility", () => {
       PluginMetadataSnapshot,
       "owners" | "declaredProviderOwners"
     > & {
-      owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">;
+      owners: Omit<
+        PluginMetadataSnapshot["owners"],
+        "modelIdNormalizationPolicies" | "providerAuthContributions"
+      >;
     };
     type AcceptedMetadataSnapshot = NonNullable<
       NonNullable<Parameters<typeof loadModelCatalog>[0]>["metadataSnapshot"]

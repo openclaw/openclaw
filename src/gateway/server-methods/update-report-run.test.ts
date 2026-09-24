@@ -95,6 +95,17 @@ type ClientAuthority = Pick<
   "internal" | "authenticatedUserProfile" | "connectionSignal"
 >;
 
+function namedAdministrator(): ClientAuthority {
+  return {
+    authenticatedUserProfile: {
+      profileId: "11111111-2222-4333-8444-555555555555",
+      displayName: "Example administrator",
+      hasAvatar: false,
+      updatedAt: 0,
+    },
+  };
+}
+
 async function invoke(
   params: Record<string, unknown>,
   hasCurrentClientAuthority = () => true,
@@ -206,6 +217,70 @@ afterEach(async () => {
 });
 
 describe("Report action from the authoritative update ledger", () => {
+  it.each(["identity", "attempt", "digest"] as const)(
+    "retires named administrator consent when %s changes during final validation",
+    async (change) => {
+      recordFailure();
+      const authority = namedAdministrator();
+      const { previewDigest } = await preview(authority);
+      const paused = createDeferred();
+      const resume = createDeferred();
+      // Read admission, validate before reservation, validate after artifact staging.
+      mocks.sentinel
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async () => {
+          paused.resolve();
+          await resume.promise;
+          return change === "digest" ? matchingSentinel() : null;
+        });
+      const submitting = invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      await paused.promise;
+      if (change === "identity") {
+        authority.authenticatedUserProfile!.profileId = "another-administrator";
+      } else if (change === "attempt") {
+        createUpdateRun({ trigger: "control-ui" });
+      }
+      resume.resolve();
+      const response = await submitting;
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+      expect(mocks.runGh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never authenticates the host after owner demotion during artifact publication", async () => {
+    recordFailure();
+    const authority = namedAdministrator();
+    authority.authenticatedUserProfile!.profileId = GATEWAY_OWNER_PROFILE_ID;
+    const { previewDigest } = await preview(authority);
+    const rename = fs.rename.bind(fs);
+    const publication = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (String(args[0]).includes(`${path.sep}update-reports${path.sep}`)) {
+        authority.authenticatedUserProfile!.profileId = "named-administrator";
+      }
+    });
+    try {
+      const response = await invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(mocks.runGh).not.toHaveBeenCalled();
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+    } finally {
+      publication.mockRestore();
+    }
+  });
+
   it.each(["compact", "direct-success", "other-scope"] as const)(
     "enriches only the same scoped attempt in lifecycle order: %s",
     async (mode) => {
@@ -292,7 +367,7 @@ describe("Report action from the authoritative update ledger", () => {
     async ({ text, code, publicCode }) => {
       const onStepComplete = vi.fn();
       const step = await runStep({
-        name: "global install stage",
+        name: "package-stage",
         argv: ["npm", "install"],
         cwd: home.home,
         timeoutMs: 1000,
@@ -318,9 +393,9 @@ describe("Report action from the authoritative update ledger", () => {
       const { body, previewDigest } = await preview();
       expect(body).not.toContain("PRIVATE_CUSTOMER_ID");
       expect(renderUpdateRunReport(recorded!).lines.join("\n")).toContain(
-        `Failing check package-install (${code})`,
+        `Failing check package-stage (${code})`,
       );
-      expect(body).toContain(`Failing check package-install (${publicCode})`);
+      expect(body).toContain(`Failing check package-stage (${publicCode})`);
       for (const privateText of [
         "private-customer-text",
         "private-host.example",
@@ -332,7 +407,7 @@ describe("Report action from the authoritative update ledger", () => {
       }
       await invoke({ action: "submit", attemptId: runId, previewDigest });
       const submission = mocks.runGh.mock.calls.find(([args]) => args[0] === "api");
-      expect(submission?.[1]?.input?.toString()).toContain("package-install");
+      expect(submission?.[1]?.input?.toString()).toContain("package-stage");
       expect(submission?.[1]?.input?.toString()).not.toContain("private-customer-text");
       expect(submission?.[1]?.input?.toString()).not.toContain("PRIVATE_CUSTOMER_ID");
     },
@@ -657,6 +732,18 @@ describe("Report action from the authoritative update ledger", () => {
       expect(readUpdateFailureReportReceipt(runId)?.previewDigest === previewDigest).toBe(
         !changedPreview,
       );
+      if (outcome === "pending") {
+        const callsBefore = mocks.runGh.mock.calls.length;
+        const named = await invoke(
+          { action: "submit", attemptId: runId, previewDigest },
+          undefined,
+          namedAdministrator(),
+        );
+        expect(named).toHaveBeenCalledWith(true, expect.objectContaining({ status: "pending" }));
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("url");
+        expect(mocks.runGh).toHaveBeenCalledTimes(callsBefore);
+      }
       const response = await invoke({ action: "submit", attemptId: runId, previewDigest });
       expect(response).toHaveBeenCalledWith(
         true,

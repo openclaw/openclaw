@@ -8,13 +8,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -65,7 +69,16 @@ describe("worktrees gateway methods", () => {
       create: vi.fn(async () => record),
       remove: vi.fn(async () => ({ removed: true, snapshotRef: "refs/snapshot" })),
       restore: vi.fn(async () => ({ ...record, snapshotRef: "refs/snapshot" })),
-      gc: vi.fn(async () => ({ removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 })),
+      gc: vi.fn(async () => ({
+        removed: [record.id],
+        orphansDeleted: 1,
+        snapshotsPruned: 2,
+        outcome: "completed" as const,
+        issues: [],
+        issueCount: 0,
+        protectedCount: 0,
+        limitsSatisfied: true,
+      })),
     };
     const handlers = createWorktreesHandlers(service as never);
 
@@ -246,7 +259,16 @@ describe("worktrees gateway methods", () => {
 
   it("uses the built-in cleanup policy for gc", async () => {
     const service = {
-      gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
+      gc: vi.fn(async () => ({
+        removed: [],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "completed" as const,
+        issues: [],
+        issueCount: 0,
+        protectedCount: 0,
+        limitsSatisfied: true,
+      })),
     };
     const handlers = createWorktreesHandlers(service as never);
     const context = { getRuntimeConfig: () => ({}) };
@@ -256,6 +278,40 @@ describe("worktrees gateway methods", () => {
       limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
+    });
+  });
+
+  it("returns incomplete cleanup details without inviting an unsafe retry", async () => {
+    const service = {
+      gc: vi.fn(async () => ({
+        removed: ["removed"],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "partial" as const,
+        issues: [
+          {
+            id: "retained",
+            stage: "idle" as const,
+            outcome: "failed" as const,
+            reason: "cleanup-failed: repository unavailable",
+          },
+        ],
+        issueCount: 1,
+        protectedCount: 0,
+        limitsSatisfied: false,
+      })),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    const response = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
+
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      details: {
+        outcome: "partial",
+        issues: [{ id: "retained", reason: expect.stringContaining("repository unavailable") }],
+      },
+      retryable: false,
     });
   });
 

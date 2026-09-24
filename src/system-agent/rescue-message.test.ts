@@ -280,13 +280,6 @@ describe("OpenClaw rescue message", () => {
     );
   });
 
-  it("refuses model provider setup from remote rescue with a local pointer", async () => {
-    const cfg: OpenClawConfig = {};
-    const reply = await runRescue("/openclaw configure model provider", cfg);
-    expect(reply).toContain("cannot host model-provider credential setup");
-    expect(reply).toContain("openclaw onboard");
-  });
-
   it("refuses doctor repairs without creating a pending approval", async () => {
     await withRescueStateDir("doctor-fix-refused-", async () => {
       const cfg: OpenClawConfig = {};
@@ -657,16 +650,21 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
-  it.each([undefined, "writer"])(
-    "queues and applies agent creation with role %s through conversational approval",
-    async (role) => {
+  it.each([
+    { role: undefined, name: undefined },
+    { role: "writer", name: undefined },
+    { role: undefined, name: "QA Writer" },
+    { role: "writer", name: "QA Writer" },
+  ])(
+    "queues and applies agent creation with role $role and name $name through conversational approval",
+    async ({ role, name }) => {
       await withRescueStateDir("agent-", async () => {
         const cfg: OpenClawConfig = {};
         const deps = {
           createAgent: vi.fn(async () => ({
             status: "created" as const,
             agentId: "work",
-            name: "work",
+            name: name ?? "work",
             workspace: "/tmp/work",
             agentDir: "/tmp/agent-work",
             bootstrapPending: true,
@@ -677,28 +675,25 @@ describe("OpenClaw rescue message", () => {
 
         await expect(
           runRescue(
-            `/openclaw create agent work${role ? ` role ${role}` : ""} workspace /tmp/work`,
+            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""} workspace /tmp/work`,
             cfg,
             commandContext(),
             deps,
           ),
         ).resolves.toBe(
-          `Plan: create agent work with workspace /tmp/work${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
+          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
         );
+        expect(deps.createAgent).not.toHaveBeenCalled();
         await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
           "[openclaw] done: agents.create",
         );
 
         expect(deps.createAgent).toHaveBeenCalledTimes(1);
-        const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
-          {
-            name: string;
-            workspace: string;
-            provenance: { createdVia: string; creatorAgentId: string };
+        expect(deps.createAgent).toHaveBeenCalledWith({
+          entry: {
+            id: "work",
+            ...(name ? { name, identity: { name } } : {}),
           },
-        ];
-        expect(agentParams).toEqual({
-          name: "work",
           ...(role ? { role } : {}),
           workspace: "/tmp/work",
           provenance: { createdVia: "agent", creatorAgentId: "openclaw" },

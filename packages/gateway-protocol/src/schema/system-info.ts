@@ -2,6 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { GatewayEventLoopHealthSchema, GatewayProcessMemorySchema } from "./runtime-vitals.js";
 
 /** Empty request payload for Gateway host system information. */
 export const SystemInfoParamsSchema = closedObject({});
@@ -33,6 +34,8 @@ export const SystemInfoResultSchema = closedObject({
   loadAverage: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number()])),
   memoryTotalBytes: Type.Integer(),
   memoryFreeBytes: Type.Integer(),
+  eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
+  processMemory: Type.Optional(GatewayProcessMemorySchema),
   diskTotalBytes: Type.Optional(Type.Integer()),
   diskAvailableBytes: Type.Optional(Type.Integer()),
   diskPath: Type.Optional(Type.String()),

@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import * as convergence from "../../commands/doctor/shared/post-core-plugin-convergence.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import {
-  writePersistedInstalledPluginIndexInstallRecords,
-  readPersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import * as cohort from "../../plugins/update-cohort.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -16,6 +16,99 @@ import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 describe("post-core plugin payload degradation", () => {
+  it.each(["stable", "dev"] as const)(
+    "retains an explicitly linked plugin through post-core convergence on %s",
+    async (channel) => {
+      await withOpenClawTestState({ label: `post-core-linked-${channel}` }, async (state) => {
+        const pluginId = "llm-task";
+        const linkedPath = state.statePath("linked-task");
+        const bundledPath = state.statePath("bundled", pluginId);
+        const payload = "module.exports = { selected: true };\n";
+        for (const directory of [`bundled/${pluginId}`, "linked-task"]) {
+          await state.writeJson(`${directory}/package.json`, {
+            name: "@example/llm-task",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.js"] },
+          });
+          await state.writeJson(`${directory}/openclaw.plugin.json`, {
+            id: pluginId,
+            configSchema: { type: "object" },
+          });
+          await state.writeText(`${directory}/index.js`, payload);
+        }
+        const config: OpenClawConfig = {
+          update: { channel },
+          plugins: {
+            load: { paths: [linkedPath] },
+            entries: { [pluginId]: { enabled: true, config: { retained: "authored" } } },
+          },
+        };
+        const records: Record<string, PluginInstallRecord> = {
+          [pluginId]: {
+            source: "path",
+            sourcePath: linkedPath,
+            installPath: bundledPath,
+            spec: "@example/llm-task",
+          },
+        };
+        await state.writeConfig(config);
+        const originalConfig = await fs.readFile(state.configPath, "utf8");
+        await withEnvAsync(
+          {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: state.statePath("bundled"),
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          },
+          async () => {
+            await seedInstalledPluginIndex(records, {
+              config,
+              env: process.env,
+            });
+            const result = await withPluginCache(createPluginCache(), async () =>
+              updatePluginsAfterCoreUpdate({
+                root: state.root,
+                channel,
+                ...(await preparePostCorePluginConfig({ requestedChannel: null })),
+                pluginInstallRecords: records,
+                timeoutMs: 10_000,
+                json: true,
+              }),
+            );
+
+            expect(result).toMatchObject({
+              status: "warning",
+              assessment: { kind: "no-payload-repair" },
+              changed: false,
+              warnings: [
+                expect.objectContaining({
+                  pluginId,
+                  reason: "plugin-operator-managed",
+                  source: linkedPath,
+                }),
+              ],
+              sync: {
+                switchedToBundled: [],
+                warnings: [],
+                errors: [],
+              },
+            });
+            expect(result.npm.outcomes.some((outcome) => outcome.status === "error")).toBe(false);
+            expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+            expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+            const selected = withPluginCache(createPluginCache(), () =>
+              loadInstalledPluginIndex({ config, installRecords: records, env: process.env }),
+            ).plugins.find((plugin) => plugin.pluginId === pluginId);
+            expect(selected?.rootDir).toBe(linkedPath);
+            expect(await fs.readFile(state.statePath("linked-task", "index.js"), "utf8")).toBe(
+              payload,
+            );
+          },
+        );
+      });
+    },
+  );
+
   it.each([
     ["missing-owner", true, "warning", "unsafe", "unowned-plugin-payload"],
     ["missing-owner", false, "warning", "unsafe", "unowned-plugin-payload"],
@@ -87,11 +180,14 @@ describe("post-core plugin payload degradation", () => {
             : undefined;
         const spy = vi
           .spyOn(convergence, "runPostCorePluginConvergence")
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async ({ cfg }) => {
             if (failure === "authority") {
               throw refusal;
             }
             return {
+              config: cfg,
+              configChanges: [],
+              installedPluginIdRecovery: new Map(),
               changes: [],
               warnings:
                 failure === "unclassified"
@@ -201,7 +297,7 @@ describe("failed cohort repair requirement assessment", () => {
         await state.writeConfig(config);
         const dataPath = await state.writeText("plugin-data.txt", "newer data survives");
         const npmConfigPath = await state.writeText("empty.npmrc", "");
-        await writePersistedInstalledPluginIndexInstallRecords(records, {
+        await seedInstalledPluginIndex(records, {
           config,
           env: process.env,
         });

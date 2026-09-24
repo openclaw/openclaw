@@ -24,6 +24,25 @@ In the current DM or group chat, the action can return the trusted sender's stab
 Private/shared-channel and non-current chat member lookups require additional roster permissions
 and are rejected by the default permission baseline.
 
+For `member-info` and `search` in the message tool, use `channelId` to select the
+conversation. The Graph `<team-id>/<channel-id>` form identifies a Teams channel:
+
+```json5
+{
+  action: "member-info",
+  channel: "msteams",
+  channelId: "<team-id>/<channel-id>",
+  userId: "<user-id>",
+}
+```
+
+`search` uses the same `channelId` filter with a `query` instead of `userId`.
+Omitting the filter uses the current conversation when its Graph route is
+available. For the current channel, its bare `19:...@thread.tacv2` ID and
+`conversation:19:...@thread.tacv2` form reuse that same Graph route. Use the full
+Graph form to select another channel. The selected conversation must still
+satisfy the configured access policy and the action's membership requirements.
+
 ## Native approval cards
 
 Microsoft Teams can deliver exec and plugin approval requests as Adaptive Cards in the originating conversation. Each card describes the requested command or plugin action and provides only the decisions allowed for that request, such as **Approve once**, **Always allow**, and **Deny**. After a decision or expiration, OpenClaw updates the original card with its final status.
@@ -57,6 +76,9 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 - Existing `msteams-polls.json` files are imported by `openclaw doctor --fix`, not by the running plugin.
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries, and there is no poll-results CLI.
+
+Revoking a scheduled job's message permission stops a poll that has not yet been submitted.
+A poll already submitted to Teams retains its accepted ID and normal vote tracking while the run finishes.
 
 ## Presentation cards
 

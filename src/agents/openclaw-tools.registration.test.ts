@@ -7,6 +7,7 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { withEnv } from "../test-utils/env.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -24,7 +25,10 @@ import {
   shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { textResult, type AnyAgentTool } from "./tools/common.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import * as inProcessGateway from "./tools/in-process-gateway.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import * as sessionsSpawnTool from "./tools/sessions-spawn-tool.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -105,6 +109,36 @@ describe("openclaw-tools progress_card gating", () => {
       emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
     ).toEqual([]);
   });
+
+  it.each([false, true])(
+    "gates personal instructions on multiple people (%s) without general filesystem access",
+    (multipleProfiles) => {
+      const identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:dashboard:project",
+        runSessionKey: "agent:main:dashboard:project",
+        cwd: "/project/worktree",
+        workspaceDir: "/project/worktree",
+        config: {
+          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
+        },
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("personal_instructions")).toBe(multipleProfiles);
+      expect(toolNames(tools)).not.toContain("write");
+      expect(toolNames(tools)).not.toContain("exec");
+      expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
+      setEmbeddedMode(true);
+      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+        "personal_instructions",
+      );
+      identityCount.mockRestore();
+    },
+  );
 
   it("enables progress_card by default", () => {
     expectProgressCardEnabled({ config: {} as OpenClawConfig }, true);
@@ -320,6 +354,41 @@ describe("openclaw-tools progress_card gating", () => {
     expect(defaultTools).not.toContain("sessions_send");
     expect(gatewayBoundTools).toContain("sessions_spawn");
     expect(gatewayBoundTools).not.toContain("sessions_send");
+  });
+
+  it.each([
+    {
+      currentChannelId: "channel:111",
+      currentMessagingTarget: "user:222",
+      nativeChannelId: "111",
+      expectedTarget: "user:222",
+      expectedChannelId: "111",
+    },
+    {
+      currentChannelId: "telegram:-100:topic:77",
+      nativeChannelId: "-100",
+      expectedTarget: "telegram:-100:topic:77",
+      expectedChannelId: "-100",
+    },
+    {
+      currentChannelId: "channel:111",
+      expectedTarget: "channel:111",
+      expectedChannelId: "channel:111",
+    },
+  ])("keeps native spawn metadata separate from delivery ($expectedTarget)", (context) => {
+    const spawn = vi.spyOn(sessionsSpawnTool, "createSessionsSpawnTool");
+    try {
+      createTestOpenClawTools(context);
+
+      expect(spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentMessagingTarget: context.expectedTarget,
+          currentChannelId: context.expectedChannelId,
+        }),
+      );
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   it("advertises sessions_spawn from agents_list only when spawn is available", () => {
@@ -552,7 +621,7 @@ describe("sessions_yield completion ownership", () => {
       expect(result.details).toMatchObject({
         status: "error",
         error:
-          "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+          'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".',
       });
       expect(markRequesterTurnYielded).toHaveBeenCalledOnce();
       expect(onYield).not.toHaveBeenCalled();
@@ -561,7 +630,7 @@ describe("sessions_yield completion ownership", () => {
     }
   });
 
-  it("accepts a subagent self-yield without a pending child completion", async () => {
+  it("accepts an explicit incoming-message wait without a pending child completion", async () => {
     const registry = await import("./subagents/registry/subagent-registry.js");
     const markRequesterTurnYielded = vi
       .spyOn(registry, "markRequesterTurnYielded")
@@ -582,7 +651,7 @@ describe("sessions_yield completion ownership", () => {
         "sessions_yield",
       );
 
-      await expect(tool.execute("yield-subagent", {})).resolves.toMatchObject({
+      await expect(tool.execute("yield-subagent", { waitFor: "message" })).resolves.toMatchObject({
         details: { status: "yielded" },
       });
       expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
@@ -591,6 +660,41 @@ describe("sessions_yield completion ownership", () => {
         requesterTurnRunId: "run-subagent",
       });
       expect(onYield).toHaveBeenCalledOnce();
+    } finally {
+      markRequesterTurnYielded.mockRestore();
+    }
+  });
+
+  it("rejects a collector yield before any claim source runs", async () => {
+    const registry = await import("./subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
+    const claimYieldCompletion = vi.fn(() => true);
+    const onYield = vi.fn(async () => undefined);
+
+    try {
+      const tool = expectToolNamed(
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:subagent:collector",
+          sessionId: "collector-session",
+          runId: "run-collector",
+          swarmCollector: true,
+          claimYieldCompletion,
+          onYield,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+        }),
+        "sessions_yield",
+      );
+
+      await expect(tool.execute("yield-collector", {})).resolves.toMatchObject({
+        details: { status: "error", error: expect.stringContaining("collected explicitly") },
+      });
+      expect(claimYieldCompletion).not.toHaveBeenCalled();
+      expect(markRequesterTurnYielded).not.toHaveBeenCalled();
+      expect(onYield).not.toHaveBeenCalled();
     } finally {
       markRequesterTurnYielded.mockRestore();
     }
@@ -861,7 +965,7 @@ describe("gateway client capability tool filtering", () => {
       );
 
       expect(tool.description).toContain(
-        "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+        "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
       );
     } finally {
       resetPluginRuntimeStateForTest();
@@ -879,6 +983,37 @@ describe("gateway client capability tool filtering", () => {
   it("only exposes screen to UI-command clients", () => {
     expect(hasTool(createOpenClawTools(), "screen")).toBe(false);
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
+  });
+
+  it("exposes profile theme actions without a connected UI capability", () => {
+    expect(hasTool(createOpenClawTools(), "theme")).toBe(true);
+    expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "theme")).toBe(true);
+  });
+
+  it("retains the requesting browser through coding tool assembly", async () => {
+    const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
+    const targets: unknown[] = [];
+    const call = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(async () => {
+        targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
+        return { ok: true } as never;
+      });
+    try {
+      const tools = createOpenClawCodingTools({
+        config: withDefaultRoster(undefined),
+        sessionKey: "agent:main:main",
+        clientCaps: ["ui-commands"],
+        gatewayUiCommandTarget,
+      });
+      await expectToolNamed(tools, "screen").execute("select", {
+        action: "navigate",
+        sessionKey: "agent:main:other",
+      });
+      expect(targets).toEqual([gatewayUiCommandTarget]);
+    } finally {
+      call.mockRestore();
+    }
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {

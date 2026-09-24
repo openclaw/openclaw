@@ -2141,7 +2141,7 @@ struct ChatViewModelOutboxTests {
             await store.loadCommands().count == 1
         }
         try await waitUntil("newer original-session draft preserved") {
-            await MainActor.run { vm.draftsBySession["main"] == "queued once" }
+            await MainActor.run { vm.draftsBySession[vm.composerSessionKey(for: "main")] == "queued once" }
         }
 
         await MainActor.run { vm.switchSession(to: "main") }

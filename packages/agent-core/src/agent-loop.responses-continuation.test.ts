@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { streamOpenAICodexResponses } from "../../ai/src/providers/openai-chatgpt-responses.js";
-import { agentLoop } from "./agent-loop.js";
+import { runAgentLoop } from "./agent-loop.js";
 import type { Message, Model } from "./llm.js";
 import type { AgentEvent, AgentTool } from "./types.js";
 
@@ -117,7 +117,7 @@ describe("Responses turn continuation", () => {
     };
     try {
       const events: AgentEvent[] = [];
-      const stream = agentLoop(
+      const result = await runAgentLoop(
         [{ role: "user", content: "Check the result and report it.", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
         {
@@ -125,6 +125,12 @@ describe("Responses turn continuation", () => {
           convertToLlm: (messages) => messages as Message[],
           shouldStopAfterTurn: () => scenario.stop === true,
           afterToolCall: async () => (scenario.terminateTool ? { terminate: true } : undefined),
+        },
+        (event) => {
+          events.push(event);
+          if (scenario.cancel && event.type === "turn_end") {
+            controller.abort(new Error("Caller stopped the run"));
+          }
         },
         controller.signal,
         (_model, context, options) =>
@@ -134,13 +140,6 @@ describe("Responses turn continuation", () => {
             transport: "websocket",
           }),
       );
-      for await (const event of stream) {
-        events.push(event);
-        if (scenario.cancel && event.type === "turn_end") {
-          controller.abort(new Error("Caller stopped the run"));
-        }
-      }
-      const result = await stream.result();
       expect(requests).toHaveLength(scenario.requests);
       expect(execute).toHaveBeenCalledTimes(scenario.requests > 1 ? 1 : 0);
       expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
@@ -156,6 +155,8 @@ describe("Responses turn continuation", () => {
             timestamp: expect.any(Number),
             details: {
               eventType: scenario.incomplete ? "response.incomplete" : "response.completed",
+              stopReason: scenario.incomplete ? "length" : "stop",
+              ...(scenario.incomplete ? { incompleteReason: "max_output_tokens" } : {}),
               endTurn:
                 typeof providerEndTurn === "boolean"
                   ? providerEndTurn

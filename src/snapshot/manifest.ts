@@ -89,9 +89,7 @@ async function hashFileHandle(
   const initialStat = await source.stat({ bigint: true });
   let sizeBytes = 0;
   if (target) {
-    sizeBytes = await copyFileHandle(source, target, {
-      noProgressMessage: "Snapshot restore staging copy made no progress.",
-    });
+    sizeBytes = await copyFileHandle(source, target);
   }
   const hashed = await sha256File(target ?? source);
   const finalStat = await source.stat({ bigint: true });

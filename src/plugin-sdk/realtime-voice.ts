@@ -1,5 +1,12 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
+export {
+  registerRealtimeVoiceSelection,
+  type RealtimeVoiceSelectionHandle,
+  type RealtimeVoiceSelectionInfo,
+  type RealtimeVoiceSelectionRequest,
+} from "../talk/voice-selection-control.js";
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+export { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
 export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
@@ -236,3 +243,9 @@ export {
   resamplePcm,
   resamplePcmTo8k,
 } from "../talk/audio-codec.js";
+
+export {
+  createRealtimeVoiceAudioPortSender,
+  type RealtimeVoiceAudioOutputPort,
+  type RealtimeVoiceAudioOutputMessage,
+} from "../talk/audio-output-port.js";

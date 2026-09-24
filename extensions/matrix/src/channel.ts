@@ -1,4 +1,3 @@
-// Matrix plugin module implements channel behavior.
 import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
@@ -54,7 +53,7 @@ import {
   resolveMatrixGroupToolPolicy,
 } from "./group-mentions.js";
 import {
-  resolveMatrixAccount,
+  resolveDefaultMatrixAccountId,
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
@@ -77,9 +76,7 @@ import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
 } from "./thread-binding-api.js";
-import type { CoreConfig } from "./types.js";
-// Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
-let matrixStartupLock: Promise<void> = Promise.resolve();
+import type { CoreConfig, MatrixConfig } from "./types.js";
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -87,6 +84,13 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const loadMatrixDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
+// Share the import across account starts; the monitor pulls in the reply pipeline.
+const loadMatrixMonitorModule = createLazyRuntimeModule(() =>
+  import("./matrix/monitor/index.js").catch((error: unknown) => {
+    loadMatrixMonitorModule.clear();
+    throw error;
+  }),
+);
 
 function buildMatrixTrafficStatusSummary(
   snapshot?: {
@@ -113,45 +117,49 @@ const matrixDoctor: ChannelDoctorAdapter = {
     await (await loadMatrixDoctorModule()).cleanStaleMatrixPluginConfig(cfg),
 };
 
-const listMatrixDirectoryPeersFromConfig =
-  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
-    kind: "user",
-    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-    resolveSources: (account) => [
-      account.config.dm?.allowFrom ?? [],
-      account.config.groupAllowFrom ?? [],
-      ...Object.values(account.config.groups ?? account.config.rooms ?? {}).map(
-        (room) => room.users ?? [],
-      ),
-    ],
-    normalizeId: (entry) => {
-      const raw = entry.replace(/^matrix:/i, "").trim();
-      if (!raw || raw === "*") {
-        return null;
-      }
-      const lowered = normalizeLowercaseStringOrEmpty(raw);
-      const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
-      return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
-    },
-  });
+const listMatrixDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
+  kind: "user",
+  resolveAccount: (cfg, accountId) =>
+    resolveMatrixAccountConfig({
+      cfg,
+      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
+    }),
+  resolveSources: (account) => [
+    account.dm?.allowFrom ?? [],
+    account.groupAllowFrom ?? [],
+    ...Object.values(account.groups ?? account.rooms ?? {}).map((room) => room.users ?? []),
+  ],
+  normalizeId: (entry) => {
+    const raw = entry.replace(/^matrix:/i, "").trim();
+    if (!raw || raw === "*") {
+      return null;
+    }
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
+    const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+    return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
+  },
+});
 
-const listMatrixDirectoryGroupsFromConfig =
-  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
-    kind: "group",
-    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-    resolveSources: (account) => [Object.keys(account.config.groups ?? account.config.rooms ?? {})],
-    normalizeId: (entry) => {
-      const raw = entry.replace(/^matrix:/i, "").trim();
-      if (!raw || raw === "*") {
-        return null;
-      }
-      const lowered = normalizeLowercaseStringOrEmpty(raw);
-      if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
-        return raw;
-      }
-      return raw.startsWith("!") ? `room:${raw}` : raw;
-    },
-  });
+const listMatrixDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
+  kind: "group",
+  resolveAccount: (cfg, accountId) =>
+    resolveMatrixAccountConfig({
+      cfg,
+      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
+    }),
+  resolveSources: (account) => [Object.keys(account.groups ?? account.rooms ?? {})],
+  normalizeId: (entry) => {
+    const raw = entry.replace(/^matrix:/i, "").trim();
+    if (!raw || raw === "*") {
+      return null;
+    }
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
+    if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
+      return raw;
+    }
+    return raw.startsWith("!") ? `room:${raw}` : raw;
+  },
+});
 
 function projectMatrixConversationBinding(binding: {
   boundAt: number;
@@ -564,31 +572,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             `[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`,
           );
 
-          // Serialize startup: wait for any previous startup to complete import phase.
-          // This works around a race condition with concurrent dynamic imports.
-          //
-          // INVARIANT: The import() below cannot hang because:
-          // 1. It only loads local ESM modules with no circular awaits
-          // 2. Module initialization is synchronous (no top-level await in ./matrix/monitor/index.js)
-          // 3. The lock only serializes the import phase, not the provider startup
-          const previousLock = matrixStartupLock;
-          let releaseLock: () => void = () => {};
-          matrixStartupLock = new Promise<void>((resolve) => {
-            releaseLock = resolve;
-          });
-          await previousLock;
-
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          // Wrap in try/finally to ensure lock is released even if import fails.
-          let monitorMatrixProvider: typeof import("./matrix/monitor/index.js").monitorMatrixProvider;
-          try {
-            const module = await import("./matrix/monitor/index.js");
-            monitorMatrixProvider = module.monitorMatrixProvider;
-          } finally {
-            // Release lock after import completes or fails
-            releaseLock();
-          }
-
+          const { monitorMatrixProvider } = await loadMatrixMonitorModule();
           return monitorMatrixProvider({
             runtime: ctx.runtime,
             channelRuntime: ctx.channelRuntime,

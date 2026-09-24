@@ -28,9 +28,14 @@ export async function completeSourceUpdateRuntime(params: {
   timeoutMs: number;
   lease: PluginLifecycleLeaseContext;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePublication?: () => Promise<void>;
 }): Promise<{ changed: boolean }> {
   params.lease.assertOwned();
-  if ((await resolveUpdateInstallKind(params.root, { signal: params.lease.signal })) !== "git") {
+  const installKind = await resolveUpdateInstallKind(params.root, {
+    signal: params.lease.signal,
+    timeoutMs: params.timeoutMs,
+  });
+  if (installKind !== "git") {
     params.lease.assertOwned();
     return { changed: false };
   }
@@ -80,6 +85,8 @@ export async function completeSourceUpdateRuntime(params: {
     try {
       params.lease.assertOwned();
       if (prepared.changed) {
+        await params.beforePublication?.();
+        params.lease.assertOwned();
         await withGatewayRuntimeArtifactPublication(
           {
             root,

@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { cloneConfigObject } from "../config-form-utils.ts";
+import { createConfigDraftDiscard } from "./config-draft-discard.ts";
 import {
   rebaseConfigDraft,
   removeConfigFormValue,
@@ -10,9 +11,9 @@ import {
   updateConfigFormValue,
   updateConfigRawValue,
 } from "./config-draft-model.ts";
+import { createConfigFieldDiscard } from "./config-field-discard.ts";
 import {
   executeConfigExternalMutation,
-  loadConfig,
   refreshDraft,
   refreshConfigAfterMutation,
   submitConfigDraft,
@@ -42,9 +43,8 @@ type ConfigWriteCoordinatorContext = {
   state: RuntimeConfigState;
   gateway: RuntimeConfigGateway;
   publish: () => void;
-  run: <T>(task: () => Promise<T>) => Promise<T>;
+  run: <T>(task: () => Promise<T>, loadKey?: "config" | "schema") => Promise<T>;
   mutate: (task: () => void) => void;
-  trackLoad: (key: "config" | "schema", promise: Promise<unknown>) => Promise<void>;
   resetLoads: () => void;
   resetConfigLoad: () => void;
   refreshConnectionState: (beforeApplySnapshot?: () => void) => Promise<boolean>;
@@ -66,7 +66,6 @@ export function createConfigWriteCoordinator({
   publish,
   run,
   mutate,
-  trackLoad,
   resetLoads,
   resetConfigLoad,
   refreshConnectionState,
@@ -88,7 +87,7 @@ export function createConfigWriteCoordinator({
   let interruptedWriteRaw: string | null = null;
   // Blocks trailing autosaves while a discard drains pending writes; the
   // drained draft is about to be thrown away, not re-written.
-  let suppressAutoSave = false;
+  let suppressAutoSave = 0;
   // Wakes drains awaiting a request a connection change just orphaned — that
   // request may never settle, and a drain stuck on it would wedge the app
   // updater barrier, applies, and discards until then.
@@ -163,6 +162,7 @@ export function createConfigWriteCoordinator({
   // Stale bases and previous connections require explicit recovery, including teardown.
   const canAutoSaveDraft = () =>
     state.configAutoSaveStatus !== "conflict" &&
+    state.configRecoveryError === null &&
     !autoSaveRequiresExplicitSubmit &&
     autoSaveDraftConnection !== null &&
     autoSaveDraftConnection.client === state.client &&
@@ -191,8 +191,10 @@ export function createConfigWriteCoordinator({
     auto = false,
   ): Promise<T> => {
     const flight: ConfigWriteFlight = { promise: Promise.resolve(), submission: null };
+    const observeSubmission = fieldDiscard.captureSubmissionObserver();
     const submit = task((submission) => {
       flight.submission = submission;
+      observeSubmission(submission);
       // Keep the ack for teardown, but only a live flight may retire older loads.
       if (submission.ack && !isDisposed() && inFlight === flight) {
         invalidateConfigLoad();
@@ -299,6 +301,8 @@ export function createConfigWriteCoordinator({
   const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
     while (true) {
       if (flushScheduledDraft) {
+        // A debounce timer is pending persisted intent. Flush it into a tracked
+        // flight before draining so external writers cannot race the draft.
         flushScheduledAutoSave();
       }
       const flight = inFlight;
@@ -321,20 +325,15 @@ export function createConfigWriteCoordinator({
       }
     }
   };
-  // Discard barrier shared by discardDraft and refresh({discardPendingChanges}):
-  // settle pending writes with trailing saves suppressed so a late completion
-  // cannot trail the just-discarded bytes back to disk.
-  const drainWritesForDiscard = async (): Promise<void> => {
+  const holdAutoSave = () => {
+    suppressAutoSave++;
     cancelScheduledAutoSave();
-    if (inFlight) {
-      suppressAutoSave = true;
-      try {
-        await drainPendingWrites();
-      } finally {
-        suppressAutoSave = false;
+    return (resume: boolean) => {
+      suppressAutoSave--;
+      if (resume) {
+        scheduleAutoSave();
       }
-    }
-    patches.clear();
+    };
   };
   // Explicit ops (save/apply/patch) also serialize among THEMSELVES: two
   // callers queued behind the same in-flight write would otherwise both
@@ -342,11 +341,11 @@ export function createConfigWriteCoordinator({
   let explicitOpQueue: Promise<unknown> | null = null;
   const afterPendingWritesSettled = <T>(
     task: (onSubmitted: ConfigSubmissionObserver) => Promise<T>,
-    unavailable: T,
+    unavailable: (recoveryError?: string) => T,
     options: { flushScheduledDraft?: boolean; canDispatch?: () => boolean } = {},
   ): Promise<T> => {
     if (writesSuspended && !refreshWriteAdmission) {
-      return Promise.resolve(unavailable);
+      return Promise.resolve(unavailable());
     }
     const client = state.client;
     const connectionEpoch = currentConfigConnectionEpoch(state);
@@ -377,16 +376,14 @@ export function createConfigWriteCoordinator({
         }
         // The updater may have started while we drained; suspension must be a
         // real barrier or an apply could restart the gateway mid-update.
-        if (writesSuspended || isDisposed()) {
-          return unavailable;
-        }
-        if (!client || !isCurrentConfigConnection(state, client, connectionEpoch)) {
-          return unavailable;
+        const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);
+        if (writesSuspended || isDisposed() || !connected) {
+          return unavailable();
         }
         // Hello method/scope metadata can change while the client and
         // connection epoch stay stable. Recheck at the dispatch boundary.
-        if (options.canDispatch && !options.canDispatch()) {
-          return unavailable;
+        if (state.configRecoveryError !== null || options.canDispatch?.() === false) {
+          return unavailable(state.configRecoveryError ?? undefined);
         }
         return await trackWrite(task);
       });
@@ -401,6 +398,15 @@ export function createConfigWriteCoordinator({
     explicitOpQueue = tail;
     return queued;
   };
+  const fieldDiscard = createConfigFieldDiscard({
+    state,
+    serialize: (task) => afterPendingWritesSettled(task, () => false),
+    run,
+    holdAutoSave,
+    isDisposed,
+    publish,
+    reconcileDraft: reconcileAutoSaveDraftConnection,
+  });
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
@@ -408,6 +414,7 @@ export function createConfigWriteCoordinator({
     state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
+      fieldDiscard.resetConnection();
       patches.clear();
       const draftBelongsToPreviousConnection = state.configFormDirty || inFlight !== null;
       resetLoads();
@@ -523,7 +530,7 @@ export function createConfigWriteCoordinator({
     state,
     reconcileDraft: reconcileAutoSaveDraftConnection,
     dispatch: (task) =>
-      afterPendingWritesSettled(task, false, {
+      afterPendingWritesSettled(task, () => false, {
         flushScheduledDraft: true,
         canDispatch: () => canDispatchConfigMutation("config.patch"),
       }),
@@ -531,55 +538,30 @@ export function createConfigWriteCoordinator({
     reconcileAppliedRefresh,
     scheduleAutoSave,
   });
-  const mutateDraft = (mutation: () => void) => {
+  const mutateDraft = (mutation: () => void, path?: Array<string | number>) => {
+    fieldDiscard.invalidate(path);
     mutate(mutation);
     reconcileAutoSaveDraftConnection();
     scheduleAutoSave();
   };
   const writes: ConfigWriteCoordinator = {
-    prepareDiscard: drainWritesForDiscard,
-    patchForm: (path, value) => mutateDraft(() => updateConfigFormValue(state, path, value)),
-    removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path)),
+    patchForm: (path, value) => mutateDraft(() => updateConfigFormValue(state, path, value), path),
+    removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path), path),
     setRaw: (value) => mutateDraft(() => updateConfigRawValue(state, value)),
-    resetDraft: () => {
-      patches.clear();
-      cancelScheduledAutoSave();
-      mutate(() => resetConfigPendingChanges(state));
-      clearAutoSaveDraftConnection();
-      reconcileAppliedRefresh();
-    },
-    discardDraft: async () => {
-      // Settle pending writes first (with trailing saves suppressed — the
-      // draft is being thrown away, not re-written) so a late ack cannot
-      // re-dirty or trail-write over the discard.
-      await drainWritesForDiscard();
-      if (state.connected && state.client) {
-        cancelAppliedRefresh();
-        try {
-          await trackLoad(
-            "config",
-            run(() => loadConfig(state, { discardPendingChanges: true })),
-          );
-          clearAutoSaveDraftConnection();
-        } finally {
-          reconcileAppliedRefresh();
-        }
-        return;
-      }
-      // Offline: a network refresh would silently no-op and strand the
-      // draft; fall back to a pure local reset onto the snapshot originals.
-      mutate(() => {
-        resetConfigPendingChanges(state);
-        // Conflict marks the snapshot itself stale; an offline reset onto
-        // those stale originals must NOT pretend to have reconciled — only a
-        // connected reload clears conflict (same invariant as elsewhere).
-        if (state.configAutoSaveStatus !== "conflict") {
-          state.configAutoSaveStatus = "idle";
-          state.lastError = null;
-        }
-      });
-      clearAutoSaveDraftConnection();
-    },
+    discardFormValue: fieldDiscard.discard,
+    discardDraft: createConfigDraftDiscard({
+      state,
+      invalidateFieldDiscards: fieldDiscard.invalidate,
+      hasInFlightWrite: () => inFlight !== null,
+      holdAutoSave,
+      drainPendingWrites,
+      clearPatches: patches.clear,
+      run,
+      mutate,
+      clearDraftConnection: clearAutoSaveDraftConnection,
+      cancelAppliedRefresh,
+      reconcileAppliedRefresh,
+    }),
     setWritesSuspended: (suspended, refreshAdmission) => {
       refreshWriteAdmission = refreshAdmission;
       if (writesSuspended === suspended) {
@@ -599,12 +581,23 @@ export function createConfigWriteCoordinator({
         scheduleAutoSave();
       }
     },
-    waitForPendingWrites: () => {
-      // A debounce timer represents pending persisted intent too. Convert it
-      // into a tracked flight before draining so external writers cannot race
-      // the draft simply because the user clicked again within 800 ms.
-      flushScheduledAutoSave();
-      return drainPendingWrites(true);
+    waitForPendingWrites: () => drainPendingWrites(true),
+    flushFormChanges: async () => {
+      const client = state.client;
+      const epoch = currentConfigConnectionEpoch(state);
+      if (!client || !canCallConfigMethod("config.set") || state.configFormMode !== "form") {
+        return false;
+      }
+      // Field commits skip the debounce, but never rebind a retained draft as
+      // manual Save does. A new revision alone cannot acknowledge this draft.
+      await drainPendingWrites(true);
+      return (
+        !isDisposed() &&
+        isCurrentConfigConnection(state, client, epoch) &&
+        !state.configFormDirty &&
+        state.configRecoveryError === null &&
+        (state.configAutoSaveStatus === "saved" || state.configAutoSaveStatus === "idle")
+      );
     },
     save: (options = {}) => {
       const canDispatch = () =>
@@ -633,7 +626,7 @@ export function createConfigWriteCoordinator({
                 reconcileAppliedRefresh();
               }
             },
-            false,
+            () => false,
             { canDispatch },
           );
     },
@@ -669,13 +662,14 @@ export function createConfigWriteCoordinator({
                 reconcileAppliedRefresh();
               }
             },
-            false,
+            () => false,
             { canDispatch: () => canDispatchConfigMutation("config.apply") },
           ),
     stageDefaultAgent: (agentId) => {
       if (!canDispatchConfigMutation("config.set")) {
         return false;
       }
+      fieldDiscard.invalidate(["agents"]);
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
       reconcileAutoSaveDraftConnection();
@@ -713,13 +707,6 @@ export function createConfigWriteCoordinator({
             await writesResumedPromise;
           }
         }
-        const unavailable: RuntimeConfigExternalMutationResult<T> = {
-          ok: false,
-          reason: writesSuspended ? "suspended" : "unavailable",
-          error: writesSuspended
-            ? "Configuration writes are temporarily suspended."
-            : "Configuration is unavailable; reconnect and try again.",
-        };
         if (
           !mutationClient ||
           !isCurrentConfigConnection(state, mutationClient, mutationConnectionEpoch)
@@ -738,14 +725,18 @@ export function createConfigWriteCoordinator({
               mutationConnectionEpoch,
               task,
               options,
-              async () => {
-                const refresh = run(() => refreshConfigAfterMutation(state));
-                void trackLoad("config", refresh);
-                return await refresh;
-              },
+              () => run(() => refreshConfigAfterMutation(state), "config"),
               onSubmitted,
             ),
-          unavailable,
+          (recoveryError) => ({
+            ok: false,
+            reason: writesSuspended ? "suspended" : "unavailable",
+            error:
+              recoveryError ??
+              (writesSuspended
+                ? "Configuration writes are temporarily suspended."
+                : "Configuration is unavailable; reconnect and try again."),
+          }),
           { flushScheduledDraft: true },
         );
         if (
@@ -761,6 +752,7 @@ export function createConfigWriteCoordinator({
       }
     },
     dispose() {
+      fieldDiscard.invalidate();
       patches.clear();
       writesResumed?.();
       writesResumed = null;

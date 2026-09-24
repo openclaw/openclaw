@@ -3,12 +3,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { createOAuthManager } from "./oauth-manager.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
+import { OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { refreshSerializedOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -46,14 +49,18 @@ async function withOAuthTempRoot(
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
-  closeOpenClawStateDatabaseForTest();
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
 });
 
 describe("OAuth refresh generation fence", () => {
   it("keeps serialized provider I/O outside locks and settles after observer timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const profileId = "openai:default";
     const expired = createCredential({
       access: "serialized-access",
@@ -78,19 +85,13 @@ describe("OAuth refresh generation fence", () => {
         }
       },
     };
-    let finish: ((result: { apiKey: string; credential: OAuthCredential }) => void) | undefined;
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
+    const started = createDeferredCore();
+    const release = createDeferredCore<{ apiKey: string; credential: OAuthCredential }>();
+    const refresh = vi.fn(async () => {
+      expect(lockDepth).toBe(0);
+      started.resolve();
+      return await release.promise;
     });
-    const refresh = vi.fn(
-      () =>
-        new Promise<{ apiKey: string; credential: OAuthCredential }>((resolve) => {
-          expect(lockDepth).toBe(0);
-          finish = resolve;
-          markStarted?.();
-        }),
-    );
     const run = async (
       refreshOwner: (
         credential: OAuthCredential,
@@ -101,7 +102,7 @@ describe("OAuth refresh generation fence", () => {
         provider: "openai",
         profileId,
         label: "test serialized refresh",
-        timeoutMs: 10,
+        timeoutMs: 100,
         parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
         serialize: JSON.stringify,
         readCredential: (data) => data[profileId],
@@ -112,17 +113,23 @@ describe("OAuth refresh generation fence", () => {
         commit: () => {},
       });
 
-    const first = run(refresh);
-    await started;
+    const work = new AsyncWorkScope();
+    const first = work.run(() => run(refresh));
+    await started.promise;
     expect(JSON.parse(persisted)[profileId].access).toMatch(
       /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:access:[a-f0-9]{64}$/,
     );
-    await expect(first).rejects.toThrow("exceeded hard timeout");
+    const firstTimedOut = expect(first).rejects.toThrow("exceeded hard timeout (100ms)");
+    await vi.advanceTimersByTimeAsync(100);
+    await firstTimedOut;
+    const drained = vi.fn();
+    const drain = work.drain().then(drained);
+    await vi.advanceTimersByTimeAsync(0);
+    const drainedBeforeSettlement = drained.mock.calls.length;
     const peerRefresh = vi.fn(async () => null);
     const peer = run(peerRefresh);
-    expect(peerRefresh).not.toHaveBeenCalled();
 
-    finish?.({
+    release.resolve({
       apiKey: "serialized-rotated-access",
       credential: createCredential({
         access: "serialized-rotated-access",
@@ -131,12 +138,16 @@ describe("OAuth refresh generation fence", () => {
         accountId: "acct-123",
       }),
     });
+    await drain;
+    // A peer may have read the fence before rotation; drive its poll, not microtask ordering.
+    await vi.advanceTimersByTimeAsync(25);
     await expect(peer).resolves.toMatchObject({ apiKey: "serialized-rotated-access" });
-    await vi.waitFor(() => {
-      expect(JSON.parse(persisted)[profileId]).toMatchObject({
-        access: "serialized-rotated-access",
-        refresh: "serialized-rotated-refresh",
-      });
+    expect(drainedBeforeSettlement).toBe(0);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(peerRefresh).not.toHaveBeenCalled();
+    expect(JSON.parse(persisted)[profileId]).toMatchObject({
+      access: "serialized-rotated-access",
+      refresh: "serialized-rotated-refresh",
     });
   });
 
@@ -158,18 +169,12 @@ describe("OAuth refresh generation fence", () => {
         return update.result;
       },
     };
-    let finish: ((result: { apiKey: string; credential: OAuthCredential }) => void) | undefined;
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
+    const started = createDeferredCore();
+    const release = createDeferredCore<{ apiKey: string; credential: OAuthCredential }>();
+    const refresh = vi.fn(() => {
+      started.resolve();
+      return release.promise;
     });
-    const refresh = vi.fn(
-      () =>
-        new Promise<{ apiKey: string; credential: OAuthCredential }>((resolve) => {
-          finish = resolve;
-          markStarted?.();
-        }),
-    );
     const run = (
       refreshOwner: (
         credential: OAuthCredential,
@@ -192,7 +197,7 @@ describe("OAuth refresh generation fence", () => {
       });
 
     const owner = run(refresh);
-    await started;
+    await started.promise;
     const peerRefresh = vi.fn(async () => null);
     const observer = run(peerRefresh);
     persisted = JSON.stringify({
@@ -205,7 +210,7 @@ describe("OAuth refresh generation fence", () => {
     });
 
     await expect(observer).resolves.toBeNull();
-    finish?.({
+    release.resolve({
       apiKey: "rotated-a-access",
       credential: createCredential({
         access: "rotated-a-access",
@@ -754,6 +759,7 @@ describe("OAuth refresh generation fence", () => {
   });
 
   it("rejects a late settlement after an identity-less generation is restored and reclaimed", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const profileId = "openai:default";
     const firstCredential = createCredential({
       access: "first-access",
@@ -799,7 +805,9 @@ describe("OAuth refresh generation fence", () => {
           settleFirst = resolve;
         }),
     );
-    await expect(first).rejects.toThrow("exceeded hard timeout");
+    const firstTimedOut = expect(first).rejects.toThrow("exceeded hard timeout (10ms)");
+    await vi.advanceTimersByTimeAsync(10);
+    await firstTimedOut;
 
     persisted = JSON.stringify({ [profileId]: firstCredential });
     await expect(

@@ -103,15 +103,15 @@ function main(): void {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-performance-base-"));
   try {
     const baseRoot = path.join(temporaryRoot, "source");
-    const archive = path.join(temporaryRoot, "source.tar");
+    const archive = path.join(temporaryRoot, "source.tar.gz");
     const buildEnv = {
       ...process.env,
       ...COMPARISON_BUILD_ENV,
       GIT_DIR: path.join(temporaryRoot, "git-disabled"),
     };
     fs.mkdirSync(baseRoot);
-    run("git", ["archive", "--format=tar", "--output", archive, base]);
-    run("tar", ["-xf", archive, "-C", baseRoot]);
+    run("git", ["archive", "--format=tar.gz", "-1", "--output", archive, base]);
+    run("tar", ["-xzf", archive, "-C", baseRoot]);
     linkDependencies(baseRoot);
 
     // Both builds use the candidate's dependency installation. Calling Vite

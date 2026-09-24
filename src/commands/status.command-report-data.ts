@@ -18,7 +18,8 @@ import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
-import type { StatusSummary } from "../status/types.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
@@ -46,7 +47,7 @@ import {
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
-import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 import { formatUpdateAvailableHint } from "./status.update.js";
 
 /** Builds all table rows, section lines, and footer data needed by the status report renderer. */
@@ -221,6 +222,7 @@ export async function buildStatusCommandReportData(params: {
       formatCliCommand,
       nodeOnlyGateway: params.surface.nodeOnlyGateway,
       gatewayReachable: params.surface.gatewayReachable,
+      gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     }),
   };
 }

@@ -70,6 +70,12 @@ const withClawPackageLifecycleLeaseMock = vi.fn(
 const tempDirs: string[] = [];
 const capabilityConsentMode = vi.hoisted(() => ({ real: false }));
 
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 vi.mock("./capability-consent.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./capability-consent.js")>();
   return {
@@ -1451,9 +1457,6 @@ describe("updateNpmInstalledPlugins", () => {
   afterEach(() => {
     capabilityConsentMode.real = false;
     vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("does not treat inherited prototype names as install records", async () => {
@@ -2655,7 +2658,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "never repairs external, developer-owned, or aliased host packages after an npm update",
+    "repairs managed ClawHub hosts without traversing external or developer aliases after an npm update",
     async () => {
       const plugins = [
         { pluginId: "sibling", packageName: "@acme/sibling" },
@@ -2752,12 +2755,12 @@ describe("updateNpmInstalledPlugins", () => {
       expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
       expect(fs.lstatSync(peerLinkPath("sibling")).isSymbolicLink()).toBe(true);
       expect(fs.lstatSync(peerLinkPath("updated")).isSymbolicLink()).toBe(true);
-      for (const copiedHostDir of copiedHosts) {
-        expect(fs.lstatSync(copiedHostDir).isDirectory()).toBe(true);
-        expect(
-          JSON.parse(fs.readFileSync(path.join(copiedHostDir, "package.json"), "utf8")),
-        ).toEqual({ name: "openclaw", version: "2026.4.1" });
-      }
+      expect(
+        copiedHosts.map((copiedHostDir) => fs.lstatSync(copiedHostDir).isSymbolicLink()),
+      ).toEqual([false, false, false, true]);
+      expect(fs.realpathSync(expectDefined(copiedHosts[3], "clawhub copied host fixture"))).toBe(
+        fs.realpathSync(process.cwd()),
+      );
     },
   );
 
@@ -4715,6 +4718,7 @@ describe("updateNpmInstalledPlugins", () => {
       version: "1.2.4",
       clawhub: {
         source: "clawhub",
+        version: "1.2.3",
         clawhubUrl: "https://clawhub.ai",
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
@@ -6212,7 +6216,9 @@ describe("syncPluginsForUpdateChannel", () => {
 
   it("forwards an explicit env to bundled plugin source resolution", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
-    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+    const env = {
+      OPENCLAW_HOME: makeTrackedTempDir("openclaw-plugin-update-home", tempDirs),
+    } as NodeJS.ProcessEnv;
 
     await syncPluginsForUpdateChannel({
       channel: "beta",
@@ -6228,7 +6234,7 @@ describe("syncPluginsForUpdateChannel", () => {
   });
 
   it("uses the provided env when matching bundled load and install paths", async () => {
-    const bundledHome = "/tmp/openclaw-home";
+    const bundledHome = makeTrackedTempDir("openclaw-plugin-update-home", tempDirs);
     mockBundledSources(
       createBundledSource({
         localPath: `${bundledHome}/plugins/feishu`,

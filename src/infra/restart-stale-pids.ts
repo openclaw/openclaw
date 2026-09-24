@@ -7,9 +7,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { killProcessTree } from "../process/kill-tree.js";
+import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-tree.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
@@ -58,17 +60,60 @@ const MAX_ANCESTOR_WALK_DEPTH = 32;
 const restartLog = createSubsystemLogger("restart");
 
 /** Terminate externally discovered stale gateway processes and allow cleanup to settle. */
-export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
+export async function terminateStaleGatewayPids(
+  pids: number[],
+  options: { env?: NodeJS.ProcessEnv; assertCurrent?: () => void } = {},
+): Promise<number[]> {
+  const ownerContext = { env: options.env };
+  if (readGatewayOwnerLease(ownerContext)) {
+    return [];
+  }
   const targets = Array.from(
-    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
-  );
-  for (const pid of targets) {
-    killProcessTree(pid, { graceMs: 300 });
+    new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0)),
+  ).map((pid) => ({ pid, startedAt: getFileLockProcessStartTime(pid, options.env) }));
+  const canSignal = (target: (typeof targets)[number]) => {
+    if (
+      target.startedAt === null ||
+      isPidDefinitelyDead(target.pid) ||
+      getFileLockProcessStartTime(target.pid, options.env) !== target.startedAt ||
+      readGatewayOwnerLease(ownerContext)
+    ) {
+      return false;
+    }
+    options.assertCurrent?.();
+    return true;
+  };
+  const signal = (pid: number, value: "SIGTERM" | "SIGKILL", detached?: boolean) =>
+    new Promise<void>((resolve) => {
+      signalProcessTree(pid, value, { detached, onComplete: resolve });
+    });
+  const signaled: Array<{ target: (typeof targets)[number]; members: typeof targets }> = [];
+  for (const target of targets) {
+    const members = readUnixProcessGroupMembers(target.pid).map((pid) =>
+      pid === target.pid
+        ? target
+        : { pid, startedAt: getFileLockProcessStartTime(pid, options.env) },
+    );
+    // A member may have exited and recycled while its start identity was read.
+    const currentMembers = new Set(readUnixProcessGroupMembers(target.pid));
+    if (canSignal(target)) {
+      await signal(target.pid, "SIGTERM");
+      signaled.push({ target, members: members.filter(({ pid }) => currentMembers.has(pid)) });
+    }
   }
-  if (targets.length > 0) {
-    await sleep(500);
+  if (signaled.length > 0) {
+    await sleep(300);
+    for (const { members } of signaled) {
+      // Keep exact member identities after leader exit; never expand a recycled group.
+      for (const member of members) {
+        if (canSignal(member)) {
+          await signal(member.pid, "SIGKILL", false);
+        }
+      }
+    }
+    await sleep(200);
   }
-  return targets;
+  return signaled.map(({ target }) => target.pid);
 }
 
 function sleepSync(ms: number): void {
@@ -349,6 +394,7 @@ function filterVerifiedWindowsGatewayPidsResult(
 }
 
 type CleanStaleGatewayProcessesOptions = {
+  env?: NodeJS.ProcessEnv;
   /** Reassert effect authority after blocking probes and before every signal. */
   assertCurrent?: () => void;
   protectedPid?: number;
@@ -535,13 +581,15 @@ function pollPortOnceWindows(port: number): PollResult {
  * On Unix: sends SIGTERM, waits briefly, then SIGKILL for survivors.
  * On Windows: uses taskkill (graceful first, then /F for force-kill).
  */
-function terminateStaleProcessesSync(pids: number[], assertCurrent?: () => void): number[] {
+function terminateStaleProcessesSync(pids: number[], canSignal: () => boolean): number[] {
   if (process.platform === "win32") {
-    return terminateStaleProcessesWindows(pids, assertCurrent);
+    return terminateStaleProcessesWindows(pids, canSignal);
   }
   const killed: number[] = [];
   for (const pid of pids) {
-    assertCurrent?.();
+    if (!canSignal()) {
+      break;
+    }
     if (trySignalStaleProcess(pid, "SIGTERM")) {
       killed.push(pid);
     }
@@ -552,7 +600,9 @@ function terminateStaleProcessesSync(pids: number[], assertCurrent?: () => void)
   sleepSync(STALE_SIGTERM_WAIT_MS);
   for (const pid of killed) {
     if (isProcessAlive(pid)) {
-      assertCurrent?.();
+      if (!canSignal()) {
+        break;
+      }
       trySignalStaleProcess(pid, "SIGKILL");
     }
   }
@@ -578,7 +628,7 @@ function trySignalStaleProcess(pid: number, signal: NodeJS.Signals): boolean {
  * Windows-specific process termination using taskkill.
  * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
  */
-function terminateStaleProcessesWindows(pids: number[], assertCurrent?: () => void): number[] {
+function terminateStaleProcessesWindows(pids: number[], canSignal: () => boolean): number[] {
   const taskkillPath = path.win32.join(
     getWindowsInstallRoots().systemRoot,
     "System32",
@@ -586,7 +636,9 @@ function terminateStaleProcessesWindows(pids: number[], assertCurrent?: () => vo
   );
   const killed: number[] = [];
   for (const pid of pids) {
-    assertCurrent?.();
+    if (!canSignal()) {
+      break;
+    }
     const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -602,7 +654,9 @@ function terminateStaleProcessesWindows(pids: number[], assertCurrent?: () => vo
       killed.push(pid);
       continue;
     }
-    assertCurrent?.();
+    if (!canSignal()) {
+      break;
+    }
     const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
       stdio: "ignore",
       timeout: 5000,
@@ -677,10 +731,14 @@ export function cleanStaleGatewayProcessesSync(
   options?: CleanStaleGatewayProcessesOptions,
 ): number[] {
   try {
+    const ownerContext = { env: options?.env };
+    if (readGatewayOwnerLease(ownerContext)) {
+      return [];
+    }
     const port =
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
         ? Math.floor(portOverride)
-        : resolveGatewayPort(undefined, process.env);
+        : resolveGatewayPort(undefined, options?.env ?? process.env);
     const stalePids =
       process.platform === "win32"
         ? (() => {
@@ -697,13 +755,16 @@ export function cleanStaleGatewayProcessesSync(
             PROCESS_INSPECTION_TIMEOUT_MS,
             options,
           );
-    if (stalePids.length === 0) {
+    if (stalePids.length === 0 || readGatewayOwnerLease(ownerContext)) {
       return [];
     }
     restartLog.warn(
       `killing ${stalePids.length} stale gateway process(es) before restart: ${stalePids.join(", ")}`,
     );
-    const killed = terminateStaleProcessesSync(stalePids, options?.assertCurrent);
+    const killed = terminateStaleProcessesSync(stalePids, () => {
+      options?.assertCurrent?.();
+      return readGatewayOwnerLease(ownerContext) === undefined;
+    });
     // Wait for the port to be released before returning — called unconditionally
     // even when `killed` is empty (all pids were already dead before SIGTERM).
     // A process can exit before our signal arrives yet still leave its socket

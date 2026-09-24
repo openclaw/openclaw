@@ -352,9 +352,7 @@ describe("Cloud worker snapshots", () => {
         },
       });
       await waitForFast(() =>
-        expect(fixture.page.textContent).toContain(
-          "Retention policy saved. Restart the Gateway to apply it.",
-        ),
+        expect(fixture.page.textContent).toContain("Retention policy saved."),
       );
     } finally {
       fixture.dispose();

@@ -4,17 +4,19 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { formatSingleUnitDuration } from "./format-time/format-duration-internal.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
 // Session maintenance warnings notify an active session before warn-only
 // cleanup would prune it, with per-session dedupe and system-event fallback.
 type WarningParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   entry: SessionEntry;
   warning: SessionMaintenanceWarning;
@@ -103,9 +105,10 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   const contextKey = buildWarningContext(params);
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+  if (shouldSuppressWarning(queueKey, contextKey)) {
     return;
   }
 
@@ -113,13 +116,13 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   const target = resolveWarningDeliveryTarget(params.entry);
 
   if (!target.channel || !target.to) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: queueKey });
     return;
   }
 
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   if (!isDeliverableMessageChannel(channel)) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: queueKey });
     return;
   }
 
@@ -143,6 +146,6 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     }
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: queueKey });
   }
 }

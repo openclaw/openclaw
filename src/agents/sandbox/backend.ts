@@ -4,6 +4,7 @@
  * Stores process-wide backend factories so core and plugins can register local container, SSH, or custom sandbox providers.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -158,6 +159,13 @@ export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWork
   return resolveSandboxBackendRegistration(id)?.resolveWorkdir ?? null;
 }
 
+/** Read static backend capabilities without provisioning a sandbox runtime. */
+export function getSandboxBackendCapabilities(
+  id: string,
+): RegisteredSandboxBackend["capabilities"] | undefined {
+  return resolveSandboxBackendRegistration(id)?.capabilities;
+}
+
 /** Resolve a backend factory or throw the user-facing configuration error. */
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {
   const factory = getSandboxBackendFactory(id);
@@ -175,6 +183,7 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 /** Create and publish a backend, reserving provider IDs only for opted-in factories. */
 export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<SandboxBackendHandle> {
   const factory = requireSandboxBackendFactory(params.cfg.backend);
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
@@ -189,7 +198,14 @@ export async function createSandboxBackend(
     configLabelKind: backend.configLabelKind ?? "Image",
   });
   if (!reserveRuntimeId) {
-    const backend = await factory(params);
+    // Only the built-in container owner can establish custody of its allocation.
+    // A plugin overriding the same backend ID retains its own lifecycle contract.
+    const backend =
+      factory === createDockerSandboxBackend
+        ? await createDockerSandboxBackend(params, operatorAuthority)
+        : factory === createPodmanSandboxBackend
+          ? await createPodmanSandboxBackend(params, operatorAuthority)
+          : await factory(params);
     await updateRegistry(toEntry(backend));
     return backend;
   }
@@ -219,14 +235,14 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          completeSandboxRegistryReservation(toEntry(backend));
+          await completeSandboxRegistryReservation(toEntry(backend));
           return backend;
         } catch (error) {
           if (
             error instanceof SandboxRuntimeRetiredError &&
             error.runtimeId === reservation.containerName
           ) {
-            completeSandboxRegistryReservation(reservation, true);
+            await completeSandboxRegistryReservation(reservation, true);
           }
           throw error;
         }
@@ -248,11 +264,13 @@ builtinSandboxBackends.set("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("podman", {
   factory: createPodmanSandboxBackend,
   manager: podmanSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("ssh", {
   factory: createSshSandboxBackend,

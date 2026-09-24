@@ -82,6 +82,51 @@ describe("createComputerTool v2 execution", () => {
     expect(tool.description).toContain("Observe first with `get_window_state`");
   });
 
+  it("adopts refreshed node capabilities on explicit re-selection without changing Gateways", async () => {
+    const initial = v2Descriptor(["screenshot", "list_windows"]);
+    const upgraded = v2Descriptor(["screenshot", "launch_app"], {
+      provider: { ...initial.provider, generation: "generation-2" },
+    });
+    const gatewayOptions = { gatewayUrl: "wss://gateway.example", gatewayToken: "fixture-token" };
+    listNodesMock
+      .mockResolvedValueOnce([macComputerNode({ computerUse: initial })])
+      .mockResolvedValue([macComputerNode({ computerUse: upgraded })]);
+    const tool = createVisionComputerTool();
+    await tool.execute("before-upgrade", {
+      action: "screenshot",
+      node: "mac-1",
+      ...gatewayOptions,
+    });
+    expect(readActionEnum(tool)).toContain("list_windows");
+    expect(readActionEnum(tool)).not.toContain("launch_app");
+
+    await tool.execute("after-upgrade", { action: "screenshot", node: "mac-1" });
+    expect(listNodesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining(gatewayOptions),
+      undefined,
+    );
+    expect(readActionEnum(tool)).toContain("launch_app");
+    expect(readActionEnum(tool)).not.toContain("list_windows");
+    await tool.execute("new-action", { action: "launch_app", app: "Fixture" });
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining(gatewayOptions),
+      expect.objectContaining({
+        nodeId: "mac-1",
+        command: "computer.act",
+        params: expect.objectContaining({ action: "launch_app", app: "Fixture" }),
+      }),
+      { signal: undefined },
+    );
+    await expect(
+      tool.execute("retarget", {
+        action: "screenshot",
+        node: "mac-1",
+        gatewayUrl: "wss://other-gateway.example",
+      }),
+    ).rejects.toThrow("bound to its Gateway connection");
+  });
+
   it("refreshes a prepared schema from the Gateway override target", async () => {
     const remoteCapabilities = v2Descriptor(["screenshot", "launch_app", "get_accessibility_tree"]);
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: remoteCapabilities })]);
@@ -255,7 +300,7 @@ describe("createComputerTool v2 execution", () => {
               }
             : { coordinate, ...(action === "left_click_drag" ? { startCoordinate } : {}) }),
         });
-        const sent = readLastComputerActParams();
+        const sent = readLastComputerActParams(action);
         expect(sent[action === "zoom" ? "x2" : "x"]).toBeCloseTo(expectedX, 6);
         expect(sent[action === "zoom" ? "y2" : "y"]).toBeCloseTo(expectedY, 6);
         if (action !== "left_click") {
@@ -359,7 +404,7 @@ describe("createComputerTool v2 execution", () => {
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
       expect(callGatewayToolMock).not.toHaveBeenCalled();
       await tool.execute("element", { action: "left_click", ...refs, elementRef: "element-1" });
-      expect(readLastComputerActParams()).toMatchObject({
+      expect(readLastComputerActParams("left_click")).toMatchObject({
         action: "left_click",
         elementRef: "element-1",
       });
@@ -515,7 +560,7 @@ describe("createComputerTool v2 execution", () => {
         deliveryMode: "background",
       }),
     ).resolves.toBeDefined();
-    expect(readLastComputerActParams()).toEqual({
+    expect(readLastComputerActParams("left_click")).toEqual({
       action: "left_click",
       screenIndex: 0,
       refWidth: EFFECTIVE_REF_WIDTH,

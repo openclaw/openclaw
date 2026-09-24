@@ -38,6 +38,10 @@ this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
 
+For a side-by-side explanation of what is handed off, who refreshes it, and how
+a shared native account affects supervised Chats, see
+[Credentials and account ownership](/plugins/codex-harness/native-features#credentials-and-account-ownership).
+
 No credential file is written in this mode, in either home. A subscription
 profile is handed over as an `account/login/start` request of type
 `chatgptAuthTokens`, which Codex installs as in-memory external auth rather
@@ -154,3 +158,22 @@ to `appServer.clearEnv`:
 OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
 normalization: `CODEX_HOME` stays pointed at the selected agent or user scope,
 and `HOME` stays inherited so subprocesses can use normal user-home state.
+
+## Upgrading from 2026.9.4 with Codex sign-in
+
+If `openai:default` exists only through native Codex sign-in, you can prepare
+on 2026.9.4 before upgrading to 2026.9.5, which no longer supplies that overlay.
+For the conventional `main` shared-store owner, complete a fresh device-code
+sign-in through OpenClaw and verify the persisted profile:
+
+```bash
+openclaw models auth login --provider openai --method device-code --profile-id openai:default --agent main
+openclaw models auth list --agent main --json
+```
+
+Keep `--profile-id`: omitting it on 2026.9.4 can import under a different ID
+and remove the old overlay. `openai:default` should appear in the unfiltered
+list above. Other agents [inherit the shared profile](/auth-credential-semantics#agent-copy-portability),
+including agents with unrelated local credentials. A local profile with the
+same ID overrides it; sign in separately with `--agent <id>` only to create or
+replace an intentional local OpenAI override.

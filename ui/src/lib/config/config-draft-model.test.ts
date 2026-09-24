@@ -451,8 +451,10 @@ describe("config draft model", () => {
     expect(runtimeConfig.stageDefaultAgent("main")).toBe(true);
     expect(runtimeConfig.state.configForm).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -466,8 +468,10 @@ describe("config draft model", () => {
     )?.raw;
     expect(JSON.parse(String(raw))).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -948,7 +952,7 @@ describe("config draft model", () => {
       expect(runtimeConfig.state.configFormDirty).toBe(false);
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
 
-      await runtimeConfig.refresh({ discardPendingChanges: true });
+      await runtimeConfig.discardDraft({ reloadOnly: true });
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
       runtimeConfig.dispose();
     },
@@ -965,6 +969,10 @@ describe("config draft model", () => {
 
     publish(false);
     runtimeConfig.setRaw('{\n  "count": 9\n}\n');
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await runtimeConfig.discardDraft({ reloadOnly: true });
+    expect(runtimeConfig.state.configRaw).toBe('{\n  "count": 9\n}\n');
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
     await runtimeConfig.discardDraft();

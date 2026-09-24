@@ -64,6 +64,7 @@ async function setup(mode: "embedded" | "dock" | "document" = "embedded", connec
     return {
       disconnect,
       disableInput: vi.fn(),
+      setPresented: vi.fn(() => true),
       sendBackspace: vi.fn(),
       sendKeyboardEvent: vi.fn(),
       sendText: vi.fn(),

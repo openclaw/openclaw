@@ -1,9 +1,6 @@
-// Msteams plugin module implements reply stream controller behavior.
 import {
   type AgentPlanStep,
   createChannelProgressDraftCompositor,
-  type ChannelProgressDraftLine,
-  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -233,6 +230,9 @@ export function createTeamsReplyStreamController(params: {
 
   // Teams cannot delete an empty interim card; final delivery settles it.
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
+    // Informative Teams activities are already plain text, unlike Markdown draft transports.
+    formatPlainText: (text) => text,
     entry: params.msteamsConfig,
     mode: streamMode,
     active: Boolean(stream) && streamMode === "progress",
@@ -337,22 +337,8 @@ export function createTeamsReplyStreamController(params: {
       }
     },
 
-    async noteProgressWork(options?: { toolName?: string }): Promise<void> {
-      if (
-        options?.toolName !== undefined &&
-        !isChannelProgressDraftWorkToolName(options.toolName)
-      ) {
-        return;
-      }
-      await progressDraft.noteActivity();
-    },
-
-    async pushProgressLine(
-      line?: string | ChannelProgressDraftLine,
-      options?: { toolName?: string },
-    ): Promise<void> {
-      await progressDraft.pushToolProgress(line, options);
-    },
+    pushItemEvent: progressDraft.pushItemEvent.bind(progressDraft),
+    pushToolEvent: progressDraft.pushToolEvent,
 
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }): Promise<void> {
       await progressDraft.pushReasoningProgress(text, options);
@@ -368,7 +354,7 @@ export function createTeamsReplyStreamController(params: {
 
     async pushPlanProgress(
       steps?: AgentPlanStep[],
-      options?: { explanation?: string },
+      options?: { explanation?: string; explanationFormat?: "plain" },
     ): Promise<void> {
       await progressDraft.pushPlanProgress(steps, options);
     },

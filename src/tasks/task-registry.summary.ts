@@ -1,4 +1,11 @@
 // Summarizes task registry records for CLI and API surfaces.
+import {
+  addTaskAuditRecordSummary,
+  type RetainedLostTaskAuditSummary,
+  type TaskAuditRecord,
+  type TaskAuditSummary,
+} from "./task-registry.audit.js";
+import { createEmptyTaskAuditSummary } from "./task-registry.audit.shared.js";
 import type {
   TaskRecord,
   TaskRegistrySummary,
@@ -7,6 +14,12 @@ import type {
   TaskStatus,
   TaskStatusCounts,
 } from "./task-registry.types.js";
+
+export type TaskStatusSummary = {
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
+  taskAuditRetainedLost: RetainedLostTaskAuditSummary;
+};
 
 // Summary helpers keep task status/runtime counters stable for UI and plugin views.
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
@@ -66,4 +79,23 @@ export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistr
     addTaskRegistrySummaryCounts(summary, task.runtime, task.status, 1);
   }
   return summary;
+}
+
+export function createEmptyTaskStatusSummary(): TaskStatusSummary {
+  return {
+    tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
+    taskAuditRetainedLost: { count: 0 },
+  };
+}
+
+export function addTaskStatusSummaryRecord(
+  summary: TaskStatusSummary,
+  task: TaskAuditRecord & Pick<TaskRecord, "runtime">,
+  now: number,
+): void {
+  addTaskRegistrySummaryCounts(summary.tasks, task.runtime, task.status, 1);
+  if (addTaskAuditRecordSummary(summary.taskAudit, summary.taskAuditRetainedLost, task, now)) {
+    summary.tasks.failures -= 1;
+  }
 }

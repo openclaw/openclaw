@@ -140,7 +140,9 @@ internal class WearRealtimeTalkClient(
         snapshot
       } catch (err: Throwable) {
         closeChannel(resources)
-        activatedAttempt?.let(::closeLocal)
+        // A failed start owes Voice the same audio error a failed restart publishes.
+        // Cancellation cannot reach here: nothing suspends between activate and return.
+        activatedAttempt?.let { closeLocal(it, failed = true) }
         if (channelOpened) {
           // Finish ambiguous-start cleanup before another attempt can acquire
           // the lifecycle lock and create a replacement relay for this Watch.
@@ -544,15 +546,6 @@ internal fun wearRealtimeAudioChannelPath(
   } else {
     // v2026.7.2 shipped the fixed path. Keep it for staggered phone/Watch updates.
     WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH
-  }
-
-internal fun pcm16LeMouthLevels(
-  pcm: ByteArray,
-  sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
-  frameMillis: Int = MOUTH_FRAME_MILLIS,
-): List<Float> =
-  Pcm16MouthLevelAccumulator(sampleRateHz, frameMillis).run {
-    append(pcm) + flush()
   }
 
 internal class Pcm16MouthLevelAccumulator(

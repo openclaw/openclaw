@@ -23,6 +23,11 @@ Mac node capabilities and Talk Mode.
 3. Click **Connect**. For a Gateway protected by Cloudflare Access, the app
    opens your default browser. Continue with the account you use for that
    Gateway and complete any sign-in prompts there.
+   If the browser does not appear, choose **Open browser** in the pending
+   sign-in. This resumes the same sign-in attempt; it does not start another one.
+   The recovery action launches your default browser normally, allowing the
+   browser to select its profile instead of reusing an invisible automation
+   process. Check the account shown in the browser before approving sign-in.
 4. Return to OpenClaw. The saved Gateway's dashboard opens; check the account
    name in its sidebar footer. You can open more windows from
    **File → New Gateway Window…** or the **Gateways** menu. The app reopens your selected Gateway after
@@ -55,6 +60,12 @@ chat cache and queued messages. Signing in with a different account closes the
 previous account's native chat windows and uses that account's own cache and
 queue. Previously queued messages remain with their original account; sign
 back into that account to access them.
+
+The **Open browser** action is available only while its sign-in is active.
+Cancelling, closing the sign-in, or changing the saved Gateway invalidates it.
+After a timeout, start sign-in again. Command-line sign-in also presents this
+recovery action in a native window; closing that window cancels the pending
+command.
 
 To sign out of that Gateway in the Mac app,
 remove it from **Connection… → Gateways** and confirm **Remove**. This removes its

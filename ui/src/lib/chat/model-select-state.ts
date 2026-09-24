@@ -3,9 +3,12 @@ import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -16,6 +19,8 @@ import {
   resolvePreferredServerChatModelValue,
 } from "./model-ref.ts";
 
+registerModelControlsEnglish();
+
 type ChatModelSelectStateInput = {
   activeSession?: GatewaySessionRow;
   agentDefaultModel?: string;
@@ -23,6 +28,9 @@ type ChatModelSelectStateInput = {
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  catalogRetired?: boolean;
+  catalogInitialized?: boolean;
 };
 
 type ChatModelSelectOption = {
@@ -56,7 +64,7 @@ export type ChatFastModeSelectState = {
 
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
-  "effectiveFastMode" | "fastMode" | "model" | "modelProvider"
+  "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"
 >;
 
 type ChatFastModeSelectStateInput = {
@@ -102,6 +110,12 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  if (state.catalogRetired || state.catalogInitialized === false) {
+    return "";
+  }
+  if (state.modelSelectionPolicy?.restricted) {
+    return state.modelSelectionPolicy.defaultModel ?? "";
+  }
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
@@ -163,6 +177,9 @@ function buildChatModelOptions(
           right.provider.trim().toLowerCase() !== normalizeChatModelProviderId(right.provider),
         ),
   )) {
+    if (entry.manualSelectionAllowed === false) {
+      continue;
+    }
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
     const value = option.value.trim();
     const key = value.toLowerCase();
@@ -208,11 +225,30 @@ export function resolveChatModelUnavailableReason(
     : "missing-auth";
 }
 
+export function hasChatModelCatalogSelection(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): boolean {
+  const key = normalizeChatModelAvailabilityKey(
+    resolvePreferredServerChatModelValue(model, provider, catalog),
+  );
+  return catalog.some(
+    (entry) =>
+      entry.manualSelectionAllowed !== false &&
+      normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
+        key,
+  );
+}
+
 export function chatModelUnavailableMessage(
-  reason: ModelCatalogEntry["unavailableReason"],
+  reason: ModelRuntimeEntry["unavailableReason"],
 ): string | undefined {
   if (reason === "missing-auth") {
     return t("modelSetup.missingAuth");
+  }
+  if (reason === "unsupported-runtime") {
+    return t("chat.modelControls.runtimeUnavailable");
   }
   return reason === "auth-failed"
     ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
@@ -391,7 +427,12 @@ export function resolveChatFastModeSelectState(
             buildQualifiedChatModelValue(entry.id, entry.provider),
           ) === selectedValue,
       )
-      .map((entry) => entry.supportsFastMode),
+      .map((entry) => {
+        const runtimeEntry = entry.runtimeChoices?.length
+          ? resolveModelRuntimeEntry(entry, activeRow?.agentRuntime?.id)
+          : entry;
+        return (runtimeEntry ?? entry).supportsFastMode;
+      }),
   );
   const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
   const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);

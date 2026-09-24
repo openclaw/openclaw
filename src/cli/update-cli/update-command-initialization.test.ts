@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
+import { resolveStateLifecycleRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
@@ -13,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 
 const mocks = vi.hoisted(() => ({ doctor: vi.fn() }));
 vi.mock("./update-command-package.js", () => ({ runPackageUpdateDoctor: mocks.doctor }));
@@ -43,6 +45,30 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 function freshEnvironment() {
   const root = dirs.make("openclaw-update-initialization-");
   return { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
+}
+
+function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, value: string) {
+  const params = {
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+  };
+  return execNodeEvalSync(
+    `import {
+      StateSchemaMutationConflictError,
+      withStateSchemaFence,
+    } from ${JSON.stringify(new URL("../../infra/state-database-coordinator.ts", import.meta.url).href)};
+    try {
+      console.log(withStateSchemaFence(${JSON.stringify(params)}, () => ${JSON.stringify(value)}));
+    } catch (error) {
+      if (!(error instanceof StateSchemaMutationConflictError)) throw error;
+      console.log(error.message);
+    }`,
+    {
+      imports: ["tsx"],
+      env: { ...env, PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      timeout: 20_000,
+    },
+  ).trim();
 }
 
 function createTargetDatabase() {
@@ -196,19 +222,30 @@ describe("selected-target state initialization", () => {
     expect(fs.readFileSync(filename)).toEqual(before);
   });
 
-  it("refuses failed target Doctor after package staging created a compatible database", async () => {
-    const env = freshEnvironment();
-    const filename = publishTargetDatabase(createTargetDatabase(), env);
-    const before = fs.readFileSync(filename);
-    mocks.doctor.mockResolvedValue({ ...doctorSuccess, exitCode: 1, stderrTail: "Invalid config" });
+  it.each([
+    { label: "nonzero exit", completion: { exitCode: 1 } },
+    { label: "zero-exit timeout", completion: { exitCode: 0, termination: "timeout" } },
+    { label: "zero-exit output limit", completion: { exitCode: 0, outputLimitExceeded: true } },
+  ])(
+    "refuses target Doctor $label after staging created a compatible database",
+    async ({ completion }) => {
+      const env = freshEnvironment();
+      const filename = publishTargetDatabase(createTargetDatabase(), env);
+      const before = fs.readFileSync(filename);
+      mocks.doctor.mockResolvedValue({
+        ...doctorSuccess,
+        ...completion,
+        stderrTail: "Invalid config",
+      });
 
-    await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow(
-      "Invalid config",
-    );
+      await expect(initializeUpdateStateFromTarget(initializationOptions(env))).rejects.toThrow(
+        "Invalid config",
+      );
 
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(fs.readFileSync(filename)).toEqual(before);
-  });
+      expect(mocks.doctor).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(filename)).toEqual(before);
+    },
+  );
 
   it("refuses a newer database created during staging without changing it", async () => {
     const env = freshEnvironment();
@@ -265,7 +302,7 @@ describe("selected-target state initialization", () => {
 });
 
 describe("initialization schema coordination", () => {
-  it("fences modern schema writers while the legacy target creates its database", async () => {
+  it("fences modern schema writers while the legacy target creates its database", () => {
     const env = freshEnvironment();
     const databasePath = resolveOpenClawStateSqlitePath(env);
     const fence = acquireLegacyUpdateInitializationFence({
@@ -274,15 +311,10 @@ describe("initialization schema coordination", () => {
       targetSchemas: { state: 1, agent: 1 },
     });
     expect(fence).toBeDefined();
-    // A separately loaded owner has no access to the parent's reentrant lease.
-    vi.resetModules();
-    const independent = await import("../../infra/state-database-coordinator.js");
     try {
-      expect(() =>
-        independent.withStateSchemaFence({ databasePath }, () => {
-          throw new Error("Unexpected modern schema writer");
-        }),
-      ).toThrow("another Gateway owns that state directory");
+      expect(runIndependentSchemaWriter(env, "Unexpected modern schema writer")).toContain(
+        "another Gateway owns that state directory",
+      );
       fs.mkdirSync(path.dirname(databasePath), { recursive: true });
       const legacy = new DatabaseSync(databasePath);
       try {
@@ -304,10 +336,10 @@ describe("initialization schema coordination", () => {
     } finally {
       fence?.release();
     }
-    expect(independent.withStateSchemaFence({ databasePath }, () => "released")).toBe("released");
+    expect(runIndependentSchemaWriter(env, "released")).toBe("released");
   });
 
-  it("leaves the modern target free to acquire its own schema fence", async () => {
+  it("leaves the modern target free to acquire its own schema fence", () => {
     const env = freshEnvironment();
     const fence = acquireLegacyUpdateInitializationFence({
       env,
@@ -315,14 +347,7 @@ describe("initialization schema coordination", () => {
       targetSchemas,
     });
     try {
-      vi.resetModules();
-      const independent = await import("../../infra/state-database-coordinator.js");
-      expect(
-        independent.withStateSchemaFence(
-          { databasePath: resolveOpenClawStateSqlitePath(env) },
-          () => "target-owned",
-        ),
-      ).toBe("target-owned");
+      expect(runIndependentSchemaWriter(env, "target-owned")).toBe("target-owned");
     } finally {
       fence?.release();
     }

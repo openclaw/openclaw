@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -10,15 +11,32 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { preparedClawHubArtifactName } from "../../scripts/clawhub-prepared-artifact.mjs";
+import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  createPublicationAdmission,
+  createPublicationObservations,
+  createPublicationSourceFact,
+  normalizePublicationIntent,
+  publicationDispatchEnvelope,
+  publicationIntentInputs,
+  publicationSourceRequest,
+} from "../../scripts/full-release-publication-contract.mjs";
+import {
+  buildReleaseExecutionPlanArtifact,
+  composeReleaseAttemptJobs,
+  releaseExecutionPlanSha256,
+} from "../../scripts/full-release-validation-policy.mjs";
 import {
   readyArtifactName,
   validateReadyRelease,
   validateReleaseButtonInputs,
 } from "../../scripts/openclaw-release-ready.mjs";
 import { preparedNpmArtifactName } from "../../scripts/plugin-npm-prepared-release.mjs";
+import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -120,12 +138,16 @@ describe("release readiness contract", () => {
       inputs({
         tag,
         npm_dist_tag: channel,
+        stable_soak_waiver: "Operator accepted missing soak",
+        lane_waiver: "Telegram lane blocked: operator approved",
         publish_openclaw_npm: true,
         publish_docker_only: false,
       }),
     );
     expect(value).toEqual({
       ...inputs({ tag, npm_dist_tag: channel }),
+      stable_soak_waiver: "Operator accepted missing soak",
+      lane_waiver: "Telegram lane blocked: operator approved",
       plugin_publish_scope: "all-publishable",
       publish_openclaw_npm: "true",
       publish_docker_only: "false",
@@ -220,6 +242,12 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
     resolve("scripts/openclaw-release-ready.mjs"),
     join(scripts, "openclaw-release-ready.mjs"),
   );
+  writeFixtureFile(
+    scripts,
+    "validate-full-release-validation-evidence.mjs",
+    `export * from ${JSON.stringify(pathToFileURL(resolve("scripts/validate-full-release-validation-evidence.mjs")).href)};\n`,
+  );
+  copyFileSync(resolve("scripts/release-ci-summary.mjs"), join(scripts, "release-ci-summary.mjs"));
   for (const name of ["actions-artifact-archive", "record-shared", "release-version"]) {
     writeFixtureFile(
       scripts,
@@ -623,6 +651,10 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
   );
+  copyFileSync(
+    resolve("scripts/linux-app-channel.mjs"),
+    join(fixture.scripts, "linux-app-channel.mjs"),
+  );
   const statePath = writeFixtureFile(
     fixture.root,
     "github-state.json",
@@ -635,6 +667,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       isDraft: true,
       isPrerelease: true,
       isLatest: false,
+      releaseId: 101,
       writes: 0,
       lostClawHubDispatchResponse: false,
       preparationProducer: {},
@@ -650,7 +683,26 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     const args = process.argv.slice(2);
     const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
     appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'gh', args }) + '\\n');
-    if (args[0] === 'api' && args[1].startsWith('repos/${REPOSITORY}/commits/')) {
+    const option = name => {
+      const index = args.indexOf(name);
+      return index < 0 ? undefined : args[index + 1];
+    };
+    const apiEndpoint = args[0] === 'api' ? args.find(arg => arg.startsWith('repos/')) : undefined;
+    const endpoint = String(apiEndpoint ?? '').replace('repos/${REPOSITORY}/', '').split('?')[0];
+    const method = option('--method') ?? 'GET';
+    const release = () => ({
+      id: state.releaseId, tag_name: process.env.FIXTURE_RELEASE_TAG,
+      draft: state.isDraft, prerelease: state.isPrerelease,
+    });
+    if (state.frv && !state.unavailableFrv && args[0] === 'run' && args[1] === 'view' && args[2] === '200') {
+      console.log(JSON.stringify(state.frv.view));
+    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.archives, endpoint)) {
+      process.stdout.write(readFileSync(state.frv.archives[endpoint]));
+    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.logs, endpoint)) {
+      process.stdout.write(state.frv.logs[endpoint]);
+    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.responses, endpoint)) {
+      console.log(JSON.stringify(state.frv.responses[endpoint]));
+    } else if (args[0] === 'api' && args[1].startsWith('repos/${REPOSITORY}/commits/')) {
       const sha = decodeURIComponent(args[1]).includes('/release-publish/') ? state.toolingSha : state.sourceSha;
       console.log(args[args.indexOf('--jq') + 1].startsWith('.sha') ? sha : JSON.stringify({ sha }));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/compare/${TOOLING_SHA}...main') {
@@ -658,6 +710,35 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/git/ref/tags/${TOOLING.ref}') {
       if (state.toolingMissing) process.exit(1);
       console.log(JSON.stringify({ ref: '${TOOLING.fullRef}', object: { type: 'commit', sha: state.toolingSha } }));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'git/ref/heads/' + process.env.GITHUB_REF_NAME &&
+      process.env.GITHUB_REF_NAME.startsWith('tideclaw/alpha/')) {
+      console.log(JSON.stringify({ ref: process.env.GITHUB_REF,
+        object: { type: 'commit', sha: state.toolingSha } }));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'git/ref/tags/' + encodeURIComponent(process.env.FIXTURE_RELEASE_TAG)) {
+      console.log(JSON.stringify({ ref: 'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+        object: { type: 'commit', sha: state.sourceSha } }));
+    } else if (args[0] === 'api' && method === 'GET' && endpoint === 'releases/latest') {
+      if (!state.isLatest) { console.error('HTTP 404'); process.exit(1); }
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      endpoint === 'releases/tags/' + encodeURIComponent(process.env.FIXTURE_RELEASE_TAG)) {
+      if (state.isDraft) { console.error('HTTP 404'); process.exit(1); }
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'GET' &&
+      apiEndpoint === 'repos/${REPOSITORY}/releases/' + state.releaseId + '/assets?per_page=100&page=1') {
+      console.log('[]');
+    } else if (args[0] === 'api' && method === 'GET' && endpoint === 'releases/' + state.releaseId) {
+      console.log(JSON.stringify(release()));
+    } else if (args[0] === 'api' && method === 'PATCH' &&
+      endpoint === 'releases/' + state.releaseId && option('--field') === 'draft=false' &&
+      ['make_latest=true', 'make_latest=false'].includes(option('--raw-field'))) {
+      state.isDraft = false;
+      state.isLatest = option('--raw-field') === 'make_latest=true';
+      state.writes += 1;
+      writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
+      console.log(JSON.stringify(release()));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/runs/700') {
       if (state.publicationReadbackUnavailable) process.exit(1);
       console.log(JSON.stringify({ id: 700, run_attempt: state.parentRunAttempt,
@@ -665,6 +746,14 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         path: '.github/workflows/openclaw-release-publish.yml', head_sha: '${TOOLING_SHA}',
         head_branch: '${TOOLING.ref}', status: 'completed', conclusion: state.parentConclusion,
         ...state.publicationProducer }));
+    } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/runs/900') {
+      console.log(JSON.stringify({ id: 900, run_attempt: 1,
+        repository: { full_name: '${REPOSITORY}' }, event: 'workflow_dispatch',
+        path: process.env.FIXTURE_ACTIVATION_OWNER === 'button'
+          ? '.github/workflows/openclaw-release-promote.yml' : '.github/workflows/openclaw-release-publish.yml',
+        head_sha: '${TOOLING_SHA}',
+        head_branch: process.env.GITHUB_REF_NAME, status: 'in_progress', conclusion: null,
+        ...state.currentWriter }));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/workflows/openclaw-release-publish.yml/dispatches') {
       const receipt = join(process.env.RUNNER_TEMP, 'release-button/dispatch.json');
       appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'publication-dispatch',
@@ -709,7 +798,14 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       state.isLatest = flag('--latest', !state.isPrerelease);
       state.writes += 1;
       writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
-    } else if (args[0] === 'release' && args[1] === 'view') {
+    } else if (args[0] === 'release' && args[1] === 'view' &&
+      args[2] === process.env.FIXTURE_RELEASE_TAG &&
+      option('--json') === 'databaseId,tagName,isDraft,isPrerelease') {
+      console.log(JSON.stringify({ databaseId: state.releaseId,
+        tagName: process.env.FIXTURE_RELEASE_TAG,
+        isDraft: state.isDraft, isPrerelease: state.isPrerelease }));
+    } else if (args[0] === 'release' && args[1] === 'view' &&
+      args[2] === process.env.FIXTURE_RELEASE_TAG && option('--json') === 'isDraft,isPrerelease') {
       console.log(JSON.stringify({ isDraft: state.isDraft, isPrerelease: state.isPrerelease }));
     } else {
       console.error('unexpected fixture GitHub operation: ' + JSON.stringify(args));
@@ -721,6 +817,7 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   const env = {
     ...fixture.env,
     PATH: `${dirname(gh)}:${fixture.env.PATH}`,
+    OPENCLAW_GH_BIN: gh,
     FIXTURE_GITHUB_STATE: statePath,
   };
   return {
@@ -733,7 +830,9 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       request?: ReturnType<typeof publicationRequest>,
     ) {
       const ready = readyRelease();
-      ready.inputs = validateReleaseButtonInputs(inputs({ tag, npm_dist_tag: channel }));
+      if (owner === "button") {
+        ready.inputs = validateReleaseButtonInputs(inputs({ tag, npm_dist_tag: channel }));
+      }
       if (!request) {
         mockReadiness(fixture.scripts, ready);
       }
@@ -745,12 +844,15 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       );
       const job = workflow.jobs[owner === "button" ? "finalize" : "finalize_github_release"];
       const step = job.steps.find((entry: { run?: string }) => entry.run);
-      return spawnSync("bash", ["-c", step.run], {
+      // Bash 5.3 can block on these JSON here-strings on macOS.
+      return spawnSync(process.platform === "darwin" ? "/bin/bash" : "bash", ["-c", step.run], {
         cwd: dirname(fixture.scripts),
         env: {
           ...env,
           RELEASE_TAG: tag,
           SOURCE_SHA,
+          FIXTURE_ACTIVATION_OWNER: owner,
+          FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,
           RELEASE_REQUEST: JSON.stringify(request ?? publicationRequest(ready)),
         },
@@ -775,7 +877,414 @@ function preparationRequest() {
   };
 }
 
-function preparationFixture(overrides: Record<string, unknown> = {}) {
+async function preparationEvidence(
+  root: string,
+  selectedInputs: ReturnType<typeof inputs> & {
+    windows_node_tag?: string;
+    windows_node_installer_digests?: string;
+  },
+  route: unknown,
+  targetContextRef?: string,
+  publishCore = true,
+) {
+  const version = selectedInputs.tag.slice(1);
+  const beta = version.includes("-beta.");
+  const full = version.includes("-alpha.") || targetContextRef !== undefined;
+  const profile = full ? "full" : beta ? "beta" : "stable";
+  const coveragePolicy = full ? undefined : beta ? "npm-beta-v1" : "npm-stable-v1";
+  const branch = `release-ci/${TOOLING_SHA.slice(0, 12)}-200`;
+  const context =
+    targetContextRef ??
+    (version.includes("-alpha.")
+      ? `v${version}`
+      : `release/${version.replace(/-beta\.[0-9]+$/u, "")}`);
+  const intent = normalizePublicationIntent(
+    "publish",
+    JSON.stringify({
+      route,
+      npmDistTag: selectedInputs.npm_dist_tag,
+      publishOpenclawNpm: publishCore,
+      pluginPublishScope: "all-publishable",
+      plugins: [],
+      ...(selectedInputs.windows_node_tag
+        ? {
+            windowsNodeTag: selectedInputs.windows_node_tag,
+            windowsNodeInstallerDigests: JSON.parse(
+              selectedInputs.windows_node_installer_digests ?? "",
+            ),
+          }
+        : {}),
+    }),
+  );
+  const source = createPublicationSourceFact(
+    publicationSourceRequest({
+      PUBLICATION_INPUTS_JSON: JSON.stringify({
+        ref: SOURCE_SHA,
+        release_profile: profile,
+        rerun_group: "all",
+        mode: "direct",
+        target_context_ref: context,
+        provider: "openai",
+        npm_telegram_provider_mode: "mock-openai",
+        run_release_soak: !beta,
+        skip_package_telegram_e2e: beta,
+        trusted_workflow_json: publicationDispatchEnvelope(TOOLING, intent),
+      }),
+      PUBLICATION_TARGET_SHA: SOURCE_SHA,
+      PUBLICATION_TARGET_CONTEXT: context || SOURCE_SHA,
+      PUBLICATION_COVERAGE_POLICY: coveragePolicy,
+      PUBLICATION_TOOLING_JSON: JSON.stringify(TOOLING),
+      GITHUB_REPOSITORY: REPOSITORY,
+      GITHUB_REF: `refs/heads/${branch}`,
+      GITHUB_SHA: TOOLING_SHA,
+      GITHUB_RUN_ID: "200",
+      GITHUB_RUN_ATTEMPT: "1",
+    }),
+    { packages: [], platforms: [] },
+    {
+      version,
+      packages: publishCore ? [{ name: "openclaw", version, targets: ["npm"] }] : [],
+      platforms: selectedInputs.windows_node_tag
+        ? [{ id: "windows", source: ".github/workflows/windows-node-release.yml" }]
+        : [],
+    },
+  );
+  const time = "2026-09-13T12:00:00.000Z";
+  const observations = createPublicationObservations(source, {
+    sourceDigest: source.digest,
+    prerequisitesCompletedAt: time,
+    collectionStartedAt: time,
+    collectionCompletedAt: time,
+    npm: publishCore
+      ? [
+          {
+            name: "openclaw",
+            version,
+            required: true,
+            observedAt: time,
+            outcome: "observed",
+            state: {
+              packageExists: true,
+              hasVersionHistory: true,
+              selectedVersionExists: false,
+              latestVersion: null,
+            },
+          },
+        ]
+      : [],
+    clawhub: [],
+    pendingAuthority: [],
+    plans: {
+      npm: { all: [], candidates: [], skippedPublished: [], warnings: [] },
+      clawhub: {
+        all: [],
+        candidates: [],
+        skippedPublished: [],
+        warnings: [],
+        bootstrapCandidates: [],
+        missingTrustedPublisher: [],
+      },
+    },
+  });
+  const admission = createPublicationAdmission(
+    source,
+    observations,
+    {
+      id: "444",
+      name: "full-release-publication-observations-200-1",
+      digest: `sha256:${"c".repeat(64)}`,
+      sizeInBytes: 4096,
+    },
+    time,
+  );
+  const parent = {
+    id: 200,
+    run_attempt: 1,
+    name: "Full Release Validation",
+    display_title: "Full Release Validation",
+    repository: { full_name: REPOSITORY },
+    head_repository: { full_name: REPOSITORY },
+    path: ".github/workflows/full-release-validation.yml",
+    event: "workflow_dispatch",
+    head_sha: TOOLING_SHA,
+    head_branch: branch,
+    status: "completed",
+    conclusion: "success",
+    html_url: `https://github.com/${REPOSITORY}/actions/runs/200`,
+    actor: { login: "github-actions[bot]" },
+    triggering_actor: { login: "github-actions[bot]" },
+  };
+  const baseJob = {
+    status: "completed",
+    conclusion: "success",
+    run_attempt: 1,
+    started_at: time,
+    completed_at: "2026-09-13T12:01:00.000Z",
+  };
+  const planned = expectedChildDispatches("200", 1, branch, 3).map((child, index) => {
+    const selected =
+      child.manifestKey !== "npmTelegram" && (!beta || child.manifestKey !== "productPerformance");
+    return {
+      displayTitle: child.displayTitle,
+      key: child.manifestKey,
+      required: selected,
+      selected,
+      source: "fresh",
+      result: selected ? "success" : "skipped",
+      runId: selected ? String(800 + index) : "",
+      runAttempt: selected ? 1 : null,
+      url: selected ? `https://github.com/${REPOSITORY}/actions/runs/${800 + index}` : "",
+      workflow: child.workflow,
+      workflowRef: branch,
+      workflowSha: TOOLING_SHA,
+      parentJobName: child.parentJobName,
+    };
+  });
+  const plan = buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 3,
+    candidate: null,
+    coveragePolicy,
+    targetVersion: version,
+    children: planned.map(({ parentJobName: _name, ...child }) => child),
+    evidenceReuse: { requested: false },
+    gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+    releaseProfile: profile,
+    rerunGroup: "all",
+    trustedWorkflow: TOOLING,
+    expected: {
+      parentRunId: "200",
+      parentRunAttempt: 1,
+      repository: REPOSITORY,
+      targetSha: SOURCE_SHA,
+      workflowSha: TOOLING_SHA,
+      workflowRef: branch,
+      candidateRequest: buildFullReleaseCandidateRequest({
+        repository: REPOSITORY,
+        targetSha: SOURCE_SHA,
+        toolingSha: TOOLING_SHA,
+        releaseProfile: profile,
+        releaseSoak: !beta,
+        upgradeSurvivorBaseline: "openclaw@latest",
+        upgradeSurvivorBaselines: "",
+        upgradeSurvivorScenarios: "",
+        allowFrozenTargetScenarioOmissions: false,
+        allowUnreleasedChangelog: false,
+        packagePublished: false,
+        sharedImagePolicy: "no-push-artifact",
+      }),
+    },
+  });
+  Object.assign(plan, {
+    sourceAdmissionContract: "1",
+    sourceAdmission: source,
+    publicationAdmissionContract: "1",
+    publicationAdmission: admission,
+  });
+  plan.sha256 = releaseExecutionPlanSha256(plan);
+  const childJobs = (key: string) => [
+    {
+      ...baseJob,
+      id: 950,
+      name: key === "productPerformance" ? "Verify artifact-only report mode" : "test",
+    },
+  ];
+  const childEvidence = Object.fromEntries(
+    planned
+      .filter((entry) => entry.selected)
+      .map((child) => {
+        const composite = composeReleaseAttemptJobs(
+          [{ jobs: childJobs(child.key), runAttempt: 1 }],
+          { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+        );
+        return [
+          child.key,
+          {
+            jobs: composite.jobs,
+            compositeJobsSha256: composite.sha256,
+            dispatchActor: "github-actions[bot]",
+            triggeringActor: "github-actions[bot]",
+            repository: REPOSITORY,
+            runId: child.runId,
+            effectiveRunAttempt: 1,
+            plannedRunAttempt: 1,
+            observedRunAttempts: [1],
+          },
+        ];
+      }),
+  );
+  const manifest = {
+    version: 4,
+    workflowName: parent.name,
+    runId: "200",
+    runAttempt: "1",
+    workflowRef: branch,
+    workflowSha: TOOLING_SHA,
+    workflowFullRef: `refs/heads/${branch}`,
+    workflowRefType: "branch",
+    targetRef: SOURCE_SHA,
+    targetSha: SOURCE_SHA,
+    releaseProfile: profile,
+    rerunGroup: "all",
+    runReleaseSoak: String(!beta),
+    controls: {
+      performanceBlocking: !beta,
+      performanceReportPublication: "artifact-only",
+      stableSoakRequired: !beta,
+    },
+    validationInputs: {
+      ...publicationIntentInputs(source),
+      coveragePolicy,
+      targetVersion: version,
+      targetContextRef: context,
+      mode: "direct",
+      provider: "openai",
+      codexPluginSpec: "",
+      crossOsSuiteFilter: "",
+      liveSuiteFilter: "",
+      npmTelegramPackageSpec: "",
+      npmTelegramProviderMode: "mock-openai",
+      npmTelegramScenario: "",
+      packageAcceptancePackageSpec: "",
+      releasePackageSpec: "",
+      skipPackageTelegramE2e: String(beta),
+      allowUnreleasedChangelog: "false",
+    },
+    trustedWorkflow: TOOLING,
+    sourceAdmissionContract: "1",
+    sourceAdmission: source,
+    publicationAdmissionContract: "1",
+    publicationAdmission: admission,
+    sourceParentRunAttempt: 1,
+    executionPlanSha256: plan.sha256,
+    childEvidence,
+    childRuns: Object.fromEntries(
+      planned.map((child) => [
+        child.key,
+        child.key === "productPerformance"
+          ? { blocking: !beta, conclusion: beta ? "" : "success", runId: child.runId }
+          : child.runId,
+      ]),
+    ),
+  };
+  const workflow =
+    'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n';
+  const responses: Record<string, unknown> = {
+    "actions/runs/200": parent,
+    "actions/runs/200/attempts/1": parent,
+    "contents/.github/workflows/full-release-validation.yml": {
+      type: "file",
+      encoding: "base64",
+      path: ".github/workflows/full-release-validation.yml",
+      content: Buffer.from(workflow).toString("base64"),
+      size: Buffer.byteLength(workflow),
+      sha: createHash("sha1")
+        .update(`blob ${Buffer.byteLength(workflow)}\0${workflow}`)
+        .digest("hex"),
+    },
+  };
+  const jobs = [
+    {
+      ...baseJob,
+      id: 901,
+      name: "Resolve target ref",
+      steps: [{ name: "Finalize publication admission", conclusion: "success" }],
+    },
+    {
+      ...baseJob,
+      id: 902,
+      name: "Seal release execution plan",
+      steps: [
+        { ...baseJob, name: "Seal immutable release execution plan", number: 5 },
+        {
+          ...baseJob,
+          name: "Upload immutable release execution plan",
+          number: 6,
+          started_at: "2026-09-13T12:01:00.000Z",
+          completed_at: "2026-09-13T12:01:03.000Z",
+        },
+      ],
+    },
+  ];
+  const logs: Record<string, string> = {};
+  for (const [index, child] of planned.entries()) {
+    if (!child.selected) {
+      continue;
+    }
+    const childRun = {
+      ...parent,
+      id: Number(child.runId),
+      path: `.github/workflows/${child.workflow}`,
+      name: child.displayTitle,
+      display_title: child.displayTitle,
+      html_url: child.url,
+    };
+    responses[`actions/runs/${child.runId}`] = childRun;
+    responses[`actions/runs/${child.runId}/attempts/1`] = childRun;
+    responses[`actions/runs/${child.runId}/attempts/1/jobs`] = {
+      total_count: 1,
+      jobs: childJobs(child.key),
+    };
+    const jobId = 910 + index;
+    jobs.push({ ...baseJob, id: jobId, name: child.parentJobName, steps: [] });
+    logs[`actions/jobs/${jobId}/logs`] =
+      `TARGET_SHA: ${SOURCE_SHA}\nCI_RELEASE_SCOPE: ${full ? "full" : `npm-${profile}`}\n-f publish_reports=false\nDispatched ${child.workflow}: ${child.url} (attempt 1)`;
+  }
+  responses["actions/runs/200/jobs"] = { total_count: jobs.length, jobs };
+  responses["actions/runs/200/attempts/1/jobs"] = { total_count: jobs.length, jobs };
+  const archives: Record<string, string> = {};
+  const artifacts = [];
+  for (const [index, [name, filename, value]] of (
+    [
+      ["full-release-validation-200-1", "full-release-validation-manifest.json", manifest],
+      ["full-release-execution-plan-200", "full-release-execution-plan.json", plan],
+    ] as const
+  ).entries()) {
+    const zip = new JSZip();
+    zip.file(filename, `${JSON.stringify(value)}\n`, { unixPermissions: 0o100600 });
+    const bytes = await zip.generateAsync({
+      type: "nodebuffer",
+      platform: "UNIX",
+      compression: "STORE",
+    });
+    const id = 990 + index;
+    const path = join(root, `${id}.zip`);
+    writeFileSync(path, bytes);
+    archives[`actions/artifacts/${id}/zip`] = path;
+    const artifact = {
+      id,
+      name,
+      expired: false,
+      digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      size_in_bytes: bytes.length,
+      created_at: "2026-09-13T12:01:02.000Z",
+      workflow_run: { id: 200, head_sha: TOOLING_SHA, head_branch: branch },
+    };
+    artifacts.push(artifact);
+    responses[`actions/artifacts/${id}`] = artifact;
+  }
+  responses["actions/runs/200/artifacts"] = { total_count: artifacts.length, artifacts };
+  return {
+    responses,
+    logs,
+    archives,
+    manifest,
+    parent,
+    view: {
+      attempt: 1,
+      conclusion: "success",
+      headBranch: branch,
+      headSha: TOOLING_SHA,
+      jobs: [],
+      status: "completed",
+      url: parent.html_url,
+    },
+  };
+}
+
+async function preparationFixture(
+  overrides: Record<string, unknown> = {},
+  inputOverrides: Record<string, unknown> = {},
+) {
   const preparationArtifacts = (["npm", "clawhub"] as const).map((target) => {
     const {
       artifactId,
@@ -797,12 +1306,36 @@ function preparationFixture(overrides: Record<string, unknown> = {}) {
     };
   });
   const fixture = finalizationFixture({ preparationArtifacts, ...overrides });
+  const windowsNodeTag = inputOverrides.windows_node_tag;
+  const windowsNodeInstallerDigests = inputOverrides.windows_node_installer_digests;
+  if (
+    (windowsNodeTag !== undefined && typeof windowsNodeTag !== "string") ||
+    (windowsNodeInstallerDigests !== undefined && typeof windowsNodeInstallerDigests !== "string")
+  ) {
+    throw new Error("fixture Windows workflow inputs must be serialized strings");
+  }
+  const selectedInputs = {
+    ...inputs(inputOverrides),
+    windows_node_tag: windowsNodeTag,
+    windows_node_installer_digests: windowsNodeInstallerDigests,
+  };
+  const evidence = await preparationEvidence(
+    fixture.root,
+    selectedInputs,
+    overrides.frvRoute ?? "prepared",
+    typeof overrides.frvContext === "string" ? overrides.frvContext : undefined,
+    overrides.frvCore !== false,
+  );
+  const statePath = join(fixture.root, "github-state.json");
+  const state = JSON.parse(readFileSync(statePath, "utf8"));
+  Object.assign(state, { frv: evidence });
+  writeFileSync(statePath, JSON.stringify(state));
   const git = writeFixtureFile(
     fixture.root,
     "bin/git",
     `#!${process.execPath}
     if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['show', '${SOURCE_SHA}:package.json'])) process.exit(99);
-    console.log(JSON.stringify({ version: '2026.9.2-beta.1' }));
+    console.log(JSON.stringify({ version: ${JSON.stringify(selectedInputs.tag.slice(1))} }));
   `,
   );
   chmodSync(git, 0o755);
@@ -812,19 +1345,58 @@ function preparationFixture(overrides: Record<string, unknown> = {}) {
   );
   return {
     ...fixture,
+    evidence,
     requestPath: join(fixture.env.RUNNER_TEMP, "release-ready/request.json"),
-    prepare(request?: unknown, attempt = 1) {
+    prepare(request?: unknown, attempt = 1, actualInputs: Record<string, unknown> = {}) {
       return spawnSync("bash", ["-c", step.run], {
         cwd: dirname(fixture.scripts),
         env: {
           ...fixture.env,
-          PUBLISH_INPUTS: JSON.stringify(inputs()),
+          PUBLISH_INPUTS: JSON.stringify({ ...selectedInputs, ...actualInputs }),
           PREPARATION_REQUEST: request === undefined ? "" : JSON.stringify(request),
           GITHUB_RUN_ATTEMPT: String(attempt),
         },
         encoding: "utf8",
         timeout: 10_000,
       });
+    },
+    validate(env: NodeJS.ProcessEnv = {}) {
+      const manifestPath = writeFixtureFile(
+        fixture.root,
+        "consumer-manifest.json",
+        JSON.stringify(evidence.manifest),
+      );
+      return spawnSync(
+        process.execPath,
+        [resolve("scripts/validate-full-release-validation-evidence.mjs")],
+        {
+          cwd: dirname(fixture.scripts),
+          env: {
+            ...fixture.env,
+            MANIFEST_FILE: manifestPath,
+            FULL_RELEASE_VALIDATION_RUN_ID: "200",
+            FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
+            EXPECTED_SHA: SOURCE_SHA,
+            RELEASE_TAG: selectedInputs.tag,
+            WORKFLOW_SHA: TOOLING_SHA,
+            TRUSTED_WORKFLOW_FULL_REF: TOOLING.fullRef,
+            TRUSTED_WORKFLOW_SHA: TOOLING_SHA,
+            PUBLICATION_CONSUMER: "publisher",
+            RELEASE_NPM_DIST_TAG: selectedInputs.npm_dist_tag,
+            PUBLISH_OPENCLAW_NPM: "true",
+            PUBLISH_DOCKER_ONLY: "false",
+            PLUGIN_PUBLISH_SCOPE: "all-publishable",
+            RELEASE_PLUGINS: "",
+            PREPARED_PLUGINS: overrides.frvRoute === "prepared" ? '{"prepared":true}' : "",
+            WINDOWS_NODE_TAG: selectedInputs.windows_node_tag ?? "",
+            WINDOWS_NODE_INSTALLER_DIGESTS: selectedInputs.windows_node_installer_digests ?? "",
+            ...env,
+          },
+          input: JSON.stringify(evidence.parent),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
     },
   };
 }
@@ -1017,8 +1589,190 @@ describe("publication dispatch retention", () => {
 });
 
 describe("release preparation recovery", () => {
-  it("retains the preparation child before a summary failure", () => {
-    const fixture = preparationFixture();
+  it.each([
+    ["alpha-core", "v2026.9.2-alpha.1", "alpha", "v2026.9.2-alpha.1", "core-npm"],
+    ["extended-core", "v2026.8.33", "extended-stable", "extended-stable/2026.8.33", "core-npm"],
+    [
+      "extended-docker",
+      "v2026.8.33",
+      "extended-stable",
+      "extended-stable/2026.8.33",
+      "docker-only",
+    ],
+    ["beta-docker", "v2026.9.2-beta.1", "beta", "release/2026.9.2", "docker-only"],
+  ] as const)(
+    "preserves the actual projected channel in the CLI: %s",
+    async (_label, tag, npm_dist_tag, frvContext, consumer) => {
+      const fixture = await preparationFixture(
+        {
+          frvRoute: npm_dist_tag === "beta" ? "normal" : npm_dist_tag,
+          frvContext: npm_dist_tag === "beta" ? undefined : frvContext,
+        },
+        { tag, npm_dist_tag },
+      );
+      const result = fixture.validate({
+        PUBLICATION_CONSUMER: consumer,
+        ...(consumer === "docker-only"
+          ? { PUBLISH_DOCKER_ONLY: "true", PUBLISH_OPENCLAW_NPM: "false" }
+          : {}),
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+    },
+  );
+
+  it("rejects a core consumer when authenticated B selection omitted core", async () => {
+    const fixture = await preparationFixture({ frvRoute: "normal", frvCore: false });
+    const result = fixture.validate({ PUBLICATION_CONSUMER: "core-npm" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("does not cover the actual core npm operation");
+    expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+  });
+
+  const windowsInputs = {
+    tag: "v2026.9.2",
+    npm_dist_tag: "beta",
+    windows_node_tag: "v1.2.3",
+    windows_node_installer_digests: JSON.stringify({
+      "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+      "OpenClawCompanion-Setup-arm64.exe": `sha256:${"e".repeat(64)}`,
+    }),
+  };
+  it.each(["valid", "invalid-json", "invalid-digest", "route-mismatch"] as const)(
+    "authenticates the actual Windows preparation operands: %s",
+    async (scenario) => {
+      const fixture = await preparationFixture(
+        { frvRoute: scenario === "route-mismatch" ? "normal" : "prepared" },
+        windowsInputs,
+      );
+      const result = fixture.prepare(
+        undefined,
+        1,
+        scenario === "invalid-json"
+          ? { windows_node_installer_digests: "{" }
+          : scenario === "invalid-digest"
+            ? { windows_node_installer_digests: '{"OpenClawCompanion-Setup-x64.exe":"bad"}' }
+            : {},
+      );
+      expect(result.status, result.stderr).toBe(scenario === "valid" ? 0 : 1);
+      expect(
+        fixture.trace().filter((entry) => entry.event === "preparation-dispatch"),
+      ).toHaveLength(scenario === "valid" ? 2 : 0);
+      expect(existsSync(fixture.requestPath)).toBe(scenario === "valid");
+      if (scenario === "valid") {
+        expect(
+          JSON.parse(readFileSync(fixture.requestPath, "utf8")).inputs
+            .windows_node_installer_digests,
+        ).toBe(windowsInputs.windows_node_installer_digests);
+      }
+    },
+  );
+
+  it.each([
+    ["normal-windows", "normal", {}, true],
+    ["prepared-windows", "prepared", {}, true],
+    ["invalid-json", "normal", { WINDOWS_NODE_INSTALLER_DIGESTS: "{" }, false],
+    ["invalid-digest", "normal", { WINDOWS_NODE_INSTALLER_DIGESTS: '{"installer":"bad"}' }, false],
+    ["core-normal", "normal", { PUBLICATION_CONSUMER: "core-npm" }, true],
+    ["core-prepared", "prepared", { PUBLICATION_CONSUMER: "core-npm" }, true],
+    [
+      "docker-normal",
+      "normal",
+      {
+        PUBLICATION_CONSUMER: "docker-only",
+        PUBLISH_DOCKER_ONLY: "true",
+        PUBLISH_OPENCLAW_NPM: "false",
+      },
+      true,
+    ],
+    [
+      "docker-prepared",
+      "prepared",
+      {
+        PUBLICATION_CONSUMER: "docker-only",
+        PUBLISH_DOCKER_ONLY: "true",
+        PUBLISH_OPENCLAW_NPM: "false",
+      },
+      true,
+    ],
+    [
+      "docker-contradiction",
+      "normal",
+      { PUBLICATION_CONSUMER: "docker-only", PUBLISH_DOCKER_ONLY: "true" },
+      false,
+    ],
+    [
+      "wrong-core-channel",
+      "prepared",
+      { PUBLICATION_CONSUMER: "core-npm", RELEASE_NPM_DIST_TAG: "latest" },
+      false,
+    ],
+    [
+      "wrong-docker-target",
+      "prepared",
+      {
+        PUBLICATION_CONSUMER: "docker-only",
+        PUBLISH_DOCKER_ONLY: "true",
+        PUBLISH_OPENCLAW_NPM: "false",
+        EXPECTED_SHA: "c".repeat(40),
+      },
+      false,
+    ],
+    ["wrong-attempt", "normal", { FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "2" }, false],
+    ["wrong-route", "normal", { PREPARED_PLUGINS: '{"prepared":true}' }, false],
+  ] satisfies Array<[string, string, NodeJS.ProcessEnv, boolean]>)(
+    "authenticates B through the actual publication CLI: %s",
+    async (_label, frvRoute, env, accepted) => {
+      const fixture = await preparationFixture({ frvRoute }, windowsInputs);
+      const result = fixture.validate(env);
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+      expect(existsSync(fixture.requestPath)).toBe(false);
+      // One strict pass reads each immutable archive once, not once per adapter.
+      for (const id of [990, 991]) {
+        const reads = fixture
+          .trace()
+          .filter((entry) => entry.args?.[1]?.endsWith(`/actions/artifacts/${id}/zip`));
+        expect(reads.length).toBeLessThanOrEqual(1);
+        if (accepted) {
+          expect(reads).toHaveLength(1);
+        }
+      }
+    },
+  );
+
+  it.each([
+    ["raw-sha", "", "v2026.9.2", "latest", "normal", undefined, true],
+    ["raw-sha-alpha", "", "v2026.9.2-alpha.1", "alpha", "alpha", undefined, true],
+    ["wrong-tag", "", "v2026.9.2", "latest", "normal", "v2026.9.3", false],
+    ["invalid-explicit", "ordinary-branch", "v2026.9.2", "latest", "normal", undefined, false],
+    ["canonical", "release/2026.9.2", "v2026.9.2", "latest", "normal", undefined, true],
+  ] as const)(
+    "retains parent publication context semantics in the CLI: %s",
+    async (_label, frvContext, tag, npm_dist_tag, frvRoute, actualTag, accepted) => {
+      const fixture = await preparationFixture({ frvRoute, frvContext }, { tag, npm_dist_tag });
+      const result = fixture.validate(actualTag ? { RELEASE_TAG: actualTag } : {});
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+      if (!accepted) {
+        expect(result.stderr).toContain(
+          "B publication evidence requires the actual selection and release tag.",
+        );
+      }
+      expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+    },
+  );
+
+  it("rejects unavailable FRV admission before either preparation POST or request write", async () => {
+    const fixture = await preparationFixture({ unavailableFrv: true });
+    const result = fixture.prepare();
+    expect(result.status, result.stderr).toBe(1);
+    expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+    expect(existsSync(fixture.requestPath)).toBe(false);
+    expect(result.stderr).toMatch(/FRV|full release|fixture GitHub/iu);
+  });
+
+  it("retains the preparation child before a summary failure", async () => {
+    const fixture = await preparationFixture();
     mkdirSync(fixture.env.GITHUB_STEP_SUMMARY);
     expect(fixture.prepare().status).toBe(1);
     expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toMatchObject({
@@ -1027,8 +1781,8 @@ describe("release preparation recovery", () => {
     });
     expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toHaveLength(1);
   });
-  it("does not seal readiness when the prepared ClawHub publisher is unavailable", () => {
-    const fixture = preparationFixture();
+  it("does not seal readiness when the prepared ClawHub publisher is unavailable", async () => {
+    const fixture = await preparationFixture();
     const workflow = parse(readFileSync(".github/workflows/openclaw-release-prepare.yml", "utf8"));
     const step = workflow.jobs.seal.steps.find((entry: { id?: string }) => entry.id === "seal");
     const result = spawnSync("bash", ["-c", step.run], {
@@ -1051,8 +1805,8 @@ describe("release preparation recovery", () => {
     expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
   });
 
-  it("retains acknowledged preparation when the second dispatch response is lost", () => {
-    const fixture = preparationFixture({ lostClawHubDispatchResponse: true });
+  it("retains acknowledged preparation when the second dispatch response is lost", async () => {
+    const fixture = await preparationFixture({ lostClawHubDispatchResponse: true });
     const result = fixture.prepare();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ClawHub dispatch response lost after acceptance");
@@ -1070,15 +1824,17 @@ describe("release preparation recovery", () => {
 
   it.each([1, 2])(
     "adopts exact identified preparations without dispatch on attempt %s",
-    (attempt) => {
-      const fixture = preparationFixture();
+    async (attempt) => {
+      const fixture = await preparationFixture();
       const request = preparationRequest();
       const result = fixture.prepare(request, attempt);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
       expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
       expect(
-        fixture.trace().filter((entry) => entry.args?.[1]?.includes("/actions/runs/")),
+        fixture
+          .trace()
+          .filter((entry) => /\/actions\/runs\/(?:300|400)$/u.test(entry.args?.[1] ?? "")),
       ).toEqual([
         { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/300`] },
         { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] },
@@ -1102,8 +1858,8 @@ describe("release preparation recovery", () => {
     ["unsafe child ID", { npmRunId: Number.MAX_SAFE_INTEGER + 1 }],
   ] satisfies Array<[string, Record<string, unknown>]>)(
     "rejects recovery with %s before producing a handoff",
-    (_label, overrides) => {
-      const fixture = preparationFixture();
+    async (_label, overrides) => {
+      const fixture = await preparationFixture();
       const result = fixture.prepare({ ...preparationRequest(), ...overrides });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Preparation recovery");
@@ -1119,8 +1875,8 @@ describe("release preparation recovery", () => {
     ["protected ref", { head_branch: "main" }],
     ["tooling SHA", { head_sha: "c".repeat(40) }],
     ["attempt", { run_attempt: 0 }],
-  ])("rejects a recovered producer with the wrong %s", (_label, preparationProducer) => {
-    const fixture = preparationFixture({ preparationProducer });
+  ])("rejects a recovered producer with the wrong %s", async (_label, preparationProducer) => {
+    const fixture = await preparationFixture({ preparationProducer });
     const result = fixture.prepare(preparationRequest());
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("producer workflow identity mismatch");
@@ -1130,6 +1886,58 @@ describe("release preparation recovery", () => {
 });
 
 describe("verified release activation", () => {
+  it.each(["button", "parent"] as const)(
+    "keeps %s activation authoritative after an advisory Linux carry failure",
+    (owner) => {
+      for (const changes of [
+        {},
+        { sourceSha: "c".repeat(40) },
+        { toolingMissing: true },
+        { currentWriter: { status: "completed", conclusion: "cancelled" } },
+        { currentWriter: { run_attempt: 2 } },
+        ...(owner === "button" ? [{ parentRunAttempt: 2 }] : []),
+      ]) {
+        const fixture = finalizationFixture({ isPrerelease: false });
+        writeFixtureFile(
+          fixture.scripts,
+          "linux-updater-manifest.mjs",
+          `
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
+Object.assign(state, ${JSON.stringify(changes)});
+writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state));
+appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'carry-failed' }) + '\\n');
+console.error('fixture: Linux manifest transport unavailable');
+process.exitCode = 1;
+`,
+        );
+        const result = fixture.run(owner, "v2026.9.2", "latest");
+        const authorized = Object.keys(changes).length === 0;
+        expect(fixture.trace().some((event) => event.event === "carry-failed")).toBe(true);
+        expect(result.status, result.stderr).toBe(authorized ? 0 : 1);
+        expect(fixture.state()).toMatchObject({
+          writes: authorized ? 1 : 0,
+          isDraft: !authorized,
+        });
+      }
+    },
+  );
+
+  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
+    const fixture = finalizationFixture();
+    const branch = "tideclaw/alpha/2026-09-13-0100Z";
+    fixture.env.GITHUB_REF_NAME = branch;
+    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
+    const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
+    expect(result.status, result.stderr).toBe(0);
+    expect(fixture.state()).toMatchObject({
+      writes: 1,
+      isDraft: false,
+      isPrerelease: true,
+      isLatest: false,
+    });
+  });
+
   it.each([
     ["", undefined],
     ["", "650"],
@@ -1285,9 +2093,14 @@ describe("verified release activation", () => {
   ] as const)(
     "activates %s %s on %s with explicit release flags",
     (owner, tag, channel, prerelease, latest) => {
-      const fixture = finalizationFixture({ isPrerelease: !prerelease });
+      const fixture = finalizationFixture({
+        isPrerelease: owner === "parent" ? prerelease : !prerelease,
+      });
       const result = fixture.run(owner, tag, channel);
-      expect(result.status, result.stderr).toBe(0);
+      expect(
+        result.status,
+        `${result.error?.message ?? ""} ${result.signal ?? ""} ${result.stderr}\n${JSON.stringify(fixture.trace().slice(-6))}`,
+      ).toBe(0);
       expect(fixture.state()).toMatchObject({
         writes: 1,
         isDraft: false,
@@ -1297,19 +2110,37 @@ describe("verified release activation", () => {
       if (owner === "button") {
         const calls = fixture.trace().map((entry) => entry.args as string[]);
         const writeIndex = calls.findIndex((args) => args[0] === "release" && args[1] === "edit");
-        expect(calls[writeIndex - 2]).toEqual([
+        const runIds = latest ? ["700", "900"] : ["700"];
+        expect(calls[writeIndex - runIds.length - 1]).toEqual([
           "api",
           `repos/${REPOSITORY}/git/ref/tags/${TOOLING.ref}`,
           "--method",
           "GET",
         ]);
-        expect(calls[writeIndex - 1]).toEqual([
-          "api",
-          `repos/${REPOSITORY}/actions/runs/700`,
-          "--method",
-          "GET",
-        ]);
+        expect(calls.slice(writeIndex - runIds.length, writeIndex)).toEqual(
+          runIds.map((id) => ["api", `repos/${REPOSITORY}/actions/runs/${id}`, "--method", "GET"]),
+        );
       }
+    },
+  );
+
+  it.each([
+    ["v2026.9.2-beta.1", "beta", true],
+    ["v2026.9.2", "beta", false],
+    ["v2026.9.2", "latest", false],
+  ] as const)(
+    "refuses parent activation of %s on %s with a mismatched draft classification",
+    (tag, channel, prerelease) => {
+      const fixture = finalizationFixture({ isPrerelease: !prerelease });
+      const result = fixture.run("parent", tag, channel);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Selected core prerelease classification changed");
+      expect(fixture.state()).toMatchObject({
+        writes: 0,
+        isDraft: true,
+        isPrerelease: !prerelease,
+        isLatest: false,
+      });
     },
   );
 
@@ -1329,22 +2160,24 @@ describe("verified release activation", () => {
 
 describe("prepared Windows handoff", () => {
   it.each([
-    ["stable", "v2026.9.2", "success", true, true, false, true],
-    ["absent", "v2026.9.2", "success", false, false, false, false],
-    ["incomplete", "v2026.9.2", "success", true, false, false, true],
-    ["beta", "v2026.9.2-beta.1", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "success", true, true, false, false],
-    ["failed activation", "v2026.9.2", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "skipped", true, true, false, false],
-    ["dispatch failed", "v2026.9.2", "success", true, true, true, true],
+    ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
+    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
+    ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
+    ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
+    ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
+    ["alpha", "v2026.9.2-alpha.1", "alpha", "success", true, true, false, false],
+    ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
+    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
+    ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",
-    (_label, tag, activation, selected, digests, dispatchFailure, scheduled) => {
+    (_label, tag, channel, activation, selected, digests, dispatchFailure, scheduled) => {
       const fixture = finalizationFixture({ windowsDispatchFailure: dispatchFailure });
       const ready = readyRelease();
       ready.inputs = {
         ...ready.inputs,
         tag,
+        npm_dist_tag: channel,
         windows_node_tag: selected ? "v1.2.3" : "",
         windows_node_installer_digests: digests
           ? JSON.stringify({

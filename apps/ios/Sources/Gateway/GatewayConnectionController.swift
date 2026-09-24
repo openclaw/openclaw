@@ -76,7 +76,7 @@ final class GatewayConnectionController {
         suspendedConfig: GatewayConnectConfig?)?
     @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored private var operatorFleetReconcileTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
+    private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
     @ObservationIgnored private var pendingGatewayRestoration: GatewayRestoration?
     @ObservationIgnored private var pendingForgetCleanups: [
@@ -123,6 +123,15 @@ final class GatewayConnectionController {
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
         }
+    }
+
+    /// Acceptance can precede trust review, queued reset, and permission reads.
+    /// UI callers must protect the old composer until this owner finishes the
+    /// handoff (or its cancellation/restoration barrier), not until acceptance.
+    var hasPendingConnectionHandoff: Bool {
+        self.pendingConnectionStableID != nil ||
+            self.pendingTrustPrompt != nil ||
+            self.pendingAutoConnectGeneration != nil
     }
 
     /// Registration consumes the app-owned permission snapshot; constructing a location

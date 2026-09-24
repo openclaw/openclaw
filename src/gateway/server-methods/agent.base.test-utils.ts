@@ -53,6 +53,77 @@ const mocks = getAgentTestMocks();
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
 
+  it.each(["cleared", "no-op", "discarded result"])(
+    "returns the replacement projection result with a %s store fixture",
+    async (mode) => {
+      mocks.updateSessionStore.mockReset();
+      if (mode === "no-op") {
+        mocks.updateSessionStore.mockResolvedValue(undefined);
+      } else if (mode === "discarded result") {
+        mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+          await updater({});
+        });
+      }
+      const result = { transition: "empty-fixture" };
+      const update = vi.fn(async () => ({ result }));
+
+      await expect(
+        mocks.applySessionEntryReplacements({ storePath: "/tmp/sessions.json", update }),
+      ).resolves.toBe(result);
+      expect(update).toHaveBeenCalledOnce();
+      expect(update).toHaveBeenCalledWith([]);
+    },
+  );
+
+  it("keeps backing store replacements when its delegate discards the result", async () => {
+    const sessionKey = "agent:main:main";
+    const entry = { sessionId: "session-1", updatedAt: 1 };
+    const store = { [sessionKey]: entry };
+    const replacement = { ...entry, updatedAt: 2 };
+    const result = { transition: "replaced" };
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      await updater(store);
+    });
+    const update = vi.fn(async () => ({
+      replacements: [{ sessionKey, entry: replacement }],
+      result,
+    }));
+
+    await expect(
+      mocks.applySessionEntryReplacements({
+        storePath: "/tmp/sessions.json",
+        sessionKeys: [sessionKey],
+        update,
+      }),
+    ).resolves.toBe(result);
+    expect(update).toHaveBeenCalledWith([{ sessionKey, entry }]);
+    expect(store[sessionKey]).toEqual(replacement);
+    expect(store[sessionKey]).not.toBe(replacement);
+  });
+
+  it("does not repeat a replacement projection whose result is undefined", async () => {
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      await updater({});
+    });
+    const update = vi.fn(async () => ({ result: undefined }));
+
+    await expect(
+      mocks.applySessionEntryReplacements({ storePath: "/tmp/sessions.json", update }),
+    ).resolves.toBeUndefined();
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it("does not run a replacement projection after its store fixture rejects", async () => {
+    const failure = new Error("fixture write rejected");
+    mocks.updateSessionStore.mockRejectedValueOnce(failure);
+    const update = vi.fn(async () => ({ result: "unexpected projection" }));
+
+    await expect(
+      mocks.applySessionEntryReplacements({ storePath: "/tmp/sessions.json", update }),
+    ).rejects.toBe(failure);
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("passes resolved maintenance config to the gateway admission store write", async () => {
     primeMainAgentRun({
       cfg: {
@@ -221,10 +292,9 @@ describe("gateway agent handler", () => {
   it("dedupes retries while explicit recipient session routing is pending", async () => {
     const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
     const runId = "recipient-session-route-pending";
-    let finishRoute = (_result: { sessionKey: string }) => {};
-    const routePending = new Promise<{ sessionKey: string }>((resolve) => {
-      finishRoute = resolve;
-    });
+    const { promise: routePending, resolve: finishRoute } = createDeferredCore<{
+      sessionKey: string;
+    }>();
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadConfigReturn = { session: { dmScope: "per-account-channel-peer" } };
     mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
@@ -288,10 +358,9 @@ describe("gateway agent handler", () => {
   it("honors owner cancellation while explicit recipient session routing is pending", async () => {
     const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
     const runId = "recipient-session-route-abort";
-    let finishRoute = (_result: { sessionKey: string }) => {};
-    const routePending = new Promise<{ sessionKey: string }>((resolve) => {
-      finishRoute = resolve;
-    });
+    const { promise: routePending, resolve: finishRoute } = createDeferredCore<{
+      sessionKey: string;
+    }>();
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadConfigReturn = { session: { dmScope: "per-account-channel-peer" } };
     mocks.resolveAgentExplicitRecipientSession.mockReturnValue(routePending);
@@ -868,10 +937,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:main";
     const runId = "idem-abort-during-admission";
     let releaseMutation = () => {};
-    let markMutationStarted = () => {};
-    const mutationStarted = new Promise<void>((resolve) => {
-      markMutationStarted = resolve;
-    });
+    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation({
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
@@ -928,10 +994,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:main";
     const runId = "idem-expired-during-admission";
     let releaseMutation = () => {};
-    let markMutationStarted = () => {};
-    const mutationStarted = new Promise<void>((resolve) => {
-      markMutationStarted = resolve;
-    });
+    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation({
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
@@ -990,10 +1053,7 @@ describe("gateway agent handler", () => {
     const sessionKey = "agent:main:main";
     const runId = "idem-terminal-during-admission";
     let releaseMutation = () => {};
-    let markMutationStarted = () => {};
-    const mutationStarted = new Promise<void>((resolve) => {
-      markMutationStarted = resolve;
-    });
+    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation({
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
@@ -1085,10 +1145,7 @@ describe("gateway agent handler", () => {
         assertAllowed: () => {},
       });
       const handoffId = admission.createHandoff();
-      let markMutationStarted = () => {};
-      const mutationStarted = new Promise<void>((resolve) => {
-        markMutationStarted = resolve;
-      });
+      const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
       let mutationRan = false;
       const mutation = runExclusiveSessionLifecycleMutation({
         scope,
@@ -1635,11 +1692,9 @@ describe("gateway agent handler", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
-      mocks.readTranscriptStatsSync.mockReturnValue({
-        eventCount: 1,
-        maxSeq: 1,
-        sizeBytes: 32,
-        lastMutationAtMs: now - 1_000,
+      mocks.readTranscriptMutationStateSync.mockReturnValue({
+        observedAt: null,
+        updatedAt: now - 1_000,
       });
 
       await withTestDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
@@ -1680,7 +1735,7 @@ describe("gateway agent handler", () => {
         if (scenario.expectReuse) {
           expect(call.sessionId).toBe("terminal-main-session");
           expect(capturedEntry?.sessionId).toBe("terminal-main-session");
-          expect(mocks.readTranscriptStatsSync).not.toHaveBeenCalled();
+          expect(mocks.readTranscriptMutationStateSync).not.toHaveBeenCalled();
           return;
         }
         expect(call.sessionId).not.toBe("terminal-main-session");

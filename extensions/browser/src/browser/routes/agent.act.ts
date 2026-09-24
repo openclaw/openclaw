@@ -4,7 +4,8 @@
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
 import {
   clickChromeMcpElement,
@@ -16,6 +17,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  selectChromeMcpOption,
   type ChromeMcpOperationOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -312,8 +314,6 @@ export function registerBrowserAgentActRoutes(
                       x: action.x,
                       y: action.y,
                       doubleClick: action.doubleClick ?? false,
-                      button: action.button as "left" | "right" | "middle" | undefined,
-                      delayMs: action.delayMs,
                     }),
                   );
                   return await jsonOk(undefined, { resolveCurrentTarget: true });
@@ -369,7 +369,7 @@ export function registerBrowserAgentActRoutes(
                   return await jsonOk(undefined, { resolveCurrentTarget: true });
                 case "select":
                   await runGuardedAction((target) =>
-                    fillChromeMcpElement({
+                    selectChromeMcpOption({
                       ...target,
                       uid: action.ref!,
                       value: action.values[0] ?? "",
@@ -434,12 +434,13 @@ export function registerBrowserAgentActRoutes(
                   );
                   clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
                   return await jsonOk();
+                case "insertText":
                 case "batch":
                   return jsonActError(
                     res,
                     501,
                     ACT_ERROR_CODES.unsupportedForExistingSession,
-                    EXISTING_SESSION_LIMITS.act.batch,
+                    EXISTING_SESSION_LIMITS.act[action.kind],
                   );
               }
             }

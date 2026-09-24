@@ -24,6 +24,33 @@ type HttpConnection = {
 
 const connections = new WeakMap<Duplex, HttpConnection>();
 
+/** Abort disconnected work without treating normal request/response completion as cancellation. */
+export function createHttpRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
+  const controller = new AbortController();
+  const abortIfRequestIncomplete = () => {
+    if (!req.complete) {
+      controller.abort();
+    }
+  };
+  const abortIfResponseStillOpen = () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  req.once("close", abortIfRequestIncomplete);
+  res.once("close", abortIfResponseStillOpen);
+  if ((req.destroyed && !req.complete) || (res.destroyed && !res.writableEnded)) {
+    controller.abort();
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      req.off("close", abortIfRequestIncomplete);
+      res.off("close", abortIfResponseStillOpen);
+    },
+  };
+}
+
 function connectionFor(socket: Duplex): HttpConnection {
   const existing = connections.get(socket);
   if (existing) {
@@ -177,8 +204,13 @@ export function selectHttpRequestRejection(req: IncomingMessage): Rejection {
   const onClose = () => {
     rejection.phase = "closed";
     clearTimeout(timer);
+    req.off("close", detachRequestError);
     req.off("readable", pauseCompletedRequest);
     socket.off("error", rejection.destroy);
+    // Some Node-compatible runtimes finish dispatching the request's terminal error after the
+    // socket close listeners. Keep ownership through that dispatch, then release it before the
+    // closed promise resumes application work.
+    queueMicrotask(detachRequestError);
     completion.resolve();
   };
   req.on("error", rejection.destroy);

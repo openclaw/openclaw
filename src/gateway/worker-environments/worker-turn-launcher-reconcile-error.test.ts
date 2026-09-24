@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -33,16 +34,20 @@ import {
   turn,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 describe("worker turn recovery after environment reconciliation errors", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
-    const store = createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+    const store = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
     let installation = {
       ...BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     };
     const nodeTransport = transport();
     let rejectStop = true;
@@ -94,9 +99,9 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim({ kind: "local", path: root }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+        ...createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: async () => ({ kind: "local", path: root }),
+        }),
       }),
       (_request, run) => run(),
     );
@@ -107,15 +112,19 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       isStopping: () => false,
     });
     try {
-      store.createIntent({
+      await store.createIntent({
         environmentId: ENVIRONMENT_ID,
         providerId: provider.id,
         profileId: "development",
         profileSnapshot: { executionMode: "worker-turn", settings: { device: "node-1" } },
         provisionOperationId: "shared-node-recovery",
       });
-      store.transition({ environmentId: ENVIRONMENT_ID, from: "requested", to: "provisioning" });
-      const ready = store.transition({
+      await store.transition({
+        environmentId: ENVIRONMENT_ID,
+        from: "requested",
+        to: "provisioning",
+      });
+      const ready = await store.transition({
         environmentId: ENVIRONMENT_ID,
         from: "provisioning",
         to: "ready",

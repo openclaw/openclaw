@@ -51,7 +51,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }
 
   let didSendPlanStatusNotice = false;
-  const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
+  const formatPlanUpdateText = (payload: {
+    explanation?: string;
+    explanationFormat?: "plain";
+    steps?: AgentPlanStep[];
+  }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
       .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
@@ -62,10 +66,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         maxLineChars: 120,
       }).join("\n");
     }
-    return explanation || "Planning next steps.";
+    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
+    return payload.explanationFormat === "plain"
+      ? "Progress updated"
+      : explanation || "Planning next steps.";
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
   }): Promise<void> => {
     if (

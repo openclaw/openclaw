@@ -1,4 +1,5 @@
 // Workboard API module exposes the plugin public contract.
+import { fileURLToPath } from "node:url";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
@@ -210,7 +211,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       // Empty legacy namespaces need no SQLite runtime. Resolve the target only
       // when there is state to preview and migrate.
-      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store-paths.js");
       return {
         preview: [
           `- Workboard: ${count} legacy .28 plugin-state KV ${count === 1 ? "entry" : "entries"} → ${resolveWorkboardSqlitePath(env)}`,
@@ -219,6 +220,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const { createWorkboardSqliteStores } = await import("./src/sqlite-store.js");
+      const { resolveWorkboardSqliteWorkerModuleUrl } = await import("./src/sqlite-store-paths.js");
       const env = migrationEnv(params);
       const cards = openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -244,7 +246,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: "workboard.attachments",
         maxEntries: MAX_CARDS * 21,
       });
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({
+        env,
+        workerModuleUrl: resolveWorkboardSqliteWorkerModuleUrl(fileURLToPath(import.meta.url)),
+      });
       try {
         const cardResult = await migrateNamespace({
           label: "card",
@@ -289,7 +294,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           ],
         };
       } finally {
-        sqlite.close();
+        await sqlite.close();
       }
     },
   },

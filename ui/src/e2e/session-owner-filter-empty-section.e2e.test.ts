@@ -87,6 +87,26 @@ suite.define(() => {
         await captureUiProof(suite, page, `filtered-has-more-${hasMore}.png`);
         await expectBrowser(other).toHaveCount(0);
 
+        await filter.click();
+        const emptyGroups = menu.locator(".sidebar-session-empty-groups-submenu");
+        await emptyGroups.hover();
+        const labelBounds = await emptyGroups.locator(":scope > .session-menu__text").boundingBox();
+        const valueBounds = await emptyGroups
+          .locator(".sidebar-session-empty-groups-value")
+          .boundingBox();
+        expect(labelBounds).not.toBeNull();
+        expect(valueBounds).not.toBeNull();
+        expect(labelBounds!.x + labelBounds!.width).toBeLessThanOrEqual(valueBounds!.x);
+        await captureUiProof(suite, page, `empty-group-choice-${involvingMe}-${hasMore}.png`);
+        await menu.locator('[value="empty-groups:never"]').click();
+        await expectBrowser(other).toHaveCount(1);
+        await expectBrowser(other.locator("[data-session-key]")).toHaveCount(0);
+        await expectBrowser(people).toHaveCount(1);
+        await filter.click();
+        await emptyGroups.hover();
+        await menu.locator('[value="empty-groups:filtering"]').click();
+        await expectBrowser(other).toHaveCount(0);
+
         // An owner filter must not hide matching rows that really belong in Other.
         await filter.click();
         await menu.locator('[value="grouping:category"]').click();
@@ -108,4 +128,74 @@ suite.define(() => {
       }
     },
   );
+  it("keeps empty-group choices inside the narrow-screen menu and remembers the choice", async () => {
+    const context = await suite.browser.newContext({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionGroups: ["Empty"],
+      sessions: [sessionRow("agent:main:mobile", "Mobile session", 8)],
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:mobile"));
+      const filter = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const openMenu = async () => {
+        if (!(await filter.isVisible())) {
+          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        }
+        await filter.click();
+      };
+      await openMenu();
+      const menu = page.locator(".sidebar-session-sort-menu");
+      const choice = menu.locator('[value="compact:open-empty-groups"]');
+      await choice.scrollIntoViewIfNeeded();
+      const geometry = await choice.evaluate((element) => {
+        const label = element.querySelector<HTMLElement>(".session-menu__text");
+        const value = element.querySelector<HTMLElement>(".sidebar-session-empty-groups-value");
+        const menuPart = element.closest("wa-dropdown")?.shadowRoot?.querySelector("[part=menu]");
+        if (!label || !value || !menuPart) {
+          throw new Error("Expected compact preference label, value, and menu");
+        }
+        return {
+          width: menuPart.getBoundingClientRect().width,
+          labelClipped: label.scrollWidth > label.clientWidth,
+          valueClipped: value.scrollWidth > value.clientWidth,
+          labelBottom: label.getBoundingClientRect().bottom,
+          valueTop: value.getBoundingClientRect().top,
+        };
+      });
+      expect(geometry.width).toBeLessThanOrEqual(220);
+      expect(geometry.labelClipped).toBe(false);
+      expect(geometry.valueClipped).toBe(false);
+      expect(geometry.valueTop).toBeGreaterThanOrEqual(geometry.labelBottom - 0.5);
+      await captureUiProof(suite, page, "empty-groups-mobile-root.png");
+      await choice.click();
+      await expectBrowser(menu.getByRole("menuitem", { name: "Back", exact: true })).toBeVisible();
+      await expectBrowser(menu.locator('[value="empty-groups:filtering"]')).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      const bounds = await menu.locator('[part="menu"]').boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+      await captureUiProof(suite, page, "empty-groups-mobile-choices.png");
+      await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+      await menu.locator('[value="compact:open-empty-groups"]').click();
+      await menu.locator('[value="empty-groups:always"]').click();
+      await expectBrowser(page.locator('[data-session-section="category:Empty"]')).toHaveCount(0);
+      await page.reload();
+      await openMenu();
+      await expectBrowser(menu.locator('[value="compact:open-empty-groups"]')).toContainText(
+        "Always",
+      );
+      await menu.locator('[value="compact:open-empty-groups"]').click();
+      await menu.locator('[value="empty-groups:never"]').click();
+      await expectBrowser(page.locator('[data-session-section="category:Empty"]')).toBeVisible();
+    } finally {
+      await context.close();
+    }
+  });
 });

@@ -32,11 +32,15 @@ const enDesktop = {
     macLockStateUnknown:
       "This Mac’s lock state is unknown. Check the desktop before using computer control; Screen Sharing remains available for sign-in.",
     connect: "Connect",
-    connecting: "Connecting to desktop…",
+    connecting: en.desktop.connecting,
+    starting: "Starting your machine…",
+    preparing: "Preparing the desktop…",
     takeControl: "Take control",
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",
+    agentInputPaused:
+      "You control this desktop. Agent input is paused until you switch to view only.",
     keyboard: "Keyboard",
     keyboardInput: "Remote desktop keyboard input",
     touchControls: "Remote desktop controls",
@@ -52,7 +56,8 @@ const enDesktop = {
     reconnect: en.desktop.reconnect,
     passwordPrompt: "Enter the VNC password for this machine.",
     passwordLabel: "VNC password",
-    accountPrompt: "Enter a macOS account to authenticate Screen Sharing.",
+    accountPrompt:
+      "Enter a macOS account allowed in System Settings → General → Sharing. Remote Management also requires Observe/Control permissions.",
     usernameLabel: "macOS username",
     accountPasswordLabel: "macOS password",
     controlTaken: "Another operator took control",

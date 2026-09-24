@@ -27,17 +27,32 @@ its exact prepared publication artifacts for both roles. For a later
 changelog-only Release SHA using evidence reuse, also record the reuse policy,
 complete changed-path set, green Code SHA parent run, and Release SHA parent
 run. For extended-stable, record the canonical branch, exact release SHA,
-fresh parent run id and attempt, workflow ref, every child run, and any
+accepted producer identity, parent run id and attempt, workflow ref, every child run, and any
 frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 
+- The attempt-one `full-release-execution-plan-<parent-run-id>` and current
+  `full-release-validation-<parent-run-id>-<attempt>` manifest retain source
+  facts and registry admission, including observations, exact selection,
+  immutable upload identity, and admission-time freshness. Reuse retains distinct
+  original and current records without restamping either. Authentication requires
+  the original successful admission and guarded upload, not an overall successful
+  sealer job: an interrupted sealer can still write and upload a complete plan.
+  Later attempts never replace that original artifact.
 - `release-package-under-test` from `OpenClaw Release Checks`
 - Docker release-path artifacts under `.artifacts/docker-tests/`
 - Package Acceptance `package-under-test` and Docker acceptance artifacts
 - Cross-OS release-check artifacts for each OS and suite
 - QA parity, runtime parity, and selected Matrix, Buzz, Telegram, Discord,
   WhatsApp, or Slack artifacts
+
+Readers authenticate retained evidence; they do not refresh registry observations
+or expire it by the current clock. Registry admission is not publication authority
+or a promise that registry state is unchanged. Final writers keep their own trust,
+approval, content, and readback checks. Known enclosing evidence is budgeted before
+fanout, but later job/attempt growth can still exceed the unchanged final artifact
+limit and fail sealing; evidence is not truncated to fit.
 
 ## Workflow files
 

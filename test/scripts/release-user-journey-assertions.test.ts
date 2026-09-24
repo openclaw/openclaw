@@ -13,6 +13,7 @@ import {
   waitForClickClackSocket,
 } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
@@ -21,6 +22,7 @@ const CLICKCLACK_PLUGIN_WRITER_SCRIPT =
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
   const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
@@ -39,7 +41,7 @@ function runAssertion(
   args: string[],
   options: { env?: Record<string, string>; timeoutMs?: number } = {},
 ) {
-  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
+  return spawnSync(testNodeExecPath, [ASSERTIONS_SCRIPT, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -414,7 +416,7 @@ describe("release user journey assertions", () => {
     const statePath = path.join(root, "clickclack.json");
     const port = await reserveTcpPort();
     const token = "clickclack-test-token";
-    const fixture = spawn(process.execPath, [CLICKCLACK_FIXTURE_SCRIPT], {
+    const fixture = spawn(testNodeExecPath, [CLICKCLACK_FIXTURE_SCRIPT], {
       env: {
         ...process.env,
         CLICKCLACK_FIXTURE_PORT: String(port),
@@ -486,7 +488,7 @@ describe("release user journey assertions", () => {
     };
 
     const pluginDir = path.join(tempDirs.make("openclaw-release-clickclack-plugin-"), "plugin");
-    const writer = spawnSync(process.execPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
+    const writer = spawnSync(testNodeExecPath, [CLICKCLACK_PLUGIN_WRITER_SCRIPT, pluginDir], {
       encoding: "utf8",
     });
     expect(writer.status, writer.stderr).toBe(0);
@@ -544,7 +546,9 @@ describe("release user journey assertions", () => {
       socket.on("close", () => {
         socketClosed = true;
       });
-      socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nleft-open");
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nleft-open");
+      });
     });
 
     try {

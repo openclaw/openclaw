@@ -1,14 +1,18 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -24,7 +28,6 @@ import {
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   createMemoryForgetFixture,
-  closeMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 import { runSessionBackfill } from "./session-backfill.js";
@@ -33,21 +36,110 @@ import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promot
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 
 describe("memory forget", () => {
+  let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
   let stateDir: string;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
 
   beforeEach(async () => {
-    stateDir = tempDirs.make("openclaw-memory-forget-");
-    ({ workspaceDir, cfg } = await createMemoryForgetFixture(stateDir));
+    fixture = await createMemoryForgetFixture();
+    ({ stateDir, workspaceDir, cfg } = fixture);
   });
 
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
-      closeMemoryForgetFixture();
-      cleanup();
-    }),
-  );
+  afterEach(async () => {
+    await fixture.cleanup();
+  });
+
+  it("previews and forgets sessions without fetching unrelated session bodies", async () => {
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const insert = db.prepare(`INSERT INTO memory_index_chunks
+      (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES (?, ?, ?, 1, 1, 'fixture-hash', 'test', ?, x'', 1)`);
+    const provenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
+      (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'agent', 'interactive', 1)`);
+    const body = "unrelated session body 🚀\0".repeat(4_096);
+    for (let index = 0; index < 32; index += 1) {
+      const id = `session-${index}`;
+      insert.run(id, `sessions/main/${index === 0 ? "target" : id}.jsonl`, "sessions", body);
+      provenance.run(id);
+    }
+    insert.run(
+      "memory-target",
+      "memory/target.md",
+      "memory",
+      "## Session ID: target\nForget this.",
+    );
+    insert.run("memory-keep", "MEMORY.md", "memory", "Keep this memory.\0🚀");
+    // Observe cached executions too: Kysely retains a statement after its second use.
+    for (let pass = 0; pass < 2; pass += 1) {
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"], dryRun: true });
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native statement receiver.
+    const { all: originalAll, iterate: originalIterate } = StatementSync.prototype;
+    let fetchedBytes = 0;
+    let fetchedRows = 0;
+    const observeRow = (row: Record<string, unknown>) => {
+      fetchedRows += 1;
+      for (const value of Object.values(row)) {
+        if (typeof value === "string") {
+          fetchedBytes += Buffer.byteLength(value);
+        }
+      }
+    };
+    const allSpy = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      const rows = originalAll.apply(this, args);
+      if (this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
+        rows.forEach(observeRow);
+      }
+      return rows;
+    });
+    const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      const rows = originalIterate.apply(this, args);
+      if (!this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
+        return rows;
+      }
+      return (function* () {
+        for (const row of rows) {
+          observeRow(row);
+          yield row;
+        }
+        return undefined;
+      })();
+    });
+    try {
+      const preview = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        sessionIds: ["target"],
+        dryRun: true,
+      });
+      expect(preview.artifacts.indexChunks).toBe(2);
+      expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
+        count: 34,
+      });
+      const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+      expect(result).toEqual({ ...preview, dryRun: false });
+      expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual(
+        ["memory-keep", ...Array.from({ length: 31 }, (_, index) => `session-${index + 1}`)]
+          .toSorted()
+          .map((id) => ({ id })),
+      );
+      expect(
+        db.prepare("SELECT text FROM memory_index_chunks WHERE id = 'session-1'").get(),
+      ).toEqual({ text: body });
+      expect(fetchedRows).toBe(68);
+      expect(fetchedBytes).toBeLessThan(16_384);
+    } finally {
+      allSpy.mockRestore();
+      iterateSpy.mockRestore();
+    }
+  });
 
   it.each([true, false])(
     "reports no cache deletion for an empty selection (dryRun=%s)",
@@ -55,7 +147,7 @@ describe("memory forget", () => {
       const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
       db.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('test', 'test', 'test', 'unrelated', '[1,0]', 2, 1)`).run();
+      VALUES ('test', 'test', 'test', 'unrelated', ?, 2, 1)`).run(encodeMemoryEmbedding([1, 0]));
       const report = await forgetMemoryEntries({
         cfg,
         agentId: "main",
@@ -256,13 +348,13 @@ describe("memory forget", () => {
         `INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES ('unrelated', 'MEMORY.md', 'memory', 1, 2,
-         'unrelated-hash', 'test', 'Keep this.', '[1,0]', 1)`,
-      ).run();
+         'unrelated-hash', 'test', 'Keep this.', ?, 1)`,
+      ).run(encodeMemoryEmbedding([1, 0]));
       db.prepare(
         `INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-       VALUES ('test', 'test', 'test', 'unrelated-hash', '[1,0]', 2, 1)`,
-      ).run();
+       VALUES ('test', 'test', 'test', 'unrelated-hash', ?, 2, 1)`,
+      ).run(encodeMemoryEmbedding([1, 0]));
 
       const preview = await forgetMemoryEntries({
         cfg,
@@ -427,8 +519,8 @@ describe("memory forget", () => {
         `INSERT INTO memory_index_chunks
         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES ('survivor-chunk', ?, 'sessions', 1, 1,
-         'survivor-hash', 'test', 'Preserve this unrelated fact.', '[1,0]', 1)`,
-      ).run(`sessions/main/${survivorId}.jsonl`);
+         'survivor-hash', 'test', 'Preserve this unrelated fact.', ?, 1)`,
+      ).run(`sessions/main/${survivorId}.jsonl`, encodeMemoryEmbedding([1, 0]));
       db.prepare(
         `INSERT INTO memory_index_chunk_provenance
         (chunk_id, origin_class, session_kind, observed_at)
@@ -450,6 +542,7 @@ describe("memory forget", () => {
   it.each([
     { failure: "none", corpusExtension: "txt" },
     { failure: "index", corpusExtension: "txt" },
+    { failure: "sources", corpusExtension: "txt" },
     { failure: "backup", corpusExtension: "txt" },
     { failure: "memory", corpusExtension: "txt" },
     { failure: "corpus", corpusExtension: "txt" },
@@ -587,11 +680,9 @@ describe("memory forget", () => {
       const db = agentDatabase.db;
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
+      const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
       db.exec(`
-      CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(
-        text, id UNINDEXED, path UNINDEXED, source UNINDEXED,
-        model UNINDEXED, start_line UNINDEXED, end_line UNINDEXED
-      );
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY, embedding FLOAT[2]
       );
@@ -655,16 +746,11 @@ describe("memory forget", () => {
         db.prepare(
           `INSERT INTO memory_index_chunks (
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-        ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, '[1,0]', 1)`,
-        ).run(chunkId, file.path, file.source, hash, text);
+        ) VALUES (?, ?, ?, 1, 1, ?, 'test', ?, ?, 1)`,
+        ).run(chunkId, file.path, file.source, hash, text, encodeMemoryEmbedding([1, 0]));
         db.prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
         ).run(file.path, file.source, hash);
-        db.prepare(
-          `INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-         VALUES (?, ?, ?, ?, 'test', 1, 1)`,
-        ).run(text, chunkId, file.path, file.source);
         db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
           chunkId,
           new Float32Array([1, 0]),
@@ -672,8 +758,8 @@ describe("memory forget", () => {
         db.prepare(
           `INSERT INTO memory_embedding_cache
           (provider, model, provider_key, hash, embedding, dims, updated_at)
-         VALUES ('test', 'test', 'test', ?, '[1,0]', 2, 1)`,
-        ).run(hash);
+         VALUES ('test', 'test', 'test', ?, ?, 2, 1)`,
+        ).run(hash, encodeMemoryEmbedding([1, 0]));
         db.prepare(
           `INSERT INTO memory_index_chunk_provenance
           (chunk_id, origin_class, session_kind, observed_at)
@@ -757,12 +843,13 @@ describe("memory forget", () => {
               ? "BEFORE UPDATE ON plugin_state_entries WHEN OLD.plugin_id = 'memory-core' AND OLD.namespace = 'dreaming-memory-backups'"
               : failure === "index"
                 ? "BEFORE DELETE ON memory_index_chunks WHEN OLD.id = 'chunk-0'"
-                : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
-          // Attach the fault to the actual purge connection after schema validation,
-          // so an unexpected persistent trigger cannot fail database admission first.
+                : failure === "sources"
+                  ? "BEFORE DELETE ON memory_index_sources WHEN OLD.source = 'sessions'"
+                  : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
+          // KV writes use the admitted worker; agent writes retain this native connection.
           const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
           faultDb.exec(
-            `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+            `CREATE ${failure === "backup" ? "" : "TEMP "}TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
           );
           try {
             await expect(

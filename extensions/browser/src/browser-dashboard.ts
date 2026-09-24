@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   readBrowserDashboardDefinition,
@@ -40,7 +41,6 @@ import {
   withoutBrowserSessionTabCleanup,
   type BrowserSessionTabRecord,
 } from "./browser/session-tab-store.js";
-import { getRuntimeConfig } from "./config/config.js";
 
 type DashboardTab = BrowserSessionTabRecord & { storageKey: string };
 const logger = createSubsystemLogger("browser");
@@ -71,8 +71,11 @@ function operationKey(definition: BrowserDashboardDefinition): string {
   return JSON.stringify([definition.sessionKey, definition.agentId, definition.instanceId]);
 }
 
-function tabsForDefinition(definition: BrowserDashboardDefinition): DashboardTab[] {
-  return readBrowserDashboardTabs()
+function tabsForDefinition(
+  definition: BrowserDashboardDefinition,
+  storageKey?: string,
+): DashboardTab[] {
+  return readBrowserDashboardTabs(storageKey)
     .filter(
       (tab) =>
         tab.dashboard?.sessionKey === definition.sessionKey &&
@@ -208,7 +211,9 @@ async function releaseTab(
   const released = tab.dashboard?.state === "released" ? tab : changeTabState(tab, "released");
   const closed = released ? await closeBrowserDashboardTabs([released], params) : 0;
   return {
-    released: !readBrowserDashboardTabs().some((current) => current.storageKey === tab.storageKey),
+    released: !readBrowserDashboardTabs(tab.storageKey).some(
+      (current) => current.storageKey === tab.storageKey,
+    ),
     closed,
   };
 }
@@ -255,7 +260,7 @@ async function closeStoppingTab(
 ): Promise<number> {
   const closed = await closeBrowserDashboardTabs([tab], params);
   if (
-    readBrowserDashboardTabs().some(
+    readBrowserDashboardTabs(tab.storageKey).some(
       (current) => current.storageKey === tab.storageKey && current.dashboard?.state === "stopped",
     )
   ) {
@@ -289,7 +294,7 @@ async function materialize(
     const observation = await observeExistingTab(definition, tab, authority);
     if (observation === "present") {
       await assertDefinitionCurrent(definition, authority);
-      const current = tabsForDefinition(definition).find(
+      const current = tabsForDefinition(definition, tab.storageKey).find(
         (candidate) => candidate.storageKey === tab.storageKey,
       );
       if (!current || current.dashboard?.state !== "active") {
@@ -335,7 +340,7 @@ async function materialize(
       ) {
         await closeStoppingTab(candidate.tab, definition);
         assertAuthority(authority);
-        const stopped = tabsForDefinition(definition).find(
+        const stopped = tabsForDefinition(definition, candidate.tab.storageKey).find(
           (tab) =>
             tab.storageKey === candidate.tab.storageKey && tab.dashboard?.state === "stopped",
         );
@@ -483,7 +488,7 @@ export async function assertBrowserDashboardTargetCurrent(
       signal: authority.signal,
     });
     await assertDefinitionCurrent(definition, authority);
-    const retained = tabsForDefinition(definition).find(
+    const retained = tabsForDefinition(definition, current.storageKey).find(
       (tab) =>
         tab.storageKey === current.storageKey &&
         tab.dashboard?.state === "active" &&
@@ -629,7 +634,7 @@ async function stopMaterializedDashboard(
       await closeStoppingTab(stopping, definition);
       assertAuthority(authority);
       if (
-        readBrowserDashboardTabs().some(
+        readBrowserDashboardTabs(stopping.storageKey).some(
           (current) =>
             current.storageKey === stopping.storageKey && current.dashboard?.state === "stopping",
         )
@@ -653,7 +658,11 @@ async function stopMaterializedDashboard(
 
 /** Existing cleanup cycle reconciles dashboard removal, replacement, and explicit stop. */
 export async function reconcileBrowserDashboards(
-  params: { sessionKeys?: Array<string | undefined>; onWarn?: (message: string) => void } = {},
+  params: {
+    sessionKeys?: Array<string | undefined>;
+    isCurrent?: () => boolean;
+    onWarn?: (message: string) => void;
+  } = {},
 ): Promise<number> {
   if (!getOptionalBrowserStateRuntime()?.gateway) {
     return 0;
@@ -670,6 +679,9 @@ export async function reconcileBrowserDashboards(
       const definition = await readBrowserDashboardDefinition({
         ...tab.dashboard,
       });
+      if (params.isCurrent?.() === false) {
+        return closed;
+      }
       if (!definitionOwnsTab(definition, tab) || tab.dashboard.state === "released") {
         closed += (await releaseTab(tab, params)).closed;
       } else if (definition && tab.dashboard.state === "stopping") {
@@ -696,6 +708,9 @@ export async function reconcileBrowserDashboards(
     }
     try {
       const definition = await readBrowserDashboardDefinition(intent);
+      if (params.isCurrent?.() === false) {
+        return closed;
+      }
       if (
         !sameBrowserDashboardDefinition(intent, definition) ||
         (definition &&

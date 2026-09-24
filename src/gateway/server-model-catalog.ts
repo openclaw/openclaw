@@ -1,3 +1,4 @@
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type {
@@ -14,9 +15,11 @@ import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.ful
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import type {
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
+  PreparedGatewayModelCatalogReadResult,
 } from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
@@ -56,17 +59,6 @@ async function resolveLoader(
   const { loadPublishedPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
   return loadPublishedPreparedModelCatalogOwnerSnapshot;
-}
-
-// Isolated gateway tests share process module state with lifecycle-owner tests.
-export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
-  const [{ resetPreparedModelRuntimeSnapshotsForTest }, { resetModelCatalogBuilderCacheForTest }] =
-    await Promise.all([
-      import("../agents/prepared-model-runtime.test-support.js"),
-      import("../agents/model-catalog.js"),
-    ]);
-  await resetPreparedModelRuntimeSnapshotsForTest();
-  resetModelCatalogBuilderCacheForTest();
 }
 
 async function loadGatewayModelCatalogOwnerSnapshot(
@@ -184,13 +176,11 @@ export async function loadGatewayModelCatalog(
   return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }
 
-/** Reads the newest completed published catalog without starting provider discovery. */
-export async function readPreparedGatewayModelCatalog(
+function readPreparedGatewayModelCatalogSync(
+  getPreparedModelCatalogOwnerSnapshot: typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogOwnerSnapshot,
+  config: GatewayModelCatalogConfig,
   params?: LoadGatewayModelCatalogParams,
-): Promise<PreparedGatewayModelCatalog | undefined> {
-  const { getPreparedModelCatalogOwnerSnapshot } =
-    await import("../agents/prepared-model-catalog.js");
-  const config = (params?.getConfig ?? getRuntimeConfig)();
+): PreparedGatewayModelCatalog | undefined {
   const owner = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
@@ -201,10 +191,59 @@ export async function readPreparedGatewayModelCatalog(
   if (!owner) {
     return undefined;
   }
-  return {
-    entries: (owner.readFullModelCatalog?.() ?? owner.modelCatalog).entries,
+  const catalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
+  return createPreparedGatewayModelCatalog({
+    entries: catalog.entries,
+    routeVariants: catalog.routeVariants,
     pluginRegistry: owner.pluginRegistry,
-  };
+    metadataSnapshot: owner.metadataSnapshot,
+  });
+}
+
+/** Reads the newest completed published catalog without starting provider discovery. */
+export async function readPreparedGatewayModelCatalog(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<PreparedGatewayModelCatalog | undefined> {
+  const { getPreparedModelCatalogOwnerSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
+  return readPreparedGatewayModelCatalogSync(
+    getPreparedModelCatalogOwnerSnapshot,
+    (params?.getConfig ?? getRuntimeConfig)(),
+    params,
+  );
+}
+
+export async function readPreparedGatewayModelCatalogBatch(
+  agentIds: readonly string[],
+  params?: Pick<LoadGatewayModelCatalogParams, "getConfig">,
+): Promise<PreparedGatewayModelCatalogReadResult[]> {
+  if (agentIds.length === 0) {
+    return [];
+  }
+  const { getPreparedModelCatalogOwnerSnapshot, withPreparedModelRuntimeReadBatch } =
+    await import("../agents/prepared-model-catalog.js");
+  const config = (params?.getConfig ?? getRuntimeConfig)();
+  // Both read scopes end before yielding, so publication cannot leave stale candidates behind.
+  return withPreparedModelRuntimeReadBatch(() =>
+    withAgentRosterFactsBatch(config, () =>
+      agentIds.map((agentId): PreparedGatewayModelCatalogReadResult => {
+        try {
+          return {
+            status: "fulfilled",
+            value: readPreparedGatewayModelCatalogSync(
+              getPreparedModelCatalogOwnerSnapshot,
+              config,
+              {
+                agentId,
+              },
+            ),
+          };
+        } catch (reason) {
+          return { status: "rejected", reason };
+        }
+      }),
+    ),
+  );
 }
 
 /** Reads the published owner generation without activating full catalog discovery. */

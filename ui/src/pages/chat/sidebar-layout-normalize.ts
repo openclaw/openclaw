@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core";
+import { isRecord, normalizeOptionalString, readStringValue } from "@openclaw/normalization-core";
 import type { SidebarLayout, SidebarPanel, SidebarSlotId } from "./sidebar-layout-types.ts";
 
 const DEFAULT_WIDTH = 480;
@@ -22,12 +22,14 @@ function normalizeSlotId(value: unknown): SidebarSlotId | null {
     return "dashboard";
   }
   return value === "browser" ||
+    value === "link-reader" ||
     value === "companion" ||
     value === "conversation" ||
     value === "dashboard" ||
     value === "desktop" ||
     value === "detail" ||
     value === "discussion" ||
+    value === "portal" ||
     value === "tasks" ||
     value === "terminal" ||
     value === "workspace" ||
@@ -44,8 +46,7 @@ function clampHeight(height: number): number {
   return Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height));
 }
 
-function uniqueId(value: unknown, fallback: string, used: Set<string>): string {
-  const base = typeof value === "string" && value.trim() ? value.trim() : fallback;
+function uniqueId(base: string, used: Set<string>): string {
   let id = base;
   let suffix = 2;
   while (used.has(id)) {
@@ -63,11 +64,11 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
   const usedPanelIds = new Set<string>();
   const usedSlots = new Set<SidebarSlotId>();
   const panels: SidebarPanel[] = [];
-  const requestedMainId =
-    typeof value.mainPanelId === "string" ? value.mainPanelId.trim() : undefined;
+  const requestedMainId = readStringValue(value.mainPanelId)?.trim();
   let mainPanelId: string | undefined;
   let activePanelId = "";
   let width = DEFAULT_WIDTH;
+  let browserWidthPending: true | undefined;
   let height = DEFAULT_HEIGHT;
   for (const rawColumn of value.columns) {
     if (
@@ -77,21 +78,41 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     ) {
       continue;
     }
-    columnId ??= (typeof rawColumn.id === "string" ? rawColumn.id.trim() : "") || "column";
-    const requestedActiveId =
-      typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";
+    columnId ??= normalizeOptionalString(rawColumn.id) ?? "column";
+    const requestedActiveId = normalizeOptionalString(rawColumn.activePanelId) ?? "";
     let columnActivePanelId: string | undefined;
     for (const rawPanel of rawColumn.panels) {
       if (!isRecord(rawPanel)) {
         continue;
       }
-      const slot = normalizeSlotId(rawPanel.slot);
-      if (!slot || usedSlots.has(slot)) {
+      const sourceSlot = normalizeSlotId(rawPanel.slot);
+      const taskId = normalizeOptionalString(rawPanel.taskId);
+      // Saved layouts from the previous task inspector retain the ID on Review.
+      // Normalize that persisted data once; runtime selection belongs only to Tasks.
+      const legacyTask = sourceSlot === "detail" && taskId !== undefined;
+      const slot = legacyTask ? "tasks" : sourceSlot;
+      if (!slot) {
         continue;
       }
-      const rawPanelId = typeof rawPanel.id === "string" ? rawPanel.id.trim() : "";
-      const panelId = uniqueId(rawPanel.id, slot, usedPanelIds);
-      const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : slot);
+      if (usedSlots.has(slot)) {
+        const existing = panels.find((panel) => panel.slot === slot)!;
+        if (slot === "tasks") {
+          if (taskId && (!legacyTask || !existing.taskId)) {
+            existing.taskId = taskId;
+          }
+          const sourceId = normalizeOptionalString(rawPanel.id) ?? sourceSlot;
+          if (sourceId === requestedActiveId) {
+            columnActivePanelId = existing.id;
+          }
+          if (sourceId === requestedMainId) {
+            mainPanelId = existing.id;
+          }
+        }
+        continue;
+      }
+      const rawPanelId = normalizeOptionalString(rawPanel.id) ?? "";
+      const panelId = uniqueId(rawPanelId || slot, usedPanelIds);
+      const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : sourceSlot);
       if (sourceId === requestedActiveId) {
         columnActivePanelId ??= panelId;
       }
@@ -99,13 +120,26 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         mainPanelId ??= panelId;
       }
       usedSlots.add(slot);
-      panels.push({ id: panelId, slot });
+      panels.push({
+        id: panelId,
+        slot,
+        ...(slot === "tasks" && taskId ? { taskId } : {}),
+        ...((slot === "desktop" ||
+          (slot === "portal" && !normalizeOptionalString(rawPanel.portalId))) &&
+        normalizeOptionalString(rawPanel.environmentId)
+          ? { environmentId: normalizeOptionalString(rawPanel.environmentId) }
+          : {}),
+        ...(slot === "portal" && normalizeOptionalString(rawPanel.portalId)
+          ? { portalId: normalizeOptionalString(rawPanel.portalId) }
+          : {}),
+      });
     }
     activePanelId = columnActivePanelId ?? activePanelId;
     width =
       typeof rawColumn.width === "number" && Number.isFinite(rawColumn.width)
         ? clampWidth(rawColumn.width)
         : width;
+    browserWidthPending = rawColumn.browserWidthPending === true ? true : undefined;
     height =
       typeof rawColumn.height === "number" && Number.isFinite(rawColumn.height)
         ? clampHeight(rawColumn.height)
@@ -120,19 +154,18 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
   if (mainPanelId || conversation || requestedMainId !== undefined || value.expanded === true) {
     if (!conversation) {
       conversation = {
-        id: uniqueId("conversation", "conversation", usedPanelIds),
+        id: uniqueId("conversation", usedPanelIds),
         slot: "conversation",
       };
       panels.push(conversation);
     }
     mainPanelId ??= conversation.id;
-    if (!panels.some((panel) => panel.id === activePanelId && panel.id !== mainPanelId)) {
-      activePanelId =
-        conversation.id !== mainPanelId
-          ? conversation.id
-          : (panels.find((panel) => panel.id !== mainPanelId)?.id ?? "");
-    }
   }
+  const activeSidePanel =
+    panels.find((panel) => panel.id === activePanelId && panel.id !== mainPanelId) ??
+    (conversation && conversation.id !== mainPanelId
+      ? conversation
+      : panels.find((panel) => panel.id !== mainPanelId));
   const columns =
     columnId || panels.length > 0 || value.open === true
       ? [
@@ -140,13 +173,10 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
             id: columnId ?? "side-panel-column",
             side: "right" as const,
             panels,
-            activePanelId: panels.some(
-              (panel) => panel.id === activePanelId && panel.id !== mainPanelId,
-            )
-              ? activePanelId
-              : (panels.find((panel) => panel.id !== mainPanelId)?.id ?? ""),
+            activePanelId: activeSidePanel?.id ?? "",
             height,
             width,
+            ...(browserWidthPending ? { browserWidthPending } : {}),
           },
         ]
       : [];
@@ -156,10 +186,15 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     dock: value.dock === "bottom" || value.dock === "left" ? value.dock : "right",
     open: typeof value.open === "boolean" ? value.open : columns.length > 0,
     expanded: value.expanded === true,
+    ...(value.dashboardPresentationOverride === null ||
+    value.dashboardPresentationOverride === "split" ||
+    value.dashboardPresentationOverride === "expanded"
+      ? { dashboardPresentationOverride: value.dashboardPresentationOverride }
+      : {}),
     ...(value.expanded === true &&
     value.expandedSide === true &&
     value.open !== false &&
-    panels.some((panel) => panel.id === activePanelId && panel.id !== mainPanelId)
+    activeSidePanel
       ? { expandedSide: true }
       : {}),
     ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),

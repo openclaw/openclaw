@@ -17,6 +17,7 @@ registerDesktopEnglish();
 
 export function renderDesktopPanelView(options: {
   embedded: boolean;
+  workspaceControls?: boolean;
   dock: "bottom" | "right";
   height: number;
   width: number;
@@ -32,6 +33,17 @@ export function renderDesktopPanelView(options: {
   const connection = renderDesktopConnection({
     ...options.connection,
     state: options.content.state,
+    presentationControls: options.workspaceControls
+      ? html`<button
+            class="desktop-toolbar-action"
+            type="button"
+            title=${t("desktop.openWindow")}
+            aria-label=${t("desktop.openWindow")}
+            @click=${options.onOpenWindow}
+          >
+            ${icons.externalLink}</button
+          >${options.renderFullscreenControl()}`
+      : nothing,
   });
   const style =
     options.embedded || options.fullscreen
@@ -151,13 +163,9 @@ export function renderDesktopPicker(options: {
 }) {
   if (options.automatic) {
     return html`<div class="desktop-status" role="status">
-      ${
-        options.loading
-          ? t("desktop.connecting")
-          : html`<button class="desktop-button" type="button" @click=${options.onRefresh}>
-              ${t("common.retry")}
-            </button>`
-      }
+      <button class="desktop-button" type="button" @click=${options.onRefresh}>
+        ${t("common.retry")}
+      </button>
     </div>`;
   }
   return html`
@@ -274,9 +282,11 @@ export function renderDesktopConnection(options: {
   showApps: boolean;
   sizing: DesktopSizingOptions;
   pictureInPictureControl: TemplateResult;
+  presentationControls?: TemplateResult | typeof nothing;
   onDisconnect: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
   onTakeControl: () => void;
+  onControlToggle: () => void;
 }) {
   return html`
     <div class="desktop-toolbar desktop-toolbar--connection">
@@ -310,7 +320,23 @@ export function renderDesktopConnection(options: {
           : nothing
       }
       <span class="desktop-toolbar__spacer"></span>
+      ${
+        options.controlling
+          ? html`<button
+              class="desktop-toolbar-action"
+              type="button"
+              aria-label=${t("desktop.switchToViewOnly")}
+              ?disabled=${options.state !== "connected"}
+              @click=${options.onControlToggle}
+            >
+              ${t("desktop.control")}
+            </button>`
+          : options.state === "connected"
+            ? html`<span class="desktop-toolbar-mode" role="status">${t("desktop.viewOnly")}</span>`
+            : nothing
+      }
       ${renderDesktopSizing(options.sizing)} ${options.pictureInPictureControl}
+      ${options.presentationControls ?? nothing}
       <button
         class="desktop-toolbar-action"
         type="button"
@@ -330,6 +356,7 @@ export function renderDesktopConnection(options: {
               type="button"
               title=${t("desktop.takeControl")}
               aria-label=${t("desktop.takeControl")}
+              ?disabled=${options.state !== "connected"}
               @click=${options.onTakeControl}
             ></button>`
           : nothing

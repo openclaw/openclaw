@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -12,11 +12,6 @@ function expectEmptyLead(row: Element | null) {
   expect(lead).not.toBeNull();
   expect(lead?.childElementCount).toBe(0);
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
 
 describe("AppSidebar session indicators", () => {
   it("removes a session stripe when a changed event clears its color", async () => {
@@ -46,21 +41,25 @@ describe("AppSidebar session indicators", () => {
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
 
-  it("renders named glyphs as strokes and keeps emoji as text", async () => {
+  it("renders named glyphs and SVG artwork while keeping emoji as text", async () => {
     const glyphKey = "agent:main:glyph";
     const emojiKey = "agent:main:emoji";
-    const sessions = createSessionsHarness("main", [glyphKey, emojiKey]);
+    const svgKey = "agent:main:svg";
+    const svgIcon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>')}`;
+    const sessions = createSessionsHarness("main", [glyphKey, emojiKey, svgKey]);
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
     const glyph = result.sessions.find((row) => row.key === glyphKey);
     const emoji = result.sessions.find((row) => row.key === emojiKey);
-    if (!glyph || !emoji) {
+    const svg = result.sessions.find((row) => row.key === svgKey);
+    if (!glyph || !emoji || !svg) {
       throw new Error("expected icon sessions");
     }
     glyph.icon = "braces";
     emoji.icon = "🦞";
+    svg.icon = svgIcon;
 
     const { sidebar } = await mountSidebar(
       createGatewayHarness({} as GatewayBrowserClient).gateway,
@@ -68,11 +67,24 @@ describe("AppSidebar session indicators", () => {
     );
     const glyphRow = sidebar.querySelector(`[data-session-key="${glyphKey}"]`);
     const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
+    const svgRow = () => sidebar.querySelector(`[data-session-key="${svgKey}"]`);
 
     expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
     expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
     expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
     expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+    expect(svgRow()?.querySelector(".session-glyph__icon img")?.getAttribute("src")).toBe(svgIcon);
+    expect(svgRow()?.querySelector(".session-glyph__icon svg")).toBeNull();
+    expect(svgRow()?.querySelector(".session-glyph__emoji")).toBeNull();
+
+    sessions.publish({
+      result: reconcileSessionChanged(sessions.sessions.state.result, {
+        sessionKey: svgKey,
+        icon: null,
+      }).result,
+    });
+    await sidebar.updateComplete;
+    expect(svgRow()?.querySelector(".session-glyph__icon")).toBeNull();
   });
 
   it("prioritizes session icons, then channel avatars, then owner chips", async () => {

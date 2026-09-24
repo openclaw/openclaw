@@ -80,7 +80,6 @@ type TestChatPane = HTMLElement & {
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
-  persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
   renderBoardPanel: (
@@ -382,31 +381,6 @@ describe("chat pane board shell", () => {
     },
   );
 
-  it("opens a dashboard route in split view only once", () => {
-    const pane = createTestPane();
-    pane.boardProvider = createMockBoardProvider("agent:main:dashboard-route");
-    pane.state.sessionKey = "agent:main:dashboard-route";
-    pane.sessionKey = "agent:main:dashboard-route";
-    pane.routeFace = "dashboard";
-    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(
-      pane.state.sidebarLayout.columns.flatMap(
-        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
-      ),
-    ).toContain("dashboard");
-    expect(pane.state.sidebarLayout.expanded).toBe(false);
-
-    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(
-      pane.state.sidebarLayout.columns.flatMap(
-        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
-      ),
-    ).toContain("terminal");
-  });
-
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
     const list = vi.fn().mockResolvedValue({ sessions: [] });
@@ -688,7 +662,10 @@ describe("chat pane board shell", () => {
     pane.state.sessionKey = "agent:main:main";
     pane.boardProvider = createMockBoardProvider("main");
     pane.routeFace = "dashboard";
-    pane.persistBoardSessionView({ activeTabId: "research" });
+    pane.handleBoardCommand({
+      sessionKey: "main",
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     pane.boardProvider = createMockBoardProvider("agent:main:main");
 
@@ -704,8 +681,12 @@ describe("chat pane board shell", () => {
     pane.sessionKey = "agent:main:retained";
     const onFaceChange = vi.fn();
     pane.onFaceChange = onFaceChange;
+    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
 
-    pane.persistBoardSessionView({ face: "dashboard" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "set_chat_dock", dock: "right" },
+    });
 
     expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
@@ -728,7 +709,10 @@ describe("chat pane board shell", () => {
       face: "dashboard",
     });
 
-    pane.persistBoardSessionView({ activeTabId: "main" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "main",
       face: "dashboard",
@@ -752,7 +736,10 @@ describe("chat pane board shell", () => {
     secondPane.state.settings = initialSettings;
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
 
-    firstPane.persistBoardSessionView({ activeTabId: "research" });
+    firstPane.handleBoardCommand({
+      sessionKey: firstPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     secondPane.state.sessionKey = "agent:main:first";
     secondPane.boardProvider = createMockBoardProvider("agent:main:first");
@@ -763,7 +750,10 @@ describe("chat pane board shell", () => {
 
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
-    secondPane.persistBoardSessionView({ activeTabId: "main" });
+    secondPane.handleBoardCommand({
+      sessionKey: secondPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
       "agent:main:first": { activeTabId: "research" },

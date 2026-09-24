@@ -10,9 +10,11 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -210,14 +212,17 @@ describe("attachment transfer revocation", () => {
   it.each([
     { boundary: "blob-admitted", revoke: false },
     { boundary: "blob-admitted", revoke: true },
-    { boundary: "before-create-entry", revoke: false },
-    { boundary: "before-create-entry", revoke: true },
-    { boundary: "inside-create-before-open", revoke: false },
-    { boundary: "inside-create-before-open", revoke: true },
-    { boundary: "inside-create-after-open", revoke: false },
-    { boundary: "inside-create-after-open", revoke: true },
-    { boundary: "inside-final-create", revoke: false },
-    { boundary: "inside-final-create", revoke: true },
+    { boundary: "source-open", revoke: false },
+    { boundary: "source-open", revoke: true },
+    { boundary: "before-stage-open", revoke: false },
+    { boundary: "before-stage-open", revoke: true },
+    { boundary: "private-stage-created", revoke: false },
+    { boundary: "private-stage-created", revoke: true },
+    { boundary: "after-publish", revoke: false },
+    { boundary: "after-publish", revoke: true },
+    { boundary: "after-final-publish", revoke: false },
+    { boundary: "after-final-publish", revoke: true },
+    { boundary: "after-publish-replaced", revoke: true },
   ] as const)("$boundary revoked=$revoke", async ({ boundary, revoke }) => {
     const root = await fs.realpath(tempDirs.make("attachment-revocation-"));
     const workspaceDir = path.join(root, "workspace");
@@ -309,39 +314,77 @@ describe("attachment transfer revocation", () => {
         res.destroy(error instanceof Error ? error : new Error(String(error))),
       );
     });
-    const readsAfterRevocation: string[] = [];
+    const sourceAccessAfterRevocation: string[] = [];
+    const observeSourceAccess = (file: string) => {
+      if (file.includes(".workspace.workspace-transfer-") && reached && revoke) {
+        sourceAccessAfterRevocation.push(file);
+      }
+    };
     const originalReadFile = fs.readFile.bind(fs);
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const file = typeof args[0] === "string" ? args[0] : "";
-      const installing = file.includes(".workspace.workspace-transfer-");
-      if (installing && reached && revoke) {
-        readsAfterRevocation.push(file);
-      }
-      const data = await originalReadFile(...args);
-      // The real staging read finishes before the installer calls Root.create().
-      if (installing && file.endsWith(fresh) && boundary === "before-create-entry") {
-        crossBoundary();
-      }
-      return data;
+      observeSourceAccess(file);
+      return await originalReadFile(...args);
     });
-    const originalOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const creation =
-        args[0] ===
-          path.join(workspaceDir, boundary === "inside-final-create" ? subsequent : fresh) &&
-        typeof args[1] === "number" &&
-        (args[1] & fsSync.constants.O_CREAT) !== 0;
-      if (creation && boundary === "inside-create-before-open") {
-        crossBoundary();
+    const stageBoundary = ["before-stage-open", "private-stage-created"].includes(boundary);
+    const originalRoot = fsSafe.root;
+    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+      const guarded = await originalRoot(...args);
+      if (path.basename(guarded.rootReal).startsWith(".workspace.workspace-transfer-")) {
+        const open = guarded.open.bind(guarded);
+        vi.spyOn(guarded, "open").mockImplementation(async (...openArgs) => {
+          const file = path.resolve(guarded.rootReal, openArgs[0]);
+          observeSourceAccess(file);
+          const opened = await open(...openArgs);
+          const read = opened.handle.read.bind(opened.handle);
+          vi.spyOn(opened.handle, "read").mockImplementation(async (...readArgs) => {
+            observeSourceAccess(file);
+            return await read(...readArgs);
+          });
+          if (file.endsWith(path.normalize(fresh)) && boundary === "source-open") {
+            crossBoundary();
+          }
+          return opened;
+        });
       }
-      const handle = await originalOpen(...args);
-      if (
-        creation &&
-        (boundary === "inside-create-after-open" || boundary === "inside-final-create")
-      ) {
-        crossBoundary();
+      if (guarded.rootReal === workspaceDir) {
+        const copyIn = guarded.copyIn.bind(guarded);
+        vi.spyOn(guarded, "copyIn").mockImplementation(async (relativePath, input, options) => {
+          await copyIn(relativePath, input, {
+            ...options,
+            assertBeforeMutation: () => {
+              options?.assertBeforeMutation?.();
+              if (reached || relativePath !== fresh || !stageBoundary) {
+                return;
+              }
+              // Native copying may fill the stage before this mutation fence observes it.
+              const stageExists = fsSync
+                .readdirSync(path.join(workspaceDir, directory))
+                .some((name) => name.startsWith(".fs-safe-"));
+              if (stageExists === (boundary === "private-stage-created")) {
+                crossBoundary();
+              }
+            },
+            onDestinationPublished: (receipt) => {
+              options?.onDestinationPublished?.(receipt);
+              const publishedInput = boundary === "after-final-publish" ? subsequent : fresh;
+              if (
+                receipt.path === path.join(workspaceDir, publishedInput) &&
+                ["after-publish", "after-final-publish", "after-publish-replaced"].includes(
+                  boundary,
+                )
+              ) {
+                if (boundary === "after-publish-replaced") {
+                  fsSync.unlinkSync(receipt.path);
+                  fsSync.writeFileSync(receipt.path, "later user replacement", { mode: 0o600 });
+                }
+                crossBoundary();
+              }
+            },
+          });
+        });
       }
-      return handle;
+      return guarded;
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -380,20 +423,28 @@ describe("attachment transfer revocation", () => {
           name.startsWith(".workspace.workspace-transfer-"),
         ),
       ).toEqual([]);
+      expect(
+        (await fs.readdir(path.join(workspaceDir, directory))).filter((name) =>
+          name.startsWith(".fs-safe-"),
+        ),
+      ).toEqual([]);
       if (revoke) {
         expect.soft(result).toBe("rejected");
-        expect.soft(readsAfterRevocation).toEqual([]);
-        if (boundary.startsWith("inside-")) {
-          // fs-safe 0.7.0 cannot cancel or identity-roll back an entered create.
+        expect.soft(sourceAccessAfterRevocation).toEqual([]);
+        if (
+          boundary === "after-publish" ||
+          boundary === "after-final-publish" ||
+          boundary === "after-publish-replaced"
+        ) {
           await expect(fs.readFile(path.join(workspaceDir, fresh), "utf8")).resolves.toBe(
-            "private new input",
+            boundary === "after-publish-replaced" ? "later user replacement" : "private new input",
           );
         } else {
           await expect(fs.stat(path.join(workspaceDir, fresh))).rejects.toMatchObject({
             code: "ENOENT",
           });
         }
-        if (boundary === "inside-final-create") {
+        if (boundary === "after-final-publish") {
           await expect(fs.readFile(path.join(workspaceDir, subsequent), "utf8")).resolves.toBe(
             "subsequent private input",
           );
@@ -572,18 +623,18 @@ describe("durable credential revocation fencing through the real store", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
-    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     const environmentId = "worker-store-fence";
     const sessionId = "session-store-fence";
-    store.createIntent({
+    await store.createIntent({
       environmentId,
       providerId: "fake-provider",
       profileId: "test-profile",
       profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
       provisionOperationId: `provision:${environmentId}`,
     });
-    store.transition({ environmentId, from: "requested", to: "provisioning" });
-    const bootstrapping = store.transition({
+    await store.transition({ environmentId, from: "requested", to: "provisioning" });
+    const bootstrapping = await store.transition({
       environmentId,
       from: "provisioning",
       to: "bootstrapping",
@@ -599,7 +650,7 @@ describe("durable credential revocation fencing through the real store", () => {
         },
       },
     });
-    store.transition({
+    await store.transition({
       environmentId,
       from: bootstrapping.state,
       to: "ready",
@@ -617,7 +668,7 @@ describe("durable credential revocation fencing through the real store", () => {
         },
       },
     });
-    const attached = store.transition({
+    const attached = await store.transition({
       environmentId,
       from: "ready",
       to: "attached",
@@ -699,7 +750,7 @@ describe("durable credential revocation fencing through the real store", () => {
       bytes += first.value?.byteLength ?? 0;
 
       // Permanent revocation through the real store drives the fence end to end.
-      store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
+      await store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
 
       const drained = (async () => {
         try {
@@ -726,6 +777,7 @@ describe("durable credential revocation fencing through the real store", () => {
         server.close(() => resolve());
       });
       await service.closeAll().catch(() => undefined);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
   });

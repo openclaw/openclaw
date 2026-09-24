@@ -2,14 +2,22 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { gitOutput, resolveBranchLanding } from "./control-ui-session-prs-landing.js";
+import {
+  gitOutput,
+  readCheckoutHead,
+  resolveBranchLanding,
+} from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 export async function readCheckoutGitContext(
   root: string,
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
-  const branch = await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (!branch || branch === "HEAD") {
+  const head = readCheckoutHead(root);
+  const branch =
+    head?.branch === null
+      ? "HEAD"
+      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+  if (!branch) {
     return null;
   }
   const remoteUrl = await gitOutput(root, ["remote", "get-url", "origin"]);
@@ -19,7 +27,12 @@ export async function readCheckoutGitContext(
   }
   const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
-  return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
+  return {
+    ...remote,
+    branch: branch === "HEAD" ? null : branch,
+    root,
+    ...(defaultBranch ? { defaultBranch } : {}),
+  };
 }
 
 const SHORTSTAT_FILES = /(\d+) files? changed/;
@@ -138,8 +151,15 @@ export async function readPullRequestBranchFacts(
   input: GitReadOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
   const landing = await resolveBranchLanding(input.root, input);
+  // A matching stats base proves Git resolved the common tip. Equal recorded
+  // IDs alone can name missing objects and must retain the error fallback.
+  const noPushedChanges =
+    landing.defaultSha !== null &&
+    landing.defaultSha === landing.pushedSha &&
+    landing.statsBase === landing.defaultSha;
   const creatable =
     (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    !noPushedChanges &&
     (await branchHasCreatablePullRequest(
       input.root,
       landing.defaultSha,

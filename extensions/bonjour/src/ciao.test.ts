@@ -1,4 +1,3 @@
-// Bonjour tests cover ciao plugin behavior.
 import { describe, expect, it } from "vitest";
 
 const { classifyCiaoProcessError } = await import("./ciao.js");

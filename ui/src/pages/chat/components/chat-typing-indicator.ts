@@ -1,15 +1,17 @@
 import { html } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../../i18n/index.ts";
+import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 export function renderChatTypingIndicator(
   actors: readonly { id: string; label: string; preview?: string }[] | undefined,
+  avatarPlacement: "gutter" | "footer" | "none" = "gutter",
 ) {
   if (!actors?.length) {
     return null;
   }
-  const previews = actors.filter((actor) => actor.preview?.trim());
-  const indicators = actors.filter((actor) => !actor.preview?.trim());
   const status =
     actors.length === 1
       ? t("chat.sessionSuggestions.typing", { name: actors[0]?.label ?? "" })
@@ -17,40 +19,50 @@ export function renderChatTypingIndicator(
           names: actors.map((actor) => actor.label).join(", "),
         });
   return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
-    ${previews.map(
-      (actor) => html`<div class="agent-chat__typing-preview-row">
-        ${renderChatAvatar("user", undefined, undefined, {
+    ${repeat(
+      actors,
+      (actor) => actor.id,
+      (actor) => {
+        // session.typing actors are authenticated Gateway profiles, like sent user turns.
+        const sender = {
           id: actor.id,
           name: actor.label,
-        })}
-        <div class="agent-chat__typing-preview-content">
-          <span class="agent-chat__typing-preview-label">
-            ${t("chat.sessionSuggestions.typing", { name: actor.label })}
-          </span>
-          <span class="agent-chat__typing-preview-bubble">${actor.preview}</span>
-        </div>
-      </div>`,
+          identity: { type: "profile" as const, id: actor.id },
+        };
+        const preview = actor.preview?.trim() ? actor.preview : undefined;
+        return html`<div
+          class="chat-group user chat-group--peer chat-group--sender-tint chat-group--with-footer chat-group--typing"
+          style=${`--chat-sender-hue: ${resolveIdentityHue(sender)}`}
+          aria-live="off"
+        >
+          <div class="chat-group-messages">
+            <div class="chat-bubble ${preview ? "agent-chat__typing-preview-bubble" : ""}">
+              <div class="chat-message-avatar-anchor">
+                ${
+                  preview
+                    ? html`<span class="chat-text agent-chat__typing-preview-text" dir="auto"
+                        >${preview}</span
+                      >`
+                    : html`<span class="agent-chat__typing-bubble" aria-hidden="true"
+                        ><span></span><span></span><span></span
+                      ></span>`
+                }
+                ${avatarPlacement === "gutter" ? renderChatAvatar("user", undefined, undefined, sender) : null}
+              </div>
+            </div>
+          </div>
+          <div class="chat-group-footer chat-group-footer--persistent-identity">
+            <div class="chat-group-footer__meta">
+              ${avatarPlacement === "footer" ? renderChatAuthorAvatar(sender) : null}
+              <span class="chat-sender-name agent-chat__typing-preview-label">${actor.label}</span>
+              <span class="agent-chat__typing-state"
+                >${t("chat.sessionSuggestions.typingDraftState")}</span
+              >
+            </div>
+          </div>
+        </div>`;
+      },
     )}
-    ${
-      indicators.length
-        ? html`<div class="agent-chat__typing-dots-row">
-            <span class="agent-chat__typing-avatars" aria-hidden="true">
-              ${indicators.slice(0, 3).map((actor) =>
-                renderChatAvatar("user", undefined, undefined, {
-                  id: actor.id,
-                  name: actor.label,
-                }),
-              )}
-            </span>
-            <span class="agent-chat__typing-bubble" aria-hidden="true">
-              <svg class="agent-chat__typing-tail" viewBox="0 0 12 12">
-                <path d="M12 0c-.5 5.5-3.5 9.5-11 11 4.5-3.5 5.5-7 5.5-11H12Z"></path>
-              </svg>
-              <span></span><span></span><span></span>
-            </span>
-          </div>`
-        : null
-    }
     <span class="sr-only" role="status">${status}</span>
   </div>`;
 }

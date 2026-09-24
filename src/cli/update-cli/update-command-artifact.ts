@@ -8,6 +8,7 @@ import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { createUpdateProgress } from "./progress.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
@@ -106,13 +107,13 @@ function readFreshUpdateArtifactMetadata(manifest: unknown) {
     typeof manifest.version !== "string" ||
     !validSemver(manifest.version)
   ) {
-    return undefined;
+    return { failure: createUpdatePreflightFailure("target-version-resolution") };
   }
   const schemas = isRecord(manifest.openclaw)
     ? parseOpenClawSchemaVersions(manifest.openclaw.schemaVersions)
     : undefined;
   if (!schemas) {
-    return undefined;
+    return { failure: createUpdatePreflightFailure("target-schema-metadata") };
   }
   return {
     version: manifest.version,
@@ -142,10 +143,11 @@ export async function runFreshUpdateArtifact(
       async ({ stage, manifest }) => {
         initialization.stagedPackage = stage;
         const metadata = readFreshUpdateArtifactMetadata(manifest);
-        if (!metadata) {
+        if (metadata.failure) {
           return await target.refuseUpdate(
             "target-metadata-preflight",
-            "The selected artifact does not declare its database schema support. Use a compatible artifact with schema metadata, or an exact published --tag.",
+            metadata.failure.message,
+            metadata.failure.failureFacts,
           );
         }
         const comparison = compareSemverStrings(target.currentVersion, metadata.version);

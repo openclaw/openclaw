@@ -1,5 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { setWorkboardCards } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -137,7 +138,7 @@ async function loadWorkboardInternal(
           return true;
         }
         // Catalog hydration never establishes task freshness or authorizes stale edits.
-        state.cards = normalized.cards;
+        setWorkboardCards(state, normalized.cards);
         state.statuses = normalized.statuses;
         state.tasksByCardId = new Map(
           state.cards.flatMap((card) => {
@@ -277,7 +278,7 @@ async function loadWorkboardInternal(
           delete runtime.defaultTaskDiscoveryCursor;
         }
       }
-      state.cards = taskLinkState.cards;
+      setWorkboardCards(state, taskLinkState.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;

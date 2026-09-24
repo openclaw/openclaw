@@ -14,6 +14,7 @@ enum DashboardFailurePage {
     static func html(
         signedOut: SignedOut,
         signingIn: Bool = false,
+        browserAttempt: UUID? = nil,
         error: String? = nil,
         now: Date = Date()) -> String
     {
@@ -29,15 +30,24 @@ enum DashboardFailurePage {
                 host)
         let action = signingIn ? "reconnect-cancel" : "reconnect"
         let label = signingIn ? String(localized: "Cancel") : String(localized: "Sign in again")
-        let button = """
+        var button = """
         <button type="button" data-id="\(self.htmlEscape(signedOut.target.bridgeID))"
           onclick="window.webkit.messageHandlers.openclawGateways
             .postMessage({type:'\(action)',id:this.dataset.id})">\(self.htmlEscape(label))</button>
         """
+        if signingIn, let browserAttempt {
+            let browserLabel = self.htmlEscape(String(localized: "Open browser"))
+            button += "\n" + """
+            <button type="button" data-id="\(self.htmlEscape(signedOut.target.bridgeID))"
+              onclick="window.webkit.messageHandlers.openclawGateways
+                .postMessage({type:'reconnect-browser',id:this.dataset.id,
+                  attempt:'\(browserAttempt.uuidString)'})">\(browserLabel)</button>
+            """
+        }
         return self.html(
             title: String(format: String(localized: "Signed out of %@"), signedOut.name),
             message: message,
-            detail: signingIn ? String(localized: "Complete sign-in in your browser…") : error,
+            detail: error ?? (signingIn ? String(localized: "Complete sign-in in your browser…") : nil),
             url: nil,
             primaryButton: button)
     }

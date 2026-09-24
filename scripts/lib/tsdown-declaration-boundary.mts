@@ -27,10 +27,14 @@ function findAncestorInstall(root: string, real: string): string | undefined {
 
 export function createDeclarationInputBoundary(cwd: string) {
   const declared = path.resolve(cwd);
-  const prefixes = [declared, fs.realpathSync(declared)];
+  const prefixes = [declared];
+  if (fs.lstatSync(declared).isSymbolicLink()) {
+    prefixes.push(path.resolve(path.dirname(declared), fs.readlinkSync(declared)));
+  }
+  prefixes.push(fs.realpathSync(declared));
   const root = fs.realpathSync.native(declared);
-  // Node's symlink-resolved checkout can retain an OS alias that native realpath expands.
-  // Translate only these checkout prefixes; never canonicalize outside candidates into scope.
+  // Runtimes differ on whether realpath preserves a case-only symlink target.
+  // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
   const resolve = (file: string) => {
     const absolute = path.resolve(declared, file);
     const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));

@@ -1,9 +1,16 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import {
+  QuestionRequestParamsSchema,
+  QuestionResolveParamsSchema,
+  QuestionWaitAnswerParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema/questions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SecretRefSchema } from "../../config/zod-schema.core.js";
+import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../infra/embedded-mode.js";
 import {
   EmbeddedQuestionBroker,
@@ -28,6 +35,41 @@ function gatewayStub(
 ) {
   const mock = vi.fn(implementation);
   return { mock, call: mock as unknown as GatewayCall };
+}
+
+function questionManagerGateway(
+  manager: QuestionManager,
+  onRequest: (request: Parameters<QuestionManager["request"]>[0]) => unknown,
+) {
+  return gatewayStub(async (method, _options, params) => {
+    try {
+      if (method === "question.request") {
+        const request = Value.Parse(QuestionRequestParamsSchema, params);
+        return onRequest({ ...request, timeoutMs: request.timeoutMs ?? 60_000 });
+      }
+      if (method === "question.resolve") {
+        const request = Value.Parse(QuestionResolveParamsSchema, params);
+        if (!("cancel" in request)) {
+          throw new Error("expected question cancellation");
+        }
+        return manager.cancel(request.id, request.resolvedBy);
+      }
+      if (method === "question.waitAnswer") {
+        const request = Value.Parse(QuestionWaitAnswerParamsSchema, params);
+        return manager.waitAnswer(request.id, request.timeoutMs);
+      }
+      throw new Error(`unexpected method ${method}`);
+    } catch (error) {
+      if (error instanceof QuestionManagerError) {
+        throw new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: error.message,
+          details: { reason: error.code },
+        });
+      }
+      throw error;
+    }
+  });
 }
 
 function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {
@@ -576,6 +618,182 @@ describe("secrets tool", () => {
       { id: requestedQuestionId(gateway.mock), cancel: true, resolvedBy: "run-abort" },
     );
   });
+
+  it.each([
+    {
+      label: "a lost transport reply",
+      error: new Error("registration reply lost"),
+      abort: false,
+      answered: false,
+    },
+    {
+      label: "UNAVAILABLE after registration",
+      error: new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Secret store entry metadata is unavailable.",
+      }),
+      abort: false,
+      answered: false,
+    },
+    {
+      label: "an aborted registration reply",
+      error: new Error("registration interrupted"),
+      abort: true,
+      answered: false,
+    },
+    {
+      label: "a human answer before the failed registration reply",
+      error: new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "registration response unavailable",
+      }),
+      abort: false,
+      answered: true,
+    },
+  ])(
+    "preserves question truth and the original error after $label",
+    async ({ error, abort, answered }) => {
+      const manager = new QuestionManager();
+      const controller = new AbortController();
+      const sessionKey = "agent:main:secret-registration";
+      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+      const normalized = normalizeSecretsRequestParams(args);
+      const unrelated = structuredClone(
+        manager.request({
+          id: "unrelated-question",
+          questions: normalized.questions,
+          timeoutMs: 60_000,
+        }),
+      );
+      const transitions: string[] = [];
+      const gateway = questionManagerGateway(manager, (request) => {
+        const record = manager.request({
+          ...request,
+          onResolved: (event) => {
+            transitions.push(event.status);
+          },
+        });
+        if (answered) {
+          manager.resolve(record.id, storedAnswer.answers, "operator:human");
+        }
+        if (abort) {
+          controller.abort(new Error("run stopped"));
+        }
+        throw error;
+      });
+
+      try {
+        await expect(
+          createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
+            "call-registration",
+            args,
+            controller.signal,
+          ),
+        ).rejects.toBe(error);
+
+        expect(manager.get(requestedQuestionId(gateway.mock))).toMatchObject(
+          answered
+            ? { status: "answered", answers: storedAnswer.answers, resolvedBy: "operator:human" }
+            : { status: "cancelled" },
+        );
+        expect(transitions).toEqual([answered ? "answered" : "cancelled"]);
+        expect(manager.get(unrelated.id)).toEqual(unrelated);
+        expect(
+          gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
+        ).toHaveLength(1);
+        expect(
+          gateway.mock.mock.calls.filter(([method]) => method === "question.request"),
+        ).toHaveLength(1);
+        expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
+          false,
+        );
+        expect(
+          reserveAskUserPromptDelivery({
+            toolCallId: "call-after-registration",
+            sessionKey,
+            questions: normalized.questions,
+          }),
+        ).toBeDefined();
+      } finally {
+        manager.close();
+      }
+    },
+  );
+
+  it.each([
+    { reason: undefined, abort: false },
+    { reason: undefined, abort: true },
+    { reason: "QUESTION_ID_IN_USE", abort: false },
+    { reason: "QUESTION_ID_IN_USE", abort: true },
+    { reason: "QUESTION_REQUESTER_INACTIVE", abort: false },
+    { reason: "QUESTION_REQUESTER_INACTIVE", abort: true },
+  ])(
+    "does not cancel a refused registration (reason=$reason, abort=$abort)",
+    async ({ reason, abort }) => {
+      const manager = new QuestionManager();
+      const controller = new AbortController();
+      const sessionKey = "agent:main:secret-refusal";
+      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+      const normalized = normalizeSecretsRequestParams(args);
+      const reservation = reserveAskUserPromptDelivery({
+        toolCallId: "call-refusal",
+        sessionKey,
+        questions: normalized.questions,
+      });
+      if (!reservation) {
+        throw new Error("expected prompt reservation");
+      }
+      const existing = structuredClone(
+        manager.request({
+          id: reservation.questionId,
+          questions: normalized.questions,
+          sessionKey: "agent:main:other-requester",
+          timeoutMs: 60_000,
+        }),
+      );
+      const error = reason
+        ? Object.assign(new Error("registration refused"), {
+            name: "GatewayClientRequestError",
+            details: { reason },
+          })
+        : new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "registration refused",
+          });
+      const gateway = questionManagerGateway(manager, () => {
+        if (abort) {
+          controller.abort(new Error("run stopped"));
+        }
+        throw error;
+      });
+
+      try {
+        await expect(
+          createSecretsTool({ sessionKey, gatewayCall: gateway.call }).execute(
+            "call-refusal",
+            args,
+            controller.signal,
+          ),
+        ).rejects.toBe(error);
+        expect(manager.get(existing.id)).toEqual(existing);
+        expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(
+          false,
+        );
+        expect(gateway.mock.mock.calls.some(([method]) => method === "secrets.store.list")).toBe(
+          false,
+        );
+        expect(
+          reserveAskUserPromptDelivery({
+            toolCallId: "call-after-refusal",
+            sessionKey,
+            questions: normalized.questions,
+          }),
+        ).toBeDefined();
+      } finally {
+        manager.close();
+      }
+    },
+  );
 
   it("shares the existing subscriber prompt reservation and settlement lifecycle", async () => {
     const sessionKey = "agent:main:secret-prompt";

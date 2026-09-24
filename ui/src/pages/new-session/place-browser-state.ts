@@ -4,8 +4,11 @@ import type {
   FsListDirResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isAbsolutePath, sameAbsolutePath } from "./path.ts";
 import { resolvePlaceBrowserView, splitBrowserDraft } from "./place-browser-view.ts";
+
+registerNewSessionSetupEnglish();
 
 export const PICKER_INPUT_DEBOUNCE_MS = 300;
 

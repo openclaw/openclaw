@@ -92,6 +92,10 @@ describe("normalization-core/cjk-chars", () => {
     ["\ud800a\udfff", 3],
     ["\u{1D360}\u{20000}", 28],
     ["\u{20000}\u{20000}", 32],
+    ["\u{3347F}\u{33480}\u{10FFFF}", 20],
+    ["\ud800\ud800\udc00", 3],
+    ["\u9FA5\u9FA6", 16],
+    ["a你\u1100\uFF61\u{1D360}\u{20000}😀", 55],
   ])("keeps repeated estimates stable for %j", (text, expected) => {
     expect([text, "ascii", text, "", text].map(estimateStringChars)).toEqual([
       expected,

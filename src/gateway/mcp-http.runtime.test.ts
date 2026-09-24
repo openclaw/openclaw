@@ -15,11 +15,19 @@ const listNodes = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool: async (
-    _method: string,
+    method: string,
     _opts: unknown,
     _args: unknown,
     options: { signal?: AbortSignal },
-  ) => ({ nodes: await listNodes(options.signal) }),
+  ) => {
+    if (method === "node.list") {
+      return { nodes: await listNodes(options.signal) };
+    }
+    if (method === "computer.status") {
+      return { configured: false, available: false };
+    }
+    throw new Error(`Unexpected Gateway method: ${method}`);
+  },
 }));
 
 vi.mock("./tool-resolution.js", () => ({

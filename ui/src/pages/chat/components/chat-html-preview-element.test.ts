@@ -14,7 +14,7 @@ const metadata: CanvasDocumentViewResult = {
 const tag = `test-html-preview-${crypto.randomUUID()}`;
 customElements.define(tag, class extends ChatHtmlPreview {});
 
-function mount(request = vi.fn().mockResolvedValue(metadata)) {
+function mount(request = vi.fn().mockResolvedValue(metadata), html = source) {
   const listeners = new Set<() => void>();
   const context = {
     gateway: {
@@ -28,7 +28,7 @@ function mount(request = vi.fn().mockResolvedValue(metadata)) {
   };
   const view = document.createElement(tag) as ChatHtmlPreview;
   Reflect.set(view, "context", context);
-  view.html = source;
+  view.html = html;
   view.sourceIdentity = "file:example.html";
   document.body.append(view);
   return {
@@ -74,6 +74,146 @@ afterEach(() => {
 });
 
 describe("ordinary HTML preview transport", () => {
+  it.each([
+    {
+      name: "ordinary, Unicode, percent-encoded and empty fragments",
+      body: '<a href="#section">One</a><a href="#雪">Snow</a><a href="#%E9%9B%AA">Encoded</a><a href="#">Top</a>',
+      expected:
+        '<a href="about:srcdoc#section">One</a><a href="about:srcdoc#雪">Snow</a><a href="about:srcdoc#%E9%9B%AA">Encoded</a><a href="about:srcdoc#">Top</a>',
+    },
+    {
+      name: "attribute spelling and entities without rewriting surrounding bytes",
+      body: "<A class='jump' HREF = '&#35;a&amp;&quot;b' title='stay'>Jump</A>\r\n",
+      expected: "<A class='jump' href=\"about:srcdoc#a&amp;&quot;b\" title='stay'>Jump</A>\r\n",
+    },
+    {
+      name: "a named anchor and image-map link",
+      body: '<a name="section"></a><map name="report"><area href="#section" alt="Jump"></map>',
+      expected:
+        '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
+    },
+    {
+      name: "authored base URL",
+      head: '<base href="https://example.com/report">',
+      body: '<a href="#section">Jump</a>',
+    },
+    {
+      name: "independent base URL and target declarations",
+      head: '<base target="_self"><base href="/report">',
+      body: '<a href="#section">Jump</a>',
+    },
+    {
+      name: "base target with explicit self and empty overrides",
+      head: '<base target="_blank">',
+      body: '<a href="#section">Other</a><a target="_self" href="#section">Here</a><a target="" href="#section">Empty</a>',
+      expected:
+        '<a href="#section">Other</a><a target="_self" href="about:srcdoc#section">Here</a><a target="" href="about:srcdoc#section">Empty</a>',
+    },
+    {
+      name: "explicit targets, downloads and nonfragment URLs",
+      body: '<a href="#section" target="report">Other</a><a download href="#section">Download</a><a href="report.html#section">File</a><a href="https://example.com/#section">Web</a>',
+    },
+    {
+      name: "duplicate attributes",
+      body: '<a href="#first" href="#second">Jump</a>',
+      expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
+    },
+    {
+      name: "unrelated duplicate attributes",
+      body: '<p title="first" title="ignored">Report</p><a href="#section">Jump</a>',
+      expected:
+        '<p title="first" title="ignored">Report</p><a href="about:srcdoc#section">Jump</a>',
+    },
+    {
+      name: "a complete link before an unfinished unrelated tail",
+      body: '<a href="#section">Jump</a><p title="unfinished',
+      expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
+    },
+    {
+      name: "anchors reconstructed across paragraphs",
+      body: '<p><a href="#x">one<p>two',
+      expected: '<p><a href="about:srcdoc#x">one<p>two',
+    },
+    {
+      name: "anchors reconstructed across formatting elements",
+      body: '<b><a href="#x">one</b>two',
+      expected: '<b><a href="about:srcdoc#x">one</b>two',
+    },
+    {
+      name: "leading C0 controls and ASCII whitespace without treating NBSP as URL whitespace",
+      body: '<a href="\u0001\u001f \t\n#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
+      expected: '<a href="about:srcdoc#section">Jump</a><a href="\u00a0#section">Relative URL</a>',
+    },
+    {
+      name: "malformed attributes",
+      body: '<a href=#section title="unfinished>Jump</a>',
+    },
+    {
+      name: "inert template contents",
+      body: '<template><base href="/report"><a href="#section">Later</a></template><a href="#section">Now</a>',
+      expected:
+        '<template><base href="/report"><a href="#section">Later</a></template><a href="about:srcdoc#section">Now</a>',
+    },
+    {
+      name: "foreign-namespace anchors",
+      body: '<svg><a href="#section"><text>Vector</text></a></svg><a href="#section">HTML</a>',
+      expected:
+        '<svg><a href="#section"><text>Vector</text></a></svg><a href="about:srcdoc#section">HTML</a>',
+    },
+    {
+      name: "script, style and comment bytes",
+      body: '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="#section">Jump</a>',
+      expected:
+        '<script>const sample = \'<a href="#section">\';</script><style>/* <a href="#section"> */</style><!-- <a href="#section"> --><a href="about:srcdoc#section">Jump</a>',
+    },
+    {
+      name: "documents with no links",
+      body: "<p>雪 &amp; café</p>\r\n",
+    },
+  ])(
+    "prepares $name only in sandbox display bytes",
+    async ({ head = "", body, expected = body }) => {
+      const prefix = `<!DOCTYPE html>\r\n<html><head><title>Report</title>${head}</head><body>`;
+      const suffix = "</body></html>\r\n";
+      const html = prefix + body + suffix;
+      const request = vi.fn().mockResolvedValue({ ...metadata, html });
+      const { view } = mount(request, html);
+      const frame = await frameFor(view);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      message(frame, ready(frame));
+      await expect.poll(() => post.mock.calls.length).toBe(1);
+      expect(post.mock.calls[0]![0].params.html).toBe(prefix + expected + suffix);
+      expect(view.html).toBe(html);
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "canvas.document.preview",
+        { html },
+        { timeoutMs: 10_000 },
+      );
+    },
+  );
+
+  it("prepares noscript using the replacement frame's mode without rereading source", async () => {
+    const html = '<!doctype html><body><noscript><a href="#section">Jump</a></noscript></body>';
+    const request = vi.fn().mockResolvedValue({ ...metadata, html });
+    const { view } = mount(request, html);
+    for (const mode of ["scripts", "strict", "trusted"] as const) {
+      view.embedSandboxMode = mode;
+      await view.updateComplete;
+      const frame = await frameFor(view);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      message(frame, ready(frame));
+      await expect.poll(() => post.mock.calls.length).toBe(1);
+      expect(post.mock.calls[0]![0].params).toEqual({
+        html:
+          mode === "strict" ? html.replace('href="#section"', 'href="about:srcdoc#section"') : html,
+        renderId: expect.any(String),
+        ...(mode === "strict" ? { allowScripts: false } : {}),
+      });
+    }
+    expect(request).toHaveBeenCalledOnce();
+    expect(view.html).toBe(html);
+  });
+
   it("uses only the transient preview RPC and transfers exact source after an exact handshake", async () => {
     const { view, request } = mount();
     const frame = await frameFor(view);
@@ -146,9 +286,17 @@ describe("ordinary HTML preview transport", () => {
     await view.updateComplete;
     const strict = await frameFor(view);
     expect(strict).not.toBe(frame);
-    expect(strict.getAttribute("sandbox")).toBe("");
-    expect(strict.srcdoc).toBe(source);
-    expect(strict.hasAttribute("src")).toBe(false);
+    expect(strict.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
+    expect(strict.hasAttribute("srcdoc")).toBe(false);
+    expect(strict.src).toBe(frame.src);
+    const strictPost = vi.spyOn(strict.contentWindow!, "postMessage");
+    message(strict, ready(strict));
+    await expect.poll(() => strictPost.mock.calls.length).toBe(1);
+    expect(strictPost.mock.calls[0]![0].params).toEqual({
+      html: source,
+      renderId: expect.any(String),
+      allowScripts: false,
+    });
     frame.dispatchEvent(new Event("error"));
     await view.updateComplete;
     expect(view.querySelector("iframe")).toBe(strict);

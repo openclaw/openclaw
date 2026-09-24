@@ -195,7 +195,7 @@ describe("CronService", () => {
       writer.state.timer = null;
     }
     const previousRevision = cronStoreModule.getCronJobsStoreRevision(store.storePath);
-    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision");
     persist.mockClear();
 
     await expect(remove(stale.state, "missing-job")).resolves.toEqual({
@@ -210,7 +210,13 @@ describe("CronService", () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+    await vi.waitFor(
+      () => {
+        expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+        expect(stale.state.activeTimerTicks).toBe(0);
+      },
+      { interval: 0 },
+    );
     if (stale.state.timer) {
       clearTimeout(stale.state.timer);
     }

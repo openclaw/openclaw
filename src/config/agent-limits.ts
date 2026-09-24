@@ -3,7 +3,7 @@ import os from "node:os";
 import type { OpenClawConfig } from "./types.js";
 
 const MIN_AGENT_MAX_CONCURRENT = 8;
-const MAX_AGENT_MAX_CONCURRENT = 16;
+const AGENT_RUNS_PER_CPU = 4;
 let defaultAgentMaxConcurrent: number | undefined;
 
 function resolveDefaultAgentMaxConcurrent(): number {
@@ -12,15 +12,15 @@ function resolveDefaultAgentMaxConcurrent(): number {
     // for runtimes where availableParallelism is absent.
     const availableParallelism =
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
-    defaultAgentMaxConcurrent = Math.min(
-      MAX_AGENT_MAX_CONCURRENT,
-      Math.max(MIN_AGENT_MAX_CONCURRENT, availableParallelism),
+    defaultAgentMaxConcurrent = Math.max(
+      MIN_AGENT_MAX_CONCURRENT,
+      availableParallelism * AGENT_RUNS_PER_CPU,
     );
   }
   return defaultAgentMaxConcurrent;
 }
 
-/** Default maximum concurrent child-agent runs across subagent execution. */
+/** Default maximum concurrent child-agent runs per immediate spawning/controller session. */
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 /** Default maximum direct children a single agent run may spawn. */
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
@@ -44,7 +44,7 @@ export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
   return resolveDefaultAgentMaxConcurrent();
 }
 
-/** Resolves subagent concurrency, flooring finite values and clamping to at least one. */
+/** Resolves per-session subagent concurrency, flooring finite values and clamping to at least one. */
 export function resolveSubagentMaxConcurrent(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.subagents?.maxConcurrent;
   if (typeof raw === "number" && Number.isFinite(raw)) {

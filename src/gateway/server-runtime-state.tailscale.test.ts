@@ -1,5 +1,6 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -79,10 +80,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("keeps ordinary ingress closed until the managed route is claimed", async () => {
-    let releaseRouteClaim: () => void = () => {};
-    const routeClaim = new Promise<void>((resolve) => {
-      releaseRouteClaim = resolve;
-    });
+    const { promise: routeClaim, resolve: releaseRouteClaim } = createDeferred();
     const prepareManagedTailscaleIngress = vi.fn(async () => await routeClaim);
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",

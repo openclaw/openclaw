@@ -6,8 +6,8 @@
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
-import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ToolsConfig } from "../config/types.tools.js";
 import {
   buildExecAutoReviewFailureDecision,
   defaultExecAutoReviewer,
@@ -45,10 +45,7 @@ const execAutoReviewResponseSchema = z
   .strict();
 
 /** Config for the optional model-backed exec reviewer. */
-export type ExecReviewerConfig = {
-  model?: AgentModelConfig;
-  timeoutMs?: number;
-};
+export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
 
 type ExecReviewerDeps = {
   acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
@@ -514,6 +511,10 @@ export function createModelExecAutoReviewer(params: {
             options: {
               maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
               temperature: 0,
+              ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
+              ...(params.reviewer?.fastMode !== undefined
+                ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
+                : {}),
               signal,
             },
           }),

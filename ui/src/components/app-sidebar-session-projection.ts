@@ -6,6 +6,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_PAGE_SIZE,
+  type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -32,7 +33,7 @@ type SidebarProjectionInput = {
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyGroups: boolean;
+  emptyGroupsMode: SidebarEmptyGroupsMode;
   ownerFiltered: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
@@ -194,6 +195,9 @@ export class SidebarSessionProjection {
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
+    const hideEmptyGroups =
+      input.emptyGroupsMode === "always" ||
+      (input.emptyGroupsMode === "filtering" && input.ownerFiltered);
     const sections =
       input.sections ??
       groupSidebarSessionRows(input.rows, {
@@ -206,12 +210,7 @@ export class SidebarSessionProjection {
         (section) =>
           section.id !== "pinned" &&
           // Catalog rows have their own projection; these sections are placeholders.
-          !(
-            input.ownerFiltered &&
-            !section.id.startsWith("catalog:") &&
-            section.rows.length === 0
-          ) &&
-          !(input.hideEmptyGroups && section.category && section.rows.length === 0),
+          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {

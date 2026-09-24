@@ -1,4 +1,3 @@
-// Media fetch helpers download and validate remote media payloads.
 import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -22,7 +21,9 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { withMediaReadScope } from "./fetch.read-scope.js";
 import { saveMediaStream, type SavedMedia } from "./store.js";
 import { SaveMediaSourceError } from "./store.shared.js";
 
@@ -124,6 +125,8 @@ type SaveResponseMediaOptions = {
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
 type SaveRemoteMediaOptions = FetchMediaOptions & {
+  /** Revalidate caller-owned read authority through transport and file publication. */
+  assertCurrent?: () => void;
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
@@ -132,7 +135,7 @@ type SaveRemoteMediaOptions = FetchMediaOptions & {
 type GuardedMediaResponse = {
   response: Response;
   finalUrl: string;
-  release: (() => Promise<void>) | null;
+  release: () => Promise<void>;
   sourceUrl: string;
 };
 
@@ -388,9 +391,7 @@ async function fetchGuardedMediaResponse(
     return {
       response: result.response,
       finalUrl: result.finalUrl,
-      release: async () => {
-        await result.release();
-      },
+      release: result.release,
       sourceUrl,
     };
   } catch (err) {
@@ -515,13 +516,16 @@ async function* responseBodyChunks(
   body: ReadableStream<Uint8Array>,
   readIdleTimeoutMs?: number,
 ): AsyncIterable<Uint8Array> {
+  const readScope = captureChannelReadScope();
   const reader = body.getReader();
   let completed = false;
   try {
     while (true) {
+      readScope?.assertCurrent();
       const { done, value } = readIdleTimeoutMs
         ? await readChunkWithIdleTimeout(reader, readIdleTimeoutMs)
         : await reader.read();
+      readScope?.assertCurrent();
       if (done) {
         completed = true;
         return;
@@ -665,7 +669,9 @@ export async function saveResponseMedia(
 
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
+  return await withMediaReadScope(options, (scopedOptions) =>
+    withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions)),
+  );
 }
 
 async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
@@ -690,9 +696,7 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
       originalFilename: options.originalFilename,
     });
   } finally {
-    if (release) {
-      await release();
-    }
+    await release();
   }
 }
 
@@ -760,8 +764,6 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       fileName,
     };
   } finally {
-    if (release) {
-      await release();
-    }
+    await release();
   }
 }

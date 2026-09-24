@@ -231,6 +231,10 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       () =>
         '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
     ],
+    [
+      "an explicit input array item cap",
+      () => '{"error":{"code":"1214","message":"input array max 10"}}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
@@ -293,8 +297,33 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       message: "batch size is invalid, it should not be larger than 10",
       items: ["one"],
     },
+    {
+      label: "an input array item length limit",
+      message: "input array item max length 64",
+      items: ["one", "two"],
+    },
+    {
+      label: "a numbered input array element token limit",
+      message: "input array element 0 exceeds 256 tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "an input array token limit",
+      message: "input array max 64 tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "a numeric prefix with a token suffix",
+      message: "input array max 64tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "a fractional input array limit",
+      message: "input array max 64.5",
+      items: ["one", "two"],
+    },
   ])("does not retry or split $label", async ({ message, items }) => {
-    const embedBatch = vi.fn(async () => {
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async () => {
       throw new Error(`openai-compatible embeddings failed: HTTP 400: ${message}`);
     });
     const manager = createEmbeddingBatchRetryHarness(embedBatch);
@@ -304,6 +333,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       operation: kind === "text" ? "batch" : "structured-batch",
     });
     expect(embedBatch).toHaveBeenCalledOnce();
+    expect(embedBatch.mock.calls[0]?.[0]).toEqual(batchInputs(items));
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
     expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
   });
