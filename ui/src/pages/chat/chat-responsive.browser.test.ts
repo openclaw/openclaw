@@ -1332,13 +1332,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each(
     (["gutter", "footer", "none"] as const).flatMap((placement) => [
-      { label: `desktop ${placement}`, placement, width: 1366, hasTouch: false, footerRow: 24 },
-      { label: `narrow touch ${placement}`, placement, width: 390, hasTouch: true, footerRow: 44 },
-      { label: `wide touch ${placement}`, placement, width: 1366, hasTouch: true, footerRow: 44 },
+      { label: `desktop ${placement}`, placement, width: 1366, hasTouch: false, turnGap: 16 },
+      { label: `narrow touch ${placement}`, placement, width: 390, hasTouch: true, turnGap: 12 },
+      { label: `wide touch ${placement}`, placement, width: 1366, hasTouch: true, turnGap: 12 },
     ]),
   )(
     "separates every consecutive turn by the same space on $label",
-    async ({ placement, width, hasTouch, footerRow }) => {
+    async ({ placement, width, hasTouch, turnGap }) => {
       await withBrowserPage(
         openBrowserPage(width, 1800, { hasTouch, isolated: true }),
         async (page) => {
@@ -1390,15 +1390,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             }
             // Every turn ends in one footer row of the context's size; the turn
             // gap is the only space before whatever comes next.
-            expect(group.gapAfter).toBe(16);
+            expect(group.gapAfter).toBe(turnGap);
             expect(group.footer).toEqual({
               offset: expect.closeTo(2, 1),
-              height: footerRow,
+              height: 24,
               toEdge: expect.closeTo(0, 1),
             });
             if (next) {
-              expect(next.top - group.bottom).toBeCloseTo(16, 1);
-              expect(next.contentTop - group.contentBottom).toBeCloseTo(2 + footerRow + 16, 1);
+              expect(next.top - group.bottom).toBeCloseTo(turnGap, 1);
+              expect(next.contentTop - group.contentBottom).toBeCloseTo(2 + 24 + turnGap, 1);
             }
           }
         },
@@ -1459,11 +1459,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           workToReply: 8,
           expandedTextToTool: 6,
           workedForSeparator: 0,
-          // Footer offset + footer row (24px, or the 44px touch target) + turn gap.
-          turn: hasTouch ? 62 : 42,
-          persistentTurn: hasTouch ? 62 : 42,
-          revealedPersistentTurn: hasTouch ? 62 : 42,
-          simpleToPersistentTurn: hasTouch ? 62 : 42,
+          // Footer offset + 24px footer row + turn gap (16px, or 12px on touch).
+          turn: hasTouch ? 38 : 42,
+          persistentTurn: hasTouch ? 38 : 42,
+          revealedPersistentTurn: hasTouch ? 38 : 42,
+          simpleToPersistentTurn: hasTouch ? 38 : 42,
         });
       },
     );

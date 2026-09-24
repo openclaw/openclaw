@@ -802,27 +802,21 @@ img.chat-avatar {
     justify-content: flex-end;
   }
 
-  /* Inline rows between messages of one group reserve their own touch row;
-     the group footer row already has the touch-target size. */
-  .chat-message-actions-row:has(:is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)) {
-    min-height: var(--chat-touch-target);
-    align-items: flex-start;
-  }
-
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
     position: relative;
     margin-inline: 10px;
   }
 
-  /* This transparent extension belongs to the native button. The row and
-     inline margins reserve its full area, so neighboring targets never overlap.
-     The extension inherits the button’s pointer policy during disclosure. */
+  /* This transparent extension belongs to the native button. It is anchored to
+     the button's bottom edge and grows up over the group's own message, never
+     into the turn gap; inline margins keep neighboring targets apart. It
+     inherits the button’s pointer policy during disclosure. */
   :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)::before {
     content: "";
     position: absolute;
-    inset-block-start: 0;
+    inset-block-end: 0;
     inset-inline-start: -10px;
     width: var(--chat-touch-target);
     height: var(--chat-touch-target);

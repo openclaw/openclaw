@@ -182,10 +182,10 @@
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Touch footers hold the whole tap target inside their row. */
+  /* Touch targets grow up over their own group, never into the turn gap. */
   .chat-group {
     --chat-touch-target: 44px;
-    --chat-footer-row: var(--chat-touch-target);
+    --chat-turn-gap: 12px;
   }
 }
 

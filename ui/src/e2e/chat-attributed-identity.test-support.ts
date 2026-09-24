@@ -140,12 +140,14 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
         expect(tapArea.width).toBeGreaterThanOrEqual(44);
         expect(tapArea.height).toBeGreaterThanOrEqual(44);
         expect(tapArea.hitCorners).toBe(4);
-        const bubble = await agent.locator(".chat-bubble").boundingBox();
         const groupBox = await agent.boundingBox();
-        expect(tapArea.top).toBeGreaterThanOrEqual(bubble!.y + bubble!.height);
+        // The tap area grows up over the group's own message and ends at the
+        // painted button's bottom edge, never inside the following turn gap.
+        expect(tapArea.top + tapArea.height).toBeCloseTo(target!.y + target!.height, 0);
+        expect(tapArea.top).toBeGreaterThanOrEqual(groupBox!.y);
         expect(tapArea.top + tapArea.height).toBeLessThanOrEqual(groupBox!.y + groupBox!.height);
-        // This point is below and outside the painted button, inside its real tap area.
-        await page.touchscreen.tap(tapArea.left + 2, tapArea.top + tapArea.height - 2);
+        // This point is above and outside the painted button, inside its real tap area.
+        await page.touchscreen.tap(tapArea.left + 2, tapArea.top + 2);
         await expect(copy).toHaveAttribute("data-copy-state", "copied");
         await copy.evaluate(finishElementAnimations);
         await expect
