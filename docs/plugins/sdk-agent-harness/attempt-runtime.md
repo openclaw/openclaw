@@ -76,14 +76,10 @@ Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
 canonical OpenClaw tool ids; omit `matcher` to match all tools.
 
-Omitting `runtimes` retains the existing `openclaw` and `codex` scope. To target
-`agentsapi`, include it explicitly in both the registration's `runtimes` and
-the manifest's `contracts.agentToolResultMiddleware`.
-
-Use `normalizeAgentToolResultMiddlewareRuntimeIds` from
-`openclaw/plugin-sdk/agent-harness-tool-runtime` to register the runtime ids
-from your manifest directly. It applies the host's supported-runtime validation
-and removes duplicates, keeping the manifest as the single declaration.
+Omitting `runtimes` uses every supported runtime declared in the plugin's
+`contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
+Supply `runtimes` only to select a subset of that declaration. Registration
+rejects an empty runtime list or any targeted runtime missing from the manifest.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only

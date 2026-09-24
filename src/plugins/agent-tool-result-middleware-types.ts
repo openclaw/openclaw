@@ -36,6 +36,7 @@ export type AgentToolResultMiddleware = (
 
 export type AgentToolResultMiddlewareOptions = {
   matcher?: PluginToolMatcher;
+  /** Defaults to the plugin's contracts.agentToolResultMiddleware declaration. */
   runtimes?: AgentToolResultMiddlewareRuntime[];
 };
 

@@ -35,13 +35,9 @@ function normalizeAgentToolResultMiddlewareRuntime(
 
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
+  declaredRuntimes?: readonly string[],
 ): AgentToolResultMiddlewareRuntime[] {
-  const requested = options?.runtimes;
-  if (!requested) {
-    // New runtimes require explicit opt-in; existing manifest declarations remain valid.
-    return ["openclaw", "codex"];
-  }
-  return normalizeAgentToolResultMiddlewareRuntimeIds(requested);
+  return normalizeAgentToolResultMiddlewareRuntimeIds(options?.runtimes ?? declaredRuntimes);
 }
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
