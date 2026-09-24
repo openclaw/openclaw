@@ -280,16 +280,13 @@ describe("tools.catalog handler", () => {
         pluginName: "Same",
         source: "fixture",
         names: [],
-        declaredNames: ["b_a", "c_a"],
+        declaredNames: new Set(["b_a", "c_a"]),
         factory,
         optional: true,
       },
     );
     for (const entry of registry.tools) {
       Object.freeze(entry.names);
-      if (entry.declaredNames) {
-        Object.freeze(entry.declaredNames);
-      }
       Object.freeze(entry);
     }
     Object.freeze(tags);
@@ -326,6 +323,7 @@ describe("tools.catalog handler", () => {
       ["b_z", "resolved_z", "tts", "b_a"],
       [],
     ]);
+    expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {
       expect(tool.execute).not.toHaveBeenCalled();
