@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it } from "vitest";
+import "@awesome.me/webawesome/dist/components/popup/popup.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -198,5 +199,73 @@ describe("Web Awesome adapters", () => {
 
     expect(item.getAttribute("role")).toBe("menuitemradio");
     expect(item.getAttribute("aria-checked")).toBe("true");
+  });
+});
+
+describe("Web Awesome popup lifecycle", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    "mount",
+    "overlapping anchor changes",
+    "removal during reposition",
+    "reconnection during reposition",
+    "anchor change during reposition",
+    "deactivation during reposition",
+  ] as const)("releases popup resize listeners after %s", async (scenario) => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const addListener = vi.spyOn(window, "addEventListener");
+    const removeListener = vi.spyOn(window, "removeEventListener");
+    const anchor = document.createElement("button");
+    const replacement = document.createElement("button");
+    const newest = document.createElement("button");
+    const popup = document.createElement("wa-popup");
+    popup.anchor = anchor;
+    popup.active = true;
+    popup.textContent = "Popup lifecycle";
+    const onReposition = vi.fn(() => {
+      if (scenario === "removal during reposition") {
+        popup.remove();
+      } else if (scenario === "reconnection during reposition") {
+        popup.remove();
+        document.body.append(popup);
+      } else if (scenario === "anchor change during reposition") {
+        popup.anchor = replacement;
+      } else if (scenario === "deactivation during reposition") {
+        popup.active = false;
+      }
+    });
+    popup.addEventListener("wa-reposition", onReposition, { once: true });
+    document.body.append(anchor, replacement, newest, popup);
+    await popup.updateComplete;
+    await vi.advanceTimersByTimeAsync(16);
+
+    if (scenario === "overlapping anchor changes") {
+      popup.anchor = replacement;
+      await popup.updateComplete;
+      popup.anchor = newest;
+      await popup.updateComplete;
+      await vi.advanceTimersByTimeAsync(16);
+    }
+
+    expect(onReposition).toHaveBeenCalledOnce();
+    popup.remove();
+    await popup.updateComplete;
+    await vi.advanceTimersByTimeAsync(16);
+
+    const added = new Set(
+      addListener.mock.calls.filter(([type]) => type === "resize").map(([, listener]) => listener),
+    );
+    const removed = new Set(
+      removeListener.mock.calls
+        .filter(([type]) => type === "resize")
+        .map(([, listener]) => listener),
+    );
+    expect(added.size).toBeGreaterThan(0);
+    expect([...added].filter((listener) => !removed.has(listener))).toEqual([]);
   });
 });

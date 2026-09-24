@@ -17,8 +17,6 @@ import { LogService } from "./logger.js";
 import { isRepairableSecretStorageAccessError } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } from "./types.js";
 
-const normalizeNullableVerificationString = normalizeNullableString;
-
 export abstract class MatrixClientVerification extends MatrixClientCore {
   async refreshOwnDeviceKeys(): Promise<void> {
     await this.client.getCrypto()?.userHasCrossSigningKeys(await this.getUserId(), true);
@@ -26,28 +24,15 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
 
   async getRoomKeyBackupStatus(): Promise<MatrixRoomKeyBackupStatus> {
     if (!this.encryptionEnabled) {
-      return {
-        serverVersion: null,
-        activeVersion: null,
-        trusted: null,
-        matchesDecryptionKey: null,
-        decryptionKeyCached: null,
-        keyLoadAttempted: false,
-        keyLoadError: null,
-      };
+      return unresolvedMatrixRoomKeyBackupStatus();
     }
 
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     const serverVersionFallback = await this.resolveRoomKeyBackupVersion();
     if (!crypto) {
       return {
+        ...unresolvedMatrixRoomKeyBackupStatus(),
         serverVersion: serverVersionFallback,
-        activeVersion: null,
-        trusted: null,
-        matchesDecryptionKey: null,
-        decryptionKeyCached: null,
-        keyLoadAttempted: false,
-        keyLoadError: null,
       };
     }
 
@@ -105,13 +90,11 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     const normalizedDeviceId = deviceId?.trim() || null;
     if (!this.encryptionEnabled) {
       return {
+        ...unresolvedMatrixDeviceVerificationStatus({
+          userId: normalizedUserId,
+          deviceId: normalizedDeviceId,
+        }),
         encryptionEnabled: false,
-        userId: normalizedUserId,
-        deviceId: normalizedDeviceId,
-        verified: false,
-        localVerified: false,
-        crossSigningVerified: false,
-        signedByOwner: false,
       };
     }
 
@@ -222,7 +205,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
       return null;
     }
     const version = await crypto.getActiveSessionBackupVersion().catch(() => null);
-    return normalizeNullableVerificationString(version);
+    return normalizeNullableString(version);
   }
 
   protected async resolveCachedRoomKeyBackupDecryptionKey(
@@ -279,7 +262,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     let matchesDecryptionKey: boolean | null = null;
     if (typeof crypto.getKeyBackupInfo === "function") {
       const info = await crypto.getKeyBackupInfo().catch(() => null);
-      serverVersion = normalizeNullableVerificationString(info?.version) ?? serverVersion;
+      serverVersion = normalizeNullableString(info?.version) ?? serverVersion;
       if (info && typeof crypto.isKeyBackupTrusted === "function") {
         const trustInfo = await crypto.isKeyBackupTrusted(info).catch(() => null);
         trusted = typeof trustInfo?.trusted === "boolean" ? trustInfo.trusted : null;
@@ -308,7 +291,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
       const response = (await this.doRequest("GET", "/_matrix/client/v3/room_keys/version")) as {
         version?: string;
       };
-      return normalizeNullableVerificationString(response.version);
+      return normalizeNullableString(response.version);
     } catch {
       return null;
     }

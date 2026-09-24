@@ -259,26 +259,12 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     const retryEventId = decryptedRaw.event_id || params.encryptedEvent.getId() || "";
     const retryKey = resolveDecryptRetryKey(decryptedRoomId, retryEventId);
 
-    if (params.err) {
-      this.emitFailedDecryptionOnce(retryKey, decryptedRoomId, decryptedRaw, params.err);
-      if (shouldRetryDecryptionFailure(params.decryptedEvent)) {
-        this.scheduleDecryptRetry({
-          event: params.encryptedEvent,
-          roomId: decryptedRoomId,
-          eventId: retryEventId,
-        });
-      } else if (retryKey) {
-        this.clearDecryptRetry(retryKey);
-      }
-      return;
-    }
-
-    if (params.decryptedEvent.isDecryptionFailure()) {
+    if (params.err || params.decryptedEvent.isDecryptionFailure()) {
       this.emitFailedDecryptionOnce(
         retryKey,
         decryptedRoomId,
         decryptedRaw,
-        new Error("Matrix event failed to decrypt"),
+        params.err ?? new Error("Matrix event failed to decrypt"),
       );
       if (shouldRetryDecryptionFailure(params.decryptedEvent)) {
         this.scheduleDecryptRetry({

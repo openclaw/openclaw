@@ -405,11 +405,7 @@ it.for([
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
         if (deferred) {
           expect.soft(disposalLatency).toBeLessThan(50);
         }

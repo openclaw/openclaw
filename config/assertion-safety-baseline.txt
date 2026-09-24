@@ -603,7 +603,6 @@ extensions/matrix/src/matrix/actions/messages.ts	8
 extensions/matrix/src/matrix/actions/polls.ts	1
 extensions/matrix/src/matrix/actions/reactions.ts	1
 extensions/matrix/src/matrix/actions/summary.ts	2
-extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	4
 extensions/matrix/src/matrix/client/logging.ts	3
@@ -626,13 +625,13 @@ extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
 extensions/matrix/src/matrix/monitor/index.ts	3
 extensions/matrix/src/matrix/monitor/reaction-events.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
-extensions/matrix/src/matrix/monitor/room-history.ts	2
+extensions/matrix/src/matrix/monitor/room-history.ts	1
 extensions/matrix/src/matrix/monitor/rooms.ts	1
 extensions/matrix/src/matrix/monitor/startup.ts	1
 extensions/matrix/src/matrix/monitor/thread-context.ts	2
 extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	2
-extensions/matrix/src/matrix/poll-types.ts	10
+extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
 extensions/matrix/src/matrix/reaction-common.ts	1
 extensions/matrix/src/matrix/sdk.ts	8
@@ -1579,7 +1578,7 @@ src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	6
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-settlement.ts	1
-src/agents/cli-runner/cli-run-transcript.ts	2
+src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/delivery-evidence.ts	2
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	3
@@ -1902,7 +1901,7 @@ src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/message-tool-visible-content.ts	6
-src/agents/tools/mobile-ui-tool.ts	5
+src/agents/tools/mobile-ui-tool.ts	3
 src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
@@ -1910,8 +1909,8 @@ src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/pdf-tool.ts	3
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
-src/agents/tools/session-status-tool.ts	6
-src/agents/tools/sessions-history-tool.ts	7
+src/agents/tools/session-status-tool.ts	5
+src/agents/tools/sessions-history-tool.ts	3
 src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-send-tool.ts	1
