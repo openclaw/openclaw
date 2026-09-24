@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import {
@@ -18,8 +20,8 @@ import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-manage
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { setUserProfileRole } from "../../state/user-profiles.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
@@ -57,6 +59,7 @@ it.each(
         "restart-invalidated",
         "restart-changed",
         "restart-replaced",
+        "restart-owner-revoked",
         "revoked",
         "replaced",
       ] as const
@@ -65,7 +68,15 @@ it.each(
 )(
   "fences $boundary at $handoff and leaves only valid recovery custody",
   async ({ boundary, handoff }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withAdminIngress(async ({ state, admins, context }) => {
+      const admin = admins[0]!;
+      const assertOwnerCurrent = captureCommandOwnerAssertion(
+        await context(admin.identity.senderId),
+      );
+      if (!assertOwnerCurrent) {
+        throw new Error("Channel owner assertion was not admitted");
+      }
+      assertOwnerCurrent();
       // Confirm every database selector before the first session/queue write.
       expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
       const databasePaths: [string, string][] = [
@@ -90,7 +101,7 @@ it.each(
       };
       await replaceSessionEntry(target, entry);
       const payloads = [{ text: "Captured final answer" }, { text: "Final detail" }];
-      for (const payload of payloads) {
+      for (const payload of boundary.endsWith("replaced") ? payloads : []) {
         setReplyPayloadMetadata(payload, {
           sessionWriterDeliveryAuthority: {
             agentId: "main",
@@ -193,6 +204,7 @@ it.each(
         result: { meta: { durationMs: 1 } },
         payloads,
         assertDeliveryCurrent: () => {
+          assertOwnerCurrent();
           if (custodyError) {
             throw custodyError;
           }
@@ -219,11 +231,16 @@ it.each(
           ...(replaced ? { sessionId: "replacement-session" } : {}),
         });
         const restarting = boundary.startsWith("restart");
-        const recoverable = restarting && !replaced;
+        const ownerRevoked = boundary === "restart-owner-revoked";
+        const recoverable = restarting && !replaced && !ownerRevoked;
+        if (ownerRevoked) {
+          setUserProfileRole(admin.profile.id, "member");
+          expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
+        }
         if (restarting) {
           controller.abort(createAgentRunRestartAbortError());
         }
-        if (boundary !== "restart") {
+        if (boundary !== "restart" && !ownerRevoked) {
           custodyError =
             boundary === "revoked" || boundary === "restart-invalidated"
               ? new SessionWorkStartInvalidatedError("Source admission invalidated")
