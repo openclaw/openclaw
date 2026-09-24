@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { DocumentExtractedImage } from "../plugins/document-extractor-types.js";
+import { renderDocumentTruncationNotice } from "../media/document-extraction-metadata.js";
+import type {
+  DocumentExtractedImage,
+  DocumentExtractionMetadata,
+} from "../plugins/document-extractor-types.js";
 import { wrapExternalContent } from "../security/external-content.js";
 
 // Reject inputs with trailing junk after the type/subtype to defend against
@@ -36,9 +40,18 @@ function markerSafeMime(value?: string): string | undefined {
 // Every document attachment yields a visible outcome or a typed intentional non-outcome.
 // New gates require a union variant so the renderer must handle them.
 export type FileAttachmentOutcome =
-  | { kind: "extracted"; text: string; images: DocumentExtractedImage[] }
-  | { kind: "rendered-to-images"; images: DocumentExtractedImage[] }
-  | { kind: "no-extractable-text" }
+  | {
+      kind: "extracted";
+      text: string;
+      images: DocumentExtractedImage[];
+      metadata?: DocumentExtractionMetadata;
+    }
+  | {
+      kind: "rendered-to-images";
+      images: DocumentExtractedImage[];
+      metadata?: DocumentExtractionMetadata;
+    }
+  | { kind: "no-extractable-text"; metadata?: DocumentExtractionMetadata }
   // localPath is set only after a root-approved cache read. The reply runtime
   // separately decides whether its final tool surface can reveal that path.
   | { kind: "unsupported-format"; mime?: string; localPath?: string }
@@ -50,6 +63,22 @@ export type FileAttachmentOutcome =
   // Routed to the image/audio/video stages, which own the outcome from there.
   // Delivery is not verified here; delivery-derived claims are a tracked follow-up.
   | { kind: "claimed-elsewhere" };
+
+export function resolveFileExtractionOutcome(extraction: {
+  text?: string;
+  images?: DocumentExtractedImage[];
+  metadata?: DocumentExtractionMetadata;
+}): FileAttachmentOutcome {
+  const text = extraction.text ?? "";
+  const images = extraction.images ?? [];
+  const metadata = extraction.metadata ? { metadata: extraction.metadata } : {};
+  if (text.trim() || extraction.metadata?.textTruncated) {
+    return { kind: "extracted", text, images, ...metadata };
+  }
+  return images.length > 0
+    ? { kind: "rendered-to-images", images, ...metadata }
+    : { kind: "no-extractable-text", ...metadata };
+}
 
 function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
@@ -96,11 +125,20 @@ export function renderFileAttachmentOutcome(
 ): string | null {
   switch (outcome.kind) {
     case "extracted":
-      return wrapUntrustedAttachmentContent(outcome.text);
+      return [
+        renderDocumentTruncationNotice(outcome.metadata),
+        wrapUntrustedAttachmentContent(outcome.text),
+      ]
+        .filter(Boolean)
+        .join("\n");
     case "rendered-to-images":
-      return "[PDF content rendered to images]";
+      return [renderDocumentTruncationNotice(outcome.metadata), "[PDF content rendered to images]"]
+        .filter(Boolean)
+        .join("\n");
     case "no-extractable-text":
-      return "[No extractable text]";
+      return [renderDocumentTruncationNotice(outcome.metadata), "[No extractable text]"]
+        .filter(Boolean)
+        .join("\n");
     case "unsupported-format": {
       const mime = markerSafeMime(outcome.mime);
       const formatClause = mime

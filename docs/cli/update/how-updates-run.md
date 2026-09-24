@@ -33,9 +33,30 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
+`HEAD` and the recorded build commit matches it, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
+
+If a Git checkout advanced without rebuilding or its runtime has no recorded
+build commit, the matching source revision still needs an update. OpenClaw builds
+and validates a separate candidate, then stops the managed Gateway before
+replacing the runtime and restarting it. The new build records its commit, so
+the next update can finish as already current.
+`--no-restart` cannot replace runtime files used by a running Gateway in the same
+installation; the update leaves those files intact and reports the process and
+the stop/retry action.
+
+Source commands launched with `pnpm openclaw` also refuse an automatic rebuild
+while that installation's Gateway is running. Use the installed `openclaw update`
+or `node openclaw.mjs update` from the checkout to reach the updater's managed
+handoff without the source wrapper rebuilding first. Manual `pnpm build` remains
+an operator action: stop the Gateway before rebuilding its installation.
+
+This decision runs in the installed updater. An older updater that returns
+`already-current` with `runtime-verification-failed` cannot obtain the fix from a
+candidate it never builds. Stop the Gateway through its actual service manager,
+rebuild the checkout, and start the Gateway through that manager before retrying.
+Do not rebuild its installation while the old Gateway is still serving.
 
 Linux updates also refresh outdated OpenClaw-managed systemd policy when the core
 is already current or `--no-restart` is set. This policy-only refresh confirms
@@ -56,6 +77,14 @@ backup or migration custody from ordinary root/cron work. At the deadline, they
 stop with a warning naming those counts; missing custody information never blocks
 the update. The next Gateway starts with the refreshed service policy. An operator drop-in
 that still shortens the native timeout is preserved and reported.
+
+Maintenance drain uses the service's local credentials, including an existing
+paired operator identity when no shared token or password is configured. It does
+not create an identity or request new pairing. Older installed updaters that omit
+this identity can report `device identity required` and wait until their existing
+drain deadline before stopping with a warning. A newer candidate cannot change
+that already-running updater; subsequent updates use the corrected local control
+client after installation.
 
 Explicit package artifacts, such as tarball paths and URLs, compare known build
 IDs before a same-version no-op. Matching known identity leaves the package unchanged;
@@ -397,17 +426,14 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
-If `update finalize` finds a live Gateway holding maintenance ownership, it uses
-the existing restart readiness wait within the remaining finalization allowance.
-When that exact process is verified serving the installed version and build,
-finalization leaves it running and exits successfully with a warning. The history
-records `finalize:doctor` as skipped and identifies the holder. Doctor, config
-changes, and plugin convergence remain pending until the next maintenance window:
-stop the Gateway through its owner, run `openclaw update repair`, then start it
-through the same owner. Deferred finalization does not resolve earlier interrupted
-updates. A dead process releases its physical maintenance lock; its stale lease
-does not qualify for this warning path. Ordinary maintenance admission and lease
-reclamation still apply, including refusals for unsafe or unreadable state.
+When Doctor cannot acquire maintenance before repair writes begin, finalization
+restores any service it stopped and exits successfully with a recorded warning.
+This includes lock contention from unknown or non-serving processes. Doctor and
+plugin convergence remain pending; resolve the named refusal and run
+`openclaw update repair` again. Deferred finalization does not acknowledge earlier
+interrupted updates or mark pending migrations complete. A live or unverified Gateway, active migration writes,
+unreadable state, incomplete migrations, and unsettled cleanup still fail rather
+than releasing their recovery obligations.
 
 This behavior lives in the installed finalizer, so published updaters can use it
 when they invoke the new version's `update finalize`. Older parents may omit the
@@ -676,6 +702,13 @@ A different Gateway owner, lost update authority, or unresolved contention stops
 maintenance with recovery guidance. Ordinary Doctor commands and older update
 drivers without delegated Doctor authority retain their immediate refusal.
 
+An active Gateway suspension keeps installation changes under its host operation’s
+control. The installation watcher does not independently restart the Gateway
+while suspension is preparing, draining, or prepared. After resume or lease
+expiry, its next check reads the current installation again; a pointer restored
+during rollback does not leave a stale replacement verdict. Explicit stop and
+restart requests retain their existing behavior.
+
 Published 2026.9.5 Gateways do not have an installation-replacement watcher.
 Installing a newer candidate cannot add that behavior to the process already
 running. For that first foreground update, stop the Gateway through its foreground
@@ -752,6 +785,8 @@ the sentinel.
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
 
     Git object transfer reads its prepared pack directly from disk. Packs above 256 MiB record a size warning and continue when the installed Git object volume has room for the measured pack and index. A known shortfall reports `snapshot-capacity-insufficient` before stopping the Gateway; unknown free space remains a warning. The pack import duration is recorded with the update steps. This check is separate from state-snapshot placement and runtime build-cache exclusions.
 

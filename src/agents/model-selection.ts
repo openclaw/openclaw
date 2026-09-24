@@ -7,7 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
@@ -26,6 +26,7 @@ import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js
 import {
   buildModelAliasIndex,
   normalizeModelSelection,
+  resolveConfiguredModelRef,
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
@@ -273,6 +274,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
   modelOverride?: unknown;
   defaultProvider?: string;
   includeAgentPrimary?: boolean;
+  modelRuntime?: "native" | "acp";
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
@@ -280,16 +282,22 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       includeAgentPrimary: params.includeAgentPrimary,
+      modelRuntime: params.modelRuntime,
     });
   if (!raw) {
     return undefined;
   }
   const defaultProvider =
     normalizeOptionalString(params.defaultProvider) ??
-    resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }).provider;
+    resolveConfiguredModelRef(
+      {
+        cfg: params.cfg,
+        agentId: params.agentId,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      },
+      params.modelRuntime,
+    ).provider;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     agentId: params.agentId,

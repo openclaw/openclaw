@@ -1182,36 +1182,26 @@ export class NodeRegistry {
     }
     const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null;
-    if (params.runId) {
+    let match = params.runId
+      ? this.matchAuthorizedSystemRunEvent({
+          nodeId: params.nodeId,
+          connId,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+        })
+      : null;
+    if (match === null && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
       match = this.matchAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
         connId,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-      });
-      if (!match && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
-        match = this.matchSingleAuthorizedSystemRunEvent({
-          nodeId: params.nodeId,
-          connId,
-          sessionKey: params.sessionKey,
-        });
-      }
-    } else {
-      if (!this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
-        return false;
-      }
-      match = this.matchSingleAuthorizedSystemRunEvent({
-        nodeId: params.nodeId,
-        connId,
         sessionKey: params.sessionKey,
       });
     }
-    if (!match) {
+    if (match === null) {
       return false;
     }
     if (params.terminal) {
-      this.authorizedSystemRunEvents.delete(match.key);
+      this.authorizedSystemRunEvents.delete(match);
     }
     return true;
   }
@@ -1244,49 +1234,29 @@ export class NodeRegistry {
   private matchAuthorizedSystemRunEvent(params: {
     nodeId: string;
     connId: string;
-    runId: string;
+    runId?: string;
     sessionKey: string;
-  }): { key: string; event: AuthorizedSystemRunEvent } | null {
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (
-        event.nodeId === params.nodeId &&
-        event.connId === params.connId &&
-        event.runId === params.runId &&
-        this.authorizedSystemRunSessionMatches(event, params.sessionKey)
-      ) {
-        return { key, event };
-      }
-    }
-    return null;
-  }
-
-  private matchSingleAuthorizedSystemRunEvent(params: {
-    nodeId: string;
-    connId: string;
-    sessionKey: string;
-  }): { key: string; event: AuthorizedSystemRunEvent } | null {
-    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+  }): string | null {
+    let match: string | null = null;
     for (const [key, event] of this.authorizedSystemRunEvents) {
       if (
         event.nodeId !== params.nodeId ||
         event.connId !== params.connId ||
-        !this.authorizedSystemRunSessionMatches(event, params.sessionKey)
+        (params.runId !== undefined && event.runId !== params.runId) ||
+        (event.sessionKey && event.sessionKey !== params.sessionKey)
       ) {
         continue;
       }
-      if (match) {
+      if (params.runId !== undefined) {
+        return key;
+      }
+      // Legacy macOS events may omit the run ID, but only one pending run may match.
+      if (match !== null) {
         return null;
       }
-      match = { key, event };
+      match = key;
     }
     return match;
-  }
-
-  private authorizedSystemRunSessionMatches(
-    event: AuthorizedSystemRunEvent,
-    sessionKey: string,
-  ): boolean {
-    return !event.sessionKey || event.sessionKey === sessionKey;
   }
 
   private allowsLegacyMacRunIdFallback(params: { nodeId: string; connId: string }): boolean {

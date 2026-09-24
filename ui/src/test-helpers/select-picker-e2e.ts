@@ -10,7 +10,7 @@ export async function openPicker(picker: Locator) {
   if ((await trigger.getAttribute("aria-expanded")) === "false") {
     await trigger.click();
   }
-  await picker.getByRole("listbox").waitFor({ state: "visible" });
+  await picker.locator(".picker-select__menu").waitFor({ state: "visible" });
 }
 
 export async function selectPickerValue(picker: Locator, value: string) {

@@ -1,10 +1,13 @@
 // Temporary directory helper tests cover temp directory cleanup behavior.
+import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { execNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { tempDirEntrypoint } from "./temp-dir-runtime.test-support.js";
 import { withTempDirSync, withTestDir } from "./temp-dir.js";
 
 const parentRoots: string[] = [];
@@ -81,11 +84,18 @@ describe.skipIf(process.platform === "win32")("private temporary case directorie
     "admits a private workspace under a group-writable umask (%s)",
     async (kind) => {
       const parentDir = await makeParentRoot();
+      const tempDirUrl = resolveRuntimeWorkerUrl(tempDirEntrypoint);
+      const nodeExecutable = resolveTestNodeExecPath();
       // umask is process-wide and cannot be changed in a Vitest worker thread.
-      const stdout = execNodeEvalSync(
-        `import fs from "node:fs";
+      const stdout = execFileSync(
+        nodeExecutable,
+        [
+          ...resolveRuntimeWorkerArgv(tempDirUrl, nodeExecutable).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `import fs from "node:fs";
 import { tempWorkspaceSync } from "@openclaw/fs-safe/temp";
-import { withTestDir, withTempDirSync, createSuiteTempRootTracker } from ${JSON.stringify(new URL("./temp-dir.ts", import.meta.url).href)};
+import { withTestDir, withTempDirSync, createSuiteTempRootTracker } from ${JSON.stringify(tempDirUrl.href)};
 process.umask(0o002);
 const options = { prefix: "private-case-", parentDir: ${JSON.stringify(parentDir)} };
 function exercise(dir) {
@@ -112,8 +122,10 @@ if (${JSON.stringify(kind)} === "async") {
   }
 }
 console.log(JSON.stringify({ result, remaining: fs.readdirSync(options.parentDir) }));`,
+        ],
         {
-          imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href],
+          cwd: process.cwd(),
+          encoding: "utf8",
           timeout: 10_000,
           killSignal: "SIGKILL",
         },

@@ -4,14 +4,21 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 describe("system prompt messaging routing", () => {
   it.each(
     (["full", "minimal"] as const).flatMap((promptMode) =>
-      [false, true].map((messageAvailable) => ({ promptMode, messageAvailable })),
+      [false, true].flatMap((messageAvailable) =>
+        (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) => ({
+          promptMode,
+          messageAvailable,
+          sourceReplyDeliveryMode,
+        })),
+      ),
     ),
   )(
-    "keeps messaging routing in $promptMode turns without blocking external CLIs (message=$messageAvailable)",
-    ({ promptMode, messageAvailable }) => {
+    "keeps messaging routing in $promptMode $sourceReplyDeliveryMode turns (message=$messageAvailable)",
+    ({ promptMode, messageAvailable, sourceReplyDeliveryMode }) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         promptMode,
+        sourceReplyDeliveryMode,
         toolNames: messageAvailable ? ["exec", "message"] : ["exec"],
         runtimeInfo: { channel: "discord" },
       });
@@ -25,6 +32,11 @@ describe("system prompt messaging routing", () => {
         "Other services (e.g. email): user-authorized CLI/API use is allowed",
       );
       expect(prompt).toContain("normal tool permissions and approvals still apply");
+      if (messageAvailable && sourceReplyDeliveryMode === "message_tool_only") {
+        expect(prompt).toContain(
+          "user explicitly requests only a reaction to the current source message: use `message(action=react, final=true)`",
+        );
+      }
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
     },
   );

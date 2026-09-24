@@ -12,12 +12,16 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSessionTranscriptQuestionAnswer } from "./session-transcript-read-fence.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
+  resolveSessionTranscriptActiveLeafEntryId,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 import {
   isTranscriptEntryOnVisiblePath,
@@ -301,6 +305,76 @@ function transcriptEntryIsAncestor(
       .limit(1),
   );
   return ancestor?.parent_id === candidateId;
+}
+
+/** Selects visible identity inside the append transaction, independently of the raw side cursor. */
+export function readTranscriptVisibleTailEntryIdInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  messageId: string,
+): string | null {
+  const db = getSessionKysely(database.db);
+  const resolveFromNavigation = () => {
+    const tree = scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId));
+    return selectSessionTranscriptTreePathNodes(tree, tree.leafId).at(-1)?.id ?? null;
+  };
+  if (!sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
+    const tail = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(
+          projectTranscriptNavigationSql(transcriptEventNavigationSql("event")).as("event_json"),
+        )
+        .where("active.session_id", "=", sessionId)
+        .orderBy("active.active_position", "desc")
+        .limit(1),
+    );
+    return tail
+      ? (resolveSessionTranscriptActiveLeafEntryId([JSON.parse(tail.event_json)]) ?? null)
+      : null;
+  }
+
+  const message = readTranscriptIdentityInTransaction(database, sessionId, messageId);
+  if (!message) {
+    return resolveFromNavigation();
+  }
+  let leafId: string | null = null;
+  let first = true;
+  let needsPrefix = false;
+  const navigation = iterateSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(projectTranscriptNavigationSql(transcriptEventNavigationSql()).as("event_json"))
+      .where("session_id", "=", sessionId)
+      .where("seq", ">=", message.seq)
+      .orderBy("seq", "asc"),
+  );
+  for (const row of navigation) {
+    const event: unknown = JSON.parse(row.event_json);
+    // Controls can reference an earlier branch or cross a reset. Their complete
+    // prefix belongs to the canonical tree resolver, not a second control policy.
+    if (isSessionTranscriptLeafControl(event)) {
+      needsPrefix = true;
+      break;
+    }
+    const selected = resolveSessionTranscriptActiveLeafEntryId([event]);
+    if (first && selected !== messageId) {
+      needsPrefix = true;
+      break;
+    }
+    first = false;
+    if (selected !== undefined) {
+      leafId = selected;
+    }
+  }
+  return needsPrefix || first ? resolveFromNavigation() : leafId;
 }
 
 function readActiveTranscriptAppendParentId(

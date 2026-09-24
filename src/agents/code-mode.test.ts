@@ -1,5 +1,6 @@
 /** Tests Code Mode catalog and model-visible surface. */
 
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -334,7 +335,25 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     expect(parameters.properties).not.toHaveProperty("language");
     expect(parameters.properties).not.toHaveProperty("typecheck");
-    expect(parameters).toMatchObject({ required: ["code"] });
+    for (const title of [undefined, "", "   "]) {
+      expect(() =>
+        validateToolArguments(execTool, {
+          type: "toolCall",
+          id: "untitled-cell",
+          name: "exec",
+          arguments: { code: "return 42;", ...(title === undefined ? {} : { title }) },
+        }),
+      ).toThrow("title");
+    }
+    const titledCell = { title: "Inspect the dependency graph", code: "return 42;" };
+    expect(
+      validateToolArguments(execTool, {
+        type: "toolCall",
+        id: "titled-cell",
+        name: "exec",
+        arguments: titledCell,
+      }),
+    ).toEqual(titledCell);
     expect(parameters.properties).not.toHaveProperty("command");
   });
 

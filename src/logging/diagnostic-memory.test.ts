@@ -36,6 +36,12 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
   };
 }
 
+const workerLifecycle: ReturnType<
+  typeof workerMemory.sampleTrackedWorkerMemory
+>["workerLifecycle"] = [
+  { script: "sqlite-store.worker.js", started: 3, retired: [{ reason: "closed", count: 3 }] },
+];
+
 describe("diagnostic memory", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -45,6 +51,15 @@ describe("diagnostic memory", () => {
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    // Cumulative Worker history survives earlier test files even when no Worker remains alive.
+    vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
+      workerCount: 0,
+      workerHeapSampledCount: 0,
+      workerHeapTotalBytes: 0,
+      workerHeapUsedBytes: 0,
+      workerHeaps: [],
+      workerLifecycle: structuredClone(workerLifecycle),
+    });
   });
 
   afterEach(() => {
@@ -84,6 +99,7 @@ describe("diagnostic memory", () => {
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
           workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           rssBytes: 4096,
@@ -126,6 +142,7 @@ describe("diagnostic memory", () => {
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
           workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -147,6 +164,7 @@ describe("diagnostic memory", () => {
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
           workerHeaps: [],
+          workerLifecycle,
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -154,6 +172,65 @@ describe("diagnostic memory", () => {
         },
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "RSS critical before heap critical",
+      rss: 3000,
+      heapUsed: 2000,
+      expected: { level: "critical", reason: "rss_threshold", thresholdBytes: 3000 },
+    },
+    {
+      name: "heap critical before RSS warning",
+      rss: 1000,
+      heapUsed: 2000,
+      expected: { level: "critical", reason: "heap_threshold", thresholdBytes: 2000 },
+    },
+    {
+      name: "RSS warning before heap warning",
+      rss: 1000,
+      heapUsed: 500,
+      expected: { level: "warning", reason: "rss_threshold", thresholdBytes: 1000 },
+    },
+    {
+      name: "heap warning after RSS stays below its threshold",
+      rss: 999,
+      heapUsed: 500,
+      expected: { level: "warning", reason: "heap_threshold", thresholdBytes: 500 },
+    },
+    { name: "no pressure below all thresholds", rss: 999, heapUsed: 499, expected: null },
+  ])("selects $name at inclusive boundaries", ({ rss, heapUsed, expected }) => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    const memory = emitDiagnosticMemorySample({
+      now: 1000,
+      emitSample: false,
+      memoryUsage: memoryUsage({ rss, heapUsed }),
+      thresholds: {
+        rssCriticalBytes: 3000,
+        heapUsedCriticalBytes: 2000,
+        rssWarningBytes: 1000,
+        heapUsedWarningBytes: 500,
+      },
+    });
+    stop();
+
+    expect(events).toEqual(
+      expected
+        ? [
+            {
+              seq: 1,
+              ts: 1_776_859_200_000,
+              trace: undefined,
+              type: "diagnostic.memory.pressure",
+              ...expected,
+              memory,
+            },
+          ]
+        : [],
+    );
   });
 
   it("can check pressure without recording an idle memory sample", () => {
@@ -513,6 +590,7 @@ describe("diagnostic memory", () => {
         workerHeapTotalBytes: 0,
         workerHeapUsedBytes: 0,
         workerHeaps: [],
+        workerLifecycle,
         externalBytes: 10,
         heapTotalBytes: 80,
         heapUsedBytes: 40,
@@ -568,11 +646,12 @@ describe("diagnostic memory", () => {
   });
 
   it("logs memory pressure events through the gateway subsystem", async () => {
-    vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
+    vi.mocked(workerMemory.sampleTrackedWorkerMemory).mockReturnValue({
       workerCount: 7,
       workerHeapSampledCount: 7,
       workerHeapTotalBytes: 5600,
       workerHeapUsedBytes: 2800,
+      workerLifecycle: [],
       workerHeaps: [200, 700, 400, 100, 600, 300, 500].map((heapUsed) => ({
         script: "sqlite-store.worker.js",
         heapUsed,

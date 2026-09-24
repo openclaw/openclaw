@@ -14,11 +14,11 @@ import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-c
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
-import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
 } from "../state/openclaw-state-db.paths.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,
@@ -149,11 +149,6 @@ async function discoverBackupSqliteSources(params: {
         ) {
           await visit(entryPath);
         }
-        continue;
-      }
-      // Exclusions win before symlink/stat handling; protected declarations
-      // are already resolved by the inventory's include-over-exclude policy.
-      if (!params.inventory.isIncluded(entryPath)) {
         continue;
       }
       if (

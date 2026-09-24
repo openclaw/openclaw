@@ -182,7 +182,7 @@ export class ChatPageRetainedSessions {
     }
   };
 
-  private findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
+  findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
     return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
       (pane) =>
         pane.paneId === paneId && areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey),

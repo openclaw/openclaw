@@ -428,7 +428,7 @@ ${
     );
     expect(failed.stdout + failed.stderr).toContain(
       failure === "last compiler failure"
-        ? "MISSING_EXPORT"
+        ? "TS2305"
         : failure === "missing successful receipt"
           ? "Missing successful compiler membership"
           : "changed during compilation",

@@ -28,26 +28,22 @@ import {
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { isNodePushAttemptCurrent, resolveDispatchableNodeSession } from "./nodes.shared.js";
 
-async function resolveDirectNodePushConfig() {
+async function resolveNodePushTransport(
+  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
+  cfg?: OpenClawConfig,
+) {
+  if (registration.transport === "relay") {
+    const relay = resolveApnsRelayConfigFromEnv(process.env, (cfg ?? getRuntimeConfig()).gateway, {
+      registrationRelayOrigin: registration.relayOrigin,
+    });
+    return relay.ok
+      ? { ok: true as const, transport: { registration, relayConfig: relay.value } }
+      : { ok: false as const, error: relay.error };
+  }
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
   return auth.ok
-    ? { ok: true as const, auth: auth.value }
+    ? { ok: true as const, transport: { registration, auth: auth.value } }
     : { ok: false as const, error: auth.error };
-}
-
-function resolveRelayNodePushConfig(
-  cfg: OpenClawConfig,
-  registration: Extract<
-    NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
-    { transport: "relay" }
-  >,
-) {
-  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway, {
-    registrationRelayOrigin: registration.relayOrigin,
-  });
-  return relay.ok
-    ? { ok: true as const, relayConfig: relay.value }
-    : { ok: false as const, error: relay.error };
 }
 
 async function clearStaleApnsRegistrationIfNeeded(
@@ -123,52 +119,26 @@ export async function maybeWakeNodeWithApns(
             return withDuration({ available: false, throttled: false, path: "no-registration" });
           }
 
-          let wakeResult;
-          if (registration.transport === "relay") {
-            const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
-            if (!relay.ok) {
-              return withDuration({
-                available: false,
-                throttled: false,
-                path: "no-auth",
-                apnsReason: relay.error,
-              });
-            }
-            if (!(await isAttemptCurrent())) {
-              return withDuration({ available: false, throttled: false, path: "invalidated" });
-            }
-            markWakeAttempted();
-            wakeResult = await sendApnsBackgroundWake({
-              registration,
-              nodeId,
-              wakeReason: opts?.wakeReason ?? "node.invoke",
-              relayConfig: relay.relayConfig,
-              signal: lifecycle,
-              isCurrent: isAttemptCurrent,
-            });
-          } else {
-            const auth = await resolveDirectNodePushConfig();
-            if (!auth.ok) {
-              return withDuration({
-                available: false,
-                throttled: false,
-                path: "no-auth",
-                apnsReason: auth.error,
-              });
-            }
-            if (!(await isAttemptCurrent())) {
-              return withDuration({ available: false, throttled: false, path: "invalidated" });
-            }
-            markWakeAttempted();
-            wakeResult = await sendApnsBackgroundWake({
-              registration,
-              nodeId,
-              wakeReason: opts?.wakeReason ?? "node.invoke",
-              auth: auth.auth,
-              signal: lifecycle,
-              isCurrent: isAttemptCurrent,
+          const transport = await resolveNodePushTransport(registration, opts?.cfg);
+          if (!transport.ok) {
+            return withDuration({
+              available: false,
+              throttled: false,
+              path: "no-auth",
+              apnsReason: transport.error,
             });
           }
+          if (!(await isAttemptCurrent())) {
+            return withDuration({ available: false, throttled: false, path: "invalidated" });
+          }
+          markWakeAttempted();
+          const wakeResult = await sendApnsBackgroundWake({
+            ...transport.transport,
+            nodeId,
+            wakeReason: opts?.wakeReason ?? "node.invoke",
+            signal: lifecycle,
+            isCurrent: isAttemptCurrent,
+          });
           if (!(await isAttemptCurrent())) {
             return withDuration({ available: false, throttled: false, path: "invalidated" });
           }
@@ -250,52 +220,26 @@ export async function maybeSendNodeWakeNudge(
           return withDuration({ sent: false, throttled: false, reason: "no-registration" });
         }
         try {
-          let result;
-          if (registration.transport === "relay") {
-            const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
-            if (!relay.ok) {
-              return withDuration({
-                sent: false,
-                throttled: false,
-                reason: "no-auth",
-                apnsReason: relay.error,
-              });
-            }
-            if (!(await isAttemptCurrent())) {
-              return withDuration({ sent: false, throttled: false, reason: "invalidated" });
-            }
-            result = await sendApnsAlert({
-              registration,
-              nodeId,
-              title: "OpenClaw needs a quick reopen",
-              body: "Tap to reopen OpenClaw and restore the node connection.",
-              relayConfig: relay.relayConfig,
-              signal: lifecycle,
-              isCurrent: isAttemptCurrent,
-            });
-          } else {
-            const auth = await resolveDirectNodePushConfig();
-            if (!auth.ok) {
-              return withDuration({
-                sent: false,
-                throttled: false,
-                reason: "no-auth",
-                apnsReason: auth.error,
-              });
-            }
-            if (!(await isAttemptCurrent())) {
-              return withDuration({ sent: false, throttled: false, reason: "invalidated" });
-            }
-            result = await sendApnsAlert({
-              registration,
-              nodeId,
-              title: "OpenClaw needs a quick reopen",
-              body: "Tap to reopen OpenClaw and restore the node connection.",
-              auth: auth.auth,
-              signal: lifecycle,
-              isCurrent: isAttemptCurrent,
+          const transport = await resolveNodePushTransport(registration, opts?.cfg);
+          if (!transport.ok) {
+            return withDuration({
+              sent: false,
+              throttled: false,
+              reason: "no-auth",
+              apnsReason: transport.error,
             });
           }
+          if (!(await isAttemptCurrent())) {
+            return withDuration({ sent: false, throttled: false, reason: "invalidated" });
+          }
+          const result = await sendApnsAlert({
+            ...transport.transport,
+            nodeId,
+            title: "OpenClaw needs a quick reopen",
+            body: "Tap to reopen OpenClaw and restore the node connection.",
+            signal: lifecycle,
+            isCurrent: isAttemptCurrent,
+          });
           if (!(await isAttemptCurrent())) {
             return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
           }

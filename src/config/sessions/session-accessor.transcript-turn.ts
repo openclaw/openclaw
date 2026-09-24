@@ -17,7 +17,6 @@ import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntryReadOnly,
   resolveSessionEntryFromStore,
-  resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
 import {
   readCommittedTranscriptMessageSequence,
@@ -168,13 +167,7 @@ export async function persistSessionTranscriptTurn(
   // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
   // scopes (no entry) keep the legacy append — the guarded transaction
   // requires a persisted row to validate. (#119221)
-  if (
-    target.entryFromPersistedStore &&
-    target.storePath &&
-    target.sessionKey &&
-    target.sessionEntry &&
-    target.sessionId
-  ) {
+  if (target.entryFromPersistedStore && target.storePath && target.sessionKey && target.sessionId) {
     return await persistExpectedSessionTranscriptTurn(
       {
         ...scope,
@@ -184,6 +177,7 @@ export async function persistSessionTranscriptTurn(
         ...options,
         expectedSessionId: target.sessionId,
       },
+      target,
     );
   }
   const appendedMessages = await runWithOwnedSessionTranscriptWrite(
@@ -286,20 +280,13 @@ async function persistExpectedSessionTranscriptTurn(
     atomicGroup?: boolean;
     expectedSessionId: string;
   },
+  preparedTarget?: Awaited<ReturnType<typeof prepareTranscriptTurnTarget>>,
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
-  const preparedTarget = await prepareTranscriptTurnTarget(
-    { ...scope, sessionId: expectedSessionId },
-    options.config,
-  );
-  const resolved = scope.sessionStore
-    ? resolveSessionEntryFromStore({
-        store: scope.sessionStore,
-        sessionKey: preparedTarget.sessionKey,
-      })
-    : resolveSessionEntrySelection(preparedTarget);
-  const target = { ...preparedTarget, sessionKey: resolved.normalizedKey };
+  const { selectedSessionId, selectedLifecycleRevision, ...target } =
+    preparedTarget ??
+    (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
     sessionKey: target.sessionKey,
@@ -315,6 +302,9 @@ async function persistExpectedSessionTranscriptTurn(
       appendExpectedSessionTranscriptTurn(target, {
         config: options.config,
         cwd: options.cwd,
+        keyFormat: "agent-qualified",
+        selectedSessionId,
+        selectedLifecycleRevision,
         expectedLifecycleRevision:
           options.expectedLifecycleRevision !== undefined
             ? options.expectedLifecycleRevision
@@ -361,7 +351,7 @@ async function persistExpectedSessionTranscriptTurn(
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
-    scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
+    scope.sessionStore[target.sessionKey] = turn.sessionEntry;
   }
   return {
     sessionTurnMutationResult: turn.sessionTurnMutationResult,
@@ -406,7 +396,9 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding);
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, config, {
+    keyFormat: "agent-qualified",
+  });
   // Keep the selected locator and private storage namespace across the await.
   // Incognito accessors resolve their owner from env even with a concrete locator.
   return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
@@ -433,7 +425,7 @@ async function resolveTranscriptTurnTarget(
   return {
     ...target,
     sessionEntry,
-    entryFromPersistedStore: persistedEntry != null,
+    entryFromPersistedStore: target.selectedSessionId != null,
   };
 }
 

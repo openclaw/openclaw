@@ -1,7 +1,8 @@
 ---
-summary: "Pick an OpenAI model ref, including GPT-6 Astra and the GPT-5.6 tiers"
+summary: "Pick an OpenAI model ref, including GPT-6 Astra, Sol, Luna, and the GPT-5.6 tiers"
 read_when:
   - You are choosing which OpenAI model ref to run
+  - You want to select GPT-6 Sol or Luna
   - You want Astra async tools, mid-turn steering, or cached reasoning changes
   - Your account does not expose a GPT-5.6 tier
 title: "OpenAI models"
@@ -14,6 +15,8 @@ sidebarTitle: "Models"
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
 | Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
+| GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
+| Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.      |
 | Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
 | Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.     |
 | Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                           |
@@ -23,7 +26,7 @@ sidebarTitle: "Models"
 
 ### Retired subscription model references
 
-GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `openclaw doctor --fix` to replace persisted subscription references with their documented successors: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`, respectively. This includes defaults, per-agent model selections, automation overrides, and unlocked session overrides whose selected route is known. The Platform API-key route is unaffected. Doctor retains pinned overrides when their successor is outside the agent's model policy, or when clearing an override would keep the same retired model and account. It reports the model or policy change needed, along with unresolved or conflicting account routes. Review the repair output, restart the Gateway, and re-enable any automation that was disabled after repeated failures.
+GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `openclaw doctor --fix` to replace persisted subscription references with their documented successors: `openai/gpt-5.6-terra` and `openai/gpt-5.6-luna`, respectively. This includes defaults, per-agent model selections, automation overrides, and unlocked session overrides whose selected route is known. The Platform API-key route is unaffected. Doctor retains pinned overrides when their successor is outside the agent's model policy, or when clearing an override would keep the same retired model and account. Doctor also retains the original reference and warns when its declared successor is retired or definitively unsupported on the selected account route; unknown availability and temporary cooldowns do not block migration. It reports the model or policy change needed, along with unresolved or conflicting account routes. Review the repair output, restart the Gateway, and re-enable any automation that was disabled after repeated failures.
 
 ## GPT-6 Astra
 
@@ -124,6 +127,47 @@ metadata also start fresh after transport expiry.
 
 The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
 these built-in-runtime capabilities do not imply native Codex support.
+
+## GPT-6 Sol and Luna
+
+Select `openai/gpt-6-sol` or `openai/gpt-6-luna` with an OpenAI API-key
+profile or a ChatGPT/Codex subscription that exposes the model. Check the
+selected account's catalog, then choose the model:
+
+```bash
+openclaw models list --provider openai
+openclaw models set openai/gpt-6-sol
+```
+
+Use `openclaw models set openai/gpt-6-luna` to select Luna. API organization
+and Codex workspace access can differ. A successful account catalog is
+authoritative; OpenClaw does not add subscription access or silently substitute
+another model. When subscription discovery is unavailable, the offline fallback
+list omits both models. Existing model selections stay unchanged, and fresh
+OpenAI setup continues to use Astra.
+
+Both models use the Responses API for agent tool calls and support text and
+image input, a 1,050,000-token context window, and up to 128,000 output tokens.
+OpenClaw defaults to a 272,000-token active input budget. Native Codex follows
+the selected account's advertised context limits.
+
+The API reasoning efforts are `none`, `low`, `medium`, `high`, `xhigh`, and
+`max`. OpenClaw defaults to `medium` when available; existing explicit thinking
+settings still take precedence. `/think off` selects `none`, and `/think default`
+clears a session override. Native Codex uses the effort levels reported by the
+selected account. OpenClaw's `/think ultra` mode uses `max`; native Codex offers
+Ultra only when the account advertises it.
+
+Standard API pricing per million tokens:
+
+| Model      | Input | Cache reads | Cache writes | Output |
+| ---------- | ----- | ----------- | ------------ | ------ |
+| GPT-6 Sol  | $2    | $0.20       | $2.50        | $10    |
+| GPT-6 Luna | $0.10 | $0.01       | $0.125       | $0.50  |
+
+See the [GPT-6 Sol model reference](https://developers.openai.com/api/docs/models/gpt-6-sol)
+and [GPT-6 Luna model reference](https://developers.openai.com/api/docs/models/gpt-6-luna)
+for current capabilities and pricing.
 
 ## GPT-5.6 limited preview
 

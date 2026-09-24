@@ -43,6 +43,7 @@ export type ChannelSetupWizardRunner = (
     channel?: string;
     onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
     beforePersistentEffect?: () => Promise<void>;
+    assertPersistentEffectCurrent?: () => void;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -125,6 +126,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
                   // Durable effects (plugin installs, config commit) must finish
                   // even if the client cancels mid-write.
                   beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                  assertPersistentEffectCurrent: () =>
+                    wizardSession.assertPersistentEffectCurrent(),
                 },
                 runtime,
                 prompter,

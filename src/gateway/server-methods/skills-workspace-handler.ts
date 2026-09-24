@@ -13,7 +13,11 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { SkillProposalRevisionChangedError } from "../../skills/workshop/service-evaluation.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
 export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
@@ -60,46 +64,47 @@ export type ResolvedSkillsWorkspace = Extract<
 
 export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
-export async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
-  method: string;
-  rawParams: unknown;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  validate: Validator<TParams>;
+export function defineSkillsProposalWorkspaceHandler<TParams>(
+  method: string,
+  validate: Validator<TParams>,
   run: (
     parsedParams: TParams,
     resolved: ResolvedSkillsWorkspace,
-  ) => Promise<TResult | typeof SKILL_PROPOSAL_RESPONSE_HANDLED>;
-}): Promise<void> {
-  if (!assertValidParams(params.rawParams, params.validate, params.method, params.respond)) {
-    return;
-  }
-  const resolved = resolveSkillsAgentWorkspace(params.rawParams, params.context);
-  if (!resolved.ok) {
-    params.respond(false, undefined, resolved.error);
-    return;
-  }
-  try {
-    const result = await params.run(params.rawParams, resolved);
-    if (result !== SKILL_PROPOSAL_RESPONSE_HANDLED) {
-      params.respond(true, result, undefined);
+    options: GatewayRequestHandlerOptions,
+  ) => Promise<unknown>,
+): GatewayRequestHandler {
+  return async (options) => {
+    const { params, respond, context } = options;
+    if (!assertValidParams(params, validate, method, respond)) {
+      return;
     }
-  } catch (error) {
-    const details =
-      error instanceof SkillProposalRevisionChangedError
-        ? buildSkillProposalRevisionChangedErrorDetails({
-            expectedRevisionHash: error.expectedRevisionHash,
-            currentRevisionHash: error.currentRevisionHash,
-          })
-        : undefined;
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        formatErrorMessage(error),
-        details ? { details } : undefined,
-      ),
-    );
-  }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const result = await run(params, resolved, options);
+      if (result !== SKILL_PROPOSAL_RESPONSE_HANDLED) {
+        respond(true, result, undefined);
+      }
+    } catch (error) {
+      const details =
+        error instanceof SkillProposalRevisionChangedError
+          ? buildSkillProposalRevisionChangedErrorDetails({
+              expectedRevisionHash: error.expectedRevisionHash,
+              currentRevisionHash: error.currentRevisionHash,
+            })
+          : undefined;
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatErrorMessage(error),
+          details ? { details } : undefined,
+        ),
+      );
+    }
+  };
 }

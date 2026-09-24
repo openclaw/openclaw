@@ -18,8 +18,13 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import {
+  buildConversationToolPolicyPipelineSteps,
+  resolveConversationToolPolicies,
+} from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
 import {
   resolveEffectiveToolInventory,
@@ -138,6 +143,18 @@ function buildToolsEffectiveCacheKey(params: {
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
     replyToMode: optionalCacheString(context.replyToMode),
+    // Prepared session ceilings can change without a config or session-id change.
+    policy: buildConversationToolPolicyPipelineSteps({
+      capabilityProfile: context.capabilityProfile,
+      policies: resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
+      includeRuntimeToolPolicy: true,
+    }).map(
+      ({ policy }) =>
+        policy && {
+          allow: policy.allow && (readToolAllowlistIntersection(policy.allow) ?? policy.allow),
+          deny: policy.deny,
+        },
+    ),
   });
 }
 
@@ -354,6 +371,7 @@ async function resolveBaseToolsEffectiveInventory(
   try {
     return acquired.run((runtimeModelContext) =>
       dependencies.resolveEffectiveToolInventory({
+        conversationCapabilityProfile: context.capabilityProfile,
         cfg: context.cfg,
         agentId: context.agentId,
         agentDir,

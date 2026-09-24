@@ -248,7 +248,12 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(
         await rpcReq(owner.ws, "sessions.abort", { key: run.sessionKey, runId: run.runId }),
       ).toMatchObject({ ok: true, payload: { status: "aborted", abortedRunId: run.runId } });
-      await expect.poll(() => events).toContain("sessions.changed");
+      await flushPendingSessionsChangedEvents();
+      expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
+        ok: true,
+        payload: { subscribed: true },
+      });
+      expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
       queueCleanup.clearSessionQueues([run.sessionKey]);

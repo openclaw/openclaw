@@ -1,21 +1,27 @@
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
-import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
-function createDoctorAgentLeaseRefusal(env: NodeJS.ProcessEnv, cause?: unknown): UpdateDoctorError {
+function createDoctorAgentLeaseRefusal(
+  env: NodeJS.ProcessEnv,
+  cause?: unknown,
+): DoctorMaintenanceRefusalError {
   const message =
     "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
-  return new UpdateDoctorError(
+  return new DoctorMaintenanceRefusalError(
     message,
-    [
-      createUpdateFailureFact(
-        { check: "doctor", code: "agent-database-lease-active", message },
-        env,
-      ),
-    ],
-    { cause },
+    { kind: "deferred", reason: "agent-database-in-use" },
+    {
+      cause,
+      failureFacts: [
+        createUpdateFailureFact(
+          { check: "doctor", code: "agent-database-lease-active", message },
+          env,
+        ),
+      ],
+    },
   );
 }
 

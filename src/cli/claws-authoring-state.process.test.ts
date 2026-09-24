@@ -80,9 +80,12 @@ describe("Claw authoring process state", () => {
     const project = path.join(external, "project");
     const workspace = path.join(external, "dev-workspace");
     await fs.mkdir(path.join(root, "config"), { recursive: true });
-    await fs.mkdir(path.join(root, "state", "tasks"), { recursive: true });
+    await fs.mkdir(path.join(root, "state"), { recursive: true });
     await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
-    await fs.writeFile(path.join(root, "state", "tasks", "runs.sqlite"), "legacy state\n");
+    await fs.writeFile(
+      path.join(root, "state", "restart-sentinel.json"),
+      JSON.stringify({ version: 1, payload: { kind: "restart", status: "ok", ts: 1 } }),
+    );
     await writeProject(project);
     const before = await snapshotTree(root);
 

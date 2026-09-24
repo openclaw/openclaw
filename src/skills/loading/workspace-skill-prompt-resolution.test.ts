@@ -46,9 +46,9 @@ function createEntry(name: string): SkillEntry {
 }
 
 describe("resolveSkillsPrompt", () => {
-  it.each([8_192, 32_768])(
-    "compacts descriptions at %i tokens without changing admitted skill resources",
-    async (contextTokenBudget) => {
+  it.each([8_192, 32_768, "minimum", "above minimum"] as const)(
+    "compacts descriptions at %s without changing admitted skill resources",
+    async (budget) => {
       const entries = Array.from({ length: 24 }, (_, index) => {
         const entry = createEntry(`skill-${index}`);
         entry.skill.description = `Inspect records & preserve <identifiers>. ${"Detailed matching guidance. ".repeat(10)}`;
@@ -58,12 +58,31 @@ describe("resolveSkillsPrompt", () => {
       });
       const snapshot = await buildSkillSnapshot("/tmp/openclaw", { entries });
       const original = snapshot.prompt.trim();
+      const minimum = original.replace(
+        /<description>[\s\S]*?<\/description>/gu,
+        "<description>Inspect records &amp; preserve &lt;identifiers&gt;. Detailed matching g...</description>",
+      );
+      const contextTokenBudget =
+        typeof budget === "number"
+          ? budget
+          : (minimum.length + (budget === "above minimum" ? 24 * 10 : 0)) * 5;
       const projected = await resolveSkillsPrompt({
         workspaceDir: "/tmp/openclaw",
         skillsSnapshot: snapshot,
         contextTokenBudget,
       });
       expect(projected.length).toBeLessThan(original.length);
+      if (budget === "above minimum") {
+        expect(projected).toBe(
+          original.replace(
+            /<description>[\s\S]*?<\/description>/gu,
+            "<description>Inspect records &amp; preserve &lt;identifiers&gt;. Detailed matching guidance. D...</description>",
+          ),
+        );
+        expect(projected.length).toBe(Math.floor(contextTokenBudget / 5));
+      } else {
+        expect(projected).toBe(minimum);
+      }
       const omitDescriptions = (prompt: string) =>
         prompt.replace(/<description>[\s\S]*?<\/description>/gu, "");
       expect(omitDescriptions(projected)).toBe(omitDescriptions(original));

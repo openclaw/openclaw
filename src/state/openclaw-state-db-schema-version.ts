@@ -2,6 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../infra/kysely-sync.js";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
+import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
@@ -13,7 +17,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
-// Admission also runs on cached reads. Retain the SQL, never the content version.
+const contentVersions = new WeakMap<SqliteSchemaFacts, number>();
 const contentVersionQueries = new WeakMap<
   DatabaseSync,
   ReturnType<typeof prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>>
@@ -21,7 +25,19 @@ const contentVersionQueries = new WeakMap<
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
 export function readStateSchemaContentVersion(db: DatabaseSync): number {
-  const published = readSqliteUserVersion(db);
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  const cached = schema && contentVersions.get(schema);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const version = readContentVersion(db, schema?.userVersion ?? readSqliteUserVersion(db));
+  if (schema) {
+    contentVersions.set(schema, version);
+  }
+  return version;
+}
+
+function readContentVersion(db: DatabaseSync, published: number): number {
   if (!tableExists(db, "config_machine_state")) {
     return published;
   }
@@ -113,7 +129,7 @@ export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
 
 export function assertSupportedStateSchemaVersion(db: DatabaseSync, pathname: string): number {
   try {
-    const userVersion = readSqliteUserVersion(db);
+    const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
     const contentVersion =
       userVersion > OPENCLAW_STATE_SCHEMA_VERSION ? userVersion : readStateSchemaContentVersion(db);
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {

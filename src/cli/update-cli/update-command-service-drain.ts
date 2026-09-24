@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewaySuspendPrepareResult } from "../../../packages/gateway-protocol/src/index.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readSystemdGatewayStopTimeout } from "../../daemon/systemd-maintenance.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayShutdownStatus } from "../../gateway/server-public.js";
+import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
@@ -57,7 +55,12 @@ export async function withGatewayMaintenanceDrain<T>(
       serviceCommand: params.state.command,
     });
     const target = await createConfiguredGatewayLocalProbe(config).resolveWebSocketTarget(port);
-    return { config, auth, port, target };
+    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+      auth,
+      authNone: config.gateway?.auth?.mode === "none",
+      env: params.state.env,
+    });
+    return { config, controlAuth, port, target };
   })().catch((error: unknown) => {
     observationError = String(error);
     return undefined;
@@ -68,30 +71,17 @@ export async function withGatewayMaintenanceDrain<T>(
     if (!connection?.target) {
       throw new Error(observationError ?? "Gateway TLS certificate unavailable");
     }
-    const { config, auth, port, target } = connection;
+    const { config, controlAuth, port, target } = connection;
     let observedBootId: string | undefined;
     const result = await callGatewayCli<R>({
       method,
       params: args,
       config,
-      token: auth?.token,
-      password: auth?.password,
-      skipImplicitAuth: true,
+      ...controlAuth,
       serviceTargetUrl: target.url,
       localPortOverride: port,
       ignoreEnvUrlOverride: true,
       tlsFingerprint: target.tlsFingerprint,
-      clientName:
-        config.gateway?.auth?.mode === "none"
-          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-          : GATEWAY_CLIENT_NAMES.CLI,
-      mode:
-        config.gateway?.auth?.mode === "none"
-          ? GATEWAY_CLIENT_MODES.BACKEND
-          : GATEWAY_CLIENT_MODES.CLI,
-      requireLocalBackendSharedAuth: config.gateway?.auth?.mode === "none",
-      deviceIdentity: null,
-      sharedStateMode: "read-only",
       // The deadline bounds deferral, not the final RPC needed to observe custody.
       timeoutMs: 10_000,
       onHelloOk: (hello) => {
@@ -125,6 +115,17 @@ export async function withGatewayMaintenanceDrain<T>(
     observationError = String(error);
   }
   assertResidentCurrent();
+  // A resident whose installation was replaced underneath it refuses every
+  // connection; it can neither report readiness nor accept new work, so
+  // draining it is pointless and would only burn the deadline.
+  const staleResident = () =>
+    observationError !== undefined && observationError.includes(GATEWAY_STALE_INSTALL_CLOSE_REASON);
+  if (staleResident()) {
+    params.warn(
+      "WARNING: The running Gateway's installation was replaced before this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
+    );
+    return await finish();
+  }
   if ((managerTimeout ?? 0) < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
     params.warn(
       `Gateway service stop timeout is ${managerTimeout === undefined ? "unverified" : `${managerTimeout}ms`} after policy refresh; preserving operator overrides and using lifecycle drain before stopping.`,
@@ -164,6 +165,12 @@ export async function withGatewayMaintenanceDrain<T>(
       }
       assertResidentCurrent();
       if (!observationError && lastObservation?.status === "ready") {
+        return await finish();
+      }
+      if (staleResident()) {
+        params.warn(
+          "WARNING: The running Gateway's installation was replaced during this stop; it refuses connections, so lifecycle drain is skipped and it is stopped directly.",
+        );
         return await finish();
       }
       if (performance.now() >= deadline) {

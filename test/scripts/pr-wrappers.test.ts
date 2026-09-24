@@ -376,7 +376,10 @@ function resolveCommand(command: string): string {
   throw new Error(`command not found in test PATH: ${command}`);
 }
 
-function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+function seedReadyReview(
+  fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
+  correction = false,
+) {
   const reviewRoot = join(fixture.canonical, ".worktrees", "pr-123");
   fixture.git(fixture.canonical, [
     "worktree",
@@ -387,8 +390,17 @@ function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) 
   ]);
   const review = validReview(fixture.localRevision);
   review.pr.number = 123;
-  review.recommendation = "READY FOR /prepare-pr";
+  review.recommendation = correction ? "NEEDS WORK" : "READY FOR /prepare-pr";
   review.issueValidation.status = "valid";
+  if (correction) {
+    review.findings.push({
+      id: "I1",
+      severity: "IMPORTANT",
+      title: "Wrong behavior",
+      area: "docs/fix.md",
+      fix: "Correct behavior",
+    });
+  }
   writeReviewArtifacts(reviewRoot, review, { prNumber: 123, headSha: fixture.localRevision });
 }
 
@@ -659,6 +671,29 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("dispatches public correction commands to the explicit native owners", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    seedReadyReview(fixture, true);
+    const ghPath = join(fixture.bin, "gh");
+    writeFileSync(ghPath, readFileSync(ghPath, "utf8").replace("not-main", "main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/prepare-core.sh"),
+      `prepare_init() { printf '%s\\n' "$2" | jq -e '.number == 123 and .baseRefName == "main"' >/dev/null || return 1; printf 'init <%s> <%s>\\n' "$1" "$3"; }\nprepare_correction_review_init() { printf 'review <%s>\\n' "$1"; }\n`,
+    );
+    for (const [command, expected] of [
+      ["prepare-correction-init", "init <123> <correction>"],
+      ["prepare-correction-review-init", "review <123>"],
+    ] as const) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), [command, "123"], {
+        cwd: fixture.canonical,
+        env: fixture.env,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    }
+  });
+
   itPosix("resolves an explicit merge body from the caller before supervisor cwd changes", () => {
     const fixture = makeMismatchedWrapperRepo();
     const caller = join(fixture.canonical, "nested");
@@ -851,36 +886,38 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
-  it.each(["prepare-run", "merge-recover"])(
-    "routes mismatched %s to the canonical wrapper despite opt-in",
-    (command) => {
-      const fixture = makeMismatchedWrapperRepo();
-      if (command === "prepare-run") {
-        seedReadyReview(fixture);
-      }
-      const result = spawnSync(
-        join(fixture.linked, "scripts", "pr"),
-        [
-          "--dev-wrapper",
-          command,
-          "123",
-          ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
-        ],
-        { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
-      );
-      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
-      // The stubbed gh reports a non-main base: reaching this gate proves the
-      // canonical wrapper ran instead of the mismatched local one.
-      expect(result.stderr).toContain(
-        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-      );
-      expect(result.stdout).not.toContain("local wrapper executed");
-    },
-  );
+  it.each([
+    "prepare-run",
+    "prepare-correction-init",
+    "prepare-correction-review-init",
+    "merge-recover",
+  ])("routes mismatched %s to the canonical wrapper despite opt-in", (command) => {
+    const fixture = makeMismatchedWrapperRepo();
+    if (command === "prepare-run" || command === "prepare-correction-init") {
+      seedReadyReview(fixture, command === "prepare-correction-init");
+    }
+    const result = spawnSync(
+      join(fixture.linked, "scripts", "pr"),
+      [
+        "--dev-wrapper",
+        command,
+        "123",
+        ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
+      ],
+      { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
+    );
+    expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+    // The stubbed gh reports a non-main base: reaching this gate proves the
+    // canonical wrapper ran instead of the mismatched local one.
+    expect(result.stderr).toContain(
+      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+    );
+    expect(result.stdout).not.toContain("local wrapper executed");
+  });
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -2029,9 +2066,15 @@ exit 99
     }
 
     itPosix.each([
-      ...["init", "validate-commit", "gates", "push", "run"].map(
-        (mode) => ["pr-prepare", [mode, "123"], [`prepare-${mode}`, "123"]] as const,
-      ),
+      ...[
+        "init",
+        "correction-init",
+        "correction-review-init",
+        "validate-commit",
+        "gates",
+        "push",
+        "run",
+      ].map((mode) => ["pr-prepare", [mode, "123"], [`prepare-${mode}`, "123"]] as const),
       [
         "pr-review",
         ["123", "argument with spaces", ""],

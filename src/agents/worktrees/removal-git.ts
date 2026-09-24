@@ -4,9 +4,11 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
+import { WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -18,8 +20,11 @@ export async function requireManagedWorktreeHead(
   options: GitOptions,
 ): Promise<string> {
   const branch = await runGit(record.path, ["symbolic-ref", "--quiet", "HEAD"], options);
+  if (branch.code !== 0 && branch.code !== 1) {
+    throw commandError("git symbolic-ref --quiet HEAD", branch);
+  }
   if (branch.code !== 0 || branch.stdout.trim() !== `refs/heads/${record.branch}`) {
-    throw new Error(
+    throw new WorktreeBranchMovedError(
       `Worktree HEAD no longer owns ${record.branch}; checkout and branch preserved.`,
     );
   }
@@ -71,6 +76,25 @@ export async function prepareSnapshotBranchDeletion(
   return deletionOptions;
 }
 
+/** Once destructive deletion starts, its allocation owner joins it without a deadline. */
+export async function removeManagedCheckout(
+  record: ManagedWorktreeRecord,
+  git: WorktreeGitPolicy,
+  requireLossless: boolean | undefined,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const removed = await runOutsideCommandProcessScope(() =>
+    git.run(
+      record.repoRoot,
+      ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
+      { beforeRun: assertCurrent, killProcessTree: true, waitForExit: true },
+    ),
+  );
+  if (removed.code !== 0) {
+    throw commandError("git worktree remove", removed);
+  }
+}
+
 /** Explicit detached retirement never grants ownership of another symbolic branch. */
 export async function requireExactManagedWorktreeHead(
   record: ManagedWorktreeRecord,
@@ -114,6 +138,7 @@ export async function withExactStateGitLocks<T>(
   record: ManagedWorktreeRecord,
   assertCurrent: () => void,
   run: () => Promise<T>,
+  additionalRefs: readonly string[] = [],
 ): Promise<T> {
   const options = { beforeRun: assertCurrent, killProcessTree: true };
   const storage = await runGit(
@@ -126,7 +151,7 @@ export async function withExactStateGitLocks<T>(
   }
   const held: { path: string; handle: FileHandle; dev: number; ino: number }[] = [];
   try {
-    for (const name of ["index", "HEAD", `refs/heads/${record.branch}`]) {
+    for (const name of ["index", "HEAD", `refs/heads/${record.branch}`, ...additionalRefs]) {
       const target =
         path.resolve(
           record.path,

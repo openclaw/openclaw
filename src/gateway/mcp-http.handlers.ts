@@ -118,24 +118,13 @@ export async function handleMcpJsonRpc(params: {
         return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
       }
       const toolArgs = rawToolArgs ?? {};
-      if (!toolName) {
-        return jsonRpcResult(id, {
-          content: [{ type: "text", text: "Tool not available: unknown" }],
-          isError: true,
-        });
-      }
-      if (!params.toolSchema.some((tool) => tool.name === toolName)) {
-        return jsonRpcResult(id, {
-          content: [{ type: "text", text: `Tool not available: ${toolName}` }],
-          isError: true,
-        });
-      }
-      const tool = params.tools.find(
-        (candidate) => readMcpLoopbackToolName(candidate) === toolName,
-      );
+      const tool =
+        toolName && params.toolSchema.some((entry) => entry.name === toolName)
+          ? params.tools.find((candidate) => readMcpLoopbackToolName(candidate) === toolName)
+          : undefined;
       if (!tool) {
         return jsonRpcResult(id, {
-          content: [{ type: "text", text: `Tool not available: ${toolName}` }],
+          content: [{ type: "text", text: `Tool not available: ${toolName || "unknown"}` }],
           isError: true,
         });
       }
