@@ -5,6 +5,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
+export const SECURITY_REVIEW_CHECK_INTERVAL_MS = 30_000;
 
 const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
 const githubApiRetryCodes = new Set([
@@ -48,7 +49,11 @@ export class GitHubStatusPublicationError extends Error {
   }
 }
 
-export async function withSecurityReviewRecovery(evaluate) {
+export class GitHubDiffDataError extends Error {}
+
+export class GitHubReadTimeoutError extends Error {}
+
+export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}) {
   const recorded = process.env[recoveryDeadlineEnv];
   const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
   if (!Number.isSafeInteger(deadline) || deadline <= 0) {
@@ -57,12 +62,30 @@ export async function withSecurityReviewRecovery(evaluate) {
   if (recorded === undefined && process.env.GITHUB_ENV) {
     await appendFile(process.env.GITHUB_ENV, `${recoveryDeadlineEnv}=${deadline}\n`);
   }
+  let resumeAt = 0;
+  let checkDuringWait = false;
   for (let attempt = 0; ; attempt += 1) {
     try {
+      while (Date.now() < resumeAt) {
+        const remaining = resumeAt - Date.now();
+        await wait(
+          checkDuringWait ? Math.min(remaining, SECURITY_REVIEW_CHECK_INTERVAL_MS) : remaining,
+        );
+        if (checkDuringWait && Date.now() < resumeAt) {
+          await checkCurrent();
+        }
+      }
       return await evaluate();
     } catch (error) {
       const rateLimited = error instanceof GitHubRateLimitError;
-      if (!rateLimited && !(error instanceof GitHubStatusPublicationError)) {
+      const inconsistentDiff = error instanceof GitHubDiffDataError;
+      const readTimedOut = error instanceof GitHubReadTimeoutError;
+      if (
+        !rateLimited &&
+        !inconsistentDiff &&
+        !readTimedOut &&
+        !(error instanceof GitHubStatusPublicationError)
+      ) {
         throw error;
       }
       // Do not resume a status write with stale authority after waiting. The
@@ -71,17 +94,24 @@ export async function withSecurityReviewRecovery(evaluate) {
         ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
           1_000 +
           Math.floor(Math.random() * 15_000)
-        : githubApiRetryDelaysMs[attempt];
+        : inconsistentDiff
+          ? 60_000 * 2 ** attempt
+          : githubApiRetryDelaysMs[attempt];
       if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
         throw new Error(
-          "GitHub API recovery budget exhausted; security review remains incomplete.",
+          inconsistentDiff
+            ? `GitHub diff-data recovery budget exhausted; security review remains incomplete. ${error.message}`
+            : "GitHub API recovery budget exhausted; security review remains incomplete.",
           { cause: error },
         );
       }
       console.warn(
-        `${rateLimited ? `GitHub API rate limited (${error.status})` : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff || readTimedOut ? error.message : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
-      await wait(delay);
+      // Never probe during server-directed quota backoff. A rate limit from a
+      // checkpoint joins this same recovery budget instead of starting a poller.
+      resumeAt = Date.now() + delay;
+      checkDuringWait = !rateLimited && Boolean(checkCurrent);
     }
   }
 }
@@ -319,7 +349,11 @@ export async function readBoundedGitHubJson(
 }
 
 function timeoutError(path, method, timeoutMs) {
-  return new Error(`GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`);
+  const message = `GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`;
+  // An expired write may already have succeeded; only reads can restart review.
+  return method === "GET" || method === "HEAD"
+    ? new GitHubReadTimeoutError(message)
+    : new Error(message);
 }
 
 function combineAbortSignals(signals) {
@@ -346,6 +380,9 @@ export function createGitHubApi(token, options = {}) {
   };
   const request = async (path, requestOptions = {}) => {
     const method = (requestOptions.method ?? "GET").toUpperCase();
+    if (method === "GET" || method === "HEAD") {
+      await options.beforeRead?.(path);
+    }
     const timeoutController = new AbortController();
     const requestSignal = combineAbortSignals([requestOptions.signal, timeoutController.signal]);
     let timeout;

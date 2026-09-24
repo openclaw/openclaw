@@ -1,11 +1,13 @@
 import {
   capturePluginLifecycleAuthority,
-  capturePluginRegistryLifecycleEpoch,
   getPluginRecordRegistry,
-  isPluginRegistryLifecycleEpochActive,
 } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryForContext, requireActivePluginRegistry } from "../plugins/runtime.js";
-import type { DetachedTaskLifecycleRuntime } from "./detached-task-runtime-contract.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  DetachedTaskRuntimeOwnerRetiredError,
+  type DetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime-contract.js";
 
 export function getRegisteredDetachedTaskLifecycleRuntime():
   | DetachedTaskLifecycleRuntime
@@ -13,7 +15,7 @@ export function getRegisteredDetachedTaskLifecycleRuntime():
   return requireActivePluginRegistry().detachedTaskRuntimes[0]?.runtime;
 }
 
-/** Core creation retains its activation; plugin work follows its exact live instance. */
+/** Core creation retains its scoped owner; plugin work follows its exact live instance. */
 export function captureDetachedTaskRuntimeOwner(): {
   runtime: DetachedTaskLifecycleRuntime | undefined;
   assertCurrent: () => void;
@@ -25,10 +27,13 @@ export function captureDetachedTaskRuntimeOwner(): {
   const record = registration
     ? registry.plugins.find((candidate) => candidate.id === pluginId)
     : undefined;
-  const authority = record
-    ? capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record)
-    : undefined;
-  const epoch = registration ? undefined : capturePluginRegistryLifecycleEpoch(registry);
+  // Local runs own scoped handles without publishing a Gateway activation.
+  // Core handles retain that scope; plugin callbacks follow their exact instance.
+  const authority = capturePluginLifecycleAuthority(
+    record ? getPluginRecordRegistry(registry, record) : registry,
+    record,
+    { scopedRuntime: getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry },
+  );
   return {
     runtime,
     assertCurrent() {
@@ -43,14 +48,13 @@ export function captureDetachedTaskRuntimeOwner(): {
           return;
         }
       } else if (
-        epoch &&
-        isPluginRegistryLifecycleEpochActive(registry, epoch) &&
+        authority?.() &&
         getPluginRegistryForContext() === registry &&
         registry.detachedTaskRuntimes[0] === undefined
       ) {
         return;
       }
-      throw new Error("Detached task runtime owner changed before task creation settled.");
+      throw new DetachedTaskRuntimeOwnerRetiredError();
     },
   };
 }

@@ -4,15 +4,14 @@ import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/sub
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
@@ -138,40 +137,15 @@ export async function sweepCronRunSessions(params: {
       return { swept: false, pruned: 0 };
     }
     const cutoff = now - retentionMs;
-    const requestedOwner = normalizeAgentId(params.agentId);
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    // The accessor keeps agentId logical for admission checks and resolves a shared
-    // store's physical database owner internally through its SQLite scope.
-    //
-    // Use the read-only listing here, not listSessionEntriesCore. The reaper only
-    // reads rows to decide removals; the writable open runs a synchronous
-    // `PRAGMA integrity_check` plus foreign-key check on every open, and this sweep
-    // fires per agent id every MIN_SWEEP_INTERVAL_MS, so on a large fleet it re-checks
-    // every agent database on the main thread and stalls the event loop (see #142476).
-    // The read-only open skips that gate. It also stays off the writable open's
-    // handle-cache path, which evicts an LRU handle and releases its lease through a
-    // write transaction on the shared state database, serialized on the state
-    // coordinator: a warm cache does not make this sweep cheap either, because the
-    // eviction cost is paid per open whether or not the file is reopened.
-    // The default "full" projection still returns owned entries that are safe to hold
-    // across the await below, and the actual pruning write
-    // (applySessionEntryLifecycleMutation) keeps its own integrity gate.
-    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+    // Discovery validates the physical store in its reader worker and returns only full
+    // expired candidates. Live continuation/admission checks remain with this owner.
+    for (const { sessionKey, entry } of await readExpiredCronRunEntriesInWorker({
       agentId: params.agentId,
       storePath,
+      updatedBefore: cutoff,
     })) {
-      if (!isCronRunSessionKey(sessionKey)) {
-        continue;
-      }
-      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
-      if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
-        continue;
-      }
-      const updatedAt = entry.updatedAt ?? 0;
-      if (updatedAt >= cutoff) {
-        continue;
-      }
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
         // Fresh rows and stores without continuations never touch the task registry.

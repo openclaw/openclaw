@@ -58,6 +58,11 @@ The list shows model inventory. Status explains the configured default, fallback
 and authentication for their routes. It does not inspect a chat session's model
 override; use [`/model status`](/concepts/models#model-in-chat) in that session.
 
+For agents with `runtime.type: "acp"`, status and auth probes inspect the native
+default and native fallback policy. The agent's `model.primary` selects its ACP
+harness and is not a native probe candidate. Use ACP session controls to inspect
+or change the external harness model.
+
 #### Read status correctly
 
 These sections answer different questions:

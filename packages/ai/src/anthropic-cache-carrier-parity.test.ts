@@ -1,12 +1,11 @@
 import type { Context, Model, UserMessage } from "@openclaw/llm-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   anthropicModel,
   captureAnthropicRequest,
   context,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
-import * as modelContract from "./providers/anthropic-model-contract.js";
 import { createZeroUsage } from "./usage.test-support.js";
 
 function appendToolRound(messages: Context["messages"], model: Model, round: number) {
@@ -40,22 +39,16 @@ function appendToolRound(messages: Context["messages"], model: Model, round: num
 
 describe("Anthropic runtime-context cache lifecycle", () => {
   registerParityHostLifecycle();
-  afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    { retained: false, blocks: false, cacheRetention: "short" },
-    { retained: false, blocks: true, cacheRetention: "long" },
-    { retained: true, blocks: false, cacheRetention: "short" },
-    { retained: true, blocks: true, cacheRetention: "long" },
+    { id: "claude-sonnet-4-6", retained: false, blocks: false, cacheRetention: "short" },
+    { id: "claude-sonnet-4-6", retained: false, blocks: true, cacheRetention: "long" },
+    { id: "claude-fable-5-1", retained: true, blocks: false, cacheRetention: "short" },
+    { id: "claude-opus-5-5", retained: true, blocks: true, cacheRetention: "long" },
   ] as const)(
     "preserves reusable prefixes through tool loops and a new turn: %j",
-    async ({ retained, blocks, cacheRetention }) => {
-      const model = anthropicModel;
-      if (retained) {
-        // Model classification has its own contract tests; exercise retained replay
-        // without coupling this cache regression to a particular model generation.
-        vi.spyOn(modelContract, "bindsClaudeThinkingPrefix").mockReturnValue(true);
-      }
+    async ({ id, retained, blocks, cacheRetention }) => {
+      const model = { ...anthropicModel, id };
       const cacheControl = {
         type: "ephemeral",
         ...(cacheRetention === "long" ? { ttl: "1h" } : {}),

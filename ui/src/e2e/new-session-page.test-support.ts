@@ -49,6 +49,12 @@ export async function openEnvironmentPicker(page: Page) {
   await afterShow;
 }
 
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
+}
+
 export const NEW_SESSION_MODEL_CATALOG = [
   { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },

@@ -351,14 +351,14 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         if (changed) {
           await fs.writeFile(path.join(f.prepared.workspaceDir, "source.txt"), "changed source\n");
           await expect(f.register()).rejects.toThrow("source does not match its manifest");
-          expect(f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+          expect(await f.preparedStore.find(f.record.environmentId)).toBeUndefined();
           return;
         }
         await f.register();
         await f.attach();
         await f.bind();
         expect(f.received.map((response) => response.ok)).toEqual([true, true]);
-        const acquired = f.workspace.acquireManagedWorkspace({
+        const acquired = await f.workspace.acquireManagedWorkspaceAsync({
           ...f.binding,
           workspaceDir: f.prepared.workspaceDir,
         });
@@ -435,7 +435,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         release.resolve();
         expect(await operation).toBeInstanceOf(Error);
         expect(f.invoked).toHaveLength(invokedBefore);
-        const registration = f.preparedStore.find(f.record.environmentId);
+        const registration = await f.preparedStore.find(f.record.environmentId);
         if (action === "bind") {
           expect(registration).toMatchObject({ session_id: null, bound_at_ms: null });
         } else {
@@ -472,7 +472,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         await f.cancelled.promise;
         release.resolve();
         await f.settleInvokes();
-        expect(f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+        expect(await f.preparedStore.find(f.record.environmentId)).toBeUndefined();
       } finally {
         caller.abort();
         release.resolve();

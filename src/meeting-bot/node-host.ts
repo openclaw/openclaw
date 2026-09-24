@@ -6,7 +6,11 @@ import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@o
 import { formatErrorMessage } from "../infra/errors.js";
 import type { MeetingAudioBackendSelection, MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
-import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import {
+  terminateMeetingBridgeProcess,
+  writeMeetingOutputChunk,
+  type MeetingOutputWriteWaiter,
+} from "./bridge-process.js";
 import { splitCommandArgv } from "./command-argv.js";
 import {
   prepareMeetingNodeAudio,
@@ -23,11 +27,6 @@ const NODE_BRIDGE_INPUT_DRAIN_MS = NODE_BRIDGE_TERMINATION_GRACE_MS + 1_000;
 const NODE_BRIDGE_TERMINAL_RETENTION_MS = 5_000;
 const NODE_BRIDGE_MAX_QUEUED_INPUT_CHUNKS = 200;
 const NODE_BRIDGE_MAX_QUEUED_INPUT_BYTES = 1024 * 1024;
-
-type NodeOutputWriteWaiter = {
-  output: ChildProcess;
-  release: () => void;
-};
 
 type NodeBridgeSession = {
   id: string;
@@ -48,7 +47,7 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
   clearCount: number;
   outputGeneration: number;
-  outputWriteWaiters: Set<NodeOutputWriteWaiter>;
+  outputWriteWaiters: Set<MeetingOutputWriteWaiter<ChildProcess>>;
   stopPromise?: Promise<void>;
   retiredOutputStops: Set<Promise<void>>;
   stopping: boolean;
@@ -159,7 +158,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
 
   const releaseOutputWriteWaiters = (session: NodeBridgeSession, output?: ChildProcess): void => {
     for (const waiter of session.outputWriteWaiters) {
-      if (!output || waiter.output === output) {
+      if (!output || waiter.process === output) {
         waiter.release();
       }
     }
@@ -388,38 +387,13 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session: NodeBridgeSession,
     output: ChildProcess,
     audio: Buffer,
-  ): Promise<void> =>
-    new Promise<void>((resolve, reject) => {
-      const stdin = output.stdin;
-      if (!stdin) {
-        reject(new Error("audio output stream is closed"));
-        return;
-      }
-      let settled = false;
-      const finish = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        session.outputWriteWaiters.delete(waiter);
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-      const waiter: NodeOutputWriteWaiter = { output, release: () => finish() };
-      session.outputWriteWaiters.add(waiter);
-      try {
-        stdin.write(audio, (error) => finish(error ?? undefined));
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
-        return;
-      }
-      if (stdin.destroyed || stdin.writableEnded) {
-        finish(new Error("audio output stream is closed"));
-      }
-    });
+  ): Promise<void> => {
+    const stdin = output.stdin;
+    if (!stdin) {
+      return Promise.reject(new Error("audio output stream is closed"));
+    }
+    return writeMeetingOutputChunk(session.outputWriteWaiters, output, stdin, audio);
+  };
 
   const pushAudio = async (params: Record<string, unknown>) => {
     const bridgeId = readNonEmptyString(params.bridgeId);

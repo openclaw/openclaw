@@ -1,20 +1,11 @@
 // Elevenlabs tests cover media understanding provider plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { describe, expect, it, vi } from "vitest";
 import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
-  let ssrfMock: { mockRestore: () => void } | undefined;
-
-  beforeEach(() => {
-    ssrfMock = mockPinnedHostnameResolution();
-  });
-
-  afterEach(() => {
-    ssrfMock?.mockRestore();
-    ssrfMock = undefined;
-  });
+  installPinnedHostnameTestHooks();
 
   it("has expected provider metadata", () => {
     expect(elevenLabsMediaUnderstandingProvider.id).toBe("elevenlabs");

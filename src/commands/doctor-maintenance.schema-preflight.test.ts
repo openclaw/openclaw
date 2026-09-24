@@ -8,15 +8,16 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import { ensureAgentDeletionJournalSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
@@ -147,7 +148,8 @@ it.each(["canonical", "custom-json", "shared-sqlite", "registered-shared-sqlite"
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
     const registry = new DatabaseSync(fixture.databasePath);
-    ensureAgentDeletionJournalSchema(registry);
+    registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
+    registry.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "migration_sources"));
     if (layout === "registered-shared-sqlite") {
       fixture.config.agents!.entries!.ops = {};
       registry

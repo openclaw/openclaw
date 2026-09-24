@@ -8,7 +8,7 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
-import { resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -113,9 +113,11 @@ async function persistSessionAuthProfileOverrideState(params: {
   sessionKey: string;
   state: SessionAuthProfileOverrideState;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
+  params.assertCommitAllowed?.();
   const updatedAt = Date.now();
   if (!storePath) {
     if (expectedSnapshot && !Object.hasOwn(sessionStore, sessionKey)) {
@@ -156,7 +158,10 @@ async function persistSessionAuthProfileOverrideState(params: {
         updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
       };
     },
-    expectedSnapshot ? undefined : { fallbackEntry: sessionEntry },
+    {
+      ...(expectedSnapshot ? {} : { fallbackEntry: sessionEntry }),
+      assertCommitAllowed: params.assertCommitAllowed,
+    },
   );
   if (persisted) {
     if (expectedSnapshot) {
@@ -265,6 +270,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
 }) {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
@@ -278,6 +284,7 @@ export async function clearSessionAuthProfileOverride(params: {
       authProfileOverrideCompactionCount: undefined,
     },
     storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -291,6 +298,7 @@ async function resolveSessionAuthProfileOverride(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
   requesterProfileId?: string;
@@ -377,6 +385,7 @@ async function resolveSessionAuthProfileOverride(params: {
       sessionStore,
       sessionKey,
       storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     current = undefined;
   }
@@ -388,6 +397,7 @@ async function resolveSessionAuthProfileOverride(params: {
       sessionStore,
       sessionKey,
       storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     current = undefined;
   }
@@ -420,6 +430,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverrideCompactionCount: undefined,
         },
         storePath,
+        assertCommitAllowed: params.assertCommitAllowed,
       });
       return linked;
     }
@@ -433,6 +444,7 @@ async function resolveSessionAuthProfileOverride(params: {
       sessionStore,
       sessionKey,
       storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     current = undefined;
   }
@@ -455,6 +467,7 @@ async function resolveSessionAuthProfileOverride(params: {
           authProfileOverrideCompactionCount: undefined,
         },
         storePath,
+        assertCommitAllowed: params.assertCommitAllowed,
         expectedSnapshot: {
           sessionId: sessionEntry.sessionId,
           authProfileOverride: sessionEntry.authProfileOverride,
@@ -573,6 +586,7 @@ async function resolveSessionAuthProfileOverride(params: {
         authProfileOverrideCompactionCount: compactionCount,
       },
       storePath,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
   }
 
@@ -598,6 +612,7 @@ export async function resolveSessionAuthSelection(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {
@@ -627,7 +642,7 @@ export async function resolveSessionAuthSelection(params: {
   const rotatedPinnedProfileId =
     rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
   const configuredProfile = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "",
+    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
   ).profile;
   const defaultModel = configuredProfile
     ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })

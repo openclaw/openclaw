@@ -35,6 +35,7 @@ export {
   completeForegroundUpdateHandoffAfterClose,
   captureForegroundUpdateHandoffStop,
   requestManagedServiceUpdateHandoffPark,
+  waitForSystemServiceUpdateHandoffs,
 } from "../../infra/update-managed-service-handoff.js";
 export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";

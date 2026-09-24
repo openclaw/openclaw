@@ -146,12 +146,15 @@ export async function putSessionGroups(params: {
 export async function ensureSessionGroupRegistered(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
     return false;
   }
-  return (await mutateSessionGroupCatalog({ kind: "register", name: normalized }, env)).changed;
+  return (
+    await mutateSessionGroupCatalog({ kind: "register", name: normalized }, env, assertCurrent)
+  ).changed;
 }
 
 export async function updateSessionGroupDefaults(

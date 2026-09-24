@@ -1,7 +1,10 @@
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getSubagentSessionListReadSnapshotIdentity } from "../agents/subagents/registry/subagent-registry-state.js";
-import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
+import {
+  buildProjectedAgentRunIndex,
+  readAgentRunIndexVersion,
+} from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
@@ -19,27 +22,34 @@ export function createSessionRowProjectionContext() {
   let preparedEpoch = -1;
   let registryRevision: number | undefined = getSubagentRegistryPublicationRevision();
   let registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
+  let agentRunRevision = readAgentRunIndexVersion();
   let profileRevision = 0;
   let subagentRevision = 0;
   let parentRevision = 0;
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
-  let current: SessionListRowContext = {
+  let current = {
     ...buildSessionListRowMetadataContext({ now: Date.now() }),
     identityProjection,
   };
   const subagentInputs = current.subagentRuns.inputs;
   function prepare(epoch: number) {
     const snapshot = getSubagentSessionListReadSnapshotIdentity();
-    if (preparedEpoch === epoch && registrySnapshot === snapshot) {
+    const revision = getSubagentRegistryPublicationRevision();
+    const runRevision = readAgentRunIndexVersion();
+    if (
+      preparedEpoch === epoch &&
+      registrySnapshot === snapshot &&
+      registryRevision === revision &&
+      agentRunRevision === runRevision
+    ) {
       return;
     }
     if (registrySnapshot !== snapshot) {
       registryRevision = undefined;
       registrySnapshot = snapshot;
     }
-    const now = Date.now(),
-      revision = getSubagentRegistryPublicationRevision();
+    const now = Date.now();
     if (registryRevision !== revision) {
       subagentRevision++;
     }
@@ -47,13 +57,21 @@ export function createSessionRowProjectionContext() {
       registryRevision === revision
         ? current.subagentRuns.atTime(now)
         : buildSubagentSessionListReadIndex(now);
-    const projectedAgentRuns = buildProjectedAgentRunIndex();
+    // Keep maps local to this projection; independent builders still own fresh indexes.
+    const projectedAgentRuns =
+      agentRunRevision === runRevision ? current.projectedAgentRuns : buildProjectedAgentRunIndex();
+    const projectedSubagentActivity =
+      projectedAgentRuns === current.projectedAgentRuns &&
+      subagentRuns.latestRunsByChildSessionKey === current.subagentRuns.latestRunsByChildSessionKey
+        ? current.projectedSubagentActivity
+        : buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns);
     current = modelFactsDirty
       ? {
           ...buildSessionListRowMetadataContext({
             now,
             subagentRuns,
             projectedAgentRuns,
+            projectedSubagentActivity,
             userProfileIdentityById: current.userProfileIdentityById,
           }),
           identityProjection,
@@ -62,27 +80,26 @@ export function createSessionRowProjectionContext() {
           ...current,
           subagentRuns,
           projectedAgentRuns,
-          projectedSubagentActivity: buildProjectedSubagentActivity(
-            subagentRuns,
-            projectedAgentRuns,
-          ),
+          projectedSubagentActivity,
           subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
         };
     modelFactsDirty = false;
     Object.assign(subagentInputs, current.subagentRuns.inputs);
     registryRevision = revision;
+    agentRunRevision = runRevision;
     preparedEpoch = epoch;
   }
   return {
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
         parentRevision === subagentRevision &&
+        agentRunRevision === readAgentRunIndexVersion() &&
         registryRevision === getSubagentRegistryPublicationRevision() &&
         registrySnapshot === getSubagentSessionListReadSnapshotIdentity()
         ? current
         : undefined;
     },
-    get current() {
+    get current(): SessionListRowContext {
       return current;
     },
     subagentInputs,
@@ -127,6 +144,7 @@ export function createSessionRowProjectionContext() {
       cfg: records.Inputs["cfg"],
       matching: (query: { key: string }) => records.Row[],
       put: (row: records.Row) => void,
+      referenced: (reference: string) => records.Row | undefined,
     ) {
       const previous = current.subagentRunsByChildSessionKey;
       prepare(epoch);
@@ -141,7 +159,13 @@ export function createSessionRowProjectionContext() {
           if (!row.storedEntry) {
             continue;
           }
-          const parents = records.readSessionRowParents(row, row.storedEntry, cfg, current);
+          const parents = records.readSessionRowParents(
+            row,
+            row.storedEntry,
+            cfg,
+            current,
+            referenced,
+          );
           if (!records.sameParents(row.parents, parents)) {
             put({ ...row, parents });
           }

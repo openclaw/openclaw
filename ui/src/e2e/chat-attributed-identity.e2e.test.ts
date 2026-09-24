@@ -498,7 +498,7 @@ suite.define(() => {
           return element.getAttribute("aria-label");
         }),
       );
-    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind"]);
+    expect(footerOrder).toEqual(["name", "time", "Reply to message", "Rewind", "Copy as markdown"]);
 
     await context.close();
   });

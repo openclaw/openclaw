@@ -16,6 +16,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 
 /** Binds runtime storage without changing keys that raw ownership checks and read fences validate. */
 export function bindSessionTranscriptStoreScope<
@@ -34,7 +35,13 @@ export function bindSessionTranscriptStoreScope<
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
   config?: OpenClawConfig,
-): Promise<SessionTranscriptRuntimeTarget> {
+  options: { keyFormat?: "agent-qualified" } = {},
+): Promise<
+  SessionTranscriptRuntimeTarget & {
+    selectedSessionId?: string | null;
+    selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+  }
+> {
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
@@ -46,23 +53,34 @@ export async function resolveSessionTranscriptRuntimeTarget(
     sessionId: scope.sessionId,
     storePath,
   });
-  const sessionKey =
-    persistedSessionKey ??
-    resolveSessionEntrySelection(
-      {
-        agentId,
-        ...(scope.env ? { env: scope.env } : {}),
-        sessionKey: scope.sessionKey,
-        storePath,
-      },
-      { readOnly: true },
-    )?.normalizedKey ??
-    scope.sessionKey;
+  const selected =
+    persistedSessionKey && !options.keyFormat
+      ? undefined
+      : resolveSessionEntrySelection(
+          {
+            agentId,
+            ...(scope.env ? { env: scope.env } : {}),
+            sessionKey: persistedSessionKey ?? scope.sessionKey,
+            storePath,
+          },
+          {
+            readOnly: true,
+            keyFormat: options.keyFormat,
+            allowCanonicalMove: !persistedSessionKey,
+          },
+        );
+  const sessionKey = persistedSessionKey ?? selected?.normalizedKey ?? scope.sessionKey;
   return {
     agentId,
     sessionId: scope.sessionId,
     sessionKey,
     storePath,
+    ...(options.keyFormat
+      ? {
+          selectedSessionId: selected?.existing?.sessionId ?? null,
+          selectedLifecycleRevision: selected?.existing?.lifecycleRevision ?? null,
+        }
+      : {}),
   };
 }
 

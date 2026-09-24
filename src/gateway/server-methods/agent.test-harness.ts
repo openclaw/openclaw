@@ -299,7 +299,7 @@ vi.mock("../../agents/agent-scope.js", async () => {
       cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
       cfg?.agents?.defaults?.workspace ??
       "/tmp/workspace",
-    resolveAgentEffectiveModelPrimary: () => undefined,
+    resolveNativeModelPrimary: () => undefined,
   };
 });
 

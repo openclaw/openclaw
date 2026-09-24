@@ -9,7 +9,7 @@ import {
   withEnv,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import {
   captureDeliveryQueueStateContext,
@@ -254,7 +254,10 @@ describe("captured delivery queue state", () => {
       stage,
       context,
     );
-    const release = retireUnsentDelivery({ id, producerClaimId: claim.producerClaimId }, context);
+    const release = await retireUnsentDelivery(
+      { id, producerClaimId: claim.producerClaimId },
+      context,
+    );
     expect(release).toBeTypeOf("function");
     expect(await fs.readFile(artifact, "utf8")).toBe("synthetic audio");
     await withEnvAsync(

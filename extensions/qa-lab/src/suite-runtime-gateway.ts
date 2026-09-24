@@ -6,6 +6,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -37,33 +38,15 @@ async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT
 }
 
 async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, timeoutMs = 45_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const { response, release } = await fetchWithSsrFGuard({
-        url: `${env.gateway.baseUrl}/readyz`,
-        policy: { allowPrivateNetwork: true },
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
-      });
-      try {
-        const ready = response.ok;
-        await discardIgnoredResponseBody(response);
-        if (ready) {
-          return;
-        }
-      } finally {
-        await release();
-      }
-    } catch {
-      // retry
-    }
-    const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) {
-      await sleep(Math.min(250, remainingMs));
-    }
+  const ready = await waitForQaHttpReady(
+    `${env.gateway.baseUrl}/readyz`,
+    timeoutMs,
+    250,
+    "qa-lab-suite-wait-for-gateway-healthy",
+  );
+  if (!ready) {
+    throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
   }
-  throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
 
 async function waitForTransportReady(
@@ -192,7 +175,11 @@ function withoutQaConfigApplyVolatileFields(
   return comparable;
 }
 
-function isConfigApplyNoopForSnapshot(config: Record<string, unknown>, raw: string): boolean {
+function isConfigMutationNoopForSnapshot(
+  action: "config.patch" | "config.apply",
+  config: Record<string, unknown>,
+  raw: string,
+) {
   let nextConfig: unknown;
   try {
     nextConfig = JSON.parse(raw);
@@ -202,33 +189,12 @@ function isConfigApplyNoopForSnapshot(config: Record<string, unknown>, raw: stri
   if (!isPlainObject(nextConfig)) {
     return false;
   }
-  return areJsonValuesEqual(
-    withoutQaConfigApplyVolatileFields(config),
-    withoutQaConfigApplyVolatileFields(nextConfig),
-  );
-}
-
-function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: string): boolean {
-  let patch: unknown;
-  try {
-    patch = JSON.parse(raw);
-  } catch {
-    return false;
-  }
-  if (!isPlainObject(patch)) {
-    return false;
-  }
-  return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
-}
-
-function isConfigMutationNoopForSnapshot(
-  action: "config.patch" | "config.apply",
-  config: Record<string, unknown>,
-  raw: string,
-) {
   return action === "config.patch"
-    ? isConfigPatchNoopForSnapshot(config, raw)
-    : isConfigApplyNoopForSnapshot(config, raw);
+    ? areJsonValuesEqual(applyQaMergePatch(config, nextConfig), config)
+    : areJsonValuesEqual(
+        withoutQaConfigApplyVolatileFields(config),
+        withoutQaConfigApplyVolatileFields(nextConfig),
+      );
 }
 
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {

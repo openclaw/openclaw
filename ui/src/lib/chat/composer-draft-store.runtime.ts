@@ -35,11 +35,19 @@ export type DurableQuestionDraft = {
   reopenedAfterBoundary?: string;
 };
 
+export type DurableDraftModelSelection = {
+  agentId: string;
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+};
+
 type DurableComposerDraft = {
   revision: number;
   text: string;
   mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
+  modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
 };
@@ -160,6 +168,18 @@ function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {
   ) {
     return null;
   }
+  const selection = record.modelSelection;
+  if (
+    selection !== undefined &&
+    (!selection ||
+      typeof selection !== "object" ||
+      typeof selection.agentId !== "string" ||
+      typeof selection.model !== "string" ||
+      typeof selection.thinkingLevel !== "string" ||
+      (selection.agentRuntime !== undefined && typeof selection.agentRuntime !== "string"))
+  ) {
+    record.modelSelection = undefined;
+  }
   record.mentions = readHumanMentions(record.text, record.mentions);
   // SAFETY: the complete stored shape and every attachment payload were validated above.
   return record as StoredDurableComposerDraft;
@@ -169,6 +189,7 @@ function isActiveDraft(record: StoredDurableComposerDraft): boolean {
   return Boolean(
     record.text ||
     record.goalMode ||
+    record.modelSelection ||
     record.attachments.length > 0 ||
     record.questionDrafts?.length,
   );
@@ -182,6 +203,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     text: "",
     mentions: undefined,
     goalMode: undefined,
+    modelSelection: undefined,
     attachments: [],
     questionDrafts: undefined,
     updatedAt: now,
@@ -466,6 +488,7 @@ export async function readDurableComposerDraft(
         text: record.text,
         ...(record.mentions?.length ? { mentions: record.mentions } : {}),
         ...(record.goalMode ? { goalMode: record.goalMode } : {}),
+        ...(record.modelSelection ? { modelSelection: record.modelSelection } : {}),
         attachments: record.attachments,
         ...(record.questionDrafts?.length ? { questionDrafts: record.questionDrafts } : {}),
       },
@@ -536,6 +559,7 @@ export async function writeDurableComposerDraft(
         ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
         : {}),
       ...(draft.goalMode ? { goalMode: draft.goalMode } : {}),
+      ...(draft.modelSelection ? { modelSelection: { ...draft.modelSelection } } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
       updatedAt: now,

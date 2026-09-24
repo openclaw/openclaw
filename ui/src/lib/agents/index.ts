@@ -101,17 +101,6 @@ export type AgentCapability = {
   dispose: () => void;
 };
 
-async function loadAgentsList(client: GatewayBrowserClient): Promise<AgentsListResult> {
-  return client.request<AgentsListResult>("agents.list", {});
-}
-
-async function loadAgentFilesList(
-  client: GatewayBrowserClient,
-  agentId: string,
-): Promise<AgentsFilesListResult | null> {
-  return client.request<AgentsFilesListResult | null>("agents.files.list", { agentId });
-}
-
 function hasSelectedAgentMismatch(state: AgentToolsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
@@ -309,7 +298,8 @@ export function createAgentCapability(
     state.agentsLoading = true;
     state.agentsError = null;
     publish();
-    const request = loadAgentsList(scope.client)
+    const request = scope.client
+      .request<AgentsListResult>("agents.list", {})
       .then((result) => {
         const current = lifecycle.isCurrent(scope) && listRevision === revision;
         if (current) {
@@ -367,7 +357,8 @@ export function createAgentCapability(
     publish();
     const owner = Symbol("agent-files-request-owner");
     fileRequestOwners.set(agentId, owner);
-    const request = loadAgentFilesList(scope.client, agentId)
+    const request = scope.client
+      .request<AgentsFilesListResult | null>("agents.files.list", { agentId })
       .then((result) => {
         const current = lifecycle.isCurrent(scope) && fileRequestOwners.get(agentId) === owner;
         if (current && result) {

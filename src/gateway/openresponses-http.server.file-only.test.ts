@@ -79,6 +79,86 @@ function createInputFile(filename: string) {
 }
 
 describe("OpenResponses file-only input that renders to images", () => {
+  it("labels only incomplete file text through the HTTP input_file boundary", async () => {
+    const actual =
+      await vi.importActual<typeof import("../media/input-files.js")>("../media/input-files.js");
+    extractFileContentFromSourceMock.mockImplementation(actual.extractFileContentFromSource);
+    agentCommandMock.mockResolvedValueOnce(undefined);
+    const maxChars = 60_000;
+    const files = [
+      { name: "under.txt", length: maxChars - 1 },
+      { name: "exact.txt", length: maxChars },
+      { name: "over.txt", length: maxChars + 1 },
+    ];
+    const res = await postResponses({
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: files.map(({ name, length }) => ({
+            type: "input_file",
+            source: {
+              type: "base64",
+              media_type: "text/plain",
+              filename: name,
+              data: Buffer.from("a".repeat(length)).toString("base64"),
+            },
+          })),
+        },
+      ],
+    });
+    expect(res.status, await res.text()).toBe(200);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    const blocks = [
+      ...(opts.extraSystemPrompt ?? "").matchAll(/<file name="([^"]+)">([\s\S]*?)<\/file>/g),
+    ];
+    expect(blocks.map((block) => block[1])).toEqual(files.map((file) => file.name));
+    expect(
+      blocks.map((block) => block[2]?.includes("[Partial document: text truncated.]")),
+    ).toEqual([false, false, true]);
+    expect(blocks[2]?.[2]).toContain("a".repeat(maxChars));
+    expect(blocks[2]?.[2]).not.toContain("a".repeat(maxChars + 1));
+  });
+
+  it("keeps extraction truncation visible outside uploaded file content", async () => {
+    extractFileContentFromSourceMock.mockResolvedValueOnce({
+      filename: "partial.pdf",
+      text: "visible prefix",
+      images: [],
+      metadata: {
+        pages: {
+          total: 21,
+          processed: [1, 2, 3],
+          selection: "automatic",
+          truncated: true,
+        },
+        textTruncated: false,
+        imagesTruncated: false,
+      },
+    });
+    agentCommandMock.mockResolvedValueOnce(undefined);
+
+    const res = await postResponses({
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [createInputFile("partial.pdf")],
+        },
+      ],
+    });
+
+    const body = await res.text();
+    expect(res.status, body).toBe(200);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    expect(opts.extraSystemPrompt).toContain("[Partial document: 3 of 21 pages processed.]");
+    expect(opts.extraSystemPrompt).toMatch(
+      /\[Partial document[^]*<<<EXTERNAL_UNTRUSTED_CONTENT[^]*visible prefix/,
+    );
+  });
+
   it("accepts a file-only turn whose file renders to images and forwards them", async () => {
     extractFileContentFromSourceMock.mockResolvedValueOnce({
       filename: "scan.pdf",

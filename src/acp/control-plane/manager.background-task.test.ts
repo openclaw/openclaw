@@ -15,6 +15,7 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/detached-task-runtime.test-support.js";
+import { captureTaskDeliveryWork } from "../../tasks/task-registry-delivery.test-support.js";
 import { findTaskByRunId, getTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
@@ -124,6 +125,7 @@ describe("resolveBackgroundTaskFailureStatus", () => {
 describe("ACP background task execution binding", () => {
   it("keeps distinct execution tasks and routes late same-instance mirrors to the original task", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
+      using deliveries = captureTaskDeliveryWork();
       const runtime = getDetachedTaskLifecycleRuntime();
       const start = vi.fn(runtime.startTaskRunByRunId);
       const fail = vi.fn(runtime.failTaskRunByRunId);
@@ -202,6 +204,7 @@ describe("ACP background task execution binding", () => {
       expect(findTaskByRunId("run-later-acp")?.taskId).toBe(otherRun?.taskId);
       expect(findTaskByRunId(context.runId)?.taskId).toBe(second.taskId);
       expect(getTaskById(first.taskId)).toEqual(original);
+      await deliveries.settle();
     });
   });
 

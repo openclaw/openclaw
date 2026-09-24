@@ -49,7 +49,7 @@ suite.define(() => {
         // to the installed list rather than exiting the entire Settings workspace.
         await page.keyboard.press("Escape");
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
-        await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
+        await page.getByRole("heading", { level: 1, name: "Plugins", exact: true }).waitFor();
       });
     },
   );

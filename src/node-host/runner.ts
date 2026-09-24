@@ -12,7 +12,7 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
-import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
@@ -86,39 +86,6 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
-
-type NodeHostReconnectPausedDeps = {
-  writeLine?: (message: string) => void;
-  exit?: (code: number) => void;
-};
-
-function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
-  return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
-}
-
-function formatNodeHostReconnectPausedMessage(
-  info: GatewayReconnectPausedInfo,
-  params?: { exiting?: boolean },
-): string {
-  const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
-  const reason = info.reason.trim() || "no close reason";
-  const action = params?.exiting ? "exiting for supervisor restart" : "waiting for operator action";
-  return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
-}
-
-function handleNodeHostReconnectPaused(
-  info: GatewayReconnectPausedInfo,
-  deps: NodeHostReconnectPausedDeps = {},
-): void {
-  const shouldExit = shouldExitNodeHostOnReconnectPaused(info.detailCode);
-  const writeLine = deps.writeLine ?? writeStderrLine;
-  writeLine(formatNodeHostReconnectPausedMessage(info, { exiting: shouldExit }));
-  if (!shouldExit) {
-    return;
-  }
-  const exit = deps.exit ?? ((code: number): never => process.exit(code));
-  exit(1);
-}
 
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
@@ -386,13 +353,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       void finish(1);
     },
     onReconnectPaused: (info) => {
-      handleNodeHostReconnectPaused(info, {
-        exit: (code) => {
-          // Terminal auth/version pauses restart under a supervisor; close MCP
-          // subprocesses first so restart loops cannot orphan server processes.
-          void finish(code).finally(() => requestExitAfterOneShotOutput(undefined, code));
-        },
-      });
+      const shouldExit =
+        info.detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(info.detailCode);
+      const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
+      const reason = info.reason.trim() || "no close reason";
+      const action = shouldExit ? "exiting for supervisor restart" : "waiting for operator action";
+      writeStderrLine(
+        `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`,
+      );
+      if (shouldExit) {
+        // Terminal auth/version pauses restart under a supervisor; close MCP
+        // subprocesses first so restart loops cannot orphan server processes.
+        void finish(1).finally(() => requestExitAfterOneShotOutput(undefined, 1));
+      }
     },
     onClose: (code, reason) => {
       activeRuntime.disconnect();
