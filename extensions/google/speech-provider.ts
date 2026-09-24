@@ -16,7 +16,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 
-const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.8-flash-tts";
+// Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
+const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;

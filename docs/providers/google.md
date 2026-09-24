@@ -308,11 +308,11 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ## Text-to-speech
 
-The bundled `google` speech provider uses Gemini API TTS. The default model is
-`gemini-3.8-flash-tts`. `gemini-3.8-flash-lite-tts` is the faster, lower-cost
-alternative. Older preview models stay available:
-`gemini-3.1-flash-tts-preview`, `gemini-2.5-flash-preview-tts`, and
-`gemini-2.5-pro-preview-tts`.
+The bundled `google` speech provider uses Gemini API TTS. The default model
+stays `gemini-3.1-flash-tts-preview`. Set `model` to `gemini-3.8-flash-tts` to
+opt in to Gemini 3.8, or `gemini-3.8-flash-lite-tts` for the faster, lower-cost
+variant. `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts` remain
+available.
 
 - Default voice: `Kore`
 - Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`

@@ -230,7 +230,7 @@ describe("Google speech provider", () => {
   it("advertises all documented Gemini TTS-capable models", () => {
     const provider = buildGoogleSpeechProvider();
 
-    expect(provider.defaultModel).toBe("gemini-3.8-flash-tts");
+    expect(provider.defaultModel).toBe("gemini-3.1-flash-tts-preview");
     expect(provider.models).toEqual([
       "gemini-3.8-flash-tts",
       "gemini-3.8-flash-lite-tts",
@@ -484,7 +484,7 @@ describe("Google speech provider", () => {
     });
 
     const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
-      url: "https://generativelanguage.googleapis.com/v1beta/interactions",
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
     }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
@@ -516,7 +516,7 @@ describe("Google speech provider", () => {
       });
 
       const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
-        url: "https://generativelanguage.googleapis.com/v1beta/interactions",
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
       }) as { headers?: HeadersInit };
       expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
     },
