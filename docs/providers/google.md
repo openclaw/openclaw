@@ -327,6 +327,7 @@ vocal tags use angle brackets, such as `<laugh>` or `<short pause>`.
 
 Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
 dialogue. Label each turn as `Name: spoken words`. Those labels are not spoken.
+Words before the first label are spoken by that first speaker, not dropped.
 A transcript with no labels stays on the single-voice path. Multi-speaker
 dialogue requires `gemini-3.8-flash-tts` or `gemini-3.8-flash-lite-tts`.
 
