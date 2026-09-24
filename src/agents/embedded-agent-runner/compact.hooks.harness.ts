@@ -974,6 +974,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     const { listAgentIds } = await import("../agent-scope-config.js");
     return {
       listAgentEntries: vi.fn(() => []),
+      listAgentEntriesWithSource: vi.fn(() => []),
       listAgentIds,
       resolveAgentConfig: resolveAgentConfigMock,
       resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
