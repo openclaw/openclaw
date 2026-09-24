@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -9,9 +10,14 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as updateLedger from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
@@ -50,18 +56,43 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const nativePlatform = process.platform;
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.enabled = true;
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  // The service is Windows-shaped; SQLite still opens files on the real host.
+  const existingUri = nodeSqlite.resolveExistingSqliteFileUri;
+  const immutableUri = nodeSqlite.resolveImmutableSqliteFileUri;
+  vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((pathname) =>
+    existingUri(pathname, nativePlatform),
+  );
+  vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((pathname) =>
+    immutableUri(pathname, nativePlatform),
+  );
+  const readRun = updateLedger.getUpdateRun;
+  vi.spyOn(updateLedger, "getUpdateRun").mockImplementation((...args) => {
+    const previousPlatform = process.platform;
+    platform.mockReturnValue(nativePlatform);
+    try {
+      return readRun(...args);
+    } finally {
+      platform.mockReturnValue(previousPlatform);
+    }
+  });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
 
 it.each([
+  "plugin warning",
   "launch failure",
   "failed terminal result",
   "replaced task",
   "changed protected task",
-] as const)("keeps Windows autostart suspended across migrated finalizer %s", async (outcome) => {
+] as const)("hands off migrated Windows updates: %s", async (outcome) => {
   const home = await fs.realpath(dirs.make("migrated-windows-"));
   await withEnvAsync(
     {
@@ -77,16 +108,23 @@ it.each([
       OPENCLAW_SERVICE_KIND: undefined,
     },
     async () => {
-      mockProcessPlatform("win32");
       const root = process.cwd();
+      const runId = createUpdateRun({ trigger: "cli" }).runId;
+      const activationTimeoutMs = 3_600_000;
+      const run = { runId, env: { ...process.env }, activationTimeoutMs };
+      let running = true;
       let programArguments = [process.execPath, path.join(root, "openclaw.mjs"), "gateway"];
       mocks.service.mockReturnValue(
         createMockGatewayService({
+          label: "Scheduled Task",
+          stop: async () => {
+            running = false;
+          },
           readCommand: async () => ({
             programArguments,
             environment: { HOME: home },
           }),
-          readRuntime: async () => ({ status: "running" }),
+          readRuntime: async () => ({ status: running ? "running" : "stopped" }),
           isLoaded: async () => true,
         }),
       );
@@ -95,14 +133,24 @@ it.each([
         updateInstallKind: "package",
         shouldRestart: true,
         jsonMode: true,
+        updateRun: run,
       });
+      expect(stopped.serviceMutationSkipMessage).toBeUndefined();
+      expect(stopped).toMatchObject({ stopped: true, inspected: true });
       const recovery = stopped.windowsTaskAutoStartRecovery;
       expect(recovery).toBeDefined();
       if (outcome === "changed protected task" && stopped.serviceUpdateVerdict?.kind === "owned") {
         stopped.serviceUpdateVerdict.refreshDefinition = false;
       }
       recovery?.beginMutation();
-      const activationTimeoutMs = 3_600_000;
+      expect(running).toBe(false);
+      expect(mocks.enabled).toBe(false);
+      // Candidate Doctor publishes a schema the retained updater cannot open.
+      closeOpenClawStateDatabaseForTest();
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      database.close();
+      expect(() => getUpdateRun(runId)).toThrow(/newer schema version/);
       let enabledAtWorkerStart: boolean | undefined;
       vi.mocked(runUtf8CommandWithTimeout).mockImplementationOnce(async (_argv, options) => {
         assert(typeof options === "object");
@@ -130,13 +178,41 @@ it.each([
           JSON.stringify({
             result: {
               ...input.params.result,
-              status: "error",
-              reason: "plugin-convergence-failed",
+              ...(outcome === "plugin warning"
+                ? {
+                    postUpdate: {
+                      plugins: {
+                        status: "warning",
+                        changed: false,
+                        sync: {
+                          changed: false,
+                          switchedToBundled: [],
+                          switchedToNpm: [],
+                          warnings: [],
+                          errors: [],
+                        },
+                        npm: { changed: false, outcomes: [] },
+                        integrityDrifts: [],
+                        warnings: [
+                          {
+                            reason: "plugin-version-drift",
+                            message: "codex: 2026.9.5 (npm) -> expected 2026.9.6",
+                            guidance: ["openclaw doctor --fix"],
+                          },
+                        ],
+                      },
+                    },
+                  }
+                : { status: "error", reason: "plugin-convergence-failed" }),
             },
-            terminalRunId: "migrated-windows-run",
-            exitCode: 1,
+            terminalRunId: runId,
+            exitCode: outcome === "plugin warning" ? 0 : 1,
           }),
         );
+        if (outcome === "plugin warning") {
+          mocks.enabled = true;
+          running = true;
+        }
         return {
           stdout: "",
           stderr: "",
@@ -147,7 +223,6 @@ it.each([
           cleanup: "normal",
         };
       });
-      const runId = "migrated-windows-run";
       const operation = continueMigratedUpdateInFreshProcess(
         {
           mutationStarted: true,
@@ -173,7 +248,7 @@ it.each([
           channel: "stable",
           downgradeRisk: false,
           shouldRestart: true,
-          opts: { json: true, run: { runId, env: { ...process.env }, activationTimeoutMs } },
+          opts: { json: true, run },
           preManagedServiceStop: stopped,
           controlPlaneUpdateSentinelMeta: null,
           preUpdatePluginInstallRecords: {},
@@ -189,14 +264,20 @@ it.each([
           await expect(operation).rejects.toThrow("candidate finalizer unavailable");
         } else if (outcome === "replaced task" || outcome === "changed protected task") {
           await expect(operation).rejects.toThrow(/ownership or manager identity changed/);
+        } else if (outcome === "plugin warning") {
+          await expect(operation).resolves.toMatchObject({
+            exitCode: 0,
+            result: { status: "ok", postUpdate: { plugins: { status: "warning" } } },
+          });
         } else {
           await expect(operation).resolves.toMatchObject({ exitCode: 1 });
         }
         expect(enabledAtWorkerStart).toBe(false);
         const replaced = outcome === "replaced task" || outcome === "changed protected task";
-        expect(mocks.enabled).toBe(replaced);
+        expect(mocks.enabled).toBe(replaced || outcome === "plugin warning");
         await recovery?.restore();
-        expect(mocks.enabled).toBe(replaced);
+        expect(mocks.enabled).toBe(replaced || outcome === "plugin warning");
+        expect(running).toBe(outcome === "plugin warning");
       } finally {
         await recovery?.complete(false);
       }
