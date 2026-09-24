@@ -55,7 +55,7 @@ const ADMISSION_TIMEOUT_MS = 10_000;
 const MAX_STORES = 64;
 const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
-export const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
+const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 
 export class SqliteWorkerBroker {
   // WAL readers on independent actors can progress on separate threads without blocking writers.

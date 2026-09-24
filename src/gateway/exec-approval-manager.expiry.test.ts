@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
-import { SQLITE_WORKER_MAX_QUEUED_BYTES } from "../infra/sqlite-worker-broker.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -67,9 +66,8 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
     };
     try {
-      const chunkBytes = 64 * 1024 * 1024;
-      for (let remaining = SQLITE_WORKER_MAX_QUEUED_BYTES; remaining > 0; remaining -= chunkBytes) {
-        reservations.push(reserveSqliteWorkerInputPreparation(Math.min(chunkBytes, remaining)));
+      for (let index = 0; index < 4; index += 1) {
+        reservations.push(reserveSqliteWorkerInputPreparation(64 * 1024 * 1024));
       }
     } catch (error) {
       release();
