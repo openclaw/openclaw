@@ -59,6 +59,25 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     return timers;
   }
 
+  function holdWorkerInputCapacity() {
+    const reservations: ReturnType<typeof reserveSqliteWorkerInputPreparation>[] = [];
+    const release = () => {
+      for (const reservation of reservations.splice(0)) {
+        reservation.release();
+      }
+    };
+    try {
+      const chunkBytes = 64 * 1024 * 1024;
+      for (let remaining = SQLITE_WORKER_MAX_QUEUED_BYTES; remaining > 0; remaining -= chunkBytes) {
+        reservations.push(reserveSqliteWorkerInputPreparation(Math.min(chunkBytes, remaining)));
+      }
+    } catch (error) {
+      release();
+      throw error;
+    }
+    return release;
+  }
+
   it("rejects approval records when expiry would exceed the Date range", (testContext) => {
     const manager = createTestApprovalManager(testContext);
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
@@ -236,10 +255,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         onExpired,
         onLifecycle,
       } = await prepareExpiry(testContext);
-      const capacity =
-        code !== "unavailable"
-          ? reserveSqliteWorkerInputPreparation(SQLITE_WORKER_MAX_QUEUED_BYTES)
-          : undefined;
+      const releaseCapacity = code !== "unavailable" ? holdWorkerInputCapacity() : undefined;
       if (code === "unavailable") {
         vi.mocked(operatorApprovalStore.forceDenyOperatorApproval).mockRejectedValueOnce(
           new SqliteWorkerError("synthetic pre-execution unavailable", "unavailable"),
@@ -248,7 +264,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       try {
         clock.mockReturnValue(record.expiresAtMs);
         invoke(deadlines()[0]);
-        await refused.promise;
+        await expect(Promise.race([refused.promise, decision])).resolves.toBeInstanceOf(Error);
         expect(onError.mock.calls[0]?.[0]).toMatchObject({
           code: code === "unavailable" ? "unavailable" : "overloaded",
         });
@@ -259,7 +275,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
           0,
         );
       } finally {
-        capacity?.release();
+        releaseCapacity?.();
       }
       expect(deadlines()).toHaveLength(2);
       const retry = deadlines()[1];
@@ -349,13 +365,15 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     async ({ operation, replaced }, testContext) => {
       const fixture = await prepareExpiry(testContext);
       const { manager, databaseOptions, record, clock, invoke, deadlines, refused } = fixture;
-      const capacity = reserveSqliteWorkerInputPreparation(SQLITE_WORKER_MAX_QUEUED_BYTES);
+      const releaseCapacity = holdWorkerInputCapacity();
       try {
         clock.mockReturnValue(record.expiresAtMs);
         invoke(deadlines()[0]);
-        await refused.promise;
+        await expect(Promise.race([refused.promise, fixture.decision])).resolves.toBeInstanceOf(
+          Error,
+        );
       } finally {
-        capacity.release();
+        releaseCapacity();
       }
       expect(deadlines()).toHaveLength(2);
       if (replaced) {

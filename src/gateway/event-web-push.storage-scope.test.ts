@@ -320,6 +320,34 @@ it("rejects excess waiting work before entering storage and admits new work afte
   expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
 });
 
+it("keeps the Web Push input budget bounded independently of the database broker", async () => {
+  const { stateDir, selected, releaseReply } = prepareQueuedRead();
+  await upsertBinding(stateDir, "profile-a", 1);
+  const read = withBoundWebPushSubscriptions(stateDir, () => ({ start: () => undefined }));
+  await selected.promise;
+  const profileId = "x".repeat(20 * 1024 * 1024);
+  const queued = Array.from({ length: 3 }, (_, index) =>
+    upsertBinding(stateDir, profileId, index + 2),
+  );
+  const overflow = upsertBinding(stateDir, profileId, 5);
+  const refusal = overflow.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    expect(await Promise.race([refusal, nextTurn()])).toMatchObject({ code: "overloaded" });
+    expect(mocks.nativeUpsert).toHaveBeenCalledOnce();
+  } finally {
+    releaseReply.resolve();
+    await Promise.allSettled([read, ...queued, overflow]);
+  }
+  await expect(upsertBinding(stateDir, profileId, 6)).resolves.toMatchObject({
+    subscriptionId: "scope-subscription",
+  });
+  expect(mocks.nativeUpsert).toHaveBeenCalledTimes(5);
+  expect(mocks.nativeDatabaseOpen).not.toHaveBeenCalled();
+});
+
 it.each(["read rejection", "preparation exception"] as const)(
   "settles waiting mutations after a %s",
   async (failure) => {
