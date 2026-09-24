@@ -1,13 +1,16 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
 import type {
   ConversationSendResult,
   ConversationTurnResult,
 } from "../packages/gateway-protocol/src/schema/agent.js";
-import { createHostedConversationTools } from "../src/agents/tools/conversation-tools.js";
-import * as gateway from "../src/agents/tools/in-process-gateway.js";
+import {
+  createConversationsSendTool,
+  createConversationsTurnTool,
+} from "../src/agents/tools/conversation-tools.js";
+import { callAgentToolGatewayRequest } from "../src/agents/tools/in-process-gateway.js";
+import { resolveConversation } from "../src/config/sessions/conversation-registry.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
 const destination = { conversationRef, channel: "qa-channel" };
@@ -26,32 +29,32 @@ function delivery(
 }
 
 describe("Codex core conversation delivery", () => {
-  afterEach(() => vi.restoreAllMocks());
   it.each([
     delivery("send", { ...destination, status: "sent" }, true),
-    ...(["sent", "queued"] as const).map((status) =>
+    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) =>
       delivery("send", { ...destination, status, messageId: "outbound-1" }, status === "sent"),
     ),
     delivery("turn", { ...correlated, status: "replied", reply }, true),
     delivery("turn", { ...correlated, status: "timeout" }, true, false),
-    ...(["sent", "queued"] as const).map((status) =>
+    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) =>
       delivery(
         "turn",
-        { ...correlated, status, error: "No process-local reply waiter remains." },
+        {
+          ...correlated,
+          status,
+          correlationPersisted: status === "sent" || status === "queued",
+          error: "No process-local reply waiter remains.",
+        },
         status === "sent",
         false,
       ),
     ),
   ])("records $name without changing the Gateway result", async (testCase) => {
-    const callGateway = vi
-      .spyOn(gateway, "callAgentToolGatewayRequest")
-      .mockResolvedValue(testCase.receipt);
-    const tool = expectDefined(
-      createHostedConversationTools(undefined, "main", {}).find(
-        (entry) => entry.name === `conversations_${testCase.kind}`,
-      ),
-      "conversation tool",
-    );
+    const deps = { callGateway: callAgentToolGatewayRequest, resolveConversation };
+    const callGateway = vi.spyOn(deps, "callGateway").mockResolvedValue(testCase.receipt);
+    const createTool =
+      testCase.kind === "send" ? createConversationsSendTool : createConversationsTurnTool;
+    const tool = createTool({ agentId: "main" }, deps);
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
       signal: new AbortController().signal,

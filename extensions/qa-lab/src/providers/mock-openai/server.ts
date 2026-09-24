@@ -176,6 +176,7 @@ import {
   countImageInputs,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { resolvePerTurnSendBudgetResponse } from "./mock-openai-per-turn-send-budget.js";
 import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
 import { writeMockOpenAiResponsesHttp } from "./mock-openai-responses-http.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
@@ -201,6 +202,7 @@ import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
+  buildDuplicateToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
   toolSearchOutputHasCandidate,
@@ -541,6 +543,17 @@ async function buildResponsesPayload(
   });
   if (automationScenarioTurn) {
     return automationScenarioTurn;
+  }
+  const perTurnSendBudgetResponse = resolvePerTurnSendBudgetResponse({
+    allInputText,
+    input,
+    hasDeclaredTool: (tool: string) => hasDeclaredTool(body, tool),
+    buildToolCallEventsWithArgs,
+    buildDuplicateToolCallEventsWithArgs,
+    buildAssistantEvents,
+  });
+  if (perTurnSendBudgetResponse) {
+    return perTurnSendBudgetResponse;
   }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.

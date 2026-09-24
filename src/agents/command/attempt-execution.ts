@@ -704,6 +704,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,

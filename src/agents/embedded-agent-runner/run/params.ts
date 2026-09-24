@@ -35,6 +35,7 @@ import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.typ
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { TurnSendLedgerScope } from "../../tools/turn-send-ledger.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -165,6 +166,8 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /** Gives the logical-run owner the exact prepared scope to clear at its terminal. */
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */

@@ -30,6 +30,7 @@ import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { IsolatedCompletionPurpose } from "../isolated-completion-purpose.js";
+import type { TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import type { CliSessionBindingFacts } from "./session-binding.types.js";
 
@@ -59,7 +60,9 @@ export type RunCliAgentParams = Pick<
   | "terminalReplyExpectation"
   | "streamParams"
   | "bootstrapContextMode"
+  | "currentMessagingTarget"
   | "chatId"
+  | "onDeferredTurnSendLedgerScope"
   | "bashElevated"
   | "toolsAllow"
   | "skillLibraryAuthoring"
@@ -265,4 +268,11 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  // Exact per-turn send ledger slot the loopback message/conversations_send tools
+  // write under on this run (buildCliMcpGrantContext forwards these verbatim to the
+  // tools). The settlement terminal deletes this precise slot so a reused runId — the
+  // isolated cron durable-session-id-as-runId case — does not inherit a prior turn's
+  // committed counts or seen operationIds. Absent when no loopback grant was minted
+  // (no OpenClaw tools ran, so nothing was written).
+  turnSendLedgerScope?: TurnSendLedgerScope;
 };

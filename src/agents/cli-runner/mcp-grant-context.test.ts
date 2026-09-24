@@ -90,6 +90,16 @@ describe("buildCliMcpGrantContext", () => {
   ])("does not stamp source-only authority for %j", (overrides) => {
     expect(buildGrant(overrides).sourceReplyOnly).toBeUndefined();
   });
+
+  it("carries both the native channel id and the routable messaging target", () => {
+    const grant = buildGrant({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+    });
+    expect(grant.currentChannelId).toBe("D123");
+    expect(grant.currentMessagingTarget).toBe("user:U123");
+  });
+
   it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
     expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });

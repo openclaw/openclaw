@@ -17,6 +17,7 @@ export function buildCommandAttemptToolContext(
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    currentMessagingTarget: params.runContext.currentMessagingTarget,
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
