@@ -489,14 +489,26 @@ describe("narrow session read owners", () => {
       reader.connect.scopes = ["operator.sessions.read"];
       const cfg = rolePolicyConfig();
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      for (const changed of ["metadata", "authority", "generation", "visibility"] as const) {
+      for (const changed of [
+        "metadata-no-revision",
+        "metadata",
+        "authority",
+        "generation",
+        "visibility",
+      ] as const) {
+        const metadataOnly = changed === "metadata-no-revision" || changed === "metadata";
         const entry = {
           sessionId: "original",
-          lifecycleRevision: "original",
+          lifecycleRevision: changed === "metadata-no-revision" ? undefined : "original",
           updatedAt: 1,
           visibility: "shared" as const,
         };
         await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        if (changed === "metadata-no-revision") {
+          expect(
+            sessions.loadSessionEntry({ agentId: "main", sessionKey: key })?.lifecycleRevision,
+          ).toBeUndefined();
+        }
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const io = prepareRead(method, async () => {
@@ -535,7 +547,7 @@ describe("narrow session read owners", () => {
               { agentId: "main", sessionKey: key },
               {
                 ...entry,
-                ...(changed === "metadata"
+                ...(metadataOnly
                   ? { label: "Renamed during read", updatedAt: 2 }
                   : changed === "generation"
                     ? { lifecycleRevision: "replacement" }
@@ -557,7 +569,7 @@ describe("narrow session read owners", () => {
         } else {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond).toHaveBeenCalledOnce();
-          const unchangedAccess = method === "sessions.branches.list" && changed === "metadata";
+          const unchangedAccess = method === "sessions.branches.list" && metadataOnly;
           expect(respond.mock.calls[0]?.[0]).toBe(unchangedAccess);
           expect(respond.mock.calls[0]?.[1]).toEqual(
             unchangedAccess ? { branches: [] } : undefined,
