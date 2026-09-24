@@ -190,10 +190,12 @@ export const webHandlers: GatewayRequestHandlers = {
         accountId,
       };
       const preflightResult = await gateway.loginWithQrStartPreflight?.(loginParams);
-      if (preflightResult) {
+      if (preflightResult && !preflightResult.qrDataUrl) {
         respond(true, preflightResult, undefined);
         return;
       }
+      // QR results must come through the start path so the normal channel
+      // shutdown and restoration rules run before Gateway returns the QR.
       const wasRunning = wasChannelRunning({
         context,
         channelId: provider.id,
