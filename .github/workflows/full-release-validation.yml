@@ -108,7 +108,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
+        description: Optional cross-OS selection; all runs require every OS/install/upgrade suite, focused cross-os runs allow windows/packaged-upgrade
         required: false
         default: ""
         type: string
@@ -177,7 +177,6 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
-  FULL_RELEASE_FLAKE_RETRY_CONTRACT: "1"
 
 jobs:
   resolve_target:
@@ -204,7 +203,6 @@ jobs:
       candidate_request_json: ${{ steps.candidate_request.outputs.request_json }}
       candidate_request_sha256: ${{ steps.candidate_request.outputs.request_sha256 }}
       source_admission_json: ${{ steps.publication_admission.outputs.json }}
-      known_flaky_jobs_json: ${{ steps.publication_dispatch.outputs.known_flaky_jobs_json }}
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
       plugin_compatibility_required: ${{ steps.plugin_compatibility.outputs.required }}
@@ -469,7 +467,6 @@ jobs:
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
@@ -489,12 +486,6 @@ jobs:
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
           target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
-          # The lane waiver rides on a repository variable (workflow_dispatch caps inputs at 25);
-          # it must name this exact target version so a stale value fails closed.
-          if [[ -n "${LANE_WAIVER// }" && "${LANE_WAIVER}" != "${target_version} "* && "${LANE_WAIVER}" != "${target_version}" ]]; then
-            echo "OPENCLAW_FRV_LANE_WAIVER must start with the target version ${target_version}: ${LANE_WAIVER}" >&2
-            exit 1
-          fi
           if [[ -n "${TELEGRAM_WAIVER:-}" ]]; then
             waived_channels="$(
             TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
@@ -815,7 +806,6 @@ jobs:
           COVERAGE_POLICY: ${{ steps.release_inputs.outputs.coverage_policy }}
           CI_RELEASE_SCOPE: ${{ steps.release_inputs.outputs.ci_release_scope }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           WAIVED_INTEGRATION_CHANNELS: ${{ steps.release_inputs.outputs.waived_integration_channels }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -842,9 +832,6 @@ jobs:
             if [[ -n "$TELEGRAM_WAIVER" ]]; then
               echo "- Telegram integration checks: waived/not run (\`${TELEGRAM_WAIVER}\`); not a pass"
               echo "- Owner-waived QA-live channels: $(jq -r 'join(", ")' <<< "$WAIVED_INTEGRATION_CHANNELS"); waived/not run, not a pass"
-            fi
-            if [[ -n "${LANE_WAIVER// }" ]]; then
-              echo "- Operator lane waiver (\`vars.OPENCLAW_FRV_LANE_WAIVER\`): \`${LANE_WAIVER}\`; non-proof lane failures are advisory, install-smoke/upgrade-survivor/pack/qualify/resolve_target proofs and artifact gates stay required"
             fi
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
@@ -1038,12 +1025,10 @@ jobs:
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
           TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
-          KNOWN_FLAKY_JOBS_JSON: ${{ needs.resolve_target.outputs.known_flaky_jobs_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           PUBLICATION_CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
         run: |
@@ -1071,12 +1056,10 @@ jobs:
             --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg coveragePolicy "$COVERAGE_POLICY" \
             --arg telegramWaiver "$TELEGRAM_WAIVER" \
-            --arg laneWaiver "$LANE_WAIVER" \
             --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             --arg extensionTestExcludePatternsJson "$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON" \
-            --arg knownFlakyJobsJson "$KNOWN_FLAKY_JOBS_JSON" \
             '{
               validationPurpose: $validationPurpose,
               publicationSelectionJson: $publicationSelectionJson,
@@ -1095,9 +1078,8 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson,
-              extensionTestExcludePatternsJson: $extensionTestExcludePatternsJson,
-              knownFlakyJobsJson: $knownFlakyJobsJson
-            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end) + (if $laneWaiver == "" then {} else {laneWaiver: $laneWaiver} end)')"
+              extensionTestExcludePatternsJson: $extensionTestExcludePatternsJson
+            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -1692,7 +1674,6 @@ jobs:
     name: Run package Telegram E2E
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
-    continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -1931,7 +1912,6 @@ jobs:
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
       source_parent_attempt: ${{ steps.plan.outputs.source_parent_attempt }}
-      known_flaky_children: ${{ steps.plan.outputs.known_flaky_children }}
     steps:
       - name: Checkout release execution plan tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1988,8 +1968,6 @@ jobs:
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          KNOWN_FLAKY_JOBS_JSON: ${{ needs.resolve_target.outputs.known_flaky_jobs_json || '[]' }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -2065,7 +2043,6 @@ jobs:
               --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
               --arg coveragePolicy "$COVERAGE_POLICY" \
               --arg telegramWaiver "$TELEGRAM_WAIVER" \
-              --argjson knownFlakyJobs "$KNOWN_FLAKY_JOBS_JSON" \
               --arg targetVersion "$TARGET_VERSION" \
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
@@ -2120,7 +2097,6 @@ jobs:
                 evidenceChangedPaths: $evidenceChangedPaths,
                 rerunGroup: $rerunGroup,
                 telegramWaiver: $telegramWaiver,
-                knownFlakyJobs: $knownFlakyJobs,
                 targetVersion: $targetVersion,
                 releasePackageSpec: $releasePackageSpec,
                 packageAcceptancePackageSpec: $packageAcceptancePackageSpec,
@@ -2176,130 +2152,9 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  automatic_flake_retry:
-    name: Automatic retry (${{ matrix.child }})
-    needs: [resolve_target, release_execution_plan]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.release_execution_plan.result == 'success' && needs.release_execution_plan.outputs.known_flaky_children != '' && needs.release_execution_plan.outputs.known_flaky_children != '[]' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      max-parallel: 7
-      matrix:
-        child: ${{ fromJSON(needs.release_execution_plan.outputs.known_flaky_children || '[]') }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
-      FULL_RELEASE_RETRY_CHILD: ${{ matrix.child }}
-      FULL_RELEASE_RETRY_INTENT_PATH: ${{ github.workspace }}/full-release-flake-intent/intent.json
-      FULL_RELEASE_RETRY_RECORD_PATH: ${{ github.workspace }}/full-release-flake-retry/${{ matrix.child }}.json
-    steps:
-      - name: Checkout automatic retry tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Download immutable release execution plan
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: full-release-execution-plan-${{ github.run_id }}
-          path: ${{ github.workspace }}/full-release-execution-plan
-
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Set automatic retry operation deadline
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          fs.appendFileSync(process.env.GITHUB_ENV, `FULL_RELEASE_RETRY_DEADLINE_MS=${Date.now() + 330 * 60_000}\n`);
-          NODE
-
-      - name: Restore automatic retry intent cache
-        id: intent_cache
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: full-release-flake-intent
-          key: full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}
-
-      - name: Restore automatic retry intent artifact
-        if: ${{ github.run_attempt != 1 && steps.intent_cache.outputs.cache-hit != 'true' }}
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}
-          path: ${{ github.workspace }}/full-release-flake-intent
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-
-      - name: Prepare automatic retry intent
-        id: prepare
-        run: node scripts/full-release-flake-retry.mjs prepare
-
-      - name: Upload automatic retry intent
-        id: intent_upload
-        if: steps.prepare.outputs.prepared == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: full-release-flake-intent-${{ github.run_id }}-${{ matrix.child }}
-          path: ${{ github.workspace }}/full-release-flake-intent/intent.json
-          if-no-files-found: error
-          overwrite: false
-
-      - name: Record automatic retry intent digest
-        id: intent_witness
-        if: steps.intent_upload.outcome == 'success'
-        env:
-          RETRY_INTENT_SHA256: ${{ steps.prepare.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          [[ "$RETRY_INTENT_SHA256" =~ ^[a-f0-9]{64}$ ]]
-          printf 'FRV_AUTO_RETRY_INTENT_SHA256=%s\n' "$RETRY_INTENT_SHA256"
-
-      - name: Save automatic retry intent
-        id: intent_save
-        if: ${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: full-release-flake-intent
-          key: full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}
-
-      - name: Execute automatic retry
-        if: ${{ (steps.prepare.outputs.prepared == 'true' && steps.intent_witness.outcome == 'success' && steps.intent_save.outcome == 'success') || steps.prepare.outputs.restored == 'true' }}
-        run: node scripts/full-release-flake-retry.mjs execute
-
-      - name: Locate automatic retry record
-        id: record
-        if: always()
-        run: |
-          set -euo pipefail
-          if [[ -f "$FULL_RELEASE_RETRY_RECORD_PATH" ]]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Record automatic retry rejection digest
-        if: ${{ always() && github.run_attempt == 1 && steps.record.outputs.exists == 'true' }}
-        run: node scripts/full-release-flake-retry.mjs witness
-
-      - name: Upload automatic retry record
-        if: ${{ always() && steps.record.outputs.exists == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: full-release-flake-retry-${{ github.run_id }}-${{ matrix.child }}-${{ github.run_attempt }}
-          path: ${{ github.workspace }}/full-release-flake-retry/${{ matrix.child }}.json
-          if-no-files-found: error
-          overwrite: false
-
   release_decision:
     name: Release Decision
-    needs: [resolve_target, release_execution_plan, automatic_flake_retry]
+    needs: [resolve_target, release_execution_plan]
     if: always()
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
@@ -2320,14 +2175,6 @@ jobs:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
 
-      - name: Download automatic retry records
-        if: ${{ needs.release_execution_plan.outputs.known_flaky_children != '' && needs.release_execution_plan.outputs.known_flaky_children != '[]' }}
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-flake-retry-records
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -2343,12 +2190,9 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           FULL_RELEASE_STATE_MODE: decision
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
-          FULL_RELEASE_RETRY_RECORDS_PATH: ${{ runner.temp }}/full-release-flake-retry-records
-          FULL_RELEASE_RETRY_OWNER_RESULT: ${{ needs.automatic_flake_retry.result }}
         run: &full_release_state |
           set -euo pipefail
           node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"
@@ -2375,7 +2219,7 @@ jobs:
 
   diagnostic_drain:
     name: Diagnostic Drain
-    needs: [resolve_target, release_execution_plan, automatic_flake_retry]
+    needs: [resolve_target, release_execution_plan]
     if: always()
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
@@ -2403,14 +2247,6 @@ jobs:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
 
-      - name: Download automatic retry records
-        if: ${{ needs.release_execution_plan.outputs.known_flaky_children != '' && needs.release_execution_plan.outputs.known_flaky_children != '[]' }}
-        continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: full-release-flake-retry-${{ github.run_id }}-*-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-flake-retry-records
-
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -2426,12 +2262,9 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           FULL_RELEASE_STATE_MODE: drain
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-          FULL_RELEASE_RETRY_RECORDS_PATH: ${{ runner.temp }}/full-release-flake-retry-records
-          FULL_RELEASE_RETRY_OWNER_RESULT: ${{ needs.automatic_flake_retry.result }}
         run: *full_release_state
 
       - name: Summarize locale validation
@@ -2578,7 +2411,6 @@ jobs:
         env:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           RELEASE_DECISION_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
@@ -2706,13 +2538,11 @@ jobs:
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
-          LANE_WAIVER: ${{ vars.OPENCLAW_FRV_LANE_WAIVER }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
-          KNOWN_FLAKY_JOBS_JSON: ${{ needs.resolve_target.outputs.known_flaky_jobs_json }}
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
           QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
           PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}

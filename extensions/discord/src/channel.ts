@@ -59,7 +59,6 @@ import {
   loadDiscordResolveUsersModule,
   loadDiscordSendModule,
   loadDiscordTargetResolverModule,
-  loadDiscordThreadBindingsManagerModule,
   probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
@@ -69,10 +68,6 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "./monitor/thread-bindings.session-updates.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
 import {
   looksLikeDiscordTargetId,
@@ -89,7 +84,7 @@ import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
-import { defaultTopLevelPlacement } from "./thread-binding-api.js";
+import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -218,21 +213,6 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveNames: async ({ token, entries }) =>
     (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
-
-function toConversationLifecycleBinding(binding: {
-  boundAt: number;
-  lastActivityAt?: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-}) {
-  return {
-    boundAt: binding.boundAt,
-    lastActivityAt:
-      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
-    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
-    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
-  };
-}
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
@@ -398,30 +378,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }),
         resolveCommandConversation: resolveDiscordCommandConversation,
       },
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        bindingStore: "adapter",
-        defaultTopLevelPlacement,
-        createManager: async ({ cfg, accountId }) =>
-          (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManagerAsync({
-            cfg,
-            accountId: accountId ?? undefined,
-            persist: false,
-            enableSweeper: false,
-          }),
-        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
-          setThreadBindingIdleTimeoutBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? undefined,
-            idleTimeoutMs,
-          }).map(toConversationLifecycleBinding),
-        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
-          setThreadBindingMaxAgeBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? undefined,
-            maxAgeMs,
-          }).map(toConversationLifecycleBinding),
-      },
+      conversationBindings: discordConversationBindings,
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId, threadId }) => {
           const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
@@ -725,4 +682,3 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       shouldSuppressLocalPayloadPrompt: shouldSuppressLocalDiscordExecApprovalPrompt,
     },
   });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

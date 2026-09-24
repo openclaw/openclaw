@@ -104,12 +104,16 @@ allowBuilds:
   rastermill: true
   node-pty: true
 
-# The transient npm lock generator also needs the peer marked optional.
 packageExtensions:
+  # The transient npm lock generator also needs the peer marked optional.
   baileys:
     peerDependenciesMeta:
       sharp:
         optional: true
+  # This analyzer still uses classic compiler APIs; match its existing analyzer dependency.
+  "lit-analyzer@2.0.3":
+    dependencies:
+      typescript: 5.2.2
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch

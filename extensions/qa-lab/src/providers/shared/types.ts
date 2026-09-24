@@ -8,6 +8,7 @@ export type QaProviderModeInput = QaProviderMode;
 
 export type QaMockProviderServer = {
   baseUrl: string;
+  sessionObserverUrl?: string;
   terminalRequesters?: QaTerminalRequesterSettlement;
   stop(): Promise<void>;
 };

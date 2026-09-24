@@ -152,39 +152,31 @@ describe("committed agent database reads", () => {
       },
     },
   ])(
-    "rejects a committed version change to $version on the next turn before borrowed and fresh reads",
+    "rejects a committed version change to $version on the next read before borrowed and fresh reads",
     async ({ version, expectedError }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         const options = { agentId: "main", env };
         closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath(options));
-        vi.useFakeTimers({ toFake: ["setImmediate"] });
+        const { path: databasePath } = openOpenClawAgentDatabase(options);
+        let admitted: boolean;
+        const read = () =>
+          withOpenClawAgentDatabaseReadOnly(({ db }) => {
+            admitted = true;
+            return db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get();
+          }, options);
+        expect(read()).toEqual({ found: true, value: { agent_id: "main" } });
+        admitted = false;
+        const writer = new DatabaseSync(databasePath);
         try {
-          const { path: databasePath } = openOpenClawAgentDatabase(options);
-          let admitted = false;
-          const read = () =>
-            withOpenClawAgentDatabaseReadOnly(({ db }) => {
-              admitted = true;
-              return db
-                .prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'")
-                .get();
-            }, options);
-          expect(read()).toEqual({ found: true, value: { agent_id: "main" } });
-          admitted = false;
-          const writer = new DatabaseSync(databasePath);
-          try {
-            writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
-          } finally {
-            writer.close();
-          }
-          vi.runOnlyPendingTimers();
-          expect(read).toThrow(expect.objectContaining(expectedError));
-          expect(admitted).toBe(false);
-          expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-          expect(read).toThrow(expect.objectContaining(expectedError));
-          expect(admitted).toBe(false);
+          writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
         } finally {
-          vi.useRealTimers();
+          writer.close();
         }
+        expect(read).toThrow(expect.objectContaining(expectedError));
+        expect(admitted).toBe(false);
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(read).toThrow(expect.objectContaining(expectedError));
+        expect(admitted).toBe(false);
       });
     },
   );
@@ -206,28 +198,22 @@ describe("committed agent database reads", () => {
       error: /belongs to agent other.*requested agent main/,
     },
   ])(
-    "rechecks committed $name on the next turn before invoking a retained reader",
+    "rechecks committed $name on the next read before invoking a retained reader",
     async ({ sql, error }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         const options = { agentId: "main", env };
         const owner = openOpenClawAgentDatabase(options);
-        vi.useFakeTimers({ toFake: ["setImmediate"] });
-        try {
-          inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
-          owner.db.exec(sql);
-          vi.runOnlyPendingTimers();
-          let invoked = false;
-          inWriterTransaction(owner.db, () => {
-            expect(() =>
-              withOpenClawAgentDatabaseReadOnly(() => {
-                invoked = true;
-              }, options),
-            ).toThrow(error);
-          });
-          expect(invoked).toBe(false);
-        } finally {
-          vi.useRealTimers();
-        }
+        inWriterTransaction(owner.db, () => expect(readStamp(options).db.isOpen).toBe(true));
+        owner.db.exec(sql);
+        let invoked = false;
+        inWriterTransaction(owner.db, () => {
+          expect(() =>
+            withOpenClawAgentDatabaseReadOnly(() => {
+              invoked = true;
+            }, options),
+          ).toThrow(error);
+        });
+        expect(invoked).toBe(false);
       });
     },
   );

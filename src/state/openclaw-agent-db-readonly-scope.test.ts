@@ -137,13 +137,12 @@ it.each([
     error: "has schema role state",
   },
 ])(
-  "revalidates retained read admission on the next turn after a commit: $sql",
+  "revalidates retained read admission on the next read after a commit: $sql",
   async ({ sql, error }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
       const { path } = openOpenClawAgentDatabase(options);
       await closeOpenClawAgentDatabaseByPathAsync(path);
-      vi.useFakeTimers({ toFake: ["setImmediate"] });
       const target = { agentId: "main", path };
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       const read = () =>
@@ -156,11 +155,9 @@ it.each([
         } finally {
           writer.close();
         }
-        vi.runOnlyPendingTimers();
         expect(read).toThrow(error);
       } finally {
         scope.close();
-        vi.useRealTimers();
       }
     });
   },

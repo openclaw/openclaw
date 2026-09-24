@@ -322,11 +322,7 @@ function acceptsIntent(coverage, id) {
   if (!coverage) {
     return true;
   }
-  return (
-    Array.isArray(coverage.acceptedIntents) &&
-    coverage.acceptedIntents.includes(id) &&
-    !coverage.skippedIntents?.includes(id)
-  );
+  return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
 function hasCoverage(coverage) {
@@ -520,9 +516,7 @@ function assertConfigSurvived() {
       config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
-    if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
-    }
+    assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
   }
 
   if (acceptsIntent(coverage, "skills")) {

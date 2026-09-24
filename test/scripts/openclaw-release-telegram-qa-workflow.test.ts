@@ -409,7 +409,7 @@ describe("release Telegram QA workflow", () => {
     expect(caller?.outputs?.conclusion).toBe(
       "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
     );
-    expect(caller?.["continue-on-error"]).toBe(true);
+    expect(caller?.["continue-on-error"]).toBeUndefined();
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({

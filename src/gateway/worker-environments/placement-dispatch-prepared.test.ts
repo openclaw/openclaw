@@ -62,7 +62,6 @@ async function preparedHarness(
     reserve?: boolean;
     protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
-    liveBindingFails?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
     boundWorkspace?: Pick<
       NodeWorkerPreparedWorkspaceResult,
@@ -171,10 +170,7 @@ async function preparedHarness(
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,
   });
-  const liveEvents = support.createLiveEvents({
-    bindSession: vi.fn(() => !options.liveBindingFails),
-  });
-  const workerService = support.createService(support.createProvider(), { liveEvents });
+  const workerService = support.createService(support.createProvider());
   const projected = workerService.get(environmentId)!;
   const ordinaryGet = vi.mocked(harness.environments.get).getMockImplementation()!;
   vi.mocked(harness.environments.get).mockImplementation(
@@ -299,7 +295,6 @@ async function preparedHarness(
     ready,
     intent,
     request,
-    liveEvents,
     transport,
     resolveAvailability,
     setHostingAvailable,
@@ -459,7 +454,7 @@ describe("prepared worker dispatch", () => {
   );
 
   it("does not mint attachment authority after request revocation during build validation", async () => {
-    const { harness, store, ready, request, liveEvents } = await preparedHarness();
+    const { harness, store, ready, request } = await preparedHarness();
     let authorized = true;
     vi.mocked(support.testState.prepareInstallation).mockImplementation(async () => {
       authorized = false;
@@ -474,7 +469,6 @@ describe("prepared worker dispatch", () => {
       }),
     ).rejects.toThrow("request revoked");
 
-    expect(liveEvents.bindSession).not.toHaveBeenCalled();
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
@@ -495,7 +489,7 @@ describe("prepared worker dispatch", () => {
   });
 
   it("rejects direct attachment without the prepared placement reservation", async () => {
-    const { store, workerService, ready, request, liveEvents } = await preparedHarness();
+    const { store, workerService, ready, request } = await preparedHarness();
 
     await expect(
       workerService.attachSession({
@@ -510,7 +504,6 @@ describe("prepared worker dispatch", () => {
       preparation: { consumedAtMs: null },
     });
     expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
-    expect(liveEvents.bindSession).not.toHaveBeenCalled();
   });
 
   it("fences a profile change after node eligibility before consuming its reserve", async () => {
@@ -526,26 +519,6 @@ describe("prepared worker dispatch", () => {
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
-  });
-
-  it("cannot recycle a consumed environment after live attachment rollback", async () => {
-    const { harness, store, ready, request, workerService } = await preparedHarness({
-      liveBindingFails: true,
-    });
-
-    await expect(harness.service.dispatch(request)).rejects.toThrow(
-      "Attached session target is unavailable",
-    );
-
-    expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
-    expect(
-      workerService.getPreparedCandidates({
-        providerId: ready.providerId,
-        profileSnapshot: ready.profileSnapshot,
-        preparationKey: PREPARATION_KEY,
-      }),
-    ).toEqual([]);
-    expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
   });
 
   it("fences workspace upload when node authority closes during prepared binding", async () => {

@@ -7,8 +7,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
+import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -27,6 +29,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 
 type SourceReplyTranscriptMirrorParams = {
   action: string;
@@ -261,6 +264,7 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     return "not-delivered";
   }
   if (
+    !matchesDeliveredSourceTargets(params.mirror, deliveryFact) ||
     !isExactCurrentSourceConversation({
       ...params.mirror,
       deliveredPayload: params.deliveredPayload,
@@ -333,8 +337,8 @@ function matchesCurrentSourceTarget(
     return false;
   }
   const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
-  const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-    ?.matchesToolContextTarget;
+  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const matchesToolContextTarget = plugin?.threading?.matchesToolContextTarget;
   if (
     threadPlacement === "match" &&
     (matchesToolContextTarget?.({
@@ -349,8 +353,25 @@ function matchesCurrentSourceTarget(
   ) {
     return true;
   }
-  return currentTargets.some(
-    (currentTarget) => requestedTarget === currentTarget || threadedTarget === currentTarget,
+  const normalizedTargets = new Set(
+    [requestedTarget, threadedTarget]
+      .map((target) => normalizeTargetForProvider(params.channel, target, plugin))
+      .filter((target): target is string => Boolean(target)),
+  );
+  return currentTargets.some((target) => {
+    const normalized = normalizeTargetForProvider(params.channel, target, plugin);
+    return normalized !== undefined && normalizedTargets.has(normalized);
+  });
+}
+
+function matchesDeliveredSourceTargets(
+  params: SourceReplyTranscriptMirrorParams,
+  delivery: ReturnType<typeof projectPluginMessageDeliveryFact>,
+): boolean {
+  // Requested routes cannot override contradictory transport facts. Match each
+  // reported recipient independently, without inheriting requested thread aliases.
+  return (delivery?.deliveredTargets ?? []).every((target) =>
+    matchesCurrentSourceTarget({ ...params, actionParams: { target } }, "match"),
   );
 }
 
@@ -452,18 +473,29 @@ function resolveDeliveredCurrentSourceReply(
   allowAsync: boolean,
 ): SourceReplyMatch {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
-  if (deliveryFact && deliveryFact.status !== "settled") {
+  if (
+    (deliveryFact && deliveryFact.status !== "settled") ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
+    case "react":
+      return (
+        params.sourceReplyFinal === true &&
+        params.actionParams.remove !== true &&
+        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+        isDeliveredCurrentSourceReplyAction(params)
+      );
     case "reply":
       return isDeliveredCurrentSourceReplyAction(params);
     case "thread-reply":
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
+      // Send variants share destination proof, not transcript or restart-receipt ownership.
       return (
-        (params.action === "send" || params.action === "poll") &&
-        isExactCurrentSourceConversation(params)
+        (isMessageToolSendActionName(params.action) || params.action === "poll") &&
+        isExactCurrentSourceConversation({ ...params, action: "send" })
       );
   }
 }
@@ -489,8 +521,8 @@ function normalizeMessageIdValue(value: unknown): string | undefined {
 }
 
 /**
- * Confirms a successful reply-type action addressed the message that triggered the
- * current run. Reply actions resolve their conversation from the replied-to message,
+ * Confirms a reply or explicitly terminal reaction addressed the message that triggered
+ * the current run. Reply actions resolve their conversation from the replied-to message,
  * so target matching cannot apply; replying to the run's own inbound message is the
  * one implicit route that provably lands in the current source conversation.
  */
@@ -505,20 +537,31 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   // forms (for example `C123` vs `channel:C123`) are recognized like sends.
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
   if (requestedTarget) {
-    const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-      ?.matchesToolContextTarget;
+    const channelPlugin = getChannelPlugin(params.channel as ChannelId);
+    const matchesToolContextTarget = channelPlugin?.threading?.matchesToolContextTarget;
     if (!matchesToolContextTarget?.({ target: requestedTarget, toolContext })) {
       const currentTargets = [
         normalizeOptionalString(toolContext.currentMessagingTarget),
         normalizeOptionalString(toolContext.currentChannelId),
       ].filter((target): target is string => Boolean(target));
-      if (!currentTargets.some((target) => target === requestedTarget)) {
+      const normalizedTarget =
+        normalizeTargetForProvider(params.channel, requestedTarget, channelPlugin) ??
+        requestedTarget;
+      if (
+        !currentTargets.some(
+          (target) =>
+            (normalizeTargetForProvider(params.channel, target, channelPlugin) ?? target) ===
+            normalizedTarget,
+        )
+      ) {
         return false;
       }
     }
   }
   const repliedToMessageId = normalizeMessageIdValue(
-    params.actionParams.messageId ?? params.actionParams.replyTo,
+    params.action === "react"
+      ? resolveReactionMessageId({ args: params.actionParams, toolContext })
+      : (params.actionParams.messageId ?? params.actionParams.replyTo),
   );
   const currentMessageId = normalizeMessageIdValue(toolContext.currentMessageId);
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
@@ -529,7 +572,10 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
-  if (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) {
+  if (
+    (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(

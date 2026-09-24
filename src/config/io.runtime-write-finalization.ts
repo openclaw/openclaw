@@ -11,10 +11,10 @@ import { createConfigIO } from "./io.factory.js";
 import {
   hashConfigRaw,
   replaceEnvSnapshot,
-  resolveManagedRuntimeEnvBaseline,
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
 import type {
   ConfigIoFactoryOptions,
   ConfigWriteOptions,

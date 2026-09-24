@@ -9,7 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 
 /** Runtime helpers that must never appear as undeclared declaration exports. */
 const BUNDLER_RUNTIME_HELPER_EXPORT_NAMES = ["__exportAll"] as const;
@@ -95,14 +96,13 @@ function removeListElement(
   edits.push({ start: before ? start - before[0].length : start, end });
 }
 
-function scanDts(sourceText: string, fileName: string): DtsSanitization {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    /*setParentNodes*/ true,
-    ts.ScriptKind.TS,
-  );
+function scanDts(
+  sourceText: string,
+  fileName: string,
+  parser?: NativeTypeScriptParser,
+): DtsSanitization {
+  using ownedParser = parser ? undefined : createNativeTypeScriptParser();
+  const sourceFile = (parser ?? ownedParser!).parseSourceFile(fileName, sourceText);
   const helperIsDeclared = hasLocalHelperBinding(sourceFile, "__exportAll");
   const removed: UndeclaredBundlerHelperDtsExport[] = [];
   const edits: Array<{ start: number; end: number }> = [];
@@ -154,16 +154,20 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
 export function findUndeclaredBundlerHelperDtsExports(
   sourceText: string,
   fileName = "chunk.d.ts",
+  parser?: NativeTypeScriptParser,
 ): UndeclaredBundlerHelperDtsExport[] {
-  return scanDts(sourceText, fileName).removed;
+  return scanDts(sourceText, fileName, parser).removed;
 }
 
 /** Drops undeclared bundler helper specifiers from declaration text. */
-export function sanitizeBundlerHelperDtsExports(sourceText: string): {
+export function sanitizeBundlerHelperDtsExports(
+  sourceText: string,
+  parser?: NativeTypeScriptParser,
+): {
   sourceText: string;
   removed: UndeclaredBundlerHelperDtsExport[];
 } {
-  const { edits, removed } = scanDts(sourceText, "chunk.d.ts");
+  const { edits, removed } = scanDts(sourceText, "chunk.d.ts", parser);
   let next = sourceText;
   for (const edit of edits.toSorted((left, right) => right.start - left.start)) {
     next = `${next.slice(0, edit.start)}${next.slice(edit.end)}`;
@@ -176,6 +180,7 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
   if (!fs.existsSync(root)) {
     return 0;
   }
+  using parser = createNativeTypeScriptParser();
   const queue = [root];
   let changed = 0;
   while (queue.length > 0) {
@@ -197,7 +202,7 @@ export function sanitizeBundlerHelperDtsExportTree(root: string): number {
         continue;
       }
       const current = fs.readFileSync(fullPath, "utf8");
-      const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+      const sanitized = sanitizeBundlerHelperDtsExports(current, parser).sourceText;
       if (sanitized !== current) {
         fs.writeFileSync(fullPath, sanitized);
         changed += 1;

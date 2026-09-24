@@ -26,8 +26,6 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
-Flaky tests never block a release. A lane that fails on a test the candidate did not touch, or that passes on rerun, is a flake: rerun it once, record it, and treat it as advisory (operator lane waiver `OPENCLAW_FRV_LANE_WAIVER`, or the declared flake allowance) rather than holding npm/ClawHub publication. Only install smoke, upgrade-survivor proofs, pack budget, and the artifact children stay required. A release-critical tooling PR blocked solely by a flaky check may be admin-merged once every non-flaky required check is green.
-
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
 validated publication and verification; do not ask again unless identity,
@@ -85,10 +83,9 @@ Required checks and enforced environment approvals remain required. A passing
 sibling lane cannot waive a failure. npm + ClawHub publication is the priority
 path. macOS/Windows/Linux/Android native publication runs in parallel and never
 gates npm/ClawHub publication, GitHub release finalization, or main closeout.
-A failing native-only lane (macos-swift app lanes, advisory cross-OS
-Windows/macOS, platform publishers) is classified and repaired in parallel; it
-is never a reason to re-cut or re-run the full npm validation. Windows should
-not hold the release either: Windows node-test shards are still a required
-`ci.yml` check for npm qualification, so repair and rerun that lane in
-parallel rather than re-cutting; relaxing the enforced gate is workflow work,
-not a doc waiver. Report proof gaps and pending platforms accurately.
+Platform publisher failures are classified and repaired in parallel. Selected
+normal CI lanes, including macOS Swift and Windows Node, remain required.
+Linux, Windows, and macOS Gateway cross-OS install and upgrade failures block
+beta, stable, and full release validation. Repair required failures and rerun
+the affected lanes before publication. Report proof gaps and pending platforms
+accurately.

@@ -324,8 +324,6 @@ export async function runReleasePublishPreflight(
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
-            stableSoakWaiver: options.stableSoakWaiver,
-            laneWaiver: options.laneWaiver,
             expectedSha: sourceSha,
             expectedReleaseProfile: options.releaseProfile,
           }),
@@ -472,7 +470,6 @@ export async function runReleasePublishPreflight(
                 publishTag: plan.publishTag,
                 packageVersion: pkg.version,
                 releaseProfile: manifest?.releaseProfile,
-                stableSoakWaiver: options.stableSoakWaiver,
               });
         rows.push({ ...gate, id: `plugin-npm.bootstrap.${pkg.packageName}` });
       }

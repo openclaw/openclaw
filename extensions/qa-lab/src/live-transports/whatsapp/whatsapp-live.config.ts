@@ -90,7 +90,7 @@ function buildNonMatchingWhatsAppQaAllowFrom(existingAllowFrom: string[]) {
   throw new Error("Unable to derive a WhatsApp QA groupAllowFrom entry outside allowFrom.");
 }
 
-type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type WhatsAppQaAgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 
 function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
   const identityName =
@@ -100,7 +100,6 @@ function buildWhatsAppQaScenarioAgent(agentId: string): WhatsAppQaAgentConfig {
         ? "Second WhatsApp QA"
         : `WhatsApp QA ${agentId}`;
   return {
-    id: agentId,
     identity: {
       name: identityName,
     },
@@ -114,17 +113,33 @@ function appendWhatsAppQaAgents(
   if (agentIds.length === 0) {
     return agents;
   }
-  const list = [...(agents?.list ?? [])];
-  const existingIds = new Set(list.map((agent) => agent.id));
+  const entries = { ...agents?.entries };
+  const originalIds = Object.keys(entries);
   for (const agentId of agentIds) {
-    if (!existingIds.has(agentId)) {
-      list.push(buildWhatsAppQaScenarioAgent(agentId));
-      existingIds.add(agentId);
+    if (!Object.hasOwn(entries, agentId)) {
+      entries[agentId] = buildWhatsAppQaScenarioAgent(agentId);
     }
+  }
+  const needsExplicitOwnership =
+    Object.keys(entries).length > 1 && !Object.values(entries).some((entry) => entry.default);
+  const soleAgentId = originalIds.length === 1 ? originalIds[0] : undefined;
+  const defaults = { ...agents?.defaults };
+  if (needsExplicitOwnership && soleAgentId) {
+    // Expanding the roster must preserve the original QA route and seeded workspace.
+    defaults.systemAgent = {
+      ...defaults.systemAgent,
+      agentId: defaults.systemAgent?.agentId ?? soleAgentId,
+    };
+    entries[soleAgentId] = {
+      ...entries[soleAgentId],
+      workspace: entries[soleAgentId]?.workspace ?? defaults.workspace,
+    };
   }
   return {
     ...agents,
-    list,
+    ...(needsExplicitOwnership ? { ownership: "explicit" as const } : {}),
+    defaults,
+    entries,
   };
 }
 
@@ -247,6 +262,8 @@ export function buildWhatsAppQaConfig(
       : {}),
     ...(statusReactionsEnabled
       ? {
+          ackReaction: "👀",
+          ackReactionScope: "direct" as const,
           statusReactions: {
             ...baseCfg.messages?.statusReactions,
             enabled: true,
@@ -283,15 +300,6 @@ export function buildWhatsAppQaConfig(
         enabled: true,
         defaultAccount: params.sutAccountId,
         ...whatsappHistoryLimit,
-        ...(statusReactionsEnabled
-          ? {
-              ackReaction: {
-                ...baseCfg.channels?.whatsapp?.ackReaction,
-                direct: true,
-                emoji: "👀",
-              },
-            }
-          : {}),
         ...(params.overrides?.actions
           ? {
               actions: {

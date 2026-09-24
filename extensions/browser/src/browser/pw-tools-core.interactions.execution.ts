@@ -1,5 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,

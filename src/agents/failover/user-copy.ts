@@ -324,7 +324,7 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+  "⚠️ The selected model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. Select an available model or update the model configuration, then try again.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,

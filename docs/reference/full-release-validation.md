@@ -12,10 +12,9 @@ read_when:
 happens in child workflows so a failed box can be rerun without restarting the
 whole release.
 
-An operator can declare exact flaky jobs before dispatch with
-`known_flaky_jobs_json`. Each declared child gets one recorded automatic retry
-wave; a repeated failure remains a blocker. See
-[Automatic retries for declared flakes](/reference/full-release-validation/continuation#automatic-retries-for-declared-flakes).
+Test failures remain failures. Full Release Validation never automatically reruns
+failed or timed out jobs. Diagnose the original failure before using an explicit
+operator recovery command.
 
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and complete that validation

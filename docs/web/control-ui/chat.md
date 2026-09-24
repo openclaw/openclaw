@@ -11,17 +11,34 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+## Collaborator drafts
+
+In a shared session, another person’s in-progress message stays visible when they pause typing. After a short pause, its label changes to **Paused · not sent** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. A preview also expires after two minutes without typing so an abandoned tab cannot leave it visible indefinitely. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
+
 ## Session rail and side chat
 
-While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
+While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
 
 Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset or deletion, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw` or `/side` in the main Control UI composer and press Enter to open the rail and focus its question box. Selecting `/btw` from the slash menu does the same. Add a question after either command to send it to Side chat; focus moves to its question box when the request finishes. Other clients keep their existing BTW behavior.
 
 Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
+Editing a Side chat draft does not interrupt loading its earlier answers. **Clear side chat** removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+
+Drop an image onto Side chat or paste one into its question box. You can send it
+with a written question or on its own. Side chat accepts image attachments, not
+other file types; its previews never add attachments to the main composer.
+Image questions require an image-capable Side chat utility model. A text-only
+model produces a visible error instead of answering without the image; choose
+an image-capable utility model before retrying.
+Images are available only for the current question and are not retained in the
+restored text thread. Reattach an image when asking a later question about it.
+A failed question keeps its image for **Retry** while the current pane is retained;
+reloading the page discards that failed input.
 
 Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
@@ -212,6 +229,8 @@ Tool activity summaries count the operations inside a workflow rather than count
 
 Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
 
+Filesystem paths remain readable in tool activity and error messages; credential values are still masked. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
+
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
@@ -373,6 +392,7 @@ Newly uploaded text files remain file cards, even when their names resemble
 pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
+Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents
 with interactive code blocks. When an open attachment refreshes with unchanged
@@ -432,11 +452,15 @@ cancel native clipboard writes that the browser has already accepted.
 
 ### Markdown tables
 
-Markdown tables wrap headings and cell text to fit the conversation. On wide panes,
-top-level assistant tables can use extra space without widening the surrounding prose.
-Dense tables still scroll horizontally; ordinary inline tables grow with the conversation
-instead of adding a vertical scrollbar. **Copy table** copies tab-separated cells, and
-**Expand table** above the table opens a larger view with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
+Markdown tables wrap headings and cell text to fit the conversation. On wide desktop
+panes, top-level assistant tables stay at the reading width when their content fits
+and use extra space only as needed, without widening the surrounding prose. Long
+cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
+Wide desktop tables use compact icon-only controls above the header. Mobile and
+phone-landscape views retain larger touch controls and a visible **Expand table** label.
+Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
+**Copy table** copies tab-separated cells, and **Expand table** opens a larger view
+with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 

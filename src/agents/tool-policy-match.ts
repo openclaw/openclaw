@@ -95,10 +95,10 @@ export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApply
   return (name: string) => matchers.every((matches) => matches(name));
 }
 
-export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boolean {
+export function isRuntimeToolAllowed(name: string, toolsAllow?: readonly string[]): boolean {
   return (
     toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
+    (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]]).every(
       (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
     )
   );

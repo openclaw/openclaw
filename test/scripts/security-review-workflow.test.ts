@@ -1,6 +1,14 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +17,7 @@ import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
+  name?: string;
   "continue-on-error"?: boolean;
   "timeout-minutes"?: number;
   env?: Record<string, string>;
@@ -54,6 +63,32 @@ const runtimeAction = parse(readFileSync(`${runtimeActionPath}/action.yml`, "utf
   runs: { using: string; steps: WorkflowStep[] };
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function materializeJobSources(workspace: string, name: "resolve" | "review") {
+  const checkout = readWorkflow("security-review").jobs[name]!.steps.find((step) =>
+    step.uses?.startsWith("actions/checkout@"),
+  );
+  const sparse = checkout?.with?.["sparse-checkout"];
+  if (typeof sparse !== "string") {
+    throw new Error(`Missing ${name} sparse checkout selection`);
+  }
+  for (const pattern of sparse.trim().split(/\s+/u)) {
+    expect(pattern).toMatch(/^\/[^*?[\]!]+$/u);
+    const relativePath = pattern.slice(1);
+    expect(relativePath.split("/")).not.toContain("..");
+    const destination = join(workspace, relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(resolve(relativePath), destination, { recursive: true });
+  }
+}
+
+function runSelectedEntry(workspace: string, entry: string) {
+  return spawnSync(process.execPath, [join(workspace, "scripts/github", entry)], {
+    cwd: workspace,
+    env: {},
+    encoding: "utf8",
+  });
+}
 
 describe("security review workflow trust boundaries", () => {
   it("executes trusted scripts and limits comment writes to the serialized review job", () => {
@@ -114,7 +149,9 @@ describe("security review workflow trust boundaries", () => {
         expect(bootstrapIndex).toBeGreaterThan(
           job.steps.findIndex((step) => step === checkouts[0]),
         );
-        expect(bootstrapIndex).toBeLessThan(job.steps.findIndex((step) => step.run));
+        expect(bootstrapIndex).toBeLessThan(
+          job.steps.findIndex((step) => step.run?.startsWith("node ")),
+        );
       }
       for (const step of job.steps) {
         if (step.uses && step.uses !== `./${runtimeActionPath}` && step !== bootstrap[0]) {
@@ -123,6 +160,13 @@ describe("security review workflow trust boundaries", () => {
           );
         }
         if (step.run) {
+          if (step.name === "Report checkout infrastructure retry") {
+            expect(step.if).toBe("${{ !cancelled() && steps.checkout.outcome == 'failure' }}");
+            expect(step.run).toBe(
+              'echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."',
+            );
+            continue;
+          }
           expect(step.run).toBe(
             `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
           );
@@ -345,7 +389,7 @@ describe("security review workflow trust boundaries", () => {
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
     const steps = readWorkflow("security-review").jobs.review!.steps;
-    const commands = steps.filter((step) => step.run);
+    const commands = steps.filter((step) => step.run?.startsWith("node "));
     expect(commands.map((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE)).toEqual([
       "detect",
       "autoscrub",
@@ -425,6 +469,23 @@ describe("security review workflow trust boundaries", () => {
     }
   });
 
+  it("loads the selected resolver closure without workspace dependencies", () => {
+    const workspace = tempDirs.make("openclaw-security-resolve-source-");
+    materializeJobSources(workspace, "resolve");
+    const entry = "security-review-event.mjs";
+    const result = runSelectedEntry(workspace, entry);
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe(
+      "GitHub token, event, event name, and repository are required.",
+    );
+
+    rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
+    const missingModule = runSelectedEntry(workspace, entry);
+    expect(missingModule.status).toBe(1);
+    expect(missingModule.stderr).toContain("ERR_MODULE_NOT_FOUND");
+    expect(missingModule.stderr).toContain("bounded-response.mjs");
+  });
+
   it.skipIf(process.platform === "win32")(
     "installs only the frozen trusted tooling project and makes its policy packages importable",
     () => {
@@ -435,6 +496,13 @@ describe("security review workflow trust boundaries", () => {
       for (const directory of [workspace, runnerTemp, bin]) {
         mkdirSync(directory, { recursive: true });
       }
+      materializeJobSources(workspace, "review");
+      const selectedRuntimePath = join(workspace, runtimeActionPath);
+      const selectedRuntime = parse(
+        readFileSync(join(selectedRuntimePath, "action.yml"), "utf8"),
+      ) as {
+        runs: { steps: WorkflowStep[] };
+      };
       const installLog = join(root, "install.json");
       const packages = Object.fromEntries(
         ["yaml", "minimatch"].map((name) => [name, realpathSync(`node_modules/${name}`)]),
@@ -459,13 +527,13 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
 `,
         { mode: 0o700 },
       );
-      const installSteps = runtimeAction.runs.steps.filter((step) => step.run);
+      const installSteps = selectedRuntime.runs.steps.filter((step) => step.run);
       expect(installSteps).toHaveLength(1);
       expect(installSteps[0]?.shell).toBe("bash");
       execFileSync("bash", ["-c", installSteps[0]!.run!], {
         env: {
           PATH: `${bin}:${process.env.PATH ?? ""}`,
-          GITHUB_ACTION_PATH: resolve(runtimeActionPath),
+          GITHUB_ACTION_PATH: selectedRuntimePath,
           GITHUB_WORKSPACE: workspace,
           RUNNER_TEMP: runnerTemp,
         },
@@ -487,12 +555,27 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       const probe = join(workspace, "scripts/github/probe.mjs");
       writeFileSync(
         probe,
-        'import { parse } from "yaml"; import { minimatch } from "minimatch"; console.log(JSON.stringify([parse("category: secrets").category, minimatch("src/secrets/.store/key", "src/secrets/**", { dot: true })]));',
+        'import { parse } from "yaml"; import { minimatch } from "minimatch"; import { loadSecurityReviewPolicy } from "./security-review-policy.mjs"; console.log(JSON.stringify([parse("category: secrets").category, minimatch("src/secrets/.store/key", "src/secrets/**", { dot: true }), loadSecurityReviewPolicy().isDependencyManifest("package.json")]));',
       );
-      expect(JSON.parse(execFileSync(process.execPath, [probe], { encoding: "utf8" }))).toEqual([
-        "secrets",
-        true,
-      ]);
+      expect(
+        JSON.parse(execFileSync(process.execPath, [probe], { env: {}, encoding: "utf8" })),
+      ).toEqual(["secrets", true, true]);
+      const entry = "security-review.mjs";
+      const loaded = runSelectedEntry(workspace, entry);
+      expect(loaded.status).toBe(1);
+      expect(loaded.stderr.trim()).toBe(
+        "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
+      );
+
+      rmSync(join(workspace, ".github/security-review-policy.yml"));
+      const missingPolicy = spawnSync(process.execPath, [probe], {
+        cwd: workspace,
+        env: {},
+        encoding: "utf8",
+      });
+      expect(missingPolicy.status).toBe(1);
+      expect(missingPolicy.stderr).toContain("ENOENT");
+      expect(missingPolicy.stderr).toContain("security-review-policy.yml");
     },
   );
 

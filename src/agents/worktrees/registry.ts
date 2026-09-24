@@ -3,6 +3,7 @@ import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -708,18 +709,17 @@ export function hasLiveWorktreeRunLeaseRow(
   worktreeId: string,
   checks?: RunLeaseOwnerChecks,
 ): boolean {
-  return runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = database.db;
-      const k = kyselyLeaseFor(db);
-      const { livePids } = collectLiveRunLeases(
-        db,
-        k,
-        worktreeRunLeaseScope(worktreeId),
-        checks ?? {},
-      );
-      return livePids.length > 0;
-    },
-    { env },
+  return (
+    withExistingOpenClawStateDatabaseCurrentReadOnly(
+      ({ db }) =>
+        collectLiveRunLeases(
+          db,
+          kyselyLeaseFor(db),
+          worktreeRunLeaseScope(worktreeId),
+          checks ?? {},
+          false,
+        ).livePids.length > 0,
+      { env },
+    ) ?? false
   );
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -201,9 +202,15 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir });
   const cleanup = async (assertDirectoryCurrent?: (directory: string) => void) => {
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    assertDirectoryCurrent?.(tempDir);
+    // Read-only inventory can retain a worker actor after its native reader closes.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     for (const directory of cleanupDirectories) {
-      // A receiving owner can retain exact physical custody across inventory/Doctor.
+      // Revalidate physical custody after worker drainage and before removal.
       assertDirectoryCurrent?.(directory);
       await fs.rm(directory, { recursive: true, force: true });
     }

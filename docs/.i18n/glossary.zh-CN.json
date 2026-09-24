@@ -4926,5 +4926,9 @@
   {
     "source": "Onnx plugin reference",
     "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
   }
 ]

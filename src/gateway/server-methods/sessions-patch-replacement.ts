@@ -54,6 +54,8 @@ export function prepareSessionPatchReplacement(params: {
       accessChanged:
         params.primaryKey !== params.canonicalKey ||
         previousSessionKeys.length > 0 ||
+        // Revisionless mutations retain conservative access invalidation.
+        !params.existingEntry?.lifecycleRevision?.trim() ||
         hasSessionReadAccessChanged(params.existingEntry, params.projectedEntry),
       entry: params.labelOwners.replaceEntry(
         params.candidateKeys,

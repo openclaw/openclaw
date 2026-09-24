@@ -118,19 +118,20 @@ export function createPendingSendMessage(
   return { item: pending, admission };
 }
 
-export function publishPendingSendMessage(host: ChatHost, pending: ChatQueueItem): void {
+export function publishPendingSendMessage(host: ChatHost, pending: ChatQueueItem): ChatQueueItem {
   const submittedAtMs = pending.sendSubmittedAtMs ?? controlUiNowMs();
-  chatOutboxOwner(host).keep(
+  const positioned = chatOutboxOwner(host).keep(
     host,
     { sessionKey: pending.sessionKey!, agentId: pending.agentId },
     pending,
   );
-  recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
-  if (pending.sendState === "waiting-model" || pending.sendState === "waiting-reconnect") {
-    recordChatSendTiming(host, pending, pending.sendState, submittedAtMs);
+  recordChatSendTiming(host, positioned, "pending-visible", submittedAtMs);
+  if (positioned.sendState === "waiting-model" || positioned.sendState === "waiting-reconnect") {
+    recordChatSendTiming(host, positioned, positioned.sendState, submittedAtMs);
   }
-  schedulePendingSendPaintTiming(host, pending, submittedAtMs);
+  schedulePendingSendPaintTiming(host, positioned, submittedAtMs);
   scheduleChatScroll(host, true, true, { source: "manual" });
+  return positioned;
 }
 
 export function reconnectSafeQueuedSendState(

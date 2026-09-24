@@ -16,7 +16,6 @@ it("plans the named missing-load-path row without adding aggregate coverage", ()
   const { plan } = resolveDockerE2ePlan({
     includeOpenWebUI: false,
     liveMode: "all",
-    liveRetries: 0,
     orderLanes: (lanes) => lanes,
     planReleaseAll: false,
     profile: "all",
