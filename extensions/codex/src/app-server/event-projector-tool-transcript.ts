@@ -511,6 +511,7 @@ export class CodexToolTranscriptProjection {
   synthesizeMissingToolResults(params: {
     synthesize: boolean;
     terminalDisposition: "prompt_error" | "tool_error" | "diagnostic_only";
+    retainedCommands?: ReadonlyMap<string, string>;
   }): string | undefined {
     if (!params.synthesize) {
       return undefined;
@@ -525,12 +526,16 @@ export class CodexToolTranscriptProjection {
     for (const id of missingTranscriptIds) {
       const name = this.namesById.get(id) ?? this.trajectoryNamesById.get(id);
       if (name) {
+        const processId = params.retainedCommands?.get(id);
         this.recordToolResult({
           id,
           name,
-          text: formatMissingToolResultError({ id, name }),
-          isError: true,
-          details: { reason: "missing_tool_result" },
+          text: processId
+            ? formatRetainedCommandResult(processId)
+            : formatMissingToolResultError({ id, name }),
+          isError: !processId,
+          ...(processId ? { outcomeUnknown: true as const } : {}),
+          details: processId ? { status: "running", processId } : { reason: "missing_tool_result" },
         });
       }
     }
@@ -540,16 +545,21 @@ export class CodexToolTranscriptProjection {
         continue;
       }
       this.trajectoryResultIds.add(id);
-      const text = formatMissingToolResultError({ id, name });
+      const processId = params.retainedCommands?.get(id);
+      const text = processId
+        ? formatRetainedCommandResult(processId)
+        : formatMissingToolResultError({ id, name });
       this.options.trajectoryRecorder?.recordEvent("tool.result", {
         threadId: this.threadId,
         turnId: this.turnId,
         itemId: id,
         toolCallId: id,
         name,
-        status: "failed",
-        isError: true,
-        result: { status: "failed", reason: "missing_tool_result" },
+        status: processId ? "running" : "failed",
+        isError: !processId,
+        result: processId
+          ? { status: "running", processId }
+          : { status: "failed", reason: "missing_tool_result" },
         output: text,
       });
     }
@@ -694,6 +704,10 @@ export class CodexToolTranscriptProjection {
       },
     };
   }
+}
+
+function formatRetainedCommandResult(processId: string): string {
+  return `Native command is still running with session handle ${processId}. Its final outcome is not yet available; use the native process-wait tool to collect it.`;
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {

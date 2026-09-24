@@ -176,6 +176,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-health.legacy-update.test.ts",
   "src/hooks/hooks-install.test.ts",
   "src/infra/state-migrations.audit-logs.windows.test.ts",
+  "src/infra/state-migrations.workspace-setup.windows.test.ts",
   "src/infra/state-migrations.media-persistence.lifecycle-recovery.test.ts",
   "src/skills/library/resource-read.test.ts",
   "src/skills/library/service.test.ts",

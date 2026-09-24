@@ -365,6 +365,15 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
+A native shell command can yield a session handle before it exits. When a
+successful turn ends with that exact command still owned by the native thread,
+its tool row records **Outcome unknown** and explains that the process is still
+running. This is not command success or failure. Collect the retained handle
+with the native process-wait tool to obtain its output and exit code. The
+continuation records that result without rewriting the earlier turn's snapshot.
+The existing unknown-outcome audit diagnostic remains; cancellation and a
+command with no confirmed live owner retain their failure handling.
+
 Stopping an active Codex run interrupts its turn. With the OpenClaw sandbox
 exec-server, cleanup stops the concrete processes admitted by that turn and
 preserves independent background work in the same reused thread. Each process
