@@ -298,19 +298,7 @@ export function resolveAllowAlwaysPatternCoverage(params: {
   const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
   let representedSegmentCount = 0;
   for (const segment of params.segments) {
-    if (isShellWrapperInvocation(segment.argv)) {
-      const segmentPatterns = resolveAllowAlwaysPatternEntries({
-        segments: [segment],
-        cwd: params.cwd,
-        env: params.env,
-        platform: params.platform,
-        strictInlineEval: params.strictInlineEval,
-      });
-      for (const pattern of segmentPatterns) {
-        byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
-      }
-      continue;
-    }
+    const shellWrapper = isShellWrapperInvocation(segment.argv);
     const segmentPatterns = resolveAllowAlwaysPatternEntries({
       segments: [segment],
       cwd: params.cwd,
@@ -321,7 +309,9 @@ export function resolveAllowAlwaysPatternCoverage(params: {
     if (segmentPatterns.length === 0) {
       continue;
     }
-    representedSegmentCount += 1;
+    if (!shellWrapper) {
+      representedSegmentCount += 1;
+    }
     for (const pattern of segmentPatterns) {
       byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
     }
