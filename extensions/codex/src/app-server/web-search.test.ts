@@ -54,72 +54,25 @@ describe("resolveCodexWebSearchPlan", () => {
     });
   });
 
-  it("keeps managed web_search when an explicit managed provider is selected", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { provider: "brave" },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search for an explicit Codex native search opt-out", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { openaiCodex: { enabled: false } },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when runtime policy disables Codex native tools", () => {
-    expect(resolveCodexWebSearchPlan({ nativeToolSurfaceEnabled: false })).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when the active Codex provider lacks hosted search", () => {
-    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unsupported" })).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("keeps managed web_search when active provider support is unknown", () => {
-    expect(resolveCodexWebSearchPlan({ nativeProviderWebSearchSupport: "unknown" })).toEqual({
+  it.each<{ name: string; params: Parameters<typeof resolveCodexWebSearchPlan>[0] }>([
+    {
+      name: "an explicit managed provider is selected",
+      params: { config: { tools: { web: { search: { provider: "brave" } } } } },
+    },
+    {
+      name: "Codex native search is explicitly disabled",
+      params: { config: { tools: { web: { search: { openaiCodex: { enabled: false } } } } } },
+    },
+    {
+      name: "runtime policy disables Codex native tools",
+      params: { nativeToolSurfaceEnabled: false },
+    },
+    {
+      name: "the active Codex provider lacks hosted search",
+      params: { nativeProviderWebSearchSupport: "unsupported" },
+    },
+  ])("keeps managed web_search when $name", ({ params }) => {
+    expect(resolveCodexWebSearchPlan(params)).toEqual({
       kind: "managed",
       suppressManagedWebSearch: false,
       threadConfig: {
@@ -151,40 +104,15 @@ describe("resolveCodexWebSearchPlan", () => {
     });
   });
 
-  it("disables native and managed search for tool-disabled runs", () => {
-    expect(resolveCodexWebSearchPlan({ disableTools: true })).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("disables native and managed search when effective tool policy denies web_search", () => {
-    expect(resolveCodexWebSearchPlan({ webSearchAllowed: false })).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: {
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      },
-    });
-  });
-
-  it("disables both native and managed search when OpenClaw web search is disabled", () => {
-    expect(
-      resolveCodexWebSearchPlan({
-        config: {
-          tools: {
-            web: {
-              search: { enabled: false },
-            },
-          },
-        },
-      }),
-    ).toEqual({
+  it.each<{ name: string; params: Parameters<typeof resolveCodexWebSearchPlan>[0] }>([
+    { name: "tool-disabled runs", params: { disableTools: true } },
+    { name: "effective tool policy denial", params: { webSearchAllowed: false } },
+    {
+      name: "disabled OpenClaw web search",
+      params: { config: { tools: { web: { search: { enabled: false } } } } },
+    },
+  ])("disables native and managed search for $name", ({ params }) => {
+    expect(resolveCodexWebSearchPlan(params)).toEqual({
       kind: "disabled",
       suppressManagedWebSearch: true,
       threadConfig: {

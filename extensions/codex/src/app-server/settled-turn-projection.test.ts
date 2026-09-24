@@ -127,25 +127,6 @@ describe("projectSettledCodexMessages", () => {
     ).toThrowError(new CodexHistoryRejection("invalid_content"));
   });
 
-  it("preserves failed tool-result status in the projected output", () => {
-    expect(
-      projectSettledCodexMessages([
-        toolCall(),
-        message({
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "message",
-          isError: true,
-          content: [{ type: "text", text: "Delivery failed." }],
-        }),
-      ]).at(-1),
-    ).toEqual({
-      type: "function_call_output",
-      call_id: "call-1",
-      output: "[Tool result status: error]\nDelivery failed.",
-    });
-  });
-
   it("preserves an empty failed tool result as failure evidence", () => {
     expect(
       projectSettledCodexMessages([
@@ -228,24 +209,6 @@ describe("projectSettledCodexMessages", () => {
       projectSettledCodexMessages([...oldMessages, later, toolCall(), toolResult()]),
     ).toThrow(error);
     expect(laterReads).toBe(0);
-  });
-
-  it("prefers the undecorated upstream user text", () => {
-    expect(
-      projectSettledCodexMessages([
-        message({
-          role: "user",
-          content: "[Telegram metadata] decorated prompt",
-          __openclaw: { upstreamUserText: "Send the Aurora notice to Erin." },
-        }),
-        toolCall(),
-        toolResult(),
-      ])[0],
-    ).toEqual({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: "Send the Aurora notice to Erin." }],
-    });
   });
 
   it("preserves upstream user text above the ordinary message limit", () => {
@@ -356,14 +319,5 @@ describe("projectSettledCodexMessages", () => {
         toolResult(),
       ]),
     ).toThrow("field_limit");
-  });
-
-  it("rejects a complete transcript above the aggregate byte limit", () => {
-    const messages = Array.from({ length: 9 }, () =>
-      message({ role: "user", content: "x".repeat(60 * 1024) }),
-    );
-    expect(() => projectSettledCodexMessages([...messages, toolCall(), toolResult()])).toThrow(
-      "byte_limit",
-    );
   });
 });

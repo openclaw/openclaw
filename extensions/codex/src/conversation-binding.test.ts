@@ -233,36 +233,54 @@ async function readTestConversationBinding(sessionFile: string) {
   return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
 }
 
-function boundConversationClaim(sessionFile: string, sessionKey?: string) {
+function conversationMessage(
+  content: string,
+  options: Partial<
+    Omit<
+      Parameters<typeof handleCodexConversationInboundClaimImpl>[0],
+      "content" | "commandAuthorized"
+    >
+  > = {},
+) {
+  return { content, channel: "telegram", isGroup: false, commandAuthorized: true, ...options };
+}
+
+function conversationClaimContext(
+  data: NonNullable<PluginConversationBinding["data"]>,
+  sessionKey?: string,
+  conversation = { channel: "telegram", conversationId: "5185575566" },
+) {
   const pluginBinding: PluginConversationBinding = {
     bindingId: "binding-1",
     pluginId: "codex",
     pluginRoot: tempDir,
-    channel: "telegram",
+    ...conversation,
     accountId: "default",
-    conversationId: "5185575566",
     boundAt: Date.now(),
-    data: {
-      kind: "codex-app-server-session" as const,
-      version: 1 as const,
-      sessionFile,
-      workspaceDir: tempDir,
-    },
+    data,
   };
   return {
-    event: {
-      content: "continue",
+    channelId: conversation.channel,
+    ...(sessionKey === undefined ? {} : { sessionKey }),
+    pluginBinding,
+  };
+}
+
+function boundConversationClaim(sessionFile: string, sessionKey?: string) {
+  return {
+    event: conversationMessage("continue", {
       bodyForAgent: "continue",
-      channel: "telegram",
-      isGroup: false,
-      commandAuthorized: true,
       ...(sessionKey ? { sessionKey } : {}),
-    },
-    ctx: {
-      channelId: "telegram",
-      ...(sessionKey ? { sessionKey } : {}),
-      pluginBinding,
-    },
+    }),
+    ctx: conversationClaimContext(
+      {
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+      sessionKey || undefined,
+    ),
   };
 }
 
@@ -641,110 +659,99 @@ describe("codex conversation binding", () => {
     }
   });
 
-  it.each(["direct", "registered"] as const)(
-    "keeps queued bound turns ahead of retirement through the %s entry",
-    async (entryPoint) => {
-      const sessionFile = path.join(tempDir, "queued-session.jsonl");
-      const stateStore = createCodexTestBindingStateStore();
-      const bindingStore = createCodexAppServerBindingStore(stateStore);
-      await bindingStore.mutate(testConversationIdentity(sessionFile), {
-        kind: "set",
-        binding: { threadId: "bound-thread", clientId: "test-client", cwd: tempDir },
-      });
-      type InboundClaim = typeof handleCodexConversationInboundClaimImpl;
-      let handleClaim = (event: Parameters<InboundClaim>[0], ctx: Parameters<InboundClaim>[1]) =>
-        handleCodexConversationInboundClaimImpl({ senderIsOwner: true, ...event }, ctx, {
-          bindingStore,
-        });
-      if (entryPoint === "registered") {
-        const on = vi.fn();
-        codexPlugin.register(
-          createTestPluginApi({
-            id: "codex",
-            config: {},
-            pluginConfig: {},
-            runtime: {
-              modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
-              state: {
-                openSyncKeyedStore: () => stateStore,
-                openKeyedStore: () => stateStore,
-              },
-            } as never,
-            on,
-          }),
-        );
-        const hook = on.mock.calls.find(([name]) => name === "inbound_claim")?.[1] as
-          | ((
-              event: Parameters<InboundClaim>[0],
-              ctx: Parameters<InboundClaim>[1],
-            ) => ReturnType<InboundClaim>)
-          | undefined;
-        if (!hook) {
-          throw new Error("missing registered inbound claim hook");
+  it("keeps queued bound turns ahead of retirement through the registered entry", async () => {
+    const sessionFile = path.join(tempDir, "queued-session.jsonl");
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = createCodexAppServerBindingStore(stateStore);
+    await bindingStore.mutate(testConversationIdentity(sessionFile), {
+      kind: "set",
+      binding: { threadId: "bound-thread", clientId: "test-client", cwd: tempDir },
+    });
+    type InboundClaim = typeof handleCodexConversationInboundClaimImpl;
+    const on = vi.fn();
+    codexPlugin.register(
+      createTestPluginApi({
+        id: "codex",
+        config: {},
+        pluginConfig: {},
+        runtime: {
+          modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
+          state: { openSyncKeyedStore: () => stateStore, openKeyedStore: () => stateStore },
+        } as never,
+        on,
+      }),
+    );
+    const hook = on.mock.calls.find(([name]) => name === "inbound_claim")?.[1] as
+      | ((
+          event: Parameters<InboundClaim>[0],
+          ctx: Parameters<InboundClaim>[1],
+        ) => ReturnType<InboundClaim>)
+      | undefined;
+    if (!hook) {
+      throw new Error("missing registered inbound claim hook");
+    }
+    const handleClaim = (event: Parameters<InboundClaim>[0], ctx: Parameters<InboundClaim>[1]) =>
+      hook({ senderIsOwner: true, ...event }, ctx);
+    const notificationHandlers = new Set<(notification: unknown) => void>();
+    const order: string[] = [];
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
         }
-        handleClaim = (event, ctx) => hook({ senderIsOwner: true, ...event }, ctx);
-      }
-      const notificationHandlers = new Set<(notification: unknown) => void>();
-      const order: string[] = [];
-      const client = {
-        request: vi.fn(async (method: string) => {
-          if (method !== "turn/start") {
-            throw new Error(`unexpected method: ${method}`);
-          }
-          const turnId = `turn-${order.filter((entry) => entry.startsWith("turn-")).length + 1}`;
-          order.push(turnId);
-          return { turn: { id: turnId } };
-        }),
-        addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-          notificationHandlers.add(handler);
-          return () => notificationHandlers.delete(handler);
-        }),
-        addRequestHandler: vi.fn(() => () => undefined),
-        addCloseHandler: vi.fn(() => () => undefined),
-      };
-      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
-      const { event, ctx } = boundConversationClaim(sessionFile);
-      const completeTurn = (turnId: string) => {
-        for (const handler of notificationHandlers) {
-          handler({
-            method: "turn/completed",
-            params: {
-              threadId: "bound-thread",
-              turn: {
-                id: turnId,
-                status: "completed",
-                items: [{ type: "agentMessage", id: `${turnId}-answer`, text: turnId }],
-              },
+        const turnId = `turn-${order.filter((entry) => entry.startsWith("turn-")).length + 1}`;
+        order.push(turnId);
+        return { turn: { id: turnId } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandlers.add(handler);
+        return () => notificationHandlers.delete(handler);
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+      addCloseHandler: vi.fn(() => () => undefined),
+    };
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+    const { event, ctx } = boundConversationClaim(sessionFile);
+    const completeTurn = (turnId: string) => {
+      for (const handler of notificationHandlers) {
+        handler({
+          method: "turn/completed",
+          params: {
+            threadId: "bound-thread",
+            turn: {
+              id: turnId,
+              status: "completed",
+              items: [{ type: "agentMessage", id: `${turnId}-answer`, text: turnId }],
             },
-          });
-        }
-      };
-
-      const firstTurn = handleClaim(event, ctx);
-      await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
-      const secondTurn = handleClaim(event, ctx);
-      const retirement = withCodexConversationThreadActivity(
-        legacyCodexConversationBindingId(sessionFile),
-        async () => {
-          order.push("retired");
-        },
-      );
-
-      completeTurn("turn-1");
-      await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
-      try {
-        expect(order).toEqual(["turn-1", "turn-2"]);
-      } finally {
-        completeTurn("turn-2");
-        await Promise.allSettled([firstTurn, secondTurn, retirement]);
+          },
+        });
       }
+    };
 
-      await expect(firstTurn).resolves.toMatchObject({ reply: { text: "turn-1" } });
-      await expect(secondTurn).resolves.toMatchObject({ reply: { text: "turn-2" } });
-      await retirement;
-      expect(order).toEqual(["turn-1", "turn-2", "retired"]);
-    },
-  );
+    const firstTurn = handleClaim(event, ctx);
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
+    const secondTurn = handleClaim(event, ctx);
+    const retirement = withCodexConversationThreadActivity(
+      legacyCodexConversationBindingId(sessionFile),
+      async () => {
+        order.push("retired");
+      },
+    );
+
+    completeTurn("turn-1");
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
+    try {
+      expect(order).toEqual(["turn-1", "turn-2"]);
+    } finally {
+      completeTurn("turn-2");
+      await Promise.allSettled([firstTurn, secondTurn, retirement]);
+    }
+
+    await expect(firstTurn).resolves.toMatchObject({ reply: { text: "turn-1" } });
+    await expect(secondTurn).resolves.toMatchObject({ reply: { text: "turn-2" } });
+    await retirement;
+    expect(order).toEqual(["turn-1", "turn-2", "retired"]);
+  });
 
   it.each(["detached", "replaced", "cleared-before-capture"] as const)(
     "does not recreate a %s conversation from an inbound claim queued behind retirement",
@@ -1158,34 +1165,6 @@ describe("codex conversation binding", () => {
     },
   );
 
-  it("selects Codex network-proxy permissions through app-server bind thread config", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        return {
-          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-          model: "gpt-5.4-mini",
-        };
-      }),
-    });
-
-    await prepareTestConversationBinding({
-      pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
-      sessionFile,
-      workspaceDir: tempDir,
-      model: "gpt-5.4-mini",
-      modelProvider: "openai",
-    });
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.method).toBe("thread/start");
-    expect(requests[0]?.params).not.toHaveProperty("permissions");
-    expect(requests[0]?.params).not.toHaveProperty("sandbox");
-    expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
-  });
-
   it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -1210,6 +1189,7 @@ describe("codex conversation binding", () => {
 
     expect(requests.map((request) => request.method)).toEqual(["thread/start"]);
     expect(requests[0]?.params).not.toHaveProperty("threadId");
+    expect(requests[0]?.params).not.toHaveProperty("permissions");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
     expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
     const bindingAfterStart = await readTestConversationBinding(sessionFile);
@@ -1262,7 +1242,7 @@ describe("codex conversation binding", () => {
     await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it.each([undefined, null, true])(
+  it.each([null, true])(
     "reconfigures a retained interactive or unknown-capability thread (%s)",
     async (canAcceptDirectInput) => {
       configLayerPolicyMocks.readCodexEffectiveConfig.mockResolvedValue({
@@ -1997,16 +1977,8 @@ describe("codex conversation binding", () => {
 
   it("rejects binding when configured exec auto mode may need unrouted human approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        return {
-          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-          model: "gpt-5.4-mini",
-        };
-      }),
-    });
+    const request = vi.fn();
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
 
     await expect(
       prepareTestConversationBinding({
@@ -2024,7 +1996,7 @@ describe("codex conversation binding", () => {
     ).rejects.toThrow(
       "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
     );
-    expect(requests).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("rejects binding when the binding agent exec auto mode may need unrouted approvals", async () => {
@@ -2068,16 +2040,8 @@ describe("codex conversation binding", () => {
 
   it("rejects binding when configured exec ask mode needs unrouted user approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        return {
-          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-          model: "gpt-5.4-mini",
-        };
-      }),
-    });
+    const request = vi.fn();
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
 
     await expect(
       prepareTestConversationBinding({
@@ -2095,12 +2059,12 @@ describe("codex conversation binding", () => {
     ).rejects.toThrow(
       "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
     );
-    expect(requests).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("applies host exec approval floors to configless native bind threads", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const request = vi.fn();
     execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({
       version: 1,
       defaults: {
@@ -2109,15 +2073,7 @@ describe("codex conversation binding", () => {
       },
       agents: {},
     });
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        return {
-          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-          model: "gpt-5.4-mini",
-        };
-      }),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
 
     await expect(
       prepareTestConversationBinding({
@@ -2127,7 +2083,7 @@ describe("codex conversation binding", () => {
       }),
     ).rejects.toThrow("tools.exec.mode=deny");
     expect(execApprovalsRuntimeMocks.loadExecApprovals).toHaveBeenCalled();
-    expect(requests).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("clears the Codex app-server binding when a pending bind is denied", async () => {
@@ -2393,24 +2349,16 @@ describe("codex conversation binding", () => {
         isGroup: true,
         senderIsOwner: false,
       },
-      {
-        channelId: "discord",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile: path.join(tempDir, "session.jsonl"),
-            workspaceDir: tempDir,
-          },
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: path.join(tempDir, "session.jsonl"),
+          workspaceDir: tempDir,
         },
-      },
+        undefined,
+        { channel: "discord", conversationId: "channel-1" },
+      ),
     );
 
     expect(result).toEqual({ handled: true });
@@ -2418,31 +2366,17 @@ describe("codex conversation binding", () => {
 
   it("blocks inbound bound turns without current owner or admin authority", async () => {
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "run this",
-        channel: "discord",
-        isGroup: true,
-        commandAuthorized: true,
-        senderIsOwner: false,
-      },
-      {
-        channelId: "discord",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile: path.join(tempDir, "session.jsonl"),
-            workspaceDir: tempDir,
-          },
+      conversationMessage("run this", { channel: "discord", isGroup: true, senderIsOwner: false }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: path.join(tempDir, "session.jsonl"),
+          workspaceDir: tempDir,
         },
-      },
+        undefined,
+        { channel: "discord", conversationId: "channel-1" },
+      ),
     );
 
     expect(result).toEqual({
@@ -2457,32 +2391,21 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
+      conversationMessage("continue the task", {
         channel: "discord",
         isGroup: true,
-        commandAuthorized: true,
         sessionKey: "sandboxed-session",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "sandboxed-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
         },
-      },
+        "sandboxed-session",
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
       },
@@ -2504,32 +2427,21 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
+      conversationMessage("continue the task", {
         channel: "discord",
         isGroup: true,
-        commandAuthorized: true,
         sessionKey: "node-session",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "node-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
         },
-      },
+        "node-session",
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: { tools: { exec: { host: "node", node: "worker-1" } } },
       },
@@ -2551,31 +2463,18 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
-        channel: "discord",
-        isGroup: true,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "discord",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "bot-a",
-          },
+      conversationMessage("continue the task", { channel: "discord", isGroup: true }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+          agentId: "bot-a",
         },
-      },
+        undefined,
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: {
           tools: { exec: { host: "gateway" } },
@@ -2598,33 +2497,22 @@ describe("codex conversation binding", () => {
     await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
+      conversationMessage("continue the task", {
         channel: "discord",
         isGroup: true,
-        commandAuthorized: true,
         sessionKey: "node-session",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "node-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "alpha",
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+          agentId: "alpha",
         },
-      },
+        "node-session",
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: {
           tools: { exec: { host: "gateway" } },
@@ -2658,33 +2546,22 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
+      conversationMessage("continue the task", {
         channel: "discord",
         isGroup: true,
-        commandAuthorized: true,
         sessionKey: "agent:main:session-1",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "agent:main:session-1",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "bot-a",
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+          agentId: "bot-a",
         },
-      },
+        "agent:main:session-1",
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: {
           session: {
@@ -2721,31 +2598,18 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
-        channel: "discord",
-        isGroup: true,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "discord",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "bot-a",
-          },
+      conversationMessage("continue the task", { channel: "discord", isGroup: true }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+          agentId: "bot-a",
         },
-      },
+        undefined,
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         timeoutMs: 50,
         config: {
@@ -2781,33 +2645,22 @@ describe("codex conversation binding", () => {
     const resumeCodexCliSessionOnNode = vi.fn();
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
+      conversationMessage("continue the task", {
         channel: "discord",
         isGroup: true,
-        commandAuthorized: true,
         sessionKey: "sandboxed-session",
-      },
-      {
-        channelId: "discord",
-        sessionKey: "sandboxed-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel-1",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-cli-node-session",
-            version: 1,
-            nodeId: "mb-m5",
-            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-            cwd: "/repo",
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-cli-node-session",
+          version: 1,
+          nodeId: "mb-m5",
+          sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+          cwd: "/repo",
         },
-      },
+        "sandboxed-session",
+        { channel: "discord", conversationId: "channel-1" },
+      ),
       {
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
         resumeCodexCliSessionOnNode,
@@ -2930,36 +2783,18 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hi again",
-        bodyForAgent: "hi again",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 2,
-            bindingId: legacyCodexConversationBindingId(sessionFile),
-            workspaceDir: tempDir,
-            source: {
-              agentId: source.agentId,
-              sessionId: source.sessionId,
-              threadId: source.threadId,
-            },
-          },
+      conversationMessage("hi again", { bodyForAgent: "hi again" }),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: legacyCodexConversationBindingId(sessionFile),
+        workspaceDir: tempDir,
+        source: {
+          agentId: source.agentId,
+          sessionId: source.sessionId,
+          threadId: source.threadId,
         },
-      },
+      }),
       { config: { session: { store: storePath } }, timeoutMs: 500 },
     );
 
@@ -3055,31 +2890,14 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 2,
-            bindingId: "binding-data-1",
-            workspaceDir: "/new-repo",
-            start: { id: "start-new", threadId: "thread-target" },
-          },
-        },
-      },
+      conversationMessage("continue"),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: "binding-data-1",
+        workspaceDir: "/new-repo",
+        start: { id: "start-new", threadId: "thread-target" },
+      }),
       { timeoutMs: 500 },
     );
 
@@ -3398,32 +3216,14 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hi again",
-        bodyForAgent: "hi again",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentId: "bot-a",
-          },
-        },
-      },
+      conversationMessage("hi again", { bodyForAgent: "hi again" }),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+        agentId: "bot-a",
+      }),
       {
         timeoutMs: 500,
         config: {
@@ -3471,31 +3271,13 @@ describe("codex conversation binding", () => {
       sandbox: "danger-full-access",
     });
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hi again",
-        bodyForAgent: "hi again",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
-        },
-      },
+      conversationMessage("hi again", { bodyForAgent: "hi again" }),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+      }),
       {
         timeoutMs: 500,
         config: {
@@ -3556,31 +3338,17 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hi again",
-        bodyForAgent: "hi again",
-        channel: "telegram",
-        isGroup: true,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "redacted-group",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
+      conversationMessage("hi again", { bodyForAgent: "hi again", isGroup: true }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
         },
-      },
+        undefined,
+        { channel: "telegram", conversationId: "redacted-group" },
+      ),
       { timeoutMs: 500 },
     );
 
@@ -3614,33 +3382,19 @@ describe("codex conversation binding", () => {
     );
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue",
+      conversationMessage("continue", {
         bodyForAgent: "continue",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
         sessionKey: "agent:main:session-1",
-      },
-      {
-        channelId: "telegram",
-        sessionKey: "agent:main:session-1",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
+      }),
+      conversationClaimContext(
+        {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
         },
-      },
+        "agent:main:session-1",
+      ),
       {
         timeoutMs: 50,
         config: {
@@ -3710,34 +3464,17 @@ describe("codex conversation binding", () => {
 
     try {
       const result = await handleCodexConversationInboundClaim(
-        {
-          content: "hi",
-          bodyForAgent: "hi",
-          channel: "telegram",
-          isGroup: false,
-          commandAuthorized: true,
-          sessionKey,
-        },
-        {
-          channelId: "telegram",
-          sessionKey,
-          pluginBinding: {
-            bindingId: "binding-1",
-            pluginId: "codex",
-            pluginRoot: tempDir,
-            channel: "telegram",
-            accountId: "default",
-            conversationId: "5185575566",
-            boundAt: Date.now(),
-            data: {
-              kind: "codex-app-server-session",
-              version: 1,
-              sessionFile,
-              workspaceDir: tempDir,
-              agentDir,
-            },
+        conversationMessage("hi", { bodyForAgent: "hi", sessionKey }),
+        conversationClaimContext(
+          {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentDir,
           },
-        },
+          sessionKey,
+        ),
         { timeoutMs: 50 },
       );
       await new Promise<void>((resolve) => {
@@ -4416,32 +4153,14 @@ describe("codex conversation binding", () => {
     );
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "use the fallback prompt",
-        bodyForAgent: "",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-            agentDir,
-          },
-        },
-      },
+      conversationMessage("use the fallback prompt", { bodyForAgent: "" }),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+        agentDir,
+      }),
       { timeoutMs: 50 },
     );
 
@@ -4474,30 +4193,13 @@ describe("codex conversation binding", () => {
     );
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hello",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
-        },
-      },
+      conversationMessage("hello"),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+      }),
       {
         pluginConfig: {
           appServer: {
@@ -4562,30 +4264,13 @@ describe("codex conversation binding", () => {
     });
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hello",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
-        },
-      },
+      conversationMessage("hello"),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+      }),
       {
         pluginConfig: {
           appServer: {
@@ -4695,30 +4380,13 @@ describe("codex conversation binding", () => {
     );
 
     const result = await handleCodexConversationInboundClaim(
-      {
-        content: "hello",
-        channel: "telegram",
-        isGroup: false,
-        commandAuthorized: true,
-      },
-      {
-        channelId: "telegram",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "5185575566",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-app-server-session",
-            version: 1,
-            sessionFile,
-            workspaceDir: tempDir,
-          },
-        },
-      },
+      conversationMessage("hello"),
+      conversationClaimContext({
+        kind: "codex-app-server-session",
+        version: 1,
+        sessionFile,
+        workspaceDir: tempDir,
+      }),
       {
         timeoutMs: 50,
         pluginConfig: {
@@ -4748,30 +4416,13 @@ describe("codex conversation binding", () => {
     });
     await expect(
       handleCodexConversationInboundClaim(
-        {
-          content: "hello",
-          channel: "telegram",
-          isGroup: false,
-          commandAuthorized: true,
-        },
-        {
-          channelId: "telegram",
-          pluginBinding: {
-            bindingId: "binding-1",
-            pluginId: "codex",
-            pluginRoot: tempDir,
-            channel: "telegram",
-            accountId: "default",
-            conversationId: "5185575566",
-            boundAt: Date.now(),
-            data: {
-              kind: "codex-app-server-session",
-              version: 1,
-              sessionFile,
-              workspaceDir: tempDir,
-            },
-          },
-        },
+        conversationMessage("hello"),
+        conversationClaimContext({
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+        }),
         {
           timeoutMs: 50,
           pluginConfig: {

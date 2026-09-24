@@ -2050,7 +2050,7 @@ describe("codex command", () => {
       listCodexAppServerModels: vi.fn(async () => ({
         models: [
           {
-            id: "gpt-5.4 <@U123> [trusted](https://evil)",
+            id: "unsafe_model_name <@U123> [trusted](https://evil)",
             model: "gpt-5.4",
             inputModalities: ["text"],
             supportedReasoningEfforts: ["medium"],
@@ -2062,30 +2062,11 @@ describe("codex command", () => {
     const result = await handleCodexCommand(createContext("models"), { deps });
 
     expect(result.text).toContain(
-      "gpt-5.4 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
+      "unsafe\uff3fmodel\uff3fname &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
     );
+    expect(result.text).not.toContain("unsafe_model_name");
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
-  });
-
-  it("escapes markdown underscores in Codex app-server readouts", async () => {
-    const deps = createDeps({
-      listCodexAppServerModels: vi.fn(async () => ({
-        models: [
-          {
-            id: "unsafe_model_name",
-            model: "unsafe_model_name",
-            inputModalities: ["text"],
-            supportedReasoningEfforts: ["medium"],
-          },
-        ],
-      })),
-    });
-
-    const result = await handleCodexCommand(createContext("models"), { deps });
-
-    expect(result.text).toContain("unsafe\uff3fmodel\uff3fname");
-    expect(result.text).not.toContain("unsafe_model_name");
   });
 
   it("reports status unavailable when every Codex probe fails", async () => {

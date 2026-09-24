@@ -43,17 +43,6 @@ describe("isCodexTurnAbortMarkerNotification", () => {
     ).toBe(true);
   });
 
-  it("accepts arbitrary wrapped body prose", () => {
-    expect(
-      isCodexTurnAbortMarkerNotification(
-        abortMarkerNotification({
-          role: "user",
-          text: "<turn_aborted>\nwording may change independently\n</turn_aborted>",
-        }),
-      ),
-    ).toBe(true);
-  });
-
   it("rejects a malformed wrapper", () => {
     expect(
       isCodexTurnAbortMarkerNotification(

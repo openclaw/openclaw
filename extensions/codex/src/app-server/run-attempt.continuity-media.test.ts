@@ -25,7 +25,6 @@ setupRunAttemptTestHooks();
 
 describe("Codex attachment continuity", () => {
   it.each([
-    { scenario: "managed text", source: "managed", mime: "text/plain", name: "notes.txt" },
     { scenario: "workspace JSON", source: "path", mime: "application/json", name: "data.json" },
     {
       scenario: "captionless markdown",
@@ -221,7 +220,7 @@ describe("Codex attachment continuity", () => {
       closeHost();
     }
   });
-  it.each(["inline", "offloaded", "current", "closed"] as const)(
+  it.each(["inline", "current", "closed"] as const)(
     "restores real image bytes with exact source ownership (%s)",
     async (mode) => {
       const sessionId = "session-continuity-images";

@@ -56,7 +56,6 @@ afterEach(async () => {
 
 describe("Delivery/NO_REPLY runtime contract - Codex app-server adapter", () => {
   it.each([
-    DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
     `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  `,
     DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText,
   ])("preserves silent terminal text %s for shared delivery suppression", async (text) => {

@@ -15,6 +15,38 @@ import {
   forCurrentTurn,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import type { CodexThreadItem } from "./protocol.js";
+
+function commandItem(
+  id: string,
+  overrides: Partial<
+    Pick<
+      CodexThreadItem,
+      "command" | "cwd" | "status" | "aggregatedOutput" | "exitCode" | "durationMs"
+    >
+  > = {},
+) {
+  return {
+    type: "commandExecution",
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    commandActions: [],
+    command: "python scripts/run_demo_scenario.py",
+    status: "completed",
+    aggregatedOutput: null,
+    exitCode: 0,
+    durationMs: 42,
+    id,
+    ...overrides,
+  };
+}
+
+function rawAssistant(id: string, text: string | undefined) {
+  return forCurrentTurn("rawResponseItem/completed", {
+    item: { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] },
+  });
+}
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -29,35 +61,19 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-1",
+        item: commandItem("cmd-1", {
           command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
     const toolProgressText = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string })
       .text;
     expect(toolProgressText).toBe("🛠️ `run tests (workspace)`");
 
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-tool-progress",
-          role: "assistant",
-          content: [{ type: "output_text", text: toolProgressText }],
-        },
-      }),
-    );
+    await projector.handleNotification(rawAssistant("raw-tool-progress", toolProgressText));
     await projector.handleNotification(turnCompleted());
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
@@ -85,19 +101,13 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-oversized-progress",
+        item: commandItem("cmd-oversized-progress", {
           command,
           cwd,
-          processId: null,
-          source: "agent",
           status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
           exitCode: null,
           durationMs: null,
-        },
+        }),
       }),
     );
     const emittedProgressText = (
@@ -109,14 +119,7 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(emittedProgressText).toContain("OpenClaw truncated Codex native tool output");
 
     await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-oversized-tool-progress",
-          role: "assistant",
-          content: [{ type: "output_text", text: rawToolProgressText }],
-        },
-      }),
+      rawAssistant("raw-oversized-tool-progress", rawToolProgressText),
     );
     await projector.handleNotification(turnCompleted());
 
@@ -140,33 +143,8 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
         delta: rawOutput,
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-streamed-full-output",
-          role: "assistant",
-          content: [{ type: "output_text", text: rawOutput }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-streamed-echo",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
+    await projector.handleNotification(rawAssistant("raw-streamed-full-output", rawOutput));
+    await projector.handleNotification(turnCompleted([commandItem("cmd-streamed-echo")]));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
@@ -228,33 +206,8 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(latestRaw?.length).toBe(rawOutput.length);
     expect(latestRaw?.prefix.length).toBeLessThanOrEqual(10_000);
 
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-streamed-full-output",
-          role: "assistant",
-          content: [{ type: "output_text", text: rawOutput }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-streamed-echo",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
+    await projector.handleNotification(rawAssistant("raw-streamed-full-output", rawOutput));
+    await projector.handleNotification(turnCompleted([commandItem("cmd-streamed-echo")]));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
@@ -289,33 +242,8 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const state = echoState.get("cmd-streamed-echo-newline");
     expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-streamed-full-output-newline",
-          role: "assistant",
-          content: [{ type: "output_text", text: rawOutput }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-streamed-echo-newline",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
-    );
+    await projector.handleNotification(rawAssistant("raw-streamed-full-output-newline", rawOutput));
+    await projector.handleNotification(turnCompleted([commandItem("cmd-streamed-echo-newline")]));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
@@ -328,32 +256,9 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const projector = await createProjector();
     const rawOutput = `\n${"s".repeat(12_345)}tail-should-not-appear\n`;
 
+    await projector.handleNotification(rawAssistant("raw-aggregate-full-output", rawOutput));
     await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "raw-aggregate-full-output",
-          role: "assistant",
-          content: [{ type: "output_text", text: rawOutput }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "commandExecution",
-          id: "cmd-aggregate-echo",
-          command: "python scripts/run_demo_scenario.py",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: rawOutput,
-          exitCode: 0,
-          durationMs: 42,
-        },
-      ]),
+      turnCompleted([commandItem("cmd-aggregate-echo", { aggregatedOutput: rawOutput })]),
     );
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
