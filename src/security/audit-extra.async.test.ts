@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as skillScanner from "../skills/security/scanner.js";
+import { collectStateDeepFilesystemFindings } from "./audit-extra.async.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
-  collectStateDeepFilesystemFindings,
-} from "./audit-extra.async.js";
+} from "./audit.deep.runtime.js";
 
 vi.mock("../skills/loading/workspace-skill-loader.js", () => {
   const loadWorkspaceSkills = (workspaceDir: string) => {
