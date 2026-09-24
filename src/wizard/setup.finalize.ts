@@ -60,7 +60,11 @@ import { setupWizardShellCompletion } from "./setup.completion.js";
 import { buildGatewayRecoveryProjection } from "./setup.gateway-recovery.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
-import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
+import type {
+  GatewayServiceSetupOutcome,
+  GatewayWizardSettings,
+  WizardFlow,
+} from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -148,14 +152,6 @@ async function closeSessionGatewayForOnboarding(params: {
 }
 
 const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
-
-export type GatewayServiceSetupOutcome =
-  | {
-      status: "ready";
-      action: "installed" | "started" | "reused" | "restarted" | "restart-scheduled";
-    }
-  | { status: "skipped"; reason: "explicit" | "systemd-unavailable" | "external" }
-  | { status: "failed"; error: string };
 
 /**
  * Ensure the gateway service matches the onboarding decision: prompt/decide

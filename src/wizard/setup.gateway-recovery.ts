@@ -3,7 +3,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 import { t } from "./i18n/index.js";
-import type { GatewayServiceSetupOutcome } from "./setup.finalize.js";
+import type { GatewayServiceSetupOutcome } from "./setup.types.js";
 
 export function buildGatewayRecoveryProjection(params: {
   gateway: GatewayServiceSetupOutcome;
