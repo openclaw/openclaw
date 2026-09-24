@@ -334,8 +334,8 @@ async function readConfig(
   if (
     !options.draftWrites?.hasUnacknowledgedDraftWrite() &&
     state.configAutoSaveStatus !== "conflict" &&
-    (!options.background ||
-      (state.configAutoSaveStatus !== "error" && state.configAutoSaveStatus !== "rejected"))
+    state.configAutoSaveStatus !== "rejected" &&
+    (!options.background || state.configAutoSaveStatus !== "error")
   ) {
     state.lastError = null;
     state.chatError = null;

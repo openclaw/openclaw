@@ -202,6 +202,9 @@ it.each(["read", "schema"])(
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("rejected");
     await runtimeConfig.refresh({ background: true });
     expect(runtimeConfig.state.lastError).toContain("Expected number");
+    await runtimeConfig.refresh();
+    expect(runtimeConfig.state.lastError).toContain("Expected number");
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("rejected");
     failedRead = true;
     await (operation === "read" ? runtimeConfig.refresh() : runtimeConfig.ensureSchemaLoaded());
     expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
