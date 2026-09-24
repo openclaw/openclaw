@@ -42,7 +42,12 @@ async function captureLoadingState(
   }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
-  expect(await target.innerText()).not.toContain("Loading");
+  expect(
+    await target
+      .getByText(/Loading/)
+      .filter({ visible: true })
+      .count(),
+  ).toBe(0);
 }
 
 async function withPage(run: (page: import("playwright").Page) => Promise<void>): Promise<void> {
