@@ -865,13 +865,20 @@ describe("memory index", () => {
         expect(maintenance.adoptReindexRetryState).toHaveBeenCalledWith({
           dirty: true,
           memoryFullRetryDirty: true,
+          fullReindexRetryBackoff: { attempts: 0, retryAt: 0 },
           sessionsDirty: true,
           sessionsFullRetryDirty: true,
           sessionsReconcileDirty: true,
           sessionsDirtyFiles: new Set(["session.jsonl"]),
         });
         expect(maintenance.sync).toHaveBeenCalledTimes(expectedSyncCalls);
-        expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search" });
+        expect(maintenance.sync).toHaveBeenNthCalledWith(1, { reason: "search" });
+        if (expectedSyncCalls === 2) {
+          expect(maintenance.sync).toHaveBeenNthCalledWith(2, {
+            reason: "search",
+            force: true,
+          });
+        }
         expect(maintenance.close).toHaveBeenCalledTimes(1);
         expect(manager.status().lastSyncError).toContain(syncError.message);
         expect(Reflect.get(manager, "dirty")).toBe(true);

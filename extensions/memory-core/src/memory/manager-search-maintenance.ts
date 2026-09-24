@@ -1,11 +1,13 @@
 // Memory Core owns detached search-time index maintenance lifecycle.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { MEMORY_SYNC_DEFERRED, type MemorySyncOutcome } from "./manager-sync-outcome.js";
 
 type MemorySearchMaintenanceManager<DirtyGeneration> = {
   adoptReindexRetryState(generation: DirtyGeneration): void;
   takeReindexRetryStateForMaintenance(): DirtyGeneration;
-  sync(params: { reason: string }): Promise<void>;
+  sync(params: { reason: string; force?: boolean }): Promise<void>;
+  wasFullReindexRetryDeferred(): boolean;
   status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
 };
@@ -15,7 +17,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   takeDirtyGeneration: () => DirtyGeneration;
   restoreDirtyGeneration: (generation: DirtyGeneration) => void;
   acquireManager: () => Promise<MemorySearchMaintenanceManager<DirtyGeneration> | null>;
-}): Promise<string | undefined> {
+}): Promise<MemorySyncOutcome> {
   const dirtyGeneration = params.takeDirtyGeneration();
   let manager: MemorySearchMaintenanceManager<DirtyGeneration> | null;
   try {
@@ -31,6 +33,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
 
   let maintenanceError: Error | undefined;
   let incompleteReason: string | undefined;
+  let retryDeferred = false;
   try {
     // The transient manager owns exactly this handed-off generation, merged with
     // its initial repair state. Full-retry flags still select rebuilds in runSync.
@@ -43,13 +46,14 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
       }
       // Retry only this automatic generation. The failed sync released its reindex
       // lease, and the next shadow build starts from the newest live revision.
-      await manager.sync({ reason: params.reason });
+      await manager.sync({ reason: params.reason, force: true });
     }
     const status = manager.status();
     if (status.dirty === true) {
       // Return remaining work, including edits skipped by a completed full rebuild.
       params.restoreDirtyGeneration(manager.takeReindexRetryStateForMaintenance());
       incompleteReason = status.lastSyncError;
+      retryDeferred = manager.wasFullReindexRetryDeferred();
     }
   } catch (err) {
     params.restoreDirtyGeneration(dirtyGeneration);
@@ -63,5 +67,5 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   if (maintenanceError) {
     throw maintenanceError;
   }
-  return incompleteReason;
+  return retryDeferred ? MEMORY_SYNC_DEFERRED : incompleteReason;
 }

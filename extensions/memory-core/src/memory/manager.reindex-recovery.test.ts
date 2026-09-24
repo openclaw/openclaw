@@ -41,6 +41,7 @@ type ReindexHarness = {
   provider: EmbeddingProvider | null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
+  fullReindexRetryBackoff: { attempts: number; retryAt: number };
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
@@ -211,6 +212,54 @@ describe("memory manager reindex recovery", () => {
     expect(harness.memoryFullRetryDirty).toBe(true);
     expect(harness.sessionsDirty).toBe(true);
     expect(Array.from(harness.sessionsDirtyFiles)).toEqual([dirtySessionFile]);
+  });
+
+  it("backs off the next search-triggered full reindex and resets after success", async () => {
+    const memoryManager = await openManager(
+      createCfg({
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    await memoryManager.sync({ reason: "baseline", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    harness.dirty = true;
+    harness.memoryFullRetryDirty = true;
+    const syncMemoryFiles = vi
+      .spyOn(harness, "syncMemoryFiles")
+      .mockRejectedValueOnce(new Error("full reindex failed"));
+
+    await expect(memoryManager.sync({ reason: "search" })).rejects.toThrow("full reindex failed");
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 1, retryAt: now + 30_000 });
+    expect(memoryManager.status().lastSyncError).toBe("full reindex failed");
+
+    await expect(memoryManager.sync({ reason: "search" })).resolves.toBeUndefined();
+    expect(syncMemoryFiles).toHaveBeenCalledTimes(1);
+    expect(memoryManager.status().lastSyncError).toBe("full reindex failed");
+
+    for (let attempts = 2; attempts <= 8; attempts += 1) {
+      now = harness.fullReindexRetryBackoff.retryAt;
+      syncMemoryFiles.mockRejectedValueOnce(new Error(`full reindex failure ${attempts}`));
+      await expect(memoryManager.sync({ reason: "search" })).rejects.toThrow(
+        `full reindex failure ${attempts}`,
+      );
+      const delay = Math.min(30_000 * 2 ** (attempts - 1), 30 * 60_000);
+      expect(harness.fullReindexRetryBackoff).toEqual({
+        attempts,
+        retryAt: now + delay,
+      });
+      expect(memoryManager.status().lastSyncError).toBe(`full reindex failure ${attempts}`);
+    }
+
+    now = harness.fullReindexRetryBackoff.retryAt;
+    // Let the real full rebuild run: success must clear the retry state it owns.
+    syncMemoryFiles.mockRestore();
+    await expect(memoryManager.sync({ reason: "search" })).resolves.toBeUndefined();
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 0, retryAt: 0 });
+    expect(harness.memoryFullRetryDirty).toBe(false);
+    expect(memoryManager.status().lastSyncError).toBeUndefined();
   });
 
   it("marks clean full reindex work dirty after a shadow full reindex fails late", async () => {
@@ -858,7 +907,7 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
-  it("forces source-wide session sync when retrying a failed full reindex", async () => {
+  it("resets failed full reindex backoff after source-wide session recovery", async () => {
     const memoryManager = await openManager(
       createCfg({
         provider: "none",
@@ -868,24 +917,49 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-    const sessionSyncCalls: SyncArchiveParams[] = [];
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const writeMeta = vi.spyOn(harness, "writeMeta").mockImplementationOnce(() => {
+      throw new Error("session rebuild failed");
+    });
+    const sessionSync = vi.spyOn(harness, "syncArchiveFiles");
 
-    harness.sessionsDirty = true;
-    harness.sessionsFullRetryDirty = true;
-    harness.sessionsDirtyFiles.clear();
-    harness.syncArchiveFiles = async (params) => {
-      sessionSyncCalls.push(params);
-      return emptySyncPlan;
-    };
+    await expect(harness.sync({ reason: "test", force: true })).rejects.toThrow(
+      "session rebuild failed",
+    );
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 1, retryAt: now + 30_000 });
+    expect(harness.sessionsFullRetryDirty).toBe(true);
+    expect(harness.memoryFullRetryDirty).toBe(false);
+    sessionSync.mockClear();
 
-    await harness.sync({ reason: "test" });
+    await harness.sync({ reason: "search" });
+    expect(sessionSync).not.toHaveBeenCalled();
+    now += 30_000;
+    sessionSync.mockRejectedValueOnce(new Error("session retry failed"));
+    await expect(harness.sync({ reason: "search" })).rejects.toThrow("session retry failed");
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 2, retryAt: now + 60_000 });
+    expect(harness.sessionsFullRetryDirty).toBe(true);
 
-    expect(sessionSyncCalls).toHaveLength(1);
-    expect(sessionSyncCalls[0]).toMatchObject({ needsFullReindex: true });
-    expect(sessionSyncCalls[0]?.targetArchiveFiles).toBeUndefined();
+    sessionSync.mockClear();
+    await harness.sync({ reason: "search" });
+    expect(sessionSync).not.toHaveBeenCalled();
+    now = harness.fullReindexRetryBackoff.retryAt;
+    await harness.sync({ reason: "search" });
+
+    expect(sessionSync).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ needsFullReindex: true, targetArchiveFiles: undefined }),
+    );
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 0, retryAt: 0 });
+
+    writeMeta.mockImplementationOnce(() => {
+      throw new Error("second session rebuild failed");
+    });
+    await expect(harness.sync({ reason: "test", force: true })).rejects.toThrow(
+      "second session rebuild failed",
+    );
+    expect(harness.fullReindexRetryBackoff).toEqual({ attempts: 1, retryAt: now + 30_000 });
   });
 
   it("requires doctor for legacy schemas before exposing a manager", async () => {
