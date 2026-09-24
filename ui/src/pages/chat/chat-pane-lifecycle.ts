@@ -453,6 +453,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
             this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
           handlePageGatewayEvent(state, event, () => this.presented);
+          if (event.event === "node.runnerInventory.changed") {
+            this.activeSessionResources.invalidate();
+            this.requestUpdate();
+          }
         }
       }),
     );
@@ -576,6 +580,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
+    this.activeSessionResources.syncPane({
+      state: () => this.state,
+      observation: () => this.resourceSessionObservation(),
+      gateway: this.context.gateway.snapshot,
+      isConnected: () => this.isConnected,
+      isPresented: () => this.presented && this.visuallyPresented,
+      commit: (layout, automaticResource) =>
+        this.commitSidebarLayout(layout, { persist: false, automaticResource }),
+      requestUpdate: () => this.requestUpdate(),
+    });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);
       if (layout !== this.state.sidebarLayout) {
@@ -598,6 +612,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override disconnectedCallback() {
+    this.activeSessionResources.sync(null);
     this.syncSessionCompanionPresentation(false);
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;

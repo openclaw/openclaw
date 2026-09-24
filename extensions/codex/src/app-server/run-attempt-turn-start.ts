@@ -40,12 +40,10 @@ export async function startCodexAttemptTurn(
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, turnState, systemPromptReport } = prompt;
-  const { runtime, historyState, hookContext, hookContextWindowFields, hookRunner } = context;
-  const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
-    runtime;
+  const { runtime, historyState, hookContext, hookRunner } = context;
+  const { connection, runtimeParams } = runtime;
   const {
     params,
-    usesSupervisionConnection,
     runAbortController,
     activeContextEngine,
     bindingStore,
@@ -56,7 +54,8 @@ export async function startCodexAttemptTurn(
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
-  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
+    requestRuntime;
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
@@ -187,22 +186,7 @@ export async function startCodexAttemptTurn(
       markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          provider: usesSupervisionConnection
-            ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-            : params.provider,
-          model: usesSupervisionConnection
-            ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-            : params.modelId,
-          ...hookContextWindowFields,
-          resolvedRef: usesSupervisionConnection
-            ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-            : (params.runtimePlan?.observability.resolvedRef ??
-              `${params.provider}/${params.modelId}`),
-          ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-            ? { harnessId: params.runtimePlan.observability.harnessId }
-            : {}),
+          ...buildLlmOutputEvent(),
           assistantTexts: [],
         },
         ctx: hookContext,

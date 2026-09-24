@@ -256,6 +256,57 @@ describe("Git candidate activation", () => {
     },
   );
 
+  it.each([
+    { channel: "dev", recorded: true },
+    { channel: "stable", recorded: true },
+    { channel: "dev", recorded: false },
+    { channel: "stable", recorded: false },
+  ] as const)(
+    "rebuilds a source-current $channel checkout before activating its stale runtime (recorded=$recorded)",
+    async ({ channel, recorded }) => {
+      const builtSha = beforeSha;
+      const target = await advanceRemote();
+      await git(remote, "tag", "v2026.9.1");
+      await git(root, "pull", "--ff-only");
+      beforeSha = target;
+      const buildInfoPath = path.join(root, "dist", "build-info.json");
+      if (!recorded) {
+        await fs.writeFile(buildInfoPath, JSON.stringify({ buildId: builtSha }));
+      }
+      await expectRuntime(root, builtSha);
+
+      const result = await update({
+        channel,
+        beforeGitMutation: async () => {
+          expect(stopped).toBe(false);
+          await expectRuntime(root, builtSha);
+          stopped = true;
+          events.push("stop");
+        },
+      });
+
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(result.before).toMatchObject({ sha: target, buildId: builtSha });
+      expect(result.after).toMatchObject({ sha: target, buildId: target });
+      expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+      await expectRuntime(root, target);
+      expect(JSON.parse(await fs.readFile(buildInfoPath, "utf8"))).toMatchObject({
+        commit: target,
+      });
+
+      stopped = false;
+      events.length = 0;
+      expect(await update({ channel })).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        before: { sha: target, buildId: target },
+      });
+      expect(stopped).toBe(false);
+      expect(events).toEqual([]);
+      await expectNoRuntimeStagingPaths();
+    },
+  );
+
   it("keeps build and exposure source selection in the admitted candidate", async () => {
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
     await advanceRemote();

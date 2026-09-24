@@ -33,6 +33,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -67,29 +68,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
-function createPageContext() {
-  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(vi.fn()));
-  publish(false, null);
-  return {
-    agents: {
-      state: { agentsList: null },
-      ensureList: vi.fn(async () => null),
-    },
-    agentSelection: { state: { selectedId: "main" } },
-    basePath: "",
-    config: {
-      current: {
-        allowExternalEmbedUrls: false,
-        assistantIdentity: { name: "Assistant" },
-        embedSandboxMode: "scripts",
-      },
-    },
-    gateway,
-    chatSubmissions: createChatSubmissions(),
-    sessions: {},
-  } as unknown as ApplicationContext;
-}
 
 describe("canonical session message recovery", () => {
   function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
@@ -3204,7 +3182,7 @@ describe("ChatStateController render lifecycle", () => {
 
   it("owns attachment views in Files without replacing Detail content", () => {
     const state = createPageState(
-      createPageContext(),
+      createChatPageStateContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       {
         dispatchEvent: () => true,
@@ -3847,7 +3825,7 @@ describe("ChatStateController render lifecycle", () => {
     const controller = new ChatStateController<ChatPageHost>(host);
     controller.hostConnected();
     const renderLifecycle = controller.createRenderLifecycle();
-    const state = createPageState(createPageContext(), renderLifecycle, {
+    const state = createPageState(createChatPageStateContext(), renderLifecycle, {
       dispatchEvent: () => true,
       querySelector: () => null,
     });
@@ -4120,7 +4098,7 @@ describe("session pull request refresh", () => {
 describe("image lightbox lifecycle", () => {
   it("accepts only matching base64 video at the page boundary", () => {
     const state = createPageState(
-      createPageContext(),
+      createChatPageStateContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       { dispatchEvent: () => true, querySelector: () => null },
     );
@@ -4153,7 +4131,7 @@ describe("image lightbox lifecycle", () => {
   it("invalidates immediately when beginning a deferred image open", () => {
     const invalidate = vi.fn();
     const state = createPageState(
-      createPageContext(),
+      createChatPageStateContext(),
       {
         invalidate,
         afterCommit: () => () => {},

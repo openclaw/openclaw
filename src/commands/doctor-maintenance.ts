@@ -243,7 +243,17 @@ export async function beginDoctorMaintenance(params: {
           );
           warnings.push(message);
           params.runtime.log(message);
+          return;
         }
+      }
+      if (
+        parentActivation === undefined &&
+        before.offline === true &&
+        before.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        const warning = `Gateway was already stopped before repair; repair did not start it. Run ${formatCliCommand("openclaw gateway start", env)} to bring it online.`;
+        warnings.push(warning);
+        params.runtime.log(warning);
       }
       return;
     }

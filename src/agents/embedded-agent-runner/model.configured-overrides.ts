@@ -276,7 +276,7 @@ export function mergeStaticCatalogInlineModel(
       normalizeTransportBaseUrl(inlineModel.baseUrl) ??
       normalizeTransportBaseUrl(staticCatalogModel.baseUrl),
     headers: inlineModel.headers ?? staticCatalogModel.headers,
-    ...(compat ? { compat } : {}),
+    compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
   } as Model;
@@ -381,6 +381,7 @@ export function applyConfiguredProviderOverrides(params: {
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
+  /** Original catalog donor before an inline model overlays its transport. */
   staticCatalogModel?: StaticCatalogFallbackModel;
   getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
@@ -597,19 +598,34 @@ export function applyConfiguredProviderOverrides(params: {
     resolvedMaxTokens,
     contextWindow,
   );
-  const catalogCompat = mergeModelCompat(
-    configuredStaticCatalogModel?.compat,
-    discoveredModel.compat,
-  );
-  const hasCatalogOwnedModel =
+  let catalogModel = params.staticCatalogModel ?? discoveredModel;
+  let hasCatalogOwnedModel =
     configuredStaticCatalogModel !== undefined || discoveredModel.maxTokensSource !== "configured";
+  if (
+    !params.staticCatalogModel &&
+    !modelTransportRoutesMatch(discoveredModel, resolvedTransport)
+  ) {
+    const staticCatalogModel = configuredStaticCatalogModel ?? params.getStaticCatalogModel?.();
+    if (staticCatalogModel && modelTransportRoutesMatch(staticCatalogModel, resolvedTransport)) {
+      catalogModel = staticCatalogModel;
+      hasCatalogOwnedModel = true;
+    }
+  }
+  const catalogRoute = {
+    api: catalogModel.api ?? configuredStaticCatalogModel?.api,
+    baseUrl: catalogModel.baseUrl ?? configuredStaticCatalogModel?.baseUrl,
+  };
+  const catalogCompat = mergeModelCompat(
+    configuredStaticCatalogModel &&
+      modelTransportRoutesMatch(configuredStaticCatalogModel, catalogRoute)
+      ? configuredStaticCatalogModel.compat
+      : undefined,
+    catalogModel.compat,
+  );
   const resolvedCompat = resolveCatalogOwnedModelCompat({
     ...(hasCatalogOwnedModel
       ? {
-          catalogRoute: {
-            api: discoveredModel.api ?? configuredStaticCatalogModel?.api,
-            baseUrl: discoveredModel.baseUrl ?? configuredStaticCatalogModel?.baseUrl,
-          },
+          catalogRoute,
         }
       : {}),
     catalogCompat,

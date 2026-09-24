@@ -501,26 +501,14 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
   const inheritedEnv = readEnv(policy.set);
   const includeOnly = readStringList(policy.includeOnly);
   if (includeOnly.length > 0) {
-    filterEnvKeys(inheritedEnv, includeOnly, true);
-  }
-  return inheritedEnv;
-}
-
-function filterEnvKeys(
-  env: Record<string, string>,
-  patterns: string[],
-  keepMatches: boolean,
-): void {
-  if (patterns.length === 0) {
-    return;
-  }
-  const regexes = patterns.map((pattern) => wildcardPatternToRegex(pattern));
-  for (const key of Object.keys(env)) {
-    const matches = regexes.some((regex) => regex.test(key));
-    if (matches !== keepMatches) {
-      delete env[key];
+    const regexes = includeOnly.map(wildcardPatternToRegex);
+    for (const key of Object.keys(inheritedEnv)) {
+      if (!regexes.some((regex) => regex.test(key))) {
+        delete inheritedEnv[key];
+      }
     }
   }
+  return inheritedEnv;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {
