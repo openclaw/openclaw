@@ -114,9 +114,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(acceptanceObserver).not.toHaveBeenCalled();
-    expect(
-      onResponse.mock.calls.map(([response]) => response.status).every((status) => status === 503),
-    ).toBe(true);
+    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503]);
     expect(observations).toHaveLength(1);
     expect(observations.every((entry) => entry.egress === "native-codex-sse")).toBe(true);
     expect(observations.every((entry) => entry.payloadVariant === "initial")).toBe(true);

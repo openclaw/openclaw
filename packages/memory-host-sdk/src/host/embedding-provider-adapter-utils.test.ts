@@ -8,8 +8,8 @@ describe("sanitizeEmbeddingCacheHeaders", () => {
         {
           Authorization: "Bearer redacted", // pragma: allowlist secret
           "X-Api-Key": "redacted", // pragma: allowlist secret
-          "X-Api-Key-Routing": "tenant-a",
           "X-Token-Bucket": "batch-a",
+          "X-Api-Key-Routing": "tenant-a",
         },
         ["authorization", "x-api-key"],
       ),

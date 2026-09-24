@@ -429,7 +429,7 @@ describe("Mistral provider", () => {
   );
 
   it("preserves Mistral HTTP status and message while keeping error bodies UTF-16 safe and bounded", async () => {
-    const prefix = "a".repeat(3_999);
+    const prefix = "a".repeat(499);
     mistralMockState.streamError = Object.assign(new Error("invalid request"), {
       statusCode: 400,
       body: `${prefix}😀tail`,
@@ -438,7 +438,7 @@ describe("Mistral provider", () => {
     const result = await runMistralFixture();
 
     expect(result.errorMessage).toBe("400: invalid request");
-    expect(result.errorBody).toBe(`${prefix.slice(0, 500)}... [truncated]`);
+    expect(result.errorBody).toBe(`${prefix}... [truncated]`);
   });
 
   it("routes the Mistral HTTPClient through the host guarded fetch", async () => {
@@ -996,7 +996,7 @@ describe("Mistral provider", () => {
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
-    // Prove the host redaction port is applied to structured tool-result text.
+    // Redact structured fields without rewriting opaque JSON source text.
     configureAiTransportHost({
       redactModelVisibleSecrets: <T>(value: T): T =>
         JSON.parse(JSON.stringify(value).replaceAll('"value"', '"***"')) as T,
@@ -1004,6 +1004,7 @@ describe("Mistral provider", () => {
     const testContext = makeMistralToolResultContext("fetch", [
       {
         type: "resource",
+        apiKey: "value",
         resource: {
           uri: "https://example.com/data.json",
           mimeType: "application/json",
@@ -1022,6 +1023,7 @@ describe("Mistral provider", () => {
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
     expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
+    expect(textBlock?.text).toContain('"apiKey":"***"');
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {

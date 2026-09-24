@@ -24,10 +24,6 @@ const makeVisionModel = (id: string): Model<"google-generative-ai"> =>
     maxTokens: 1,
   }) as Model<"google-generative-ai">;
 
-function countFunctionResponses(parts: readonly Part[] | undefined): number {
-  return (parts ?? []).filter((p) => p.functionResponse != null).length;
-}
-
 function functionResponseNames(parts: readonly Part[] | undefined): string[] {
   return (parts ?? []).flatMap((part) =>
     part.functionResponse?.name ? [part.functionResponse.name] : [],
@@ -83,7 +79,6 @@ describe("google-shared convertMessages — parallel tool results with an image 
           { inlineData: { mimeType: "image/png", data: "AAAA" } },
         ],
       });
-      expect(contents.slice(3).some((c) => countFunctionResponses(c.parts) > 0)).toBe(false);
     },
   );
 

@@ -178,7 +178,6 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(registeredStream).toBeTypeOf("function");
     const stream = registeredStream(result, { messages: [] }, {});
     expect(stream).toBe(sourceResult);
-    expect(stream).not.toBeInstanceOf(Promise);
     expect(capturedApi).toBe(sourceApi);
   });
 

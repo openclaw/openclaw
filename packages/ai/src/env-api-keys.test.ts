@@ -2,8 +2,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureEnv, withEnvAsync } from "../../../src/test-utils/env.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../../../src/test-utils/env.js";
 
 const envKeys = [
   "ANTHROPIC_API_KEY",
@@ -15,7 +15,9 @@ const envKeys = [
   "AWS_PROFILE",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "GCLOUD_PROJECT",
   "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
   "KIMI_API_KEY",
@@ -26,6 +28,13 @@ const envKeys = [
 
 const originalEnv = captureEnv([...envKeys]);
 const tempDirs: string[] = [];
+
+// Keep ambient credentials from selecting a different authentication path.
+beforeEach(() => {
+  for (const key of envKeys) {
+    deleteTestEnvValue(key);
+  }
+});
 
 afterEach(async () => {
   vi.unstubAllGlobals();

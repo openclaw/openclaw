@@ -101,8 +101,10 @@ describe("embedding chunk limits", () => {
     expect(joinedChunkText(out)).toBe(inputText);
     expectChunksWithinUtf8Bytes(out, 8192);
 
-    // If we split inside surrogate pairs we'd likely end up with replacement chars.
-    expect(joinedChunkText(out)).not.toContain("\uFFFD");
+    // Validate each input: joining chunks can hide a split surrogate pair.
+    for (const chunk of out) {
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
   });
 
   it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {

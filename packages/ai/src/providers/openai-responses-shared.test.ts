@@ -725,8 +725,6 @@ describe("convertResponsesMessages", () => {
       call_id: "call_audio",
       output: "(see attached audio)",
     });
-    expect(functionOutput?.output).not.toBe("(see attached image)");
-    expect(functionOutput?.output).not.toBe("(no output)");
   });
 
   it("does not emit image parts or placeholders for payload-less tool media", () => {

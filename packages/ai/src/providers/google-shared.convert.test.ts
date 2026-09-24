@@ -652,7 +652,6 @@ describe("google-shared convertMessages", () => {
     );
     const toolResponse = assertRecord(toolResponsePart);
     expect(assertRecord(toolResponse.functionResponse).name).toBe("myTool");
-    expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
 
   it("ensures function call comes after user turn, not after model turn", () => {

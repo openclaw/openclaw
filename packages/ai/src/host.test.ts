@@ -16,6 +16,7 @@ function registerCustomApi(registry: ApiRegistry, api: Api, _streamFn: StreamFn)
 }
 
 describe("AI transport host configuration", () => {
+  // Capture before the first selected case mutates the host.
   let initialHost: import("./host.js").AiTransportHost | undefined;
 
   afterAll(async () => {
@@ -29,7 +30,7 @@ describe("AI transport host configuration", () => {
   it("replays custom API registration when transports load before the concrete host", async () => {
     const { prepareModelForSimpleCompletion } = await import("./transports.js");
     const { configureAiTransportHost, getAiTransportHost } = await import("./host.js");
-    initialHost = getAiTransportHost();
+    initialHost ??= getAiTransportHost();
     configureAiTransportHost({});
 
     const registry = createApiRegistry();
@@ -74,6 +75,7 @@ describe("AI transport host configuration", () => {
 
   it("uses package transcript normalization until the embedding host overrides it", async () => {
     const { configureAiTransportHost, getAiTransportHost } = await import("./host.js");
+    initialHost ??= getAiTransportHost();
     configureAiTransportHost({});
     const model: Model<"anthropic-messages"> = {
       id: "claude-text-only",

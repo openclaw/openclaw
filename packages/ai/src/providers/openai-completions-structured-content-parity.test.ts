@@ -397,7 +397,6 @@ describe.each([
     const result = await createStream(model, scenario).result();
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual(scenario.expectedContent);
-    expect(JSON.stringify(result.content)).not.toContain("[object Object]");
 
     const visibleAnswer = result.content
       .filter((block) => block.type === "text")

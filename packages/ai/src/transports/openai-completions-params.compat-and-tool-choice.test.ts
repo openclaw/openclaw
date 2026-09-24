@@ -184,7 +184,6 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    expect(params).toHaveProperty("tools");
     expect((params as { tools: unknown[] }).tools).toEqual([]);
   });
 
@@ -195,7 +194,6 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    expect(params).toHaveProperty("tools");
     expect((params as { tools: unknown[] }).tools).toEqual([]);
   });
 });

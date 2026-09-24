@@ -143,11 +143,9 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    expect(typeof params.max_completion_tokens).toBe("number");
     const cap = params.max_completion_tokens as number;
     const estimatedInputTokens = Math.ceil((systemPrompt.length / 4) * 1.25);
     expect(cap).toBe(262_144 - estimatedInputTokens - 1);
-    expect(cap).toBeLessThan(262_144);
   });
 
   it("uses CJK-aware input estimates when clamping proxy-like completions output budgets", () => {

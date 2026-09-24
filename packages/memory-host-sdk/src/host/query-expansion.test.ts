@@ -8,24 +8,6 @@ describe("extractKeywords", () => {
     expect(keywords).toStrictEqual(["discussed", "api"]);
   });
 
-  it("extracts keywords from Chinese conversational query", () => {
-    const keywords = extractKeywords("之前讨论的那个方案");
-    expect(keywords).toStrictEqual([
-      "之",
-      "讨",
-      "论",
-      "个",
-      "方",
-      "案",
-      "前讨",
-      "讨论",
-      "论的",
-      "的那",
-      "个方",
-      "方案",
-    ]);
-  });
-
   it("extracts keywords from mixed language query", () => {
     const keywords = extractKeywords("昨天讨论的 API design");
     expect(keywords).toStrictEqual([

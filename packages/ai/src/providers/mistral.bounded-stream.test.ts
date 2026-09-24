@@ -118,8 +118,9 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
     try {
       const response = await fetcher(`http://127.0.0.1:${port}/`);
       expect(response.status).toBe(200);
-      const { total } = await readAllChunks(response.body);
-      expect(total).toBe(Buffer.byteLength(bodyText, "utf8"));
+      const actualBody = Buffer.from(await response.arrayBuffer());
+      const total = actualBody.byteLength;
+      expect(actualBody).toEqual(Buffer.from(bodyText, "utf8"));
       console.log(
         `[mistral bounded-stream proof] normal path: cap=${MAX} returned=${total} body=${JSON.stringify(bodyText)}`,
       );

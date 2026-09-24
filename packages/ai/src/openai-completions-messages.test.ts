@@ -281,9 +281,6 @@ describe("convertMessages parallel tool-result image ownership", () => {
     const userMsgP = convertedP.find((m) => m.role === "user" && Array.isArray(m.content));
     const userMsgQ = convertedQ.find((m) => m.role === "user" && Array.isArray(m.content));
 
-    // The two partitions must produce different content (ownership is distinguishable)
-    expect(JSON.stringify(userMsgP?.content)).not.toBe(JSON.stringify(userMsgQ?.content));
-
     // Partition P: first group has 1 image from screenshot, second has 2 from camera
     const contentP = userMsgP?.content as Array<{
       type: string;
@@ -465,7 +462,6 @@ describe("convertMessages parallel tool-result image ownership", () => {
     const labelText = content[0]?.text ?? "";
 
     expect(labelText).toBe(`Image(s) from tool result #1 (${namePrefix}):`);
-    expect(labelText).not.toMatch(/[\uD800-\uDFFF]/u);
     const toolMessage = converted.find((message) => message.role === "tool");
     expect(toolMessage?.role === "tool" && toolMessage.tool_call_id).toBe(longCallId);
   });

@@ -107,6 +107,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     ) as { messages: Array<Record<string, unknown>> };
 
     const assistantMessages = params.messages.filter((msg) => msg.role === "assistant");
+    expect(assistantMessages).toHaveLength(1);
     for (const msg of assistantMessages) {
       expect(msg).not.toHaveProperty("reasoning_content");
     }

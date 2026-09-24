@@ -189,6 +189,7 @@ describe("Google SDK construction auth", () => {
   );
 
   it("ignores blank Vertex project and location env fallbacks", async () => {
+    vi.stubEnv("GOOGLE_CLOUD_API_KEY", "");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "   ");
     vi.stubEnv("GCLOUD_PROJECT", "   ");
     vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");

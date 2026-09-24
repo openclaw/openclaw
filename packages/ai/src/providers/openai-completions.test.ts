@@ -1393,7 +1393,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
       .join("");
 
     expect(visibleText).toBe("Before  after");
-    expect(visibleText).not.toContain("private reasoning");
     expect(thinkingText).toBe("private reasoning");
   });
 
@@ -1854,6 +1853,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
       }
     }
 
+    expect(eventTypes).toContain("text_delta");
     expect(eventTypes.indexOf("text_delta")).toBeLessThan(eventTypes.indexOf("toolcall_end"));
     expect(eventTypes.indexOf("toolcall_end")).toBeLessThan(eventTypes.indexOf("text_end"));
     expect((await stream.result()).content).toEqual([
@@ -1884,6 +1884,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Stream ended without finish_reason");
     expect(result.content).toEqual([{ type: "text", text: "ordinary narration" }]);
+    expect(eventTypes).toContain("text_end");
     expect(eventTypes.indexOf("text_end")).toBeLessThan(eventTypes.indexOf("error"));
     expect(eventTypes).not.toContain("toolcall_end");
   });

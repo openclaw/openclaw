@@ -48,7 +48,6 @@ describe("openai completions stream", () => {
       .join("");
 
     expect(visibleText).toBe("Before  after");
-    expect(visibleText).not.toContain("private reasoning");
     expect(thinkingText).toBe("private reasoning");
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });

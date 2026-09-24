@@ -814,7 +814,6 @@ describe("OpenAI Responses compaction replay", () => {
       });
 
       expect(input.map((item) => item.type)).toEqual(["compaction", "function_call_output"]);
-      expect(input.some((item) => item.type === "function_call")).toBe(false);
       expect(input.filter((item) => item.type === "function_call_output")).toMatchObject([
         { call_id: "call_before", output: "before output" },
       ]);

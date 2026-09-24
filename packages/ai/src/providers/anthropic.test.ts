@@ -254,12 +254,12 @@ describe("Anthropic provider", () => {
           : {}),
       });
     }
-    streamAnthropic(
+    await streamAnthropic(
       makeAnthropicModel(testCase.model),
       { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
       { apiKey: testCase.key },
-    );
-    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    ).result();
+    expect(anthropicMockState.configs).toHaveLength(1);
     const config = anthropicMockState.configs[0] as {
       apiKey?: string | null;
       authToken?: string | null;
@@ -281,12 +281,12 @@ describe("Anthropic provider", () => {
   it.each(["none", "short", "long"] as const)(
     "sends the OpenCode session header with %s cache retention",
     async (cacheRetention) => {
-      streamAnthropic(
+      await streamAnthropic(
         makeAnthropicModel({ baseUrl: "https://opencode.ai/zen/go" }),
         { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
         { apiKey: "sk-ant-provider", sessionId: "session-123", cacheRetention },
-      );
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      ).result();
+      expect(anthropicMockState.configs).toHaveLength(1);
       const config = anthropicMockState.configs[0] as {
         defaultHeaders?: Record<string, string | null>;
       };
@@ -843,7 +843,6 @@ describe("Anthropic provider", () => {
 
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
-    expect(JSON.stringify(assistantMessage?.content)).not.toContain("reasoning_content");
     expect(assistantMessage?.content).toEqual([
       {
         type: "thinking",
@@ -1360,7 +1359,7 @@ describe("Anthropic provider", () => {
       });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+      expect(anthropicMockState.configs).toHaveLength(1);
       const config = anthropicMockState.configs[0] as {
         defaultHeaders?: Record<string, string>;
       };
@@ -1664,7 +1663,6 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
-    expect(result.errorMessage).not.toContain("SECRET.md");
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes).not.toContain("done");
   });
@@ -2473,9 +2471,6 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const system = (capturedPayload as { system?: unknown }).system;
-    const serialized = JSON.stringify(system);
-    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
-    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
     expect(system).toEqual([
       {
         type: "text",

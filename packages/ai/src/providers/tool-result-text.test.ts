@@ -136,10 +136,6 @@ describe("extractToolResultText", () => {
     ]);
 
     expect(text).toBe("summary");
-    expect(text).not.toContain("image-binary");
-    expect(text).not.toContain("abc123");
-    expect(text).not.toContain("def456");
-    expect(text).not.toContain("audio-binary");
   });
 
   it("omits MIME-tagged binary data while preserving textual resource data", () => {

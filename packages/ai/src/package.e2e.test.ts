@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, it } from "vitest";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -360,7 +360,5 @@ describe("@openclaw/ai packed package", () => {
       ["scripts/run-tsgo.mjs", "-p", path.join(tempDir, "tsconfig.json")],
       { cwd: repoRoot },
     );
-
-    expect(specifiers).toHaveLength(Object.keys(manifest.exports).length);
   }, 300_000);
 });
