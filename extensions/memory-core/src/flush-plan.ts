@@ -9,6 +9,32 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryCoreNowMs } from "./time.js";
 
+/**
+ * Splits the canonical model selector into the plan's primary and fallbacks.
+ *
+ * A bare string keeps the exact-override default: no fallbacks, so an
+ * unreachable maintenance model never silently bills the conversation model.
+ * The object form names the replacements the operator accepts.
+ */
+type FlushModelSelector = string | { primary?: string; fallbacks?: string[] };
+
+function resolveFlushModelSelection(model: FlushModelSelector | undefined): {
+  model?: string;
+  fallbacks?: string[];
+} {
+  if (typeof model === "string") {
+    return { model: model.trim() || undefined };
+  }
+  if (!model) {
+    return {};
+  }
+  const refs = (model.fallbacks ?? []).map((ref) => ref.trim()).filter((ref) => ref.length > 0);
+  return {
+    model: model.primary?.trim() || undefined,
+    ...(refs.length > 0 ? { fallbacks: refs } : {}),
+  };
+}
+
 const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
@@ -100,7 +126,7 @@ export function buildMemoryFlushPlan(
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
-    model: defaults?.model?.trim() || undefined,
+    ...resolveFlushModelSelection(defaults?.model),
     prompt: `${DEFAULT_MEMORY_FLUSH_PROMPT.replaceAll("YYYY-MM-DD", dateStamp)}\n${timeLine}`,
     systemPrompt: DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
