@@ -1,8 +1,8 @@
 import path from "node:path";
 import type { Static } from "typebox";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -165,15 +165,15 @@ export function useBrowserFollowupFixture() {
     const finishDispatch = async () => {
       dispatchRelease.resolve();
       activeRun?.complete();
-      let settled = false;
       const completion = getSessionWorkAdmissionRelease({
         scope: storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
-      void Promise.resolve(completion).then(() => {
-        settled = true;
-      });
-      await vi.waitFor(() => expect(settled).toBe(true), { timeout: 5_000 });
+      await withTestTimeout(
+        Promise.resolve(completion),
+        5_000,
+        "Expected chat input admission to release",
+      );
     };
     return {
       scope,

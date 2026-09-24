@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
@@ -583,14 +583,11 @@ describe("ordinary chat input admission", () => {
       try {
         const originalAck = await fixture.send();
         expect(originalAck.mock.calls[0]?.[0]).toBe(true);
-        let source: UserTurnTranscriptRecorder | undefined;
-        void fixture.dispatchedRecorder.then((recorder) => {
-          source = recorder;
-        });
-        await vi.waitFor(() => expect(source).toBeDefined(), { timeout: 5_000 });
-        if (!source) {
-          throw new Error("Expected the original accepted input recorder");
-        }
+        const source = await withTestTimeout(
+          fixture.dispatchedRecorder,
+          5_000,
+          "Expected the original accepted input recorder",
+        );
         const message = source.getPendingInputMessage?.();
         if (!message) {
           throw new Error("Expected the approved original source before collection");
