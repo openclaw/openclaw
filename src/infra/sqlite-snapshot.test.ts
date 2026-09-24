@@ -1009,8 +1009,10 @@ describe("createVerifiedSqliteSnapshot", () => {
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
       });
-      withReadOnlySnapshot(sqlite, sourcePath, (source) => {
-        expect(source.prepare("SELECT value FROM records").get()).toEqual({ value: removedValue });
+      withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
+        expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
+          value: removedValue,
+        });
       });
     },
   );
