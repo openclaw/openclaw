@@ -246,6 +246,7 @@ function resolveSessionKey(params: {
   agentId: string;
   user?: string | undefined;
   prefix: string;
+  bindUserToSession?: boolean;
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
@@ -256,7 +257,12 @@ function resolveSessionKey(params: {
   }
 
   const user = params.user?.trim();
-  const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
+  // Chat Completions treats OpenAI `user` as abuse-tracking metadata.
+  // OpenResponses still binds a durable session from any non-empty user.
+  const mainKey =
+    params.bindUserToSession !== false && user
+      ? `${params.prefix}-user:${user}`
+      : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
@@ -293,6 +299,7 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
+  bindUserToSession?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
@@ -300,6 +307,7 @@ export function resolveGatewayRequestContext(params: {
     agentId,
     user: params.user,
     prefix: params.sessionPrefix,
+    bindUserToSession: params.bindUserToSession,
   });
 
   const messageChannel = params.useMessageChannelHeader
