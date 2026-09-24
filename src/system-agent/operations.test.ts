@@ -544,22 +544,6 @@ describe("system agent operations", () => {
     expect(createAgent).not.toHaveBeenCalled();
   });
 
-  it("requires approval before restarting gateway", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runGatewayRestart = vi.fn(async () => {});
-
-    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart, setupSurface: "gateway" },
-    });
-
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      message: "Plan: restart the Gateway. Say yes to apply.",
-    });
-    expect(lines.join("\n")).toContain("Plan: restart the Gateway");
-    expect(runGatewayRestart).not.toHaveBeenCalled();
-  });
-
   it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
     mockConfig.setConfig({

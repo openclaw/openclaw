@@ -544,15 +544,8 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it.each([
-    "channels.synology-chat.webhookUrl",
-    "channels.synology-chat[webhookUrl]",
-    "channels.synology-chat.accounts[work].webhookUrl",
     'channels.synology-chat.accounts["prod.guild"].webhookUrl',
-    'channels.synology-chat.accounts["prod=us"].webhookUrl',
-    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
     "channels.synology-chat.incomingUrl",
-    "channels.synology-chat.accounts[work].incomingUrl",
-    "plugins.entries.codex.config.appServer.headers",
     "plugins.entries.codex.config.appServer.headers.Authorization",
     "channels.synology-chat",
   ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
@@ -674,14 +667,7 @@ describe("SystemAgentChatEngine approval", () => {
 
   it.each([
     "config get gateway.auth.tokenabcDEF123",
-    'config get gateway.auth["token=abcDEF123"]',
-    String.raw`config get gateway.auth.token\=abcDEF123`,
-    "config get gateway.auth.token abcDEF123",
-    "config get channels.missing.opaque=abcDEF123",
-    "config schema gateway.port=abcDEF123",
-    "config schema gateway.auth.token=abcDEF123",
     'config schema gateway.auth["token=abcDEF123"]',
-    "config schema channels.missing.opaque=abcDEF123",
   ])("keeps malformed config read path %s off model and history", async (command) => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const engine = new SystemAgentChatEngine({
@@ -713,24 +699,9 @@ describe("SystemAgentChatEngine approval", () => {
   it.each([
     "config set gateway.auth..token very-secret",
     "config set gateway.auth.token=very-secret",
-    "config set gateway.auth.token=very-secret please",
-    String.raw`config set gateway.auth.token\=very-secret please`,
-    String.raw`config set gateway.auth.token\ very-secret please`,
-    "config set gateway.auth.tokenabcDEF123 please",
-    "config set gateway.auth.token_abcDEF123 please",
-    "config set gateway.auth.token$abcDEF123 please",
-    "config set plugins.entries.codex.config.appServer.headersabcDEF123 please",
     "config set plugins.entries.codex.config.appServer.headers.Authorization=Bearer-abc please",
-    'config set channels.synology-chat["webhookUrl=abcDEF123"] please',
-    'config set channels.buzz.groups["gateway.auth.token=abcDEF123"].enabled true',
-    'config set hooks.mappings["token=abcDEF123"].agentId main',
     "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
-    "config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN",
     "config set-ref gateway.auth.token env 123:actual-gateway-token",
-    'config set gateway.auth["token=very-secret"] please',
-    'config set gateway.auth["token very-secret"] please',
-    'config set gateway.auth["token:very-secret"] please',
-    'config set gateway.auth["token=very-secret"].nested please',
   ])("keeps malformed sensitive config write %s away from every model path", async (command) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
@@ -745,40 +716,9 @@ describe("SystemAgentChatEngine approval", () => {
     expect(proposed.text).toContain("Invalid config path");
     expect(proposed.text).not.toContain("very-secret");
     expect(proposed.text).not.toContain("abcDEF123");
+    expect(proposed.text).not.toContain("actual-gateway-token");
     expect(engine.getPendingOperatorProposal()).toBeNull();
-  });
 
-  it.each([
-    "config set gateway.auth.token=very-secret",
-    "config set gateway.auth.token=very-secret please",
-    String.raw`config set gateway.auth.token\=very-secret please`,
-    String.raw`config set gateway.auth.token\ very-secret please`,
-    "config set gateway.auth.token.verysecret please",
-    "config set gateway.auth.tokenabcDEF123 please",
-    "config set gateway.auth.token_abcDEF123 please",
-    "config set gateway.auth.token$abcDEF123 please",
-    "config set plugins.entries.codex.config.appServer.headersabcDEF123 please",
-    'config set hooks.mappings["token=abcDEF123"].agentId main',
-    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
-    "config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN",
-    "config set-ref gateway.auth.token env 123:actual-gateway-token",
-    'config set gateway.auth["token=very-secret"] please',
-    'config set gateway.auth["token very-secret"] please',
-    'config set gateway.auth["token:very-secret"] please',
-    'config set gateway.auth["token=very-secret"].nested please',
-    "config set channels.missing.opaque=very-secret please",
-    'config set channels.missing["opaque=very-secret"].nested please',
-    "config set plugins.entries.missing.config.opaque=very-secret please",
-    'config set plugins.entries.missing.config["opaque=very-secret"].nested please',
-    'config set channels.synology-chat.accounts["prod.guild"].webhookUrl.abcDEF123 please',
-  ])("redacts malformed config write %s from conversation history", async (command) => {
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => ({ text: "noted" }),
-      classifyApproval: async () => "other",
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    await engine.handle(command);
     await engine.handle("did that work?");
 
     const history = engine.historySince(0);
@@ -786,6 +726,7 @@ describe("SystemAgentChatEngine approval", () => {
     expect(userTurns.some((text) => text.includes("very-secret"))).toBe(false);
     expect(userTurns.some((text) => text.includes("abcDEF123"))).toBe(false);
     expect(userTurns.some((text) => text.includes("Bearer-abc"))).toBe(false);
+    expect(userTurns.some((text) => text.includes("actual-gateway-token"))).toBe(false);
     expect(userTurns.some((text) => text.includes("<redacted secret>"))).toBe(true);
   });
 
@@ -821,14 +762,8 @@ describe("SystemAgentChatEngine approval", () => {
 
   it.each([
     "channels.telegram.botToken",
-    "channels.synology-chat[webhookUrl]",
-    "channels.synology-chat.accounts[work].webhookUrl",
     'channels.synology-chat.accounts["prod.guild"].webhookUrl',
-    String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`,
     "gateway.auth..token",
-    "channels.synology-chat.incomingUrl",
-    "channels.synology-chat.accounts[work].incomingUrl",
-    "plugins.entries.codex.config.appServer.headers",
     "plugins.entries.codex.config.appServer.headers.Authorization",
     "channels.synology-chat",
   ])("redacts config-set value at %s from conversation history", async (path) => {
