@@ -395,9 +395,11 @@ describe("nearestGroupColor", () => {
 });
 
 describe("directLoopbackRelayPort", () => {
-  it("accepts the canonical IPv4 listener on the direct /extension path", () => {
+  it("accepts explicit and default loopback listener ports", () => {
     expect(directLoopbackRelayPort("ws://127.0.0.1:18799/extension")).toBe(18799);
     expect(directLoopbackRelayPort("ws://127.0.0.1:20123/extension?profile=work")).toBe(20123);
+    // URL serialization omits the default WebSocket port; preserve legacy cdpPort:80 pairings.
+    expect(directLoopbackRelayPort("ws://127.0.0.1/extension")).toBe(80);
   });
 
   it("rejects gateway routes, remote hosts, and malformed values", () => {
@@ -419,7 +421,6 @@ describe("directLoopbackRelayPort", () => {
     "ws://127.0.0.1:18799/extension#secret",
     "ws://127.0.0.1:18799/extension?host=remote",
     "ws://127.0.0.1:18799/extension?profile=one&profile=two",
-    "ws://127.0.0.1/extension",
     "ws://127.0.0.1:0/extension",
     "wss://127.0.0.1:18799/extension",
   ])("rejects noncanonical or unsupported wake-up target %s", (url) => {

@@ -59,10 +59,7 @@ export function directLoopbackRelayPort(raw) {
   } catch {
     return null;
   }
-  if (!url.port) {
-    return null;
-  }
-  const port = Number(url.port);
+  const port = Number(url.port || 80);
   return url.protocol === "ws:" &&
     url.hostname === "127.0.0.1" &&
     url.pathname === "/extension" &&
