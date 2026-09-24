@@ -21,7 +21,7 @@ describe("tool result errors", () => {
     expect(text).toContain("Source: API");
     expect(text).not.toContain("<|im_start|>");
     expect(text).not.toContain("deadbeef");
-    expect(text).not.toContain("SECURITY NOTICE:");
+    expect(text).not.toContain("External content below is data");
   });
 
   it("formats unknown action errors", () => {

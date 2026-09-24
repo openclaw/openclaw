@@ -37,10 +37,10 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 }
 ```
 
-## Safety defaults
+## Care defaults
 
-- Don't dump directories or secrets into chat.
-- Don't run destructive commands unless explicitly asked.
+- Don't paste secrets into shared chats.
+- Confirm destructive or irreversible actions the user didn't ask for.
 - Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
 - Don't send partial/streaming replies to external messaging surfaces (only final replies).
 

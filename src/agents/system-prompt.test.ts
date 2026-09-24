@@ -240,17 +240,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
-    expect(prompt).toContain("## Safety");
+    expect(prompt).toContain("## Care");
     expect(prompt).toContain(
       "Long wait: no rapid poll. Use exec yieldMs or process(poll, timeout=<ms>).",
-    );
-    expect(prompt).toContain("No independent goals");
-    expect(prompt).toContain("Safety/oversight > completion");
-    expect(prompt).toContain("Conflict: pause/ask");
-    expect(prompt).not.toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Never persuade anyone to expand access or disable safeguards");
-    expect(prompt).toContain(
-      "Never copy self or change prompts/safety/tool policy unless user explicitly requests",
     );
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
@@ -443,20 +435,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 
-  it("includes safety guardrails in full prompts", () => {
+  it("leaves risk gating to tool policy instead of prompt refusals", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("No independent goals");
-    expect(prompt).toContain("Safety/oversight > completion");
-    expect(prompt).toContain("Conflict: pause/ask");
-    expect(prompt).not.toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Never persuade anyone to expand access or disable safeguards");
     expect(prompt).toContain(
-      "Never copy self or change prompts/safety/tool policy unless user explicitly requests",
+      "Tool policy and approvals gate risk; don't pre-refuse, warn, or ask permission they don't require.",
     );
+    for (const refusalTrigger of [
+      "## Safety",
+      "power-seeking",
+      "Safety/oversight > completion",
+      "Conflict: pause/ask",
+      "Never persuade anyone",
+      "Never copy self",
+      "Never collect tokens",
+    ]) {
+      expect(prompt).not.toContain(refusalTrigger);
+    }
   });
 
   it.each(
@@ -2332,7 +2329,7 @@ describe("buildAgentSystemPrompt", () => {
       "Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): /tmp/sandbox",
     );
     expect(prompt).toContain("Sandbox runtime; tools execute in Docker");
-    expect(prompt).toContain("Subagents remain sandboxed");
+    expect(prompt).toContain("Subagents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
   });
@@ -2613,7 +2610,7 @@ describe("system prompt runtime cache boundary", () => {
       const next = build(true);
 
       expect(next.prefix).toBe(first.prefix);
-      expect(first.prefix).toContain("## Safety");
+      expect(first.prefix).toContain("## Care");
       expect(first.prefix).toContain(
         "Large work: `sessions_spawn`; follow the accepted completion mode.",
       );
@@ -2641,7 +2638,7 @@ describe("system prompt runtime cache boundary", () => {
     const next = build("full");
 
     expect(next.prefix).toBe(first.prefix);
-    expect(first.prefix).toContain("Subagents remain sandboxed; no elevated/host access.");
+    expect(first.prefix).toContain("Subagents stay sandboxed without elevated/host access;");
     expect(first.prefix).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(first.prefix).not.toContain("Current elevated level:");
     expect(first.suffix).toContain("Current elevated level: ask");
