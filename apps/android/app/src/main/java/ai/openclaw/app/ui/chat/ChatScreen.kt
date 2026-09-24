@@ -216,6 +216,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -3558,6 +3559,7 @@ private fun ChatThinkingLevelPicker(
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
   val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
+  val boltColor = ClawTheme.colors.danger
   Surface(
     onClick = onOpen,
     enabled = enabled,
@@ -3570,7 +3572,7 @@ private fun ChatThinkingLevelPicker(
     color = Color.Transparent,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Box(modifier = Modifier.size(22.dp).testTag("chat-thinking-gauge")) {
+      Box(modifier = Modifier.size(28.dp).testTag("chat-thinking-gauge")) {
         Canvas(modifier = Modifier.matchParentSize()) {
           val radius = size.width * 0.43f
           val hub = Offset(center.x, size.height * 0.72f)
@@ -3596,17 +3598,27 @@ private fun ChatThinkingLevelPicker(
           }
         }
         if (fastMode) {
-          Icon(
-            Icons.Default.Bolt,
-            contentDescription = null,
+          Canvas(
             modifier =
               Modifier
                 .align(AbsoluteAlignment.TopLeft)
-                .absoluteOffset(x = 13.5.dp, y = 12.5.dp)
-                .size(4.5.dp)
+                .absoluteOffset(x = 16.75.dp, y = 17.5.dp)
+                .size(7.dp)
                 .testTag("chat-fast-mode-badge"),
-            tint = ClawTheme.colors.danger,
-          )
+          ) {
+            // Use the wedge width: the stock Bolt vector is mostly transparent at this scale.
+            val bolt =
+              Path().apply {
+                moveTo(size.width * 0.58f, 0f)
+                lineTo(size.width * 0.2f, size.height * 0.56f)
+                lineTo(size.width * 0.47f, size.height * 0.56f)
+                lineTo(size.width * 0.34f, size.height)
+                lineTo(size.width * 0.86f, size.height * 0.38f)
+                lineTo(size.width * 0.57f, size.height * 0.38f)
+                close()
+              }
+            drawPath(bolt, color = boltColor)
+          }
         }
       }
     }

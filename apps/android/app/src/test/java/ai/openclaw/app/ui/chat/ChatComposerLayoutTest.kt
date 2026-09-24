@@ -4003,17 +4003,22 @@ class ChatComposerLayoutTest {
     fun assertFastBoltInsideWedge() {
       val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
       val bolt = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-      val pixelsPerDp = gauge.width / 22f
+      val touchTarget = composeRule.onNodeWithContentDescription(nativeString("Thinking")).fetchSemanticsNode().boundsInRoot
+      val pixelsPerDp = composeRule.density.density
       val pivotX = gauge.center.x
       val pivotY = gauge.top + gauge.height * 0.72f
       val innerArcRadius = gauge.width * 0.43f - pixelsPerDp // Half the 2dp stroke sits inside the red arc.
+      val radialY = maxOf(pivotY - bolt.top, bolt.bottom - pivotY)
       val dx = bolt.right - pivotX
-      val dy = pivotY - bolt.top
+      assertTrue("Fast bolt must be legible at 360dp: at least 6.5dp wide", bolt.width + 0.5f >= 6.5f * pixelsPerDp)
+      assertTrue("The dial needs room for a readable bolt", gauge.width + 0.5f >= 26f * pixelsPerDp)
+      assertTrue("The 48dp touch target must remain intact", touchTarget.width + 0.5f >= 48f * pixelsPerDp)
       assertTrue("Fast bolt must be fully inside the dial", bolt.left > gauge.left && bolt.right < gauge.right && bolt.top > gauge.top && bolt.bottom < gauge.bottom)
       assertTrue("Fast bolt must clear the needle pivot", bolt.left > pivotX + 1.5f * pixelsPerDp)
-      assertTrue("Fast bolt must sit in the upper-right wedge", bolt.top < pivotY && bolt.bottom < pivotY + 1.5f * pixelsPerDp)
-      assertTrue("Fast bolt must not cover the red arc", dx * dx + dy * dy < innerArcRadius * innerArcRadius)
-      assertTrue("Fast marker must be an icon, not a covering badge disk", bolt.width <= 5f * pixelsPerDp)
+      assertTrue("Fast bolt must occupy the right wedge", bolt.top < pivotY && bolt.center.y < pivotY + 1.5f * pixelsPerDp)
+      assertTrue("Fast bolt must not cover the red arc", dx * dx + radialY * radialY < innerArcRadius * innerArcRadius)
+      val highNeedleRightAtBoltTop = pivotX + (pivotY - bolt.top) * 0.5774f + pixelsPerDp // High: 300 degrees, 2dp stroke.
+      assertTrue("Fast bolt must not cover the High needle", bolt.left > highNeedleRightAtBoltTop)
     }
 
     publishEffort("off")
@@ -4047,9 +4052,20 @@ class ChatComposerLayoutTest {
     publishEffort("off")
     capture("rtl-off")
     assertFastBoltInsideWedge()
+    val fastOnGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
     publishEffort("off", fastMode = false)
     capture("rtl-fast-off")
     composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    val fastOffGauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).captureToImage().toPixelMap()
+    val paintedBoltColumns =
+      (0 until fastOnGauge.width).count { x ->
+        (0 until fastOnGauge.height).any { y ->
+          val on = fastOnGauge[x, y]
+          val off = fastOffGauge[x, y]
+          on.red > off.red + 0.2f && on.red > on.green * 1.3f
+        }
+      }
+    assertTrue("Fast bolt must paint at least 3.5dp of red width at normal scale", paintedBoltColumns >= 3.5f * composeRule.density.density)
     composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
       SemanticsMatcher.expectValue(
         SemanticsProperties.StateDescription,
