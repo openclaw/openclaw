@@ -55,19 +55,28 @@ export async function readGitReceiptFetchTarget(
   if (!revision) {
     return null;
   }
-  const targets =
-    (await readGit("config", "--get-regexp", "^remote\\..*\\.fetch$"))
-      ?.split("\n")
-      .flatMap((line) => {
-        const [, remote, source, destination] =
-          /^remote\.(.+)\.fetch \+?([^:]+):(.+)$/.exec(line) ?? [];
-        const matched = destination ? matchRefspec(destination, revision) : undefined;
-        return remote && source && matched !== undefined
-          ? [{ remote, mergeRef: source.replace("*", matched), revision }]
-          : [];
-      }) ?? [];
-  const unique = [...new Map(targets.map((target) => [JSON.stringify(target), target])).values()];
-  if (unique.length === 0 && revision.startsWith("refs/heads/")) {
+  const refspecs =
+    (await readGit("config", "--get-regexp", "^remote\\..*\\.fetch$"))?.split("\n") ?? [];
+  const targets = refspecs.flatMap((line) => {
+    const [, remote, source, destination] =
+      /^remote\.(.+)\.fetch \+?([^:]+):(.+)$/.exec(line) ?? [];
+    const matched = destination ? matchRefspec(destination, revision) : undefined;
+    return remote && source && matched !== undefined
+      ? [{ remote, mergeRef: source.replace("*", matched), revision }]
+      : [];
+  });
+  // Excluded aliases are not competing sources. Retain positive mappings below
+  // so an excluded remote destination cannot masquerade as a local upstream.
+  const eligible = targets.filter((target) => {
+    const prefix = `remote.${target.remote}.fetch ^`;
+    return !refspecs.some(
+      (line) =>
+        line.startsWith(prefix) &&
+        matchRefspec(line.slice(prefix.length), target.mergeRef) !== undefined,
+    );
+  });
+  const unique = [...new Map(eligible.map((target) => [JSON.stringify(target), target])).values()];
+  if (targets.length === 0 && revision.startsWith("refs/heads/")) {
     return { remote: ".", mergeRef: revision, revision };
   }
   return unique.length === 1 ? (unique[0] ?? null) : null;

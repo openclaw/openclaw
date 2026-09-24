@@ -226,66 +226,88 @@ it.each(["local", "local-receipt", "missing"])(
   },
 );
 
-it.each(["duplicate", "ambiguous", "excluded"])(
-  "keeps receipt freshness honest for %s remote mappings",
-  async (mapping) => {
-    await withTestDir({ prefix: "openclaw-status-receipt-mapping-" }, async (base) => {
-      const source = path.join(base, "source");
-      const receiver = path.join(base, "receiver");
-      await initialize(source);
-      await commit(source, "initial");
-      await git(base, "clone", pathToFileURL(source).href, receiver);
-      const currentSha = await git(receiver, "rev-parse", "HEAD");
-      await git(receiver, "checkout", "--detach");
-      await git(receiver, "branch", "-D", "main");
-      await git(receiver, "fetch", "origin", "refs/heads/main");
-      const fetchHead = await fs.readFile(path.join(receiver, ".git", "FETCH_HEAD"), "utf8");
-      if (mapping === "ambiguous") {
-        await git(receiver, "remote", "add", "other", pathToFileURL(source).href);
-        await git(
-          receiver,
-          "config",
-          "remote.other.fetch",
-          "+refs/heads/main:refs/remotes/origin/main",
-        );
-      } else {
-        await git(
-          receiver,
-          "config",
-          "--add",
-          "remote.origin.fetch",
-          mapping === "excluded" ? "^refs/heads/main" : "+refs/heads/main:refs/remotes/origin/main",
-        );
-      }
-      await commit(source, "remote advances");
-      const latest = await git(source, "rev-parse", "HEAD");
-      const result = await checkUpdateStatus({
-        root: receiver,
-        fetchGit: true,
-        includeRegistry: false,
-        gitUpstreamFallback: { currentSha, upstreamRef: "origin/main" },
-      });
-      expect(result.git).toMatchObject(
-        mapping === "duplicate"
-          ? { upstreamSha: latest, ahead: 0, behind: 1, fetchOk: true }
-          : {
-              upstreamSha: null,
-              ahead: null,
-              behind: null,
-              fetchOk: mapping === "excluded" ? false : null,
-            },
+it.each([
+  "duplicate",
+  "ambiguous",
+  "excluded",
+  "excluded-alias",
+  "excluded-alias-pattern",
+  "excluded-local",
+])("keeps receipt freshness honest for %s remote mappings", async (mapping) => {
+  await withTestDir({ prefix: "openclaw-status-receipt-mapping-" }, async (base) => {
+    const source = path.join(base, "source");
+    const receiver = path.join(base, "receiver");
+    await initialize(source);
+    await commit(source, "initial");
+    await git(base, "clone", pathToFileURL(source).href, receiver);
+    const currentSha = await git(receiver, "rev-parse", "HEAD");
+    await git(receiver, "checkout", "--detach");
+    await git(receiver, "branch", "-D", "main");
+    await git(receiver, "fetch", "origin", "refs/heads/main");
+    const fetchHead = await fs.readFile(path.join(receiver, ".git", "FETCH_HEAD"), "utf8");
+    const receiptRef = mapping === "excluded-local" ? "refs/heads/saved" : "origin/main";
+    if (mapping === "excluded-local") {
+      await git(receiver, "update-ref", receiptRef, currentSha);
+      await git(receiver, "config", "remote.origin.fetch", "+refs/heads/main:refs/heads/saved");
+      await git(receiver, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
+    } else if (mapping.startsWith("excluded-alias")) {
+      await git(source, "branch", "other");
+      await git(
+        receiver,
+        "config",
+        "--add",
+        "remote.origin.fetch",
+        "+refs/heads/other:refs/remotes/origin/main",
       );
-      expect(await git(receiver, "rev-parse", "origin/main")).toBe(
-        mapping === "duplicate" ? latest : currentSha,
+      await git(
+        receiver,
+        "config",
+        "--add",
+        "remote.origin.fetch",
+        mapping === "excluded-alias-pattern" ? "^refs/heads/oth*" : "^refs/heads/other",
       );
-      if (mapping !== "duplicate") {
-        expect(await fs.readFile(path.join(receiver, ".git", "FETCH_HEAD"), "utf8")).toBe(
-          mapping === "excluded" ? "" : fetchHead,
-        );
-      }
+    } else if (mapping === "ambiguous") {
+      await git(receiver, "remote", "add", "other", pathToFileURL(source).href);
+      await git(
+        receiver,
+        "config",
+        "remote.other.fetch",
+        "+refs/heads/main:refs/remotes/origin/main",
+      );
+    } else {
+      await git(
+        receiver,
+        "config",
+        "--add",
+        "remote.origin.fetch",
+        mapping === "excluded" ? "^refs/heads/main" : "+refs/heads/main:refs/remotes/origin/main",
+      );
+    }
+    await commit(source, "remote advances");
+    const latest = await git(source, "rev-parse", "HEAD");
+    const result = await checkUpdateStatus({
+      root: receiver,
+      fetchGit: true,
+      includeRegistry: false,
+      gitUpstreamFallback: { currentSha, upstreamRef: receiptRef },
     });
-  },
-);
+    const refreshes = mapping === "duplicate" || mapping.startsWith("excluded-alias");
+    expect(result.git).toMatchObject(
+      refreshes
+        ? { upstreamSha: latest, ahead: 0, behind: 1, fetchOk: true }
+        : {
+            upstreamSha: null,
+            ahead: null,
+            behind: null,
+            fetchOk: null,
+          },
+    );
+    expect(await git(receiver, "rev-parse", receiptRef)).toBe(refreshes ? latest : currentSha);
+    if (!refreshes) {
+      expect(await fs.readFile(path.join(receiver, ".git", "FETCH_HEAD"), "utf8")).toBe(fetchHead);
+    }
+  });
+});
 
 it("keeps disconnected shallow comparisons unknown after a scoped refresh", async () => {
   await withTestDir({ prefix: "openclaw-status-disconnected-shallow-" }, async (base) => {
