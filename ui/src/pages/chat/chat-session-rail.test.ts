@@ -5,6 +5,10 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
+import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
@@ -501,6 +505,60 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("explains unsupported image input and retries the retained image only on user action", async () => {
+    const threads = new ChatSessionCompanionThreads(() => {
+      element.companion = { ...threads.view("one") };
+    });
+    const image = registerChatAttachmentPayload({
+      attachment: { id: "retry-image", mimeType: "image/png", fileName: "retry.png" },
+      dataUrl: "data:image/png;base64,aW1hZ2U=",
+      file: new File(["image"], "retry.png", { type: "image/png" }),
+    });
+    const ask = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Image input unsupported"), {
+          details: { reason: "image-input-unsupported" },
+          retryable: false,
+        }),
+      )
+      .mockResolvedValue({ answer: "The image is now visible.", ts: 123 });
+    let submitted: Promise<void> | undefined;
+    const element = await mount({
+      companion: threads.view("one"),
+      onSubmit: (turn) => {
+        submitted = threads.submit("one", turn, ask);
+      },
+    });
+    try {
+      threads.setAttachments("one", [image]);
+      await threads.submit("one", "Explain this image", ask);
+      await element.updateComplete;
+      expect(element.textContent).toContain(
+        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+      );
+      expect(element.textContent).not.toContain("No utility model is configured");
+      expect(ask).toHaveBeenCalledOnce();
+      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
+      threads.setDraft("one", "Keep my next question");
+      await element.updateComplete;
+      const retry = element.querySelector<HTMLButtonElement>(".chat-session-rail__retry");
+      expect(retry).not.toBeNull();
+      expect(retry?.disabled).toBe(false);
+      retry!.click();
+      await submitted;
+      await element.updateComplete;
+      expect(ask).toHaveBeenCalledTimes(2);
+      expect(ask).toHaveBeenLastCalledWith("one", "Explain this image", [image]);
+      expect(element.textContent).toContain("The image is now visible.");
+      expect(element.querySelector(".chat-session-rail__retry")).toBeNull();
+      expect(threads.view("one").draft).toBe("Keep my next question");
+      expect(getChatAttachmentDataUrl(image)).toBeNull();
+    } finally {
+      threads.retire();
+    }
   });
 
   it("renders one pending state and retries a retryable failure", async () => {

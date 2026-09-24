@@ -32,8 +32,10 @@ export type ChatSessionCompanionTurn = {
         | "history-unavailable"
         | "missing"
         | "model-unavailable"
+        | "image-unsupported"
         | "rate-limited"
         | "unavailable";
+      /** Whether the user can explicitly retry; independent of automatic transport retry. */
       retryable: boolean;
     }
 );
@@ -263,6 +265,7 @@ export class ChatSessionCompanionThreads {
       }
       const details = asRecord(asRecord(error).details);
       const reason = readStringField(details, "reason") ?? null;
+      const imageUnsupported = reason === "image-input-unsupported";
       const hint =
         details.code === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
@@ -272,13 +275,16 @@ export class ChatSessionCompanionThreads {
               ? "missing"
               : reason === "rate-limited"
                 ? "rate-limited"
-                : reason === "utility-model-unavailable"
-                  ? "model-unavailable"
-                  : "unavailable";
+                : imageUnsupported
+                  ? "image-unsupported"
+                  : reason === "utility-model-unavailable"
+                    ? "model-unavailable"
+                    : "unavailable";
       Object.assign(turn, {
         status: "failed",
         hint,
-        retryable: Boolean(asRecord(error).retryable) || reason === null,
+        // Changing the model is a user action, not an automatic retry condition.
+        retryable: imageUnsupported || Boolean(asRecord(error).retryable) || reason === null,
       });
     } finally {
       token.resolve();

@@ -4042,6 +4042,8 @@ export const en: TranslationMap & {
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
+      askImageUnsupported:
+        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",

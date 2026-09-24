@@ -220,6 +220,8 @@ describe("session companion embedded invocation", () => {
         undefined,
         expect.objectContaining({
           message: expect.stringContaining("does not support image input"),
+          details: { reason: "image-input-unsupported" },
+          retryable: false,
         }),
       );
       expect(modelIo).not.toHaveBeenCalled();

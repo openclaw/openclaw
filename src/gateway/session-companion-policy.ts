@@ -66,7 +66,7 @@ export function buildSessionCompanionSystemPrompt(sessionKey: string): string {
 export function assertSessionCompanionImageInput(model: Pick<Model, "input">): void {
   if (!model.input?.includes("image")) {
     throw new SessionCompanionAskError(
-      "utility-model-unavailable",
+      "image-input-unsupported",
       "The selected Side chat model does not support image input. Choose an image-capable utility model and retry.",
     );
   }

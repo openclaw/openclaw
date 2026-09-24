@@ -4,6 +4,7 @@ type SessionCompanionAskErrorReason =
   | "rate-limited"
   | "session-missing"
   | "utility-model-unavailable"
+  | "image-input-unsupported"
   | "unavailable";
 
 export class SessionCompanionAskError extends Error {
