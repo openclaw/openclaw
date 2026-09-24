@@ -164,7 +164,10 @@ server.listen(port, "127.0.0.1", () => {
         port,
       });
       expect(observed.pid).not.toBe(child.pid);
-      expect(readWindowsProcessArgsSync(observed.pid)).toEqual(observed.argv);
+      // CIM may briefly return no command line for a newly launched process.
+      await expect
+        .poll(() => readWindowsProcessArgsSync(observed.pid), { timeout: 5_000 })
+        .toEqual(observed.argv);
       const installed = await readScheduledTaskCommand(env, { requireEffective: true });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
