@@ -1602,10 +1602,12 @@ jobs:
           const runCheck = runNodeFull || (!docsOnly && nodeDataOnly && (
             changedPaths === null || changedPaths.some((path) => /\.[cm]?tsx?$/u.test(path))
           ));
-          // Plain PR leaves share the local consumer selector. Empty means the
-          // existing full owners stay scheduled, including unsupported targets.
+          const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
+          // Hosted profiles retain stripes: eligible paths can consume every
+          // core graph and exceed the central row's budget.
           let changedCoreTestPaths;
-          if (eventName === "pull_request" && runCheck && !frozenTarget && changedPaths &&
+          if (runnerProfile === "blacksmith" && eventName === "pull_request" &&
+            runCheck && !frozenTarget && changedPaths &&
             existsSync("scripts/changed-lanes.mts") &&
             [
               ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
@@ -1614,7 +1616,7 @@ jobs:
             const lanes = await import("./scripts/changed-lanes.mts");
             if (typeof lanes.getChangedCoreTestPaths === "function") {
               const coreTestPaths = lanes.getChangedCoreTestPaths(lanes.detectChangedLanes(changedPaths));
-              // Deleted leaves need the full plan before hosted stripes are scheduled.
+              // Deleted leaves need the full plan.
               if (coreTestPaths?.length && coreTestPaths.every((path) => existsSync(path))) {
                 changedCoreTestPaths = coreTestPaths;
               }
@@ -1667,7 +1669,6 @@ jobs:
             typeof changedNodeTestPlan.hasUiE2eAffectingChange !== "function" ||
             changedNodeTestPlan.hasUiE2eAffectingChange(changedPaths)
           );
-          const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";

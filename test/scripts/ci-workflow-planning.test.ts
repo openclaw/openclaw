@@ -4776,28 +4776,32 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each([
-    {
-      label: "test leaves",
-      paths: ["src/commands/doctor-config-preflight.plugin-persistence.test.ts"],
-    },
-    {
-      label: "source inputs and their test consumers",
-      paths: [
-        "src/shared/reply-payload.types.ts",
-        "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
-      ],
-    },
-  ])("retains compiler coverage when narrowing $label", ({ paths }) => {
-    const changedPaths = [...paths, "docs/ci.md"];
+  it.each(
+    (["blacksmith", "github", "hybrid"] as const).flatMap((profile) => [
+      {
+        profile,
+        label: "test leaves",
+        paths: ["src/commands/doctor-config-preflight.plugin-persistence.test.ts"],
+      },
+      {
+        profile,
+        label: "source inputs and their test consumers",
+        paths: [
+          "src/shared/reply-payload.types.ts",
+          "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
+        ],
+      },
+    ]),
+  )("retains compiler coverage for $label on $profile", ({ paths, profile }) => {
+    const targeted = profile === "blacksmith";
     const compilerPaths = paths.toSorted();
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
       changedCoreTestSupport: true,
       changedPlannerDependencies: paths,
       eventName: "pull_request",
-      runnerProfile: "hybrid",
-      changedPaths,
+      runnerProfile: profile,
+      changedPaths: [...paths, "docs/ci.md"],
       changedPlannerSource: `
         export const createChangedNodeTestShards = (_paths, options) => {
           console.log("dedicated-core-types:" + JSON.stringify(options.dedicatedCoreTypeChecks));
@@ -4807,7 +4811,9 @@ describe("ci workflow guards", () => {
       `,
     });
     expect(manifest.status, manifest.output).toBe(0);
-    expect(manifest.outputs.changed_core_test_paths_json).toBe(JSON.stringify(compilerPaths));
+    expect(manifest.outputs.changed_core_test_paths_json).toBe(
+      targeted ? JSON.stringify(compilerPaths) : "",
+    );
     expect(manifest.output).toContain("dedicated-core-types:true");
     const result = runCheckShardFixture({
       frozenTarget: false,
@@ -4815,21 +4821,33 @@ describe("ci workflow guards", () => {
       scripts: ["tsgo:scripts", "tsgo:test:root"],
       types: {
         compose: true,
+        profile,
         changedPathsJson: manifest.outputs.changed_core_test_paths_json,
         boundary: true,
       },
     });
     expect(result.status, result.output).toBe(0);
+    const stripes = targeted ? [] : [1, 2, 3, 4, 5];
     expect(result.rows).toEqual([
+      ...stripes.map((stripe) => ({ name: `core-${stripe}`, status: 0 })),
       { name: "central", status: 0 },
       { name: "boundary", status: 0 },
     ]);
-    expect(result.typeCalls.filter((call) => call.row === "central")).toEqual([
-      {
-        row: "central",
+    expect(result.typeCalls.filter((call) => call.row !== "boundary")).toEqual([
+      ...stripes.map((stripe) => ({
+        row: `core-${stripe}`,
         localCheck: null,
-        command: `node --changed-paths-json ${JSON.stringify(compilerPaths)} --concurrency 2`,
-      },
+        command: `node --stripe ${stripe}/5 --concurrency 2`,
+      })),
+      ...(targeted
+        ? [
+            {
+              row: "central",
+              localCheck: null,
+              command: `node --changed-paths-json ${JSON.stringify(compilerPaths)} --concurrency 2`,
+            },
+          ]
+        : []),
       ...["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"].map((command) => ({
         row: "central",
         localCheck: "0",
@@ -4842,20 +4860,10 @@ describe("ci workflow guards", () => {
         .map((call) => call.command)
         .toSorted(),
     ).toEqual(
-      BOUNDARY_CHECKS.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary")
+      BOUNDARY_CHECKS.filter((check) => !targeted || check.label !== "lint:tmp:tsgo-core-boundary")
         .map((check) => [check.command, ...check.args].join(" "))
         .toSorted(),
     );
-    const workflow = readCiWorkflow();
-    expect(
-      evaluateWorkflowExpression(workflow.jobs["check-test-types-hosted-core-shard"].if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerProfile: "hybrid",
-        preflightOutputs: manifest.outputs,
-      }),
-    ).toBe(false);
   });
 
   it.each([
