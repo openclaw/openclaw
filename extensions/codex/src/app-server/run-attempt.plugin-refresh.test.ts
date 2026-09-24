@@ -366,7 +366,7 @@ describe("managed Codex plugin refresh", () => {
             callId,
             namespace: null,
             tool,
-            arguments: tool === "message" ? { action: "send" } : {},
+            arguments: tool === "message" ? { action: "send", message: "Fixture reply" } : {},
           },
         });
         return reply.promise;

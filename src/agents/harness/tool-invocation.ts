@@ -23,6 +23,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   boundaries: ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>;
   retainExecutionSnapshot?: boolean;
   initialArguments?: Record<string, unknown>;
+  validateRawArguments?: (args: unknown) => void;
   prepareArguments?: (args: unknown, nativeArgumentsPrepared: boolean) => unknown;
   assertCurrent?: () => void;
   beforeExecute?: () => void | Promise<void>;
@@ -54,6 +55,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
         params.unavailableToolMessage ?? `OpenClaw tool is unavailable: ${params.call.toolName}`,
       );
     }
+    params.validateRawArguments?.(params.call.arguments);
     const prepare = tool.prepareArguments;
     const toolArgs = prepare
       ? Reflect.apply(prepare, tool, [params.call.arguments])

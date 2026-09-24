@@ -919,7 +919,10 @@ describe("Codex app-server dynamic tool build", () => {
               type: "namespace",
               name: "openclaw",
               description: "",
-              tools: [expect.objectContaining({ name: "session_status", deferLoading: true })],
+              tools: [
+                expect.objectContaining({ name: "message", deferLoading: true }),
+                expect.objectContaining({ name: "session_status", deferLoading: true }),
+              ],
             },
       );
     },

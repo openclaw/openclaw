@@ -44,6 +44,42 @@ const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   "sessions_spawn",
   "sessions_yield",
 ]);
+const DIRECT_SOURCE_REPLY_MESSAGE_DESCRIPTION =
+  "Send a text reply to the current source conversation. Load openclaw.message for media, rich presentation, message management, or another destination.";
+/**
+ * Root `message` contract for ordinary source-conversation text replies. The
+ * full manager stays reachable as deferred `openclaw.message`; this narrow
+ * schema is both catalog guidance and the dispatch boundary, so rich or routed
+ * root calls are rejected instead of silently routed elsewhere.
+ */
+export const DIRECT_SOURCE_REPLY_MESSAGE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: ["send"],
+      description: "Send a text reply to the current source conversation.",
+    },
+    message: {
+      type: "string",
+      description: "Visible reply text.",
+    },
+    final: {
+      type: "boolean",
+      description: "True for the completed reply; false for progress.",
+    },
+    replyTo: {
+      type: "string",
+      description: "Optional current-conversation message id to reply to.",
+    },
+    threadId: {
+      type: "string",
+      description: "Optional current-conversation thread id.",
+    },
+  },
+  required: ["action", "message"],
+} satisfies JsonValue;
 export function createCodexDynamicToolSpecs(params: {
   entries: readonly ProjectedCodexDynamicTool<CodexToolDescriptor>[];
   loading: CodexDynamicToolsLoading;
@@ -79,8 +115,24 @@ export function createCodexDynamicToolSpecs(params: {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }
-    if (params.loading === "direct" || directToolNames.has(entry.name)) {
+    if (params.loading === "direct") {
       specs.push(functionSpec);
+      continue;
+    }
+    if (directToolNames.has(entry.name)) {
+      if (entry.name === "message") {
+        specs.push({
+          ...functionSpec,
+          description: DIRECT_SOURCE_REPLY_MESSAGE_DESCRIPTION,
+          inputSchema: DIRECT_SOURCE_REPLY_MESSAGE_SCHEMA,
+        });
+        // Keep the complete message manager searchable under openclaw.message.
+        // The small root schema is the hot path for ordinary source replies;
+        // advanced actions retain their existing runtime and policy contract.
+        namespaceTools.push({ ...functionSpec, deferLoading: true });
+      } else {
+        specs.push(functionSpec);
+      }
       continue;
     }
     namespaceTools.push({ ...functionSpec, deferLoading: true });

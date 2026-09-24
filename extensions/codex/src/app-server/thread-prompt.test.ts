@@ -198,6 +198,16 @@ describe("buildDeveloperInstructions delegation guidance", () => {
   });
 });
 
+describe("buildDeveloperInstructions deferred-tool guidance", () => {
+  it("tells code-mode models to batch independent calls and bound tool output", () => {
+    const instructions = buildInstructions();
+
+    expect(instructions).toContain("Use `tool_search` when directly callable");
+    expect(instructions).toContain("batch them within one `exec` evaluation with `Promise.all`");
+    expect(instructions).toContain("set output limits to the smallest useful size");
+  });
+});
+
 describe("buildDeveloperInstructions UI presentation guidance", () => {
   const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
     (name): CodexDynamicToolFunctionSpec => ({

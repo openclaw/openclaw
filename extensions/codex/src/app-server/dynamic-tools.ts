@@ -50,10 +50,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  type JsonSchemaObject,
-  validateJsonSchemaValue,
-} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import {
   asNonArrayRecord,
@@ -77,6 +73,11 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
+import {
+  assertCodexDynamicToolInputMatchesSchema,
+  resolveCodexNarrowedRootMessageSchema,
+  shouldValidateCodexDynamicToolInput,
+} from "./dynamic-tool-input-validation.js";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -116,45 +117,6 @@ type CodexDynamicToolHookContext = NonNullable<
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = ProjectedTool<AnyAgentTool>;
-
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
-const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
-const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
-
-function shouldValidateCodexDynamicToolInput(tool: AnyAgentTool): boolean {
-  return getPluginToolMeta(tool)?.mcp?.operation !== "tool";
-}
-
-function assertCodexDynamicToolInputMatchesSchema(params: {
-  toolName: string;
-  schema: JsonSchemaObject;
-  value: unknown;
-}): void {
-  const validation = validateJsonSchemaValue({
-    schema: params.schema,
-    cacheKey: `codex-dynamic-tool-input:${params.toolName}:${JSON.stringify(params.schema)}`,
-    value: params.value,
-  });
-  if (validation.ok) {
-    return;
-  }
-  const visibleErrors = validation.errors.slice(0, MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS);
-  const details = visibleErrors
-    .map((error) => {
-      if (error.text.length <= MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS) {
-        return error.text;
-      }
-      return `${error.text.slice(
-        0,
-        MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS -
-          CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX.length,
-      )}${CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX}`;
-    })
-    .join("; ");
-  const omitted = validation.errors.length - visibleErrors.length;
-  const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
-  throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
-}
 
 function applyCurrentMessageProvider(
   toolName: string,
@@ -420,6 +382,11 @@ export function createCodexDynamicToolBridge(params: {
       const rawArguments =
         toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
+      const narrowedRootMessageSchema = resolveCodexNarrowedRootMessageSchema({
+        specs,
+        toolName,
+        namespace: call.namespace,
+      });
       const invocationStartedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let preparedMessageMedia:
@@ -451,6 +418,14 @@ export function createCodexDynamicToolBridge(params: {
         boundaries: executionBoundaries,
         retainExecutionSnapshot: options?.retainExecutionSnapshot,
         initialArguments: args,
+        validateRawArguments: narrowedRootMessageSchema
+          ? (value) =>
+              assertCodexDynamicToolInputMatchesSchema({
+                toolName,
+                schema: narrowedRootMessageSchema,
+                value,
+              })
+          : undefined,
         prepareArguments: (toolArgs, nativeArgumentsPrepared) => {
           const toolArgsRecord = nativeArgumentsPrepared ? toolArgs : args;
           if (toolName === "message" && isRecord(toolArgsRecord)) {
@@ -484,7 +459,7 @@ export function createCodexDynamicToolBridge(params: {
         validateArguments: (value) =>
           assertCodexDynamicToolInputMatchesSchema({
             toolName,
-            schema: toolEntry.inputSchema,
+            schema: narrowedRootMessageSchema ?? toolEntry.inputSchema,
             value,
           }),
         beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {

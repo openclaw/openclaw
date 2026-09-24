@@ -44,4 +44,40 @@ describe("parseCodexNativeToolCatalog", () => {
       ),
     ).toEqual([tool]);
   });
+
+  it("accepts the same function name at root and in a namespace, but rejects same-scope duplicates", () => {
+    const namespaced = {
+      type: "namespace" as const,
+      name: "openclaw",
+      description: "Advanced tools",
+      tools: [{ ...tool, deferLoading: true }],
+    };
+    const specs = [tool, namespaced];
+    const metadata = { id: threadId, dynamic_tools: structuredClone(specs) };
+    expect(
+      parseCodexNativeToolCatalog(metadata, threadId, codexDynamicToolsFingerprint(specs)),
+    ).toEqual(specs);
+    for (const duplicate of [[tool, tool], [{ ...namespaced, tools: [tool, tool] }]]) {
+      expect(() =>
+        parseCodexNativeToolCatalog({ id: threadId, dynamic_tools: duplicate }, threadId),
+      ).toThrow("native tool catalog is missing, corrupt, or changed");
+    }
+  });
+
+  it("keeps the 2000-function limit across namespaces", () => {
+    const functions = Array.from({ length: 2001 }, (_, index) => ({
+      ...tool,
+      name: `tool_${index}`,
+    }));
+    const metadata = {
+      id: threadId,
+      dynamic_tools: [
+        { type: "namespace", name: "first", description: "First", tools: functions.slice(0, 1000) },
+        { type: "namespace", name: "second", description: "Second", tools: functions.slice(1000) },
+      ],
+    };
+    expect(() => parseCodexNativeToolCatalog(metadata, threadId)).toThrow(
+      "native tool catalog is missing, corrupt, or changed",
+    );
+  });
 });

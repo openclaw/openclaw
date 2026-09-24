@@ -35,11 +35,12 @@ export function parseCodexNativeToolCatalog(
   if (!Array.isArray(catalog) || Buffer.byteLength(JSON.stringify(catalog)) > 1024 * 1024) {
     throw fail();
   }
-  const names = new Set<string>();
+  const rootNames = new Set<string>();
   const namespaces = new Set<string>();
+  let toolCount = 0;
   const validName = (name: unknown): name is string =>
     typeof name === "string" && /^[a-zA-Z0-9_-]{1,128}$/u.test(name);
-  const readFunction = (value: unknown): CodexDynamicToolFunctionSpec => {
+  const readFunction = (value: unknown, names: Set<string>): CodexDynamicToolFunctionSpec => {
     if (
       !isJsonObject(value) ||
       value.type !== "function" ||
@@ -51,11 +52,12 @@ export function parseCodexNativeToolCatalog(
         (key) => !["type", "name", "description", "inputSchema", "deferLoading"].includes(key),
       ) ||
       names.has(value.name) ||
-      names.size >= 2000
+      toolCount >= 2000
     ) {
       throw fail();
     }
     names.add(value.name);
+    toolCount += 1;
     return {
       type: "function",
       name: value.name,
@@ -66,7 +68,7 @@ export function parseCodexNativeToolCatalog(
   };
   const tools = catalog.map((value): CodexDynamicToolSpec => {
     if (!isJsonObject(value) || value.type !== "namespace") {
-      return readFunction(value);
+      return readFunction(value, rootNames);
     }
     if (
       !validName(value.name) ||
@@ -79,11 +81,12 @@ export function parseCodexNativeToolCatalog(
       throw fail();
     }
     namespaces.add(value.name);
+    const names = new Set<string>();
     return {
       type: "namespace",
       name: value.name,
       description: value.description,
-      tools: value.tools.map(readFunction),
+      tools: value.tools.map((tool) => readFunction(tool, names)),
     };
   });
   if (fingerprint !== undefined && codexDynamicToolsFingerprint(tools) !== fingerprint) {

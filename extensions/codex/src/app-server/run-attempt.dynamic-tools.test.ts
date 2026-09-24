@@ -19,7 +19,7 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import type { CodexDynamicToolCallParams } from "./protocol.js";
+import type { CodexDynamicToolCallParams, JsonValue } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -62,6 +62,82 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("routes source replies through the narrow registered message contract", async () => {
+    const tool = createRuntimeDynamicTool("message");
+    const prepareArguments = vi.fn((args: unknown) => args);
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "delivered" }],
+      details: {},
+    }));
+    tool.parameters = {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["send", "react"] },
+        message: { type: "string" },
+        emoji: { type: "string" },
+        target: { type: "string" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    };
+    tool.prepareArguments = prepareArguments;
+    tool.execute = execute;
+    const params = createParams(
+      path.join(tempDir, "message-contract-session.jsonl"),
+      path.join(tempDir, "message-contract-workspace"),
+    );
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [tool]);
+    const harness = createStartedThreadHarness();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await harness.waitForMethod("turn/start");
+      const call = (callId: string, namespace: string | null, args: JsonValue) =>
+        harness.handleServerRequest({
+          id: callId,
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId,
+            namespace,
+            tool: "message",
+            arguments: args,
+          },
+        });
+      await expect(
+        call("rich-root", null, { action: "react", emoji: "✅" }),
+      ).resolves.toMatchObject({
+        success: false,
+      });
+      await expect(
+        call("routed-root", null, { action: "send", message: "hello", target: "elsewhere" }),
+      ).resolves.toMatchObject({ success: false });
+      expect(prepareArguments).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      await expect(
+        call("text-root", null, { action: "send", message: "hello" }),
+      ).resolves.toMatchObject({
+        success: true,
+      });
+      await expect(
+        call("rich-manager", "openclaw", { action: "react", emoji: "✅" }),
+      ).resolves.toMatchObject({
+        success: true,
+      });
+      expect(execute).toHaveBeenCalledTimes(2);
+    } finally {
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+      closeHostCapabilities();
+    }
+  });
+
   it("acknowledges a terminal sandbox process poll only after Codex accepts its exact result", async () => {
     const process = createProcessPollDeliveryContract("codex-result-delivery");
     const turnStarted = createDeferred<void>();
