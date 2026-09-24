@@ -166,21 +166,28 @@ async function refreshWorkerHeap(worker: Worker, source: WorkerSource): Promise<
   }
 }
 
-/** Read completed samples without blocking the heartbeat on a busy native isolate. */
-export function sampleTrackedWorkerMemory() {
+/** Read lifecycle counters without requesting native CPU or heap interrupts. */
+export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
-  const workerHeaps: NonNullable<DiagnosticMemoryUsage["workerHeaps"]> = [];
-  const memory = {
+  return {
     workerCount: trackedWorkers.workers.size,
-    workerHeapSampledCount: 0,
-    workerHeapTotalBytes: 0,
-    workerHeapUsedBytes: 0,
-    workerHeaps,
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,
       retired: [...counts.retired].map(([reason, count]) => ({ reason, count })),
     })),
+  };
+}
+
+/** Read completed samples without blocking the heartbeat on a busy native isolate. */
+export function sampleTrackedWorkerMemory() {
+  const workerHeaps: NonNullable<DiagnosticMemoryUsage["workerHeaps"]> = [];
+  const memory = {
+    ...getTrackedWorkerLifecycleSnapshot(),
+    workerHeapSampledCount: 0,
+    workerHeapTotalBytes: 0,
+    workerHeapUsedBytes: 0,
+    workerHeaps,
   };
   for (const [worker, source] of trackedWorkers.workers) {
     // At most two heartbeat intervals old; exits remove both counters and samples.

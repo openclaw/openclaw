@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { TlsOptions } from "node:tls";
 import type {
@@ -53,7 +57,7 @@ type PortalRuntimeEntry = {
   detachOwner?: () => void;
   ingressSignal?: AbortSignal;
   revoked?: boolean;
-  responses: Set<import("node:http").ServerResponse>;
+  responses: Set<ServerResponse>;
 };
 
 type GatewayPortalOpenParams = {
@@ -122,6 +126,40 @@ async function formatPortalHost(host: string): Promise<string> {
   return openableHost.includes(":") ? `[${openableHost}]` : openableHost;
 }
 
+function createPortalProxyHandlers(
+  resolveRuntime: (req: IncomingMessage) => PortalRuntimeEntry | undefined,
+  tls: boolean,
+) {
+  return {
+    request: (req: IncomingMessage, res: ServerResponse) => {
+      const runtime = resolveRuntime(req);
+      if (!runtime) {
+        res.writeHead(404);
+        res.end("Unknown portal");
+        return;
+      }
+      runtime.responses.add(res);
+      res.once("close", () => runtime.responses.delete(res));
+      handlePortalProxyRequest({ req, res, target: runtime.portal, tls });
+    },
+    upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      const runtime = resolveRuntime(req);
+      if (!runtime) {
+        socket.destroy();
+        return;
+      }
+      handlePortalProxyUpgrade({
+        req,
+        socket,
+        head,
+        target: runtime.portal,
+        upgradedSockets: runtime.upgradedSockets,
+        tls,
+      });
+    },
+  };
+}
+
 /** Creates the gateway-lifetime registry and per-portal transport listeners. */
 export function createGatewayPortalService(params: {
   httpBindHosts: readonly string[];
@@ -168,32 +206,7 @@ export function createGatewayPortalService(params: {
     ? createPortalIngress({
         port: params.ingress.port,
         httpServers: params.httpServers,
-        request: (req, res) => {
-          const runtime = lookupIngress(req.headers.host);
-          if (!runtime) {
-            res.writeHead(404);
-            res.end("Unknown portal");
-            return;
-          }
-          runtime.responses.add(res);
-          res.once("close", () => runtime.responses.delete(res));
-          handlePortalProxyRequest({ req, res, target: runtime.portal, tls: true });
-        },
-        upgrade: (req, socket, head) => {
-          const runtime = lookupIngress(req.headers.host);
-          if (!runtime) {
-            socket.destroy();
-            return;
-          }
-          handlePortalProxyUpgrade({
-            req,
-            socket,
-            head,
-            target: runtime.portal,
-            upgradedSockets: runtime.upgradedSockets,
-            tls: true,
-          });
-        },
+        ...createPortalProxyHandlers((req) => lookupIngress(req.headers.host), true),
       })
     : undefined;
 
@@ -357,47 +370,21 @@ export function createGatewayPortalService(params: {
             partitionedCookies: Boolean(ingress || managed || tlsOptions),
           };
           const upgradedSockets = new Set<Duplex>();
-          const responses = new Set<import("node:http").ServerResponse>();
-          const handler = (
-            req: import("node:http").IncomingMessage,
-            res: import("node:http").ServerResponse,
-          ) => {
-            const runtime = entries.get(id);
-            if (!runtime || runtime.portal !== portal || !isAvailable(runtime)) {
-              res.writeHead(404);
-              res.end("Unknown portal");
-              return;
-            }
-            responses.add(res);
-            res.once("close", () => responses.delete(res));
-            handlePortalProxyRequest({
-              req,
-              res,
-              target: portal,
-              tls: Boolean(managed || tlsOptions),
-            });
-          };
+          const responses = new Set<ServerResponse>();
+          const { request, upgrade } = createPortalProxyHandlers(
+            () => {
+              const runtime = entries.get(id);
+              return runtime?.portal === portal && isAvailable(runtime) ? runtime : undefined;
+            },
+            Boolean(managed || tlsOptions),
+          );
           const servers = ingress
             ? []
             : bindHosts.map(() =>
-                tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler),
+                tlsOptions ? createHttpsServer(tlsOptions, request) : createHttpServer(request),
               );
           for (const server of servers) {
-            server.on("upgrade", (req, socket, head) => {
-              const runtime = entries.get(id);
-              if (!runtime || runtime.portal !== portal || !isAvailable(runtime)) {
-                socket.destroy();
-                return;
-              }
-              handlePortalProxyUpgrade({
-                req,
-                socket,
-                head,
-                target: portal,
-                upgradedSockets,
-                tls: Boolean(managed || tlsOptions),
-              });
-            });
+            server.on("upgrade", upgrade);
           }
           // Registration precedes every bind so whole-gateway cleanup owns partial startup.
           params.httpServers.push(...servers);
@@ -424,7 +411,7 @@ export function createGatewayPortalService(params: {
                   serviceName: "portal",
                   endpointScheme: tlsOptions ? "https" : "http",
                 });
-                const address = primaryServer.address() as AddressInfo | null;
+                const address = primaryServer.address();
                 if (!address || typeof address === "string") {
                   throw new Error("Portal listener failed to resolve its port");
                 }

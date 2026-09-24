@@ -89,6 +89,22 @@ it("runs the registered provider through the HTTP transport and back to host dec
   });
 });
 
+it.each([413, 422])(
+  "returns ordinary unsupported input for HTTP %s through registration, without retry or private details",
+  async (status) => {
+    const fetch = vi.fn(async () => new Response("synthetic-key: synthetic only", { status }));
+    vi.stubGlobal("fetch", fetch);
+    expect(
+      await registeredProvider().evaluate(batch, {
+        model: "jev-test",
+        signal: new AbortController().signal,
+        deadlineMonotonicMs: performance.now() + 1000,
+      }),
+    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(fetch).toHaveBeenCalledOnce();
+  },
+);
+
 it("preserves reported probability rounding and a non-argmax vendor choice", async () => {
   const reported = structuredClone(response);
   reported.answers.c.choice = "skip";

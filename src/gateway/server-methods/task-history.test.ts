@@ -31,6 +31,7 @@ import {
 } from "../../tasks/task-registry.test-support.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
@@ -74,7 +75,7 @@ function createNativeTask(runId = "synthetic-child-1") {
 }
 
 async function withHistoryState(run: () => Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const registry = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetTaskRegistryForTests();
@@ -85,7 +86,9 @@ async function withHistoryState(run: () => Promise<void>) {
         await disposeSessionReadContexts();
       } finally {
         try {
-          resetTaskRegistryForTests();
+          // Release native borrowers before the registry's synchronous close.
+          await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+          resetTaskRegistryForTests({ persist: false });
         } finally {
           restoreActivePluginRegistrySnapshot(registry);
         }

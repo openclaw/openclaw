@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
@@ -29,6 +29,7 @@ import {
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -69,6 +70,9 @@ import {
   writeExecutable,
 } from "./ci-workflow.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
 const CREATE_GITHUB_APP_TOKEN_V3 =
@@ -1419,9 +1423,13 @@ AFTER_CD
     expect(openClawKitTests?.run).toContain("--no-parallel");
   });
 
-  it("keeps Testbox pull request validation off leased runner capacity", () => {
+  it("keeps Testbox runner admission and job budget compatible with delegated proof", () => {
     const workflow = readTestboxWorkflow();
 
+    expect(workflow.on.workflow_dispatch.inputs.timeout_minutes.default).toBe(240);
+    expect(workflow.jobs.check["timeout-minutes"]).toBe(
+      "${{ fromJSON(inputs.timeout_minutes || '240') }}",
+    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
@@ -1610,11 +1618,29 @@ AFTER_CD
       });
     }
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(nativePublishStep.with["invalidation-paths"].trim().split("\n")).toContain(
+      "ui/src/i18n/.i18n/glossary.*.json",
+    );
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/play/**");
-    expect(workflow.on.push.paths).toContain("apps/android/app/src/thirdParty/**");
-    expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
+    for (const sourceRoot of [
+      "apps/android/app/src/main",
+      "apps/android/app/src/play",
+      "apps/android/app/src/thirdParty",
+      "apps/android/wear/src/main",
+      "apps/ios",
+      "apps/macos/Sources",
+      "apps/shared/OpenClawKit/Sources",
+    ]) {
+      expect(workflow.on.push.paths).toContain(`${sourceRoot}/**`);
+      expect(nativePublishStep.with["invalidation-paths"].trim().split("\n")).toContain(sourceRoot);
+    }
+    expect(workflow.on.push.paths).toContain("apps/macos/Package.swift");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/macos/Package.swift");
+    expect(workflow.on.push.paths).toContain(".github/actions/publish-generated-pr/policy.py");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain(
+      ".github/actions/publish-generated-pr/policy.py",
+    );
     for (const generatorInput of [
       "scripts/android-app-i18n.ts",
       "scripts/apple-app-i18n.ts",
@@ -1696,9 +1722,8 @@ AFTER_CD
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
-    const sharedCatalogInputs = [
+    const controlUiCatalogInputs = [
       "scripts/lib/control-ui-i18n-catalog.ts",
-      "scripts/lib/control-ui-i18n-catalog-values.ts",
       "ui/src/i18n/lib/config-hint-translation.ts",
       "ui/src/lib/fnv1a.ts",
       "src/config/schema*.ts",
@@ -1707,15 +1732,31 @@ AFTER_CD
       "src/config/talk-defaults.ts",
       "src/config/channel-config-keys.ts",
     ];
-    const sharedCatalogInputOwners = [
+    const nativeInputOwners = [
       workflow.on.push.paths,
       nativePublishStep.with["invalidation-paths"].trim().split("\n"),
+    ];
+    const controlUiInputOwners = [
       controlUiWorkflow.on.push.paths,
       controlUiPublishStep.with["invalidation-paths"].trim().split("\n"),
     ];
-    for (const catalogInput of sharedCatalogInputs) {
-      for (const ownerPaths of sharedCatalogInputOwners) {
+    for (const catalogInput of controlUiCatalogInputs) {
+      for (const ownerPaths of controlUiInputOwners) {
         expect(ownerPaths).toContain(catalogInput);
+      }
+      for (const ownerPaths of nativeInputOwners) {
+        expect(ownerPaths).not.toContain(catalogInput);
+      }
+    }
+    for (const sharedTranslationInput of [
+      "scripts/control-ui-i18n.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
+      "scripts/lib/control-ui-i18n-config.json",
+      "scripts/lib/control-ui-i18n-config.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+    ]) {
+      for (const ownerPaths of [...nativeInputOwners, ...controlUiInputOwners]) {
+        expect(ownerPaths).toContain(sharedTranslationInput);
       }
     }
     expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
@@ -2272,6 +2313,66 @@ AFTER_CD
       expect(result.branchExists).toBe(false);
       expect(result.mainGeneratedA).toBe("old-a");
       expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/config/zod-schema.agent-runtime.ts"])(
+    "keeps native publication independent of Control UI schema changes: %s",
+    (sourcePath) => {
+      const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
+      const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
+        const publisher = expectDefined(
+          workflow.jobs.finalize.steps.find(
+            (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
+          ),
+          "locale publisher",
+        );
+        return runGeneratedPublisherScenario(null, {
+          autoMerge: true,
+          invalidationPaths: publisher.with["invalidation-paths"],
+          updateSource: sourcePath,
+        });
+      });
+      const native = expectDefined(results[0], "native publication result");
+      const controlUi = expectDefined(results[1], "Control UI publication result");
+      expect(native.branchExists).toBe(true);
+      expect(native.generatedA).toBe("desired-a");
+      expect(native.mergeCalls).toContain("--auto --squash");
+      expect(controlUi.branchExists).toBe(false);
+      expect(controlUi.mergeCalls).toBe("");
+      expect(controlUi.summary).toContain(
+        "Deferred stale generated output because generator inputs changed on main.",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "defers native publication when shared translation config changes",
+    () => {
+      const workflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
+      const publisher = expectDefined(
+        workflow.jobs.finalize.steps.find(
+          (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
+        ),
+        "native locale publisher",
+      );
+      const result = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        invalidationPaths: publisher.with["invalidation-paths"],
+        updateSource: "scripts/lib/control-ui-i18n-config.json",
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toContain("--disable-auto");
       expect(result.summary).toContain(
         "Deferred stale generated output because generator inputs changed on main.",
       );
@@ -3857,6 +3958,7 @@ setImmediate(() => {
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
+      "checks-baseline-ratchets": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
       "checks-fast-plugin-contracts-shard": "ubuntu-24.04",
@@ -4411,19 +4513,6 @@ setImmediate(() => {
           );
           continue;
         }
-        if (step.with?.path === "full-release-flake-intent") {
-          expect(file).toBe(".github/workflows/full-release-validation.yml");
-          expect(jobId).toBe("automatic_flake_retry");
-          expect(step.uses).toBe(CACHE_SAVE_V5);
-          expect(step.with).toEqual({
-            path: "full-release-flake-intent",
-            key: "full-release-flake-intent-v1-${{ github.run_id }}-${{ matrix.child }}",
-          });
-          expect(step.if).toBe(
-            "${{ github.run_attempt == 1 && steps.intent_witness.outcome == 'success' }}",
-          );
-          continue;
-        }
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
@@ -4590,6 +4679,7 @@ setImmediate(() => {
       "check-lint-hosted-core-shard",
       "check-shard",
       "check-test-types-hosted-core-shard",
+      "checks-baseline-ratchets",
       "checks-fast-channel-contracts-shard",
       "checks-fast-core",
       "checks-fast-plugin-contracts-shard",
@@ -5436,7 +5526,7 @@ server.listen(0, "127.0.0.1", () => {
       );
       expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
       expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
-      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.advisory).toBeUndefined();
       expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
         "${{ inputs.allow_frozen_target_scenario_omissions }}",
       );
@@ -5464,7 +5554,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
     expect(repoE2e["timeout-minutes"]).toBe(90);
     expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
-    expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    expect(repoE2e["continue-on-error"]).toBeUndefined();
     const producerSteps = producer.steps as WorkflowStep[];
     expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
       "full) pnpm build",
@@ -5617,6 +5707,7 @@ server.listen(0, "127.0.0.1", () => {
               });
             let cacheInputs: Record<string, string> | undefined;
             let configuredGeneration: string | undefined;
+            let configuredRestored: string | undefined;
             for (const step of transformSteps) {
               // Runner v2.336.0 evaluates embedded env before if; run/with inputs
               // are evaluated only after admission (CompositeActionHandler/ActionRunner).
@@ -5646,8 +5737,19 @@ server.listen(0, "127.0.0.1", () => {
                 cacheInputs = Object.fromEntries(
                   Object.entries(step.with ?? {}).map(([key, value]) => [key, render(value)]),
                 );
+                // Exercise misses and prefix hits; neither reports cache-hit=true.
+                steps[expectDefined(step.id, "transform restore step id")] = {
+                  outputs: {
+                    "cache-hit": generation === "a".repeat(64) ? "" : "false",
+                    "cache-matched-key":
+                      generation === "a".repeat(64)
+                        ? ""
+                        : `${expectDefined(cacheInputs["restore-keys"], "transform restore prefix").trim()}9-1`,
+                  },
+                };
               } else {
                 configuredGeneration = env.CACHE_GENERATION;
+                configuredRestored = env.CACHE_RESTORED;
               }
             }
             const enabled = os !== "Windows" && mode !== "off" && flags.includes("true");
@@ -5673,9 +5775,11 @@ server.listen(0, "127.0.0.1", () => {
                 "restore-keys": `${prefix}\n`,
               });
               expect(configuredGeneration).toBe(generation);
+              expect(configuredRestored).toBe(generation === "a".repeat(64) ? "false" : "true");
             } else {
               expect(cacheInputs).toBeUndefined();
               expect(configuredGeneration).toBeUndefined();
+              expect(configuredRestored).toBeUndefined();
             }
           }
         }
@@ -5881,7 +5985,7 @@ server.listen(0, "127.0.0.1", () => {
         task,
       ).toBe("true");
     }
-    for (const task of ["baseline-ratchets", "coercion-helpers"]) {
+    for (const task of ["startup-corpus", "coercion-helpers"]) {
       expect(
         evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
           eventName: "push",
@@ -8629,7 +8733,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     { job: "check-shard", task: "prod-types", events: [] },
     {
       job: "checks-fast-core",
-      task: "baseline-ratchets",
+      task: "startup-corpus",
       events: ["pull_request", "push", "workflow_dispatch"],
     },
     {
@@ -9433,7 +9537,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it("keeps private Control UI servers and resource-sensitive files under one serial owner", () => {
-    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix));
+    assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
   it("retains shared worker limits and local throttling in the bundled UI project", () => {
@@ -10242,7 +10346,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}",
     );
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(

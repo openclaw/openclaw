@@ -72,7 +72,9 @@ until their own turn starts, without an additional receipt notice. Inputs accept
 Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
-automatically. Copy it into the composer to start a new attempt. **Show earlier
+automatically. Stopped messages stay at their original time in the conversation,
+before messages sent later; only inputs still waiting to run stay at the live edge.
+Copy a stopped message into the composer to start a new attempt. **Show earlier
 messages** pages through messages that are still waiting or were stopped before
 processing; **Show latest messages** returns to the newest page. Incoming activity
 refreshes the page you are reading without changing your selection. A long message
@@ -85,6 +87,9 @@ custody. Collect mode consumes the accepted sources with their combined
 transcript entry. Acceptance does not imply that a transcript row already
 exists; the accepted input replaces its local pending copy and later becomes
 one canonical message, including its attachments.
+Messages keep their queue position through submission, acceptance, reconnects, and
+storage recovery. Changing delivery status does not reorder them; explicit queue
+reordering and steering retain their normal behavior.
 
 ## Systems workspace
 
@@ -215,6 +220,12 @@ Native CLI catalogs appear only when they contain sessions matching the current 
 Opening a session as a viewer leaves its unread marker intact, including shared sessions. Draft sessions acknowledge reads automatically only for their owner or an administrator. If the Gateway rejects an automatic read acknowledgement because of invalid session state or missing access, the UI reports the error once for that unread episode and waits for a new episode or for you to reopen the session. Temporary failures can retry on a later session update. Manual unread reminders still remain until you reopen the session or choose **Mark as read**.
 
 **Delete** removes the confirmed selection from loaded session lists immediately and leaves any deleted conversation that is open. The Gateway finishes deletion in the background, safely stopping and reclaiming an attached cloud worker first. If deletion fails, the affected session can reappear with an error; other successful deletions and any navigation you made in the meantime are preserved. Browser drafts are retired only after deletion is confirmed, not while the request is pending.
+
+On the Sessions page, checkbox selections survive paging through the loaded list.
+When the list refreshes, sessions that have disappeared, left the current filter,
+or been replaced are deselected. A replacement never inherits the old session's
+selection. Bulk deletion remains bound to the sessions you selected, including
+while its confirmation dialog is open.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 

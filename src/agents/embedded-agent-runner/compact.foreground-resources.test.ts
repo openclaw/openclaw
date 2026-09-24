@@ -322,6 +322,7 @@ it.for([
               event.task.taskKind === CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND &&
               isTerminalTaskStatus(event.task.status)
             ) {
+              expect.soft(disposalCalls).toBe(0);
               taskSettled.resolve(event.task.status);
             }
           })
@@ -401,11 +402,7 @@ it.for([
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,

@@ -781,7 +781,7 @@ jobs:
               mapfile -t exclude_args < <(jq -r '.[] | "--exclude=" + .' <<< "$FRV_TEST_EXCLUDE_PATHS_JSON")
               exclusion_options=()
               if (( ${#exclude_args[@]} > 0 )); then exclusion_options=(--allow-empty-after-exclude); fi
-              node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- --retry=1 "${exclude_args[@]}"
+              node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
               ;;
             extension-file-shard)
               include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"

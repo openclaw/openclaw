@@ -1,6 +1,6 @@
 // Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -201,23 +201,47 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
-  it.each([
-    ["ubuntu", false],
-    ["windows", true],
-    ["macos", true],
-  ])("makes %s cross-OS coverage advisory=%s without masking failed steps", (osId, advisory) => {
+  it("preserves failed preparation and cross-OS test job conclusions", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const prepare = job(workflow, "prepare");
     const lane = job(workflow, "cross_os_release_checks");
-    const context = { inputs: { advisory: false }, matrix: { os_id: osId } };
-    const evaluate = (expression: unknown) =>
-      runInNewContext(String(expression).replace(/^\$\{\{(.*)\}\}$/u, "$1"), context);
 
-    expect(evaluate(prepare["continue-on-error"])).toBe(false);
-    expect(evaluate(lane["continue-on-error"])).toBe(advisory);
+    expect(prepare["continue-on-error"]).toBeUndefined();
+    expect(lane["continue-on-error"]).toBeUndefined();
     expect(step(lane, "Run cross-OS release checks")["continue-on-error"]).toBeUndefined();
-    context.inputs.advisory = true;
-    expect(evaluate(lane["continue-on-error"])).toBe(true);
+  });
+
+  it.each([
+    ["candidate", "download_candidate"],
+    ["baseline", "download_baseline"],
+    ["prerelease plugin registry", "download_prepublish_plugin_registry"],
+  ])("retries only failed %s artifact acquisition once before tests", (artifact, downloadId) => {
+    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
+    const first = step(consumer, `Download ${artifact} artifact`);
+    const warning = step(consumer, `Warn about ${artifact} artifact acquisition retry`);
+    const retry = step(consumer, `Retry ${artifact} artifact download`);
+
+    expect(first.id).toBe(downloadId);
+    expect(first["continue-on-error"]).toBe(true);
+    expect(first.uses).toMatch(/^actions\/download-artifact@/u);
+    expect(retry.uses).toBe(first.uses);
+    expect(retry.with).toEqual(first.with);
+    expect(retry["continue-on-error"]).toBeUndefined();
+    expect(warning.if).toBe(retry.if);
+    expect(warning.run).toContain("::warning::");
+    expect(warning.run).toContain("retrying infrastructure acquisition once before tests");
+    for (const outcome of ["success", "failure", "skipped", "cancelled"]) {
+      const retryEnabled = runInNewContext(retry.if!.replace(/^\$\{\{(.*)\}\}$/u, "$1"), {
+        steps: { [downloadId]: { outcome } },
+      });
+      expect(retryEnabled, outcome).toBe(outcome === "failure");
+    }
+    const steps = consumer.steps!;
+    expect(steps.indexOf(first)).toBeLessThan(steps.indexOf(warning));
+    expect(steps.indexOf(warning)).toBeLessThan(steps.indexOf(retry));
+    expect(steps.indexOf(retry)).toBeLessThan(
+      steps.indexOf(step(consumer, "Verify release-check inputs")),
+    );
   });
 
   it("uses the matrix runtime consistently for both consumer setup steps", () => {
@@ -274,20 +298,41 @@ describe("cross-OS release checks workflow", () => {
     expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
   });
 
-  it("retries only an interrupted Windows dashboard probe", () => {
+  it("fails the Windows lane on its first interrupted dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");
-    const run = step(consumer, "Run cross-OS release checks").run;
+    const run = step(consumer, "Run cross-OS release checks");
+    const root = tempDirs.make("cross-os-first-failure-");
+    const harness = join(root, "workflow/scripts/github");
+    const outputDir = join(root, "output");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(join(outputDir, "logs"), { recursive: true });
+    writeFileSync(
+      join(outputDir, "logs/fresh-dashboard.log"),
+      "attempt=1 url=http://127.0.0.1:1/\n",
+    );
+    writeFileSync(
+      join(harness, "run-openclaw-cross-os-release-checks.sh"),
+      [
+        'if [[ -f "$OUTPUT_DIR/attempt" ]]; then exit 0; fi',
+        'printf "first\\n" > "$OUTPUT_DIR/attempt"',
+        "exit 127",
+      ].join("\n"),
+    );
+    const result = spawnSync(BASH_BIN, ["-e", "-o", "pipefail", "-c", run.run!], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...Object.fromEntries(Object.keys(run.env ?? {}).map((key) => [key, ""])),
+        MODE: "fresh",
+        OPENCLAW_RELEASE_CHECK_OS: "windows",
+        OUTPUT_DIR: outputDir,
+      },
+    });
 
-    expect(run).toContain("run_cross_os_release_checks() {");
-    expect(run).toContain("if run_cross_os_release_checks; then");
-    expect(run).toContain('"${OPENCLAW_RELEASE_CHECK_OS}" != "windows"');
-    expect(run).toContain('"$status" -ne 127');
-    expect(run).toContain('dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"');
-    expect(run).toContain('-f "${OUTPUT_DIR}/summary.json"');
-    expect(run).toContain("attempt=.*url=http://127.0.0.1:");
-    expect(run).toContain("retrying Windows release checks after the outer process exited 127");
-    expect(run).toContain("run_cross_os_release_checks\n");
+    expect(result.status, result.stdout + result.stderr).toBe(127);
+    expect(readFileSync(join(outputDir, "attempt"), "utf8")).toBe("first\n");
   });
 
   it("bounds npm baseline packing during prepare", () => {

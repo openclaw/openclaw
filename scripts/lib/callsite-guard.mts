@@ -1,6 +1,8 @@
 // Shared scanner for guard scripts that reject disallowed source callsites.
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { SourceFile } from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { collectTypeScriptFilesFromRoots, resolveSourceRoots } from "./ts-guard-utils.mts";
 
@@ -9,7 +11,7 @@ type CallsiteGuardParams = {
   sourceRoots: string[];
   extraTestSuffixes?: string[];
   skipRelativePath?: (relativePath: string) => boolean;
-  findCallLines: (content: string, filePath: string) => number[];
+  findCallLines: (content: string, filePath: string, sourceFile: SourceFile) => number[];
   allowCallsite?: (callsite: string) => boolean;
   header: string;
   footer?: string;
@@ -24,14 +26,18 @@ export async function runCallsiteGuard(params: CallsiteGuardParams): Promise<voi
     extraTestSuffixes: params.extraTestSuffixes,
   });
   const violations: string[] = [];
-
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   for (const filePath of files) {
     const relPath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
     if (params.skipRelativePath?.(relPath)) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
-    for (const line of params.findCallLines(content, filePath)) {
+    for (const line of params.findCallLines(
+      content,
+      filePath,
+      parser.parseSourceFile(filePath, content),
+    )) {
       const callsite = `${relPath}:${line}`;
       if (params.allowCallsite?.(callsite)) {
         continue;
@@ -52,5 +58,5 @@ export async function runCallsiteGuard(params: CallsiteGuardParams): Promise<voi
   if (params.footer) {
     console.error(params.footer);
   }
-  process.exit(1);
+  process.exitCode = 1;
 }

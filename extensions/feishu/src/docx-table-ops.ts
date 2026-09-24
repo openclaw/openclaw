@@ -1,3 +1,4 @@
+import type * as Lark from "@larksuiteoapi/node-sdk";
 /**
  * Table utilities and row/column manipulation operations for Feishu documents.
  *
@@ -6,8 +7,7 @@
  * - Block cleaning for Descendant API (removes read-only fields)
  * - Table row/column insert, delete, and merge operations
  */
-
-import type * as Lark from "@larksuiteoapi/node-sdk";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import type { FeishuDocParams } from "./doc-schema.js";
 import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
@@ -293,8 +293,6 @@ export async function patchTable(client: Lark.Client, params: TableAction) {
     path: { document_id: doc_token, block_id },
     data,
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
   return { success: true, ...counts, block: res.data?.block };
 }

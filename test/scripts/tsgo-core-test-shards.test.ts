@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import JSON5 from "json5";
 import { afterEach, describe, expect, it } from "vitest";
+import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
@@ -26,21 +27,10 @@ import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 describe("tsgo core test shards", () => {
   it("covers the repository test roots exactly once", () => {
     const roots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(config),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!parsed) {
-        throw new Error(`Could not parse ${config}`);
-      }
-      expect(parsed.errors, config).toEqual([]);
-      expect(parsed.projectReferences ?? [], config).toEqual([]);
+      const parsed = readNativeTypeScriptConfig({ cwd: process.cwd(), configFileName: config });
+      const contents = JSON5.parse(fs.readFileSync(config, "utf8")) as { references?: unknown };
+      // Project references are not inherited and the native config response omits them.
+      expect(contents.references ?? [], config).toEqual([]);
       return parsed.fileNames
         .filter((file) => /\.test\.tsx?$/u.test(file))
         .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
@@ -232,20 +222,7 @@ describe("tsgo core test shards", () => {
       write(file, "export {};\n");
     }
     const roots = (config: string) => {
-      const parsed = ts.getParsedCommandLineOfConfigFile(
-        path.join(root, config),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!parsed) {
-        throw new Error(`Could not parse ${config}`);
-      }
-      expect(parsed.errors, config).toEqual([]);
+      const parsed = readNativeTypeScriptConfig({ cwd: root, configFileName: config });
       return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
     };
 
@@ -298,6 +275,21 @@ describe("changed core test graph selection", () => {
     expect(selectChangedTsgoCoreTestShards([pluginTest], graphs)).toBeUndefined();
   });
 
+  it.each(["src/owner.ts", "src/shared.test-support.ts", "test/helpers/shared.ts"])(
+    "selects only consuming test graphs for %s alongside its production graph",
+    (source) => {
+      const graphs = inventory();
+      for (const graph of graphs) {
+        if (["core", "core-test-agents-other", "core-test-agents-tools"].includes(graph.name)) {
+          graph.files.push(source);
+        }
+      }
+      expect(selectChangedTsgoCoreTestShards([source], graphs)?.map((shard) => shard.name)).toEqual(
+        ["agents-other", "agents-tools"],
+      );
+    },
+  );
+
   it.for([
     [],
     ["src/owner.ts"],
@@ -305,6 +297,8 @@ describe("changed core test graph selection", () => {
     ["src/shared.test-support.ts"],
     ["src/missing.test.ts"],
     [leaf, "package.json"],
+    ["src/types/node-runtime-globals.d.ts"],
+    ["tsconfig.json"],
   ])("retains full checks for unsupported changed paths %j", (paths) => {
     expect(selectChangedTsgoCoreTestShards(paths, inventory())).toBeUndefined();
   });
@@ -340,7 +334,7 @@ const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32")(
-  "checks a real type error in the non-root importing graph without repeating enumeration",
+  "checks a helper type error in its transitive test consumers without repeating enumeration",
   ({ signal }) =>
     lifetime.run(async () => {
       const sourceRoot = process.cwd();
@@ -364,7 +358,9 @@ it.runIf(process.platform !== "win32")(
       fs.symlinkSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), "dir");
       const leaf = "src/agents/nested/leaf.test.ts";
       const consumer = "src/agents/tools/consumer.test.ts";
-      write(leaf, "export type Value = number;\n");
+      const helper = "test/helpers/value.ts";
+      write(helper, "export type Value = number;\n");
+      write(leaf, "export type { Value } from '../../../test/helpers/value.js';\n");
       write(consumer, "export {};\n");
       write("src/empty.ts", "export {};\n");
       const configs = [
@@ -469,7 +465,7 @@ process.exit(result.status??1);
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
       );
-      const validConsumer = await check();
+      const validConsumer = await check([helper]);
       expect(validConsumer.result.status, validConsumer.result.stderr).toBe(0);
       expect(validConsumer.builds).toEqual([
         "test/tsconfig/tsconfig.core.test.agents-other.json",
@@ -479,8 +475,8 @@ process.exit(result.status??1);
       const renamed = await check([leaf, "src/agents/old.test.ts"]);
       expect(renamed.result.status, renamed.result.stderr).toBe(0);
       expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
-      write(leaf, "export type Value = string;\n");
-      const brokenConsumer = await check();
+      write(helper, "export type Value = string;\n");
+      const brokenConsumer = await check([helper]);
       expect(brokenConsumer.result.status).not.toBe(0);
       expect(brokenConsumer.builds).toEqual(validConsumer.builds);
       expect(brokenConsumer.result.stdout + brokenConsumer.result.stderr).toContain(

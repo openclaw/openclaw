@@ -175,10 +175,6 @@ export class BrowserPanelOperationOwnership {
     commits.add(targetId);
   }
 
-  markNavigationReconciled(client: BrowserRequestClient, targetId: string): void {
-    this.forgetNavigation(client, targetId);
-  }
-
   forgetNavigation(client: BrowserRequestClient, targetId: string): void {
     const commits = this.navigationCommits.get(client);
     commits?.delete(targetId);

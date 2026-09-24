@@ -13,23 +13,17 @@ import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createPdfToolInfraStub, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
-const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return { ...actual, complete: completeMock };
+  return { ...actual, completeSimple: completeMock };
 });
-
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
 
 const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
 
 describe("PDF tool prepared-runtime cancellation", () => {
   afterEach(() => {
     completeMock.mockReset();
-    registerProviderStreamForModelMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -198,7 +192,15 @@ describe("PDF tool prepared-runtime cancellation", () => {
         images: [],
       });
       const completion = createDeferredCore<never>();
-      completeMock.mockImplementationOnce(() => completion.promise);
+      const started = createDeferredCore();
+      const released = createDeferredCore();
+      completeMock.mockImplementationOnce(() => {
+        started.resolve();
+        return completion.promise;
+      });
+      release.mockImplementationOnce(async () => {
+        released.resolve();
+      });
       const cfg = {
         agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
       } as OpenClawConfig;
@@ -212,20 +214,31 @@ describe("PDF tool prepared-runtime cancellation", () => {
         { prompt: "summarize", pdf: "/tmp/a.pdf" },
         controller.signal,
       );
-
-      await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
+      const outcome = execution.then(
+        () => {
+          throw new Error("Expected PDF cancellation");
+        },
+        (error: unknown) => error,
+      );
+      await Promise.race([
+        started.promise,
+        outcome.then((error) => {
+          throw error;
+        }),
+      ]);
+      expect(completeMock).toHaveBeenCalledOnce();
       expect(vi.mocked(pdfExtractModule.extractPdfContent).mock.calls[0]?.[0].signal).toBe(
         controller.signal,
       );
       const options = completeMock.mock.calls[0]?.[2];
       expect(options?.signal).toBe(controller.signal);
-      const assertion = expect(execution).rejects.toThrow("PDF provider cancelled");
       controller.abort(new Error("PDF provider cancelled"));
-      await assertion;
+      expect(await outcome).toMatchObject({ message: "PDF provider cancelled" });
 
       expect(release).not.toHaveBeenCalled();
       completion.reject(new Error("late provider failure"));
-      await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+      await released.promise;
+      expect(release).toHaveBeenCalledOnce();
     });
   });
 });

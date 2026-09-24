@@ -469,6 +469,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       region: () => this.inputRegion,
       presented: () => this.selected && this.presented,
       pause: () => this.chatState.pauseComposerPersistence(),
+      takeAttachmentReads: () => this.chatState.takeAttachmentReads(),
+      adoptAttachmentReads: (reads) => this.chatState.adoptAttachmentReads(reads, pageState),
       resume: (restore) => {
         if (restore) {
           this.chatState.restoreComposer();

@@ -25,7 +25,6 @@ import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -53,6 +52,7 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
+import * as workerReaders from "./session-transcript-worker-readers.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 describe("SQLite historical session disk budget", () => {
@@ -173,6 +173,7 @@ describe("SQLite historical session disk budget", () => {
         });
       };
       process.on("worker", observeWorker);
+      const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
       let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
       try {
         result = await enforceSqliteSessionHistoryDiskBudget({
@@ -188,6 +189,11 @@ describe("SQLite historical session disk budget", () => {
         process.off("worker", observeWorker);
       }
 
+      const hostDiscoveryScans = references.mock.calls.filter(
+        (call) => call[2] === undefined,
+      ).length;
+      console.info("history eviction host discovery scans", { execution, hostDiscoveryScans });
+      expect(hostDiscoveryScans).toBe(execution === "in-process" ? 1 : 0);
       expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
       expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
       expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
@@ -736,7 +742,17 @@ describe("SQLite historical session disk budget", () => {
     evictionWarnSpy.mockClear();
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const references = vi.spyOn(sessionLifecycleState, "readReferencedSessionIds");
+    const references = vi.fn();
+    const createReaders = workerReaders.createSessionHistoryWorkerReaders;
+    vi.spyOn(workerReaders, "createSessionHistoryWorkerReaders").mockImplementation((run) => {
+      const readers = createReaders(run);
+      const discover = readers.readHistoricalEvictionCandidates;
+      readers.readHistoricalEvictionCandidates = (input) => {
+        references();
+        return discover(input);
+      };
+      return readers;
+    });
     const maintenanceConfig = resolveMaintenanceConfigFromInput({
       mode: "enforce",
       maxDiskBytes: 1,
@@ -820,7 +836,7 @@ describe("SQLite historical session disk budget", () => {
       .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
       .mockImplementation(async (pathname) => {
         const retained = await probe(pathname);
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         return retained;
       });
 

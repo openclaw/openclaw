@@ -17,7 +17,6 @@ import { describe, expect, it } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
-  isReleaseBefore,
   resolveScenarioConfigSteps,
   resolveUpgradeSurvivorConfigSteps,
   resolveUpgradeSurvivorConfigStepsForBaseline,
@@ -271,15 +270,6 @@ esac
     },
   );
 
-  it("compares baseline versions with the shared release parser", () => {
-    expect(isReleaseBefore("2026.3.31", "2026.4.0")).toBe(true);
-    expect(isReleaseBefore("2026.3.31-beta.1", "2026.4.0")).toBe(true);
-    expect(isReleaseBefore("2026.4.1", "2026.4.0")).toBe(false);
-    expect(isReleaseBefore(null, "2026.4.0")).toBe(false);
-    expect(isReleaseBefore("2026.3.31junk", "2026.4.0")).toBe(false);
-    expect(isReleaseBefore("2026.3.9007199254740993", "2026.4.0")).toBe(false);
-  });
-
   it("wraps Windows openclaw npm shims through cmd.exe", () => {
     expect(
       resolveUpgradeSurvivorOpenClawCommand(
@@ -358,7 +348,7 @@ esac
   );
 
   it("inserts scenario config before final validation", () => {
-    const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.6.1");
     const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
     expect(gateway.reload).toEqual({ mode: "off" });
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
@@ -366,7 +356,7 @@ esac
     expect(steps.at(-1)?.id).toBe("validate");
   });
 
-  it.each([null, "2026.3.22", "2026.8.1", "2026.9.5"])(
+  it.each([null, "2026.6.1", "2026.8.1", "2026.9.5"])(
     "authors schema-valid provider credentials without changing the primary model for %s",
     (version) => {
       const writes = configLeafWrites(
@@ -437,7 +427,7 @@ esac
     "acpx-openclaw-tools-bridge",
     "codex-allowlist-survival",
   ])("keeps all configured provider owners allowed in the %s recipe", (scenario) => {
-    for (const version of ["2026.3.22", "2026.8.1", "2026.9.5"]) {
+    for (const version of ["2026.6.1", "2026.8.1", "2026.9.5"]) {
       let allow: string[] = [];
       for (const step of resolveUpgradeSurvivorConfigStepsForBaseline(scenario, version)) {
         if (step.argv[2] === "plugins") {
@@ -484,7 +474,7 @@ esac
   });
 
   it.each([
-    { version: "2026.3.13", legacy: true, explicit: false },
+    { version: "2026.6.1", legacy: true, explicit: false },
     { version: "2026.7.1-2", legacy: true, explicit: false },
     { version: "2026.7.2-beta.3", legacy: true, explicit: false },
     { version: "2026.7.2-beta.4", legacy: false, explicit: false },
@@ -517,7 +507,7 @@ esac
       const ops = legacy
         ? agents.list.find((agent: { id: string }) => agent.id === "ops")
         : agents.entries.ops;
-      expect(ops.fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+      expect(ops.fastModeDefault).toBe(true);
       expect(agents.defaults.heartbeat.every).toBe("0m");
       if (!explicit) {
         expect(agents.ownership).toBeUndefined();
@@ -553,13 +543,6 @@ esac
     },
   );
 
-  it("removes unsupported scenario config for older baselines", () => {
-    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
-    expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
-    expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
-    expect(steps.at(-1)?.id).toBe("validate");
-  });
-
   it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
     "authors a schema-valid explicit agent roster for baseline %s",
     (version) => {
@@ -575,7 +558,7 @@ esac
     },
   );
 
-  it.each(["2026.3.13", "2026.4.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
+  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
     "preserves the legacy agent contract for baseline %s",
     (version) => {
       const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
@@ -588,14 +571,14 @@ esac
       expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
         expect.objectContaining({ id: "main" }),
       ]);
-      expect(agents.list[1].fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+      expect(agents.list[1].fastModeDefault).toBe(true);
     },
   );
 
   it.each([
     { version: null, batched: false },
     { version: "unknown", batched: false },
-    { version: "2026.3.22", batched: false },
+    { version: "2026.6.1", batched: false },
     { version: "2026.6.33", batched: false },
     { version: "2026.6.34-beta.1", batched: false },
     { version: "2026.7.1-beta.1", batched: false },
@@ -703,19 +686,18 @@ esac
   });
 
   it.each(process.platform === "win32" ? ["recipe CLI"] : ["recipe CLI", "survivor shell"])(
-    "skips unsupported ACPX bridge config through the %s",
+    "authors supported ACPX bridge config through the %s",
     (entrypoint) => {
       const { result, summary, loggedArgs } = runRecipeFixture({
         entrypoint,
         scenario: "acpx-openclaw-tools-bridge",
-        version: "2026.4.21",
+        version: "2026.6.1",
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(summary.skippedIntents).toContain("acpx-openclaw-tools-bridge");
-      expect(summary.acceptedIntents).not.toContain("acpx-openclaw-tools-bridge");
-      expect(summary.baselineVersion).toBe("2026.4.21");
+      expect(summary.acceptedIntents).toContain("acpx-openclaw-tools-bridge");
+      expect(summary.baselineVersion).toBe("2026.6.1");
       expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
-      expect(loggedArgs).not.toContainEqual(
+      expect(loggedArgs).toContainEqual(
         expect.arrayContaining([
           "set",
           "plugins",
@@ -768,12 +750,11 @@ esac
       "configured-plugin-installs",
       "validate",
     ]);
-    expect(summary.skippedIntents).toEqual([]);
   });
 
   it.each([
     { version: "2026.6.34", batched: true },
-    { version: "2026.3.22", batched: false },
+    { version: "2026.6.1", batched: false },
   ])(
     "preserves failure receipts and aborts without fallback for $version",
     ({ version, batched }) => {
@@ -814,9 +795,6 @@ esac
         "plugins",
         ...(batched ? [] : ["discord-channel"]),
       ]);
-      expect(summary.skippedIntents).toEqual(
-        version === "2026.3.22" ? ["agent-modern-preferences", "memory-plugin-allow"] : [],
-      );
       const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
         "configured-plugin-installs",
         version,
@@ -825,45 +803,6 @@ esac
       expect(result.stderr).toContain(
         `baseline config recipe failed at ${batched ? "channels" : "channels-telegram"}: 17`,
       );
-    },
-  );
-
-  it.each([
-    {
-      failPath: "models.providers.openai",
-      failedStep: "models-openai",
-      launches: 3,
-      accepted: ["update", "gateway"],
-      skipped: [],
-    },
-    {
-      failPath: "plugins",
-      failedStep: "plugins",
-      launches: 8,
-      accepted: [
-        "update",
-        "gateway",
-        "models",
-        "models-anthropic",
-        "models-google",
-        "agents",
-        "skills",
-      ],
-      skipped: ["agent-modern-preferences", "memory-plugin-allow"],
-    },
-  ])(
-    "preserves March failure at $failPath without future receipts",
-    ({ failPath, failedStep, launches, accepted, skipped }) => {
-      const { result, summary, loggedArgs } = runRecipeFixture({
-        scenario: "acpx-openclaw-tools-bridge",
-        version: "2026.3.22",
-        failPath,
-      });
-      expect(result.status).toBe(1);
-      expect(loggedArgs).toHaveLength(launches);
-      expect(summary.steps.at(-1)).toMatchObject({ id: failedStep, ok: false, status: 17 });
-      expect(summary.acceptedIntents).toEqual(accepted);
-      expect(summary.skippedIntents).toEqual(skipped);
     },
   );
 

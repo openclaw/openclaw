@@ -789,6 +789,10 @@
   gap: 5px;
 }
 
+.chat-task-detail__heading > .btn {
+  justify-self: start;
+}
+
 .chat-task-detail__heading .sidebar-title {
   overflow-wrap: anywhere;
 }
