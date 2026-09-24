@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { normalizeCronJobPatch } from "../../../../src/cron/normalize.js";
+import { applyJobPatch } from "../../../../src/cron/service/jobs.js";
+import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
@@ -94,6 +97,126 @@ describe("automation save editor ownership", () => {
       expect(state.cronError).toBe("New editor feedback");
       expect(state.cronBusy).toBe(false);
       expect(state.cronJobs).toEqual([updated]);
+    },
+  );
+});
+
+describe("automation stagger save round trip", () => {
+  it.each([
+    {
+      name: "disabling exact hourly timing",
+      expr: "0 * * * *",
+      original: 0,
+      exact: false,
+      amount: "",
+      expected: 300_000,
+    },
+    {
+      name: "clearing a custom hourly stagger",
+      expr: "0 * * * *",
+      original: 120_000,
+      exact: false,
+      amount: "",
+      expected: 300_000,
+    },
+    {
+      name: "clearing a custom daily stagger",
+      expr: "0 7 * * *",
+      original: 120_000,
+      exact: false,
+      amount: "",
+      expected: 0,
+    },
+    {
+      name: "enabling exact timing",
+      expr: "0 * * * *",
+      original: 120_000,
+      exact: true,
+      amount: "",
+      expected: 0,
+    },
+    {
+      name: "replacing exact timing with an explicit stagger",
+      expr: "0 * * * *",
+      original: 0,
+      exact: false,
+      amount: "45",
+      expected: 45_000,
+    },
+    {
+      name: "preserving unchanged exact timing",
+      expr: "0 * * * *",
+      original: 0,
+      exact: true,
+      amount: "",
+      expected: 0,
+      unchanged: true,
+    },
+  ])(
+    "persists $name when the editor reopens",
+    async ({ expr, original, exact, amount, expected, unchanged }) => {
+      const stored = {
+        id: "stagger-round-trip",
+        name: "Synthetic stagger task",
+        enabled: false,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        schedule: { kind: "cron", expr, tz: "UTC", staggerMs: original },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Synthetic paused task" },
+        state: {},
+      } satisfies CronStoredJob;
+      const readJob = (): CronJob => ({
+        ...structuredClone(stored),
+        configRevision: "stagger-revision",
+      });
+      let submittedSchedule: unknown;
+      const request = vi.fn(async (method: string, params?: { patch?: unknown }) => {
+        if (method === "cron.update") {
+          // Apply the actual Gateway normalization and mutation to the serialized UI patch.
+          const serializedPatch = JSON.stringify(params?.patch);
+          const wirePatch: unknown = JSON.parse(serializedPatch);
+          const patch = normalizeCronJobPatch(wirePatch);
+          if (!patch) {
+            throw new Error("Expected a valid automation update patch");
+          }
+          submittedSchedule = patch.schedule;
+          applyJobPatch(stored, patch);
+          return readJob();
+        }
+        if (method === "cron.get") {
+          return readJob();
+        }
+        if (method === "cron.list") {
+          return cronJobsListResponse([readJob()]);
+        }
+        return { enabled: true, jobs: 1 };
+      });
+      const state = createStateWithRequest(request, { cronJobs: [readJob()] });
+      startCronEdit(state, readJob());
+      state.cronForm = {
+        ...state.cronForm,
+        description: "Saved from the automation editor",
+        scheduleExact: exact,
+        staggerAmount: amount,
+        staggerUnit: "seconds",
+      };
+
+      await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+      expect(state.cronError).toBeNull();
+      cancelCronEdit(state, null);
+      startCronEdit(state, readJob());
+
+      expect(stored.schedule).toEqual({ kind: "cron", expr, tz: "UTC", staggerMs: expected });
+      expect(state.cronForm.scheduleExact).toBe(expected === 0);
+      expect(state.cronForm.staggerAmount).toBe(
+        expected === 0 ? "" : expected === 300_000 ? "5" : "45",
+      );
+      expect(state.cronForm.staggerUnit).toBe(expected === 300_000 ? "minutes" : "seconds");
+      if (unchanged) {
+        expect(submittedSchedule).toBeUndefined();
+      }
     },
   );
 });

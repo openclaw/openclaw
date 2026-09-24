@@ -1,3 +1,4 @@
+import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { parseCronDurationMs } from "./decimal.ts";
@@ -118,7 +119,13 @@ export function buildCronSchedule(form: CronFormState) {
   }
   const staggerAmount = form.staggerAmount.trim();
   if (!staggerAmount) {
-    return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
+    // Omitted patch fields preserve the saved window, so clearing it must send the default.
+    return {
+      kind: "cron" as const,
+      expr,
+      tz: form.cronTz.trim() || undefined,
+      staggerMs: resolveDefaultCronStaggerMs(expr) ?? 0,
+    };
   }
   const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
   if (staggerMs === undefined) {
