@@ -7,6 +7,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
@@ -24,7 +25,12 @@ import {
   resolveConfiguredChannelAutoEnableCandidates,
   type ConfiguredPluginAutoEnableParams,
 } from "./plugin-auto-enable.channels.js";
-import { hasMaterialPluginEntryConfig } from "./plugin-auto-enable.materialize.js";
+import {
+  hasMaterialPluginEntryConfig,
+  isAlreadyEnabledAutoEnablePluginId,
+  isIgnoredAutoEnablePluginId,
+} from "./plugin-auto-enable.materialize.js";
+import { pluginDeclaresPreferOver } from "./plugin-auto-enable.prefer-over.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { resolveConfiguredTalkRealtimeProviderId } from "./talk.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -365,6 +371,46 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   );
 }
 
+/**
+ * A setup probe is only read for plugins whose `setup-auto-enable` candidate can
+ * still reach runtime config. Loading one is expensive for npm-installed plugins
+ * because their setup entry is captured together with its dependency tree, so
+ * detection skips the ids whose candidate materialization cannot use.
+ *
+ * Denied and explicitly disabled ids are dropped everywhere in materialization,
+ * including prefer-over ordering, so their candidate can be skipped outright.
+ * An already-enabled id is only skipped while it declares no preference: it still
+ * suppresses the ids it prefers over, and that ordering is resolved across the
+ * whole candidate set.
+ *
+ * Channel-backed ids keep probing. Materialization resolves them through
+ * `channels.<id>.enabled` and `resolveAutoEnableChannelId`, which can decide a
+ * channel still needs enabling even when `plugins.entries.<id>.enabled` is set.
+ */
+function isSetupProbeResultDiscarded(
+  params: {
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    registry: PluginManifestRegistry;
+  },
+  pluginId: string,
+): boolean {
+  if (isIgnoredAutoEnablePluginId(params.config, pluginId)) {
+    return true;
+  }
+  if (normalizeChatChannelId(pluginId)) {
+    return false;
+  }
+  if (!isAlreadyEnabledAutoEnablePluginId(params.config, pluginId)) {
+    return false;
+  }
+  return !pluginDeclaresPreferOver({
+    pluginId,
+    env: params.env,
+    registry: params.registry,
+  });
+}
+
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
   const entries = asOptionalObjectRecord(cfg.plugins?.entries);
   return entries !== undefined && Object.keys(entries).length > 0;
@@ -640,7 +686,8 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
     const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
-      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
+      (pluginId) =>
+        !manifestMatchedPluginIds.has(pluginId) && !isSetupProbeResultDiscarded(params, pluginId),
     );
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,

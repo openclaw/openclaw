@@ -129,15 +129,14 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   return findChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
-function resolvePreferredOverIds(
-  candidate: PluginAutoEnableCandidate,
-  env: NodeJS.ProcessEnv,
-  registry: PluginManifestRegistry,
-): string[] {
-  const channelId =
-    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
-  const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
-  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[channelId]?.preferOver;
+function resolvePreferredOverIds(params: {
+  pluginId: string;
+  channelId: string;
+  env: NodeJS.ProcessEnv;
+  registry: PluginManifestRegistry;
+}): string[] {
+  const installedPlugin = params.registry.plugins.find((record) => record.id === params.pluginId);
+  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[params.channelId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
     return [...manifestChannelPreferOver];
   }
@@ -145,11 +144,32 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
-  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
+  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(params.channelId);
   if (builtInChannelPreferOver.length) {
     return [...builtInChannelPreferOver];
   }
-  return resolveExternalCatalogPreferOver(channelId, env);
+  return resolveExternalCatalogPreferOver(params.channelId, params.env);
+}
+
+/**
+ * True when `pluginId` prefers over at least one other id. Prefer-over ordering
+ * is resolved across the whole candidate set, so a caller that skips producing a
+ * candidate for an already-enabled plugin must keep producing it while the
+ * plugin can still suppress another candidate.
+ */
+export function pluginDeclaresPreferOver(params: {
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+  registry: PluginManifestRegistry;
+}): boolean {
+  return (
+    resolvePreferredOverIds({
+      pluginId: params.pluginId,
+      channelId: params.pluginId,
+      env: params.env,
+      registry: params.registry,
+    }).length > 0
+  );
 }
 
 function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
@@ -172,7 +192,12 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (cached) {
       return cached;
     }
-    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
+    const resolved = resolvePreferredOverIds({
+      pluginId: candidate.pluginId,
+      channelId: candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId,
+      env: params.env,
+      registry: params.registry,
+    });
     params.preferOverCache.set(cacheKey, resolved);
     return resolved;
   };
