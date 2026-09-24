@@ -234,14 +234,15 @@ export async function runSessionsSendA2AFlow(params: {
             threadId: stringifyRouteThreadId(sourceOrigin.threadId),
           }
         : undefined;
-    const announceTarget =
-      sourceTarget ??
-      (await resolveAnnounceTarget({
-        sessionKey: params.targetSessionKey,
-        displayKey: params.displayKey,
-        callGateway: gatewayCall,
-        agentId: params.targetAgentId,
-      }));
+    const resolvedTarget = await resolveAnnounceTarget({
+      sessionKey: params.targetSessionKey,
+      displayKey: params.displayKey,
+      callGateway: gatewayCall,
+      agentId: params.targetAgentId,
+    });
+    // A captured address selects the destination; it must not restore an
+    // announcement that the current resolver suppresses, such as a deleted opaque session.
+    const announceTarget = resolvedTarget ? (sourceTarget ?? resolvedTarget) : null;
     const targetChannel = announceTarget?.channel ?? "unknown";
     if (
       oneWayInternalRequesterSessionKey &&

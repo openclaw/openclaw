@@ -215,10 +215,10 @@ Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
 `message`, OpenClaw skips the duplicate channel announcement. Progress messages
 and replies stored only in the internal UI do not count as external delivery.
-Same-session follow-ups preserve the requesting turn's channel, account, recipient,
-and thread when that route is available. Later messages can update the session's
-stored route without redirecting the accepted follow-up's reply, including when
-an identity link makes the session key independent of its external address.
+When a same-session follow-up still has an announcement target, its reply preserves
+the requesting turn's channel, account, recipient, and thread when available.
+Later messages can update the session's stored route without redirecting the
+accepted reply, including when an identity link hides the address from the session key.
 
 A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
