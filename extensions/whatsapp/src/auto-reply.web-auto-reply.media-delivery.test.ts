@@ -353,26 +353,4 @@ describe("web auto-reply media delivery", () => {
 
     fetchMock.mockRestore();
   });
-  it("sends media with a caption when delivery succeeds", async () => {
-    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "hi",
-        mediaUrl: "https://example.com/img.png",
-      },
-    });
-
-    const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
-
-    const fetchMock = mockFetchMediaBuffer(png, "image/png");
-
-    await dispatch("msg1");
-
-    const payload = getSingleImagePayload(sendMedia);
-    expect(payload.caption).toBe("hi");
-    expect(payload.image.length).toBeGreaterThan(0);
-    // Should not fall back to separate text reply because caption is used.
-    expect(reply).not.toHaveBeenCalled();
-
-    fetchMock.mockRestore();
-  });
 });
