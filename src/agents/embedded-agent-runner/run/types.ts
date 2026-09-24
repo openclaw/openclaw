@@ -166,7 +166,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   preparedTtsPreferences?: import("../../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Revalidates a selected native catalog account immediately before first-turn model I/O. */
-  assertNativeModelSelectionCurrent?: () => void;
+  assertNativeModelSelectionCurrent?: (attempt?: { authBindingFingerprint?: string }) => void;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;

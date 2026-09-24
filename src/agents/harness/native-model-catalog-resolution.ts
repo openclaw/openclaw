@@ -57,24 +57,52 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
       : findOwnedEntry(catalog, provider, modelId, harness.id);
   if (!entry && snapshot.loadNativeModelCatalog) {
     try {
-      const loaded = await waitForPreparedModelCatalogForeground({
-        acquisition: snapshot.loadNativeModelCatalog({
-          provider,
-          modelId,
-          runtime: harness.id,
-        }),
-        waitMs: 12_000,
-        fallback: () => snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog,
-      });
+      let acquiredCatalog: ModelCatalogSnapshot | undefined;
+      let selectedRowReady = false;
+      let waitingForSelection = true;
+      const acquisition = snapshot
+        .loadNativeModelCatalog(
+          {
+            provider,
+            modelId,
+            runtime: harness.id,
+          },
+          {
+            onSelectionReady: (ready) => {
+              if (waitingForSelection) {
+                selectedRowReady = ready;
+              }
+            },
+          },
+        )
+        .then((loaded) => {
+          acquiredCatalog = loaded;
+          return loaded;
+        });
+      let loaded: ModelCatalogSnapshot;
+      try {
+        loaded = await waitForPreparedModelCatalogForeground({
+          acquisition,
+          waitMs: 12_000,
+          fallback: () => snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog,
+        });
+      } finally {
+        waitingForSelection = false;
+      }
+      // A successful targeted native acquisition is authoritative for its exact owned row,
+      // even while the overall inventory remains partial. Timeout fallbacks and failed refreshes
+      // cannot authorize a retained row from that partial inventory.
+      const completedTargetedAcquisition =
+        loaded === acquiredCatalog && selectedRowReady && !loaded.refreshFailed;
       // Prefer an authoritative refresh result when it contains the requested row. Some
       // snapshots publish inventory through an accessor that still points at the previous view.
       const refreshedEntry =
-        loaded.authoritative === false
+        loaded.authoritative === false && !completedTargetedAcquisition
           ? undefined
           : findOwnedEntry(loaded, provider, modelId, harness.id);
       if (refreshedEntry) {
-        // This exact-runtime acquisition can publish partial full-catalog inventory; the
-        // selected owner's row is usable only when this snapshot remains authoritative.
+        // Partial inventory is usable only for the selected row proven by this completed
+        // exact-runtime acquisition; other callers still require an authoritative snapshot.
         catalog = loaded;
         entry = refreshedEntry;
       } else {

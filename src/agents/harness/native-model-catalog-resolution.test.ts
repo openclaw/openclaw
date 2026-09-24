@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { setPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { resolveReadyNativeModelCatalogEntry } from "./native-model-catalog-resolution.js";
 import type { AgentHarness } from "./types.js";
@@ -84,7 +84,7 @@ function fixture(
       throw new Error("Native catalog resolution must not create execution stores");
     },
   };
-  setPreparedModelRuntimeAuthStore(snapshot, { version: 1, profiles: {} });
+  bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
   return { harness, snapshot };
 }
 
@@ -137,7 +137,12 @@ describe("first-turn native model catalog resolution", () => {
   });
 
   it("rejects a matching row from a nonauthoritative native refresh", async () => {
-    const loadNative = vi.fn(async () => ({ ...catalog([luna]), authoritative: false }));
+    const loadNative = vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>>(
+      async (_selection, options) => {
+        options?.onSelectionReady?.(false);
+        return { ...catalog([luna]), authoritative: false, refreshFailed: true };
+      },
+    );
     const { harness, snapshot } = fixture({ loadNative });
 
     await expect(
@@ -149,6 +154,61 @@ describe("first-turn native model catalog resolution", () => {
       }),
     ).resolves.toBeUndefined();
     expect(loadNative).toHaveBeenCalledOnce();
+  });
+
+  it("accepts the exact ready row from a successful partial native acquisition", async () => {
+    const assertCurrent = vi.fn();
+    const loadNative = vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>>(
+      async (_selection, options) => {
+        options?.onSelectionReady?.(true);
+        return { ...catalog([luna]), authoritative: false };
+      },
+    );
+    const { harness, snapshot } = fixture({ loadNative, captureSelection: () => assertCurrent });
+
+    await expect(
+      resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      }),
+    ).resolves.toMatchObject({ entry: luna, assertCurrent });
+    expect(loadNative).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a matching partial row returned as the timeout fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = { ...catalog([luna]), authoritative: false };
+      const loadNative = vi.fn(
+        async (
+          _selection: Parameters<
+            NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>
+          >[0],
+          _options?: Parameters<
+            NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>
+          >[1],
+        ) => {
+          await new Promise((resolve) => setTimeout(resolve, 15_000));
+          return { ...catalog([luna]), authoritative: false };
+        },
+      );
+      const { harness, snapshot } = fixture({ loadNative, readFull: () => stale });
+      const resolved = resolveReadyNativeModelCatalogEntry({
+        snapshot,
+        harness,
+        provider: "openai",
+        modelId: "gpt-6-luna",
+      });
+
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(resolved).resolves.toBeUndefined();
+      expect(loadNative).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(3_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("captures an execution assertion for the selected native catalog row", async () => {

@@ -638,10 +638,11 @@ type AgentHarnessContract<
    * Captures a secret-free revocation assertion for this exact native model selection.
    * The host calls it immediately before first-turn model I/O; it must throw if the
    * account/catalog observation or its owning runtime has changed since discovery.
+   * The optional attempt fingerprint is an opaque, secret-free auth-binding identity.
    */
   captureModelCatalogSelectionAuthority?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): (() => void) | undefined;
+  ): ((attempt?: { authBindingFingerprint?: string }) => void) | undefined;
 };
 
 /**

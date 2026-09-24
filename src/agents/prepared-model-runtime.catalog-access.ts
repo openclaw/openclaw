@@ -7,7 +7,7 @@ import {
   isPreparedNativeModelCatalogReady,
 } from "./harness/model-catalog.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -47,6 +47,10 @@ import {
   prepareModelCatalogPublication,
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
+import {
+  createPreparedNativeSelectionDiscoveryStatus,
+  isPreparedNativeSelectionDiscoveryReady,
+} from "./prepared-model-runtime.native-discovery.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createCatalogAttemptReporter,
@@ -56,6 +60,7 @@ import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.syn
 import type {
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
+  PreparedNativeModelCatalogLoadOptions,
   PreparedNativeModelSelection,
 } from "./prepared-model-runtime.types.js";
 
@@ -408,6 +413,7 @@ export async function createFullModelCatalogAccess(
   const acquireNativeCatalog = (
     providerIds?: readonly string[],
     selection?: PreparedNativeModelSelection,
+    options?: PreparedNativeModelCatalogLoadOptions,
   ): Promise<ModelCatalogSnapshot> => {
     const selectionReady = () => {
       assertCurrent();
@@ -424,6 +430,7 @@ export async function createFullModelCatalogAccess(
       return ready;
     };
     if (selectionReady()) {
+      options?.onSelectionReady?.(true);
       return Promise.resolve(published.catalog ?? staticCatalog);
     }
     const previousNative = nativePending;
@@ -431,6 +438,7 @@ export async function createFullModelCatalogAccess(
     const promise = (async () => {
       await previousNative?.catch(() => undefined);
       if (selectionReady()) {
+        options?.onSelectionReady?.(true);
         return published.catalog ?? staticCatalog;
       }
       await using _ = {
@@ -438,6 +446,8 @@ export async function createFullModelCatalogAccess(
       };
       let discoveredProviders: string[] = [];
       let completed = false;
+      let completedRows: readonly ModelCatalogEntry[] | undefined;
+      let selectedRowReady = false;
       const failures: Array<{ error: unknown; providers?: readonly string[] }> = [];
       const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
       attempt.setPending([], "native");
@@ -459,6 +469,7 @@ export async function createFullModelCatalogAccess(
           attempt.setPending([normalizeProvider(provider)], "native"),
         onDiscoveryCompleted: (rows) => {
           completed = true;
+          completedRows = rows;
           discoveredProviders = [
             ...new Set(
               rows
@@ -469,6 +480,19 @@ export async function createFullModelCatalogAccess(
         },
       });
       assertCurrent();
+      if (selection && completed && completedRows) {
+        selectedRowReady = isPreparedNativeSelectionDiscoveryReady({
+          rows: completedRows,
+          selection,
+          status: createPreparedNativeSelectionDiscoveryStatus({
+            catalog: rawCatalog,
+            selection,
+            failures,
+            normalizeProvider,
+          }),
+          normalizeProvider,
+        });
+      }
       if (!completed && failures.length) {
         failedProviders = failures.flatMap((failure) => failure.providers ?? []);
         throw failures[0]!.error;
@@ -532,6 +556,7 @@ export async function createFullModelCatalogAccess(
       if (params.isPublished?.() !== false) {
         notifyPreparedModelCatalogPublication(change);
       }
+      options?.onSelectionReady?.(selectedRowReady);
       return published.catalog ?? staticCatalog;
     })()
       .catch((error: unknown) => {
@@ -689,8 +714,8 @@ export async function createFullModelCatalogAccess(
       assertCurrent();
       return published.inventory?.runtimeModels;
     },
-    loadNativeModelCatalog: async (selection) =>
-      await acquireNativeCatalog([normalizeProvider(selection.provider)], selection),
+    loadNativeModelCatalog: async (selection, options) =>
+      await acquireNativeCatalog([normalizeProvider(selection.provider)], selection, options),
     loadFullModelCatalog: async (options) => {
       // Standalone commands cannot publish background discovery after their process exits.
       if (options?.refresh && params.inventoryOwner.provenance === "standalone") {

@@ -56,8 +56,13 @@ export async function prepareCodexAttemptTurnRequest(
     nativeHistoryProvenancePrefix,
   } = prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
-  const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
-    runtime;
+  const {
+    connection,
+    runtimeParams,
+    effectiveRuntimeProviderId,
+    effectiveRuntimeModelId,
+    preparedAuthBinding,
+  } = runtime;
   const { tools, toolBridge } = attemptTools;
   const {
     params,
@@ -328,7 +333,9 @@ export async function prepareCodexAttemptTurnRequest(
           withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
-            params.assertNativeModelSelectionCurrent?.();
+            params.assertNativeModelSelectionCurrent?.({
+              authBindingFingerprint: preparedAuthBinding?.fingerprint,
+            });
             continuation?.dispatch();
           },
         }),
