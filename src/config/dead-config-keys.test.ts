@@ -58,7 +58,6 @@ describe("dead config keys", () => {
     "agents.defaults.heartbeat.ackMaxChars",
     "agents.defaults.heartbeat.includeReasoning",
     "agents.defaults.heartbeat.includeSystemPromptSection",
-    "agents.defaults.heartbeat.skipWhenBusy",
     "agents.defaults.heartbeat.suppressToolErrorWarnings",
     "messages.suppressToolErrors",
     "agents.entries.test.groupChat.visibleReplies",

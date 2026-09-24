@@ -52,7 +52,7 @@ describe("OpenClaw profile schema", () => {
   it("rejects retired heartbeat fields with a heartbeat-scoped diagnostic", () => {
     const result = parseClawOpenClawProfile({
       schemaVersion: 1,
-      agent: { heartbeat: { every: "30m", skipWhenBusy: true } },
+      agent: { heartbeat: { every: "30m", includeReasoning: true } },
     });
 
     expect(result.ok).toBe(false);
@@ -62,7 +62,7 @@ describe("OpenClaw profile schema", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         path: "$.agent.heartbeat",
-        message: expect.stringContaining("skipWhenBusy"),
+        message: expect.stringContaining("includeReasoning"),
       }),
     );
   });

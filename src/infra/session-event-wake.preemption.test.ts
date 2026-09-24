@@ -4,6 +4,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
+  isRetryableSessionEventWakeReason,
   requestSessionEventWake,
   requestSessionEventWakeAndWait,
   setSessionEventWakeHandler as setRuntimeSessionEventWakeHandler,
@@ -171,6 +172,72 @@ describe("session event wake preemption retry", () => {
     requestSessionEventWake(wake("manual", { coalesceMs: 0 }));
 
     await vi.advanceTimersByTimeAsync(999);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("classifies lanes-busy as retryable", () => {
+    expect(isRetryableSessionEventWakeReason("lanes-busy")).toBe(true);
+    expect(isRetryableSessionEventWakeReason("disabled")).toBe(false);
+  });
+
+  it.each([
+    { intent: "scheduled", source: "interval", delay: 60_000 },
+    { intent: "task", source: "background-task", delay: 60_000 },
+    { intent: "event", source: "exec-event", delay: 1_000 },
+    { intent: "manual", source: "manual", delay: 1_000 },
+    { intent: "immediate", source: "cron", delay: 1_000 },
+  ] as const)(
+    "retains lanes-busy $intent work for its retry delay",
+    async ({ intent, source, delay }) => {
+      const handler = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "skipped", reason: "lanes-busy" })
+        .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+      setSessionEventWakeHandler(handler);
+      requestSessionEventWake({
+        source,
+        intent,
+        reason: source,
+        agentId: "main",
+        ...(intent === "scheduled" ? { scheduledEveryMs: 30 * 60_000 } : {}),
+        ...(intent === "task" ? { tasks: [{ jobId: "job", name: "job", prompt: "job" }] } : {}),
+        coalesceMs: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(delay - 2);
+      expect(handler).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls[1]?.[0]).toMatchObject({ source, intent });
+      expect(Boolean(handler.mock.calls[1]?.[0].retainedWork)).toBe(delay === 60_000);
+    },
+  );
+
+  it("honors explicit retryAtMs for scheduled lanes-busy work", async () => {
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "lanes-busy",
+        retryAtMs: Date.now() + 5_000,
+      })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setSessionEventWakeHandler(handler);
+    requestSessionEventWake({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      scheduledEveryMs: 30 * 60_000,
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(4_998);
     expect(handler).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(2);

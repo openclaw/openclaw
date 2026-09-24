@@ -24,7 +24,11 @@ import {
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
-import { getQueueSize, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
+import {
+  getQueueSize,
+  isCommandLaneTaskMarkerCurrent,
+  listCommandLaneTotals,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -57,6 +61,7 @@ import {
 import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
   type HeartbeatWakeIntent,
@@ -95,6 +100,22 @@ function hasActiveRunForSession(
 ): boolean {
   const normalizedSessionKey = sessionKey.trim();
   return Boolean(normalizedSessionKey) && listSessionKeys().includes(normalizedSessionKey);
+}
+
+function hasBusySessionLaneForAgent(agentId: string): boolean {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return listCommandLaneTotals().some(({ lane, activeCount, queuedCount }) => {
+    const sessionKey = lane.startsWith("session:")
+      ? lane.slice("session:".length)
+      : lane.startsWith("nested:")
+        ? lane.slice("nested:".length)
+        : undefined;
+    if (!sessionKey || activeCount + queuedCount === 0) {
+      return false;
+    }
+    const parsed = parseAgentSessionKey(sessionKey);
+    return parsed ? normalizeAgentId(parsed.agentId) === normalizedAgentId : false;
+  });
 }
 
 function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
@@ -217,6 +238,10 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   }
 
   const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
+  if (heartbeat?.skipWhenBusy === true && hasBusySessionLaneForAgent(agentId)) {
+    return skippedHeartbeatStage(HEARTBEAT_SKIP_LANES_BUSY, startedAt);
+  }
+
   const listActiveReplyRuns =
     opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
   const listActiveEmbeddedRuns =

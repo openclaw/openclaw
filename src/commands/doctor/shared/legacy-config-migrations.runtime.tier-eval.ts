@@ -44,7 +44,6 @@ const TIER_EVAL_RETIRED_AGENT_PATHS = [
   ["heartbeat", "ackMaxChars"],
   ["heartbeat", "includeReasoning"],
   ["heartbeat", "includeSystemPromptSection"],
-  ["heartbeat", "skipWhenBusy"],
   ["heartbeat", "suppressToolErrorWarnings"],
 ] as const;
 

@@ -478,7 +478,9 @@ describe("gateway startup-migration refusal", () => {
         lastTouchedAt: "2026-08-01T00:00:00.000Z",
         lastTouchedVersion: "2026.7.1-2",
       },
-      agents: { defaults: { heartbeat: { skipWhenBusy: true } } },
+      agents: {
+        defaults: { heartbeat: { skipWhenBusy: true, includeReasoning: true } },
+      },
       gateway: { mode: "local", auth: { mode: "none" } },
     };
     const env: NodeJS.ProcessEnv = {
@@ -541,6 +543,10 @@ describe("gateway startup-migration refusal", () => {
         valid: result.snapshot.valid,
         hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
         hasSkipWhenBusy: Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"),
+        hasIncludeReasoning: Object.hasOwn(
+          config.agents?.defaults?.heartbeat ?? {},
+          "includeReasoning",
+        ),
         hasToolUseCount: columns.some((column) => column.name === "tool_use_count"),
         migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
         removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
@@ -557,7 +563,8 @@ describe("gateway startup-migration refusal", () => {
     expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
       valid: true,
       hasLastTouchedAt: false,
-      hasSkipWhenBusy: false,
+      hasSkipWhenBusy: true,
+      hasIncludeReasoning: false,
       hasToolUseCount: true,
       migratedDeviceIdentity: true,
       removedLegacyDeviceIdentity: true,

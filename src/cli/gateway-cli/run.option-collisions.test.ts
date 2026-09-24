@@ -931,7 +931,7 @@ describe("gateway run option collisions", () => {
           lastTouchedVersion: "2026.7.1-2",
         },
         agents: {
-          defaults: { heartbeat: { skipWhenBusy: true } },
+          defaults: { heartbeat: { skipWhenBusy: true, includeReasoning: true } },
           entries: { main: {} },
         },
         env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
@@ -967,7 +967,7 @@ describe("gateway run option collisions", () => {
       expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
 
       const repairedConfig = {
-        agents: { defaults: {}, entries: { main: {} } },
+        agents: { defaults: { heartbeat: { skipWhenBusy: true } }, entries: { main: {} } },
         env: stableConfig.env,
         gateway: { mode: "local" as const },
         session: { reset: { mode: "idle", idleMinutes: 45 } },

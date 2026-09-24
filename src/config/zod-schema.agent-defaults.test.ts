@@ -561,6 +561,33 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
+  it.each([true, false])("accepts heartbeat skipWhenBusy=%s at both config scopes", (value) => {
+    const defaults = AgentDefaultsSchema.parse({ heartbeat: { skipWhenBusy: value } })!;
+    const agent = AgentEntrySchema.parse({ id: "ops", heartbeat: { skipWhenBusy: value } });
+
+    expect(defaults.heartbeat?.skipWhenBusy).toBe(value);
+    expect(agent.heartbeat?.skipWhenBusy).toBe(value);
+  });
+
+  it.each([
+    { value: 0 },
+    { value: 1 },
+    { value: "true" },
+    { value: "false" },
+    { value: null },
+    { value: {} },
+    { value: [] },
+  ])("rejects non-boolean heartbeat skipWhenBusy values: $value", ({ value }) => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ heartbeat: { skipWhenBusy: value } }),
+      "heartbeat.skipWhenBusy",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", heartbeat: { skipWhenBusy: value } }),
+      "heartbeat.skipWhenBusy",
+    );
+  });
+
   it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
     expectSchemaFailurePath(
       AgentDefaultsSchema.safeParse({

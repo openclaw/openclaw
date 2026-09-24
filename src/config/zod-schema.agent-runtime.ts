@@ -41,6 +41,7 @@ const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    skipWhenBusy: z.boolean().optional(),
     activeHours: z
       .object({
         start: z.string().optional(),

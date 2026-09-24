@@ -209,7 +209,9 @@ describe("automatic startup config repair", () => {
           lastTouchedVersion: "2026.7.1-2",
         },
         agents: {
-          defaults: { heartbeat: { skipWhenBusy: true, every: "30m" } },
+          defaults: {
+            heartbeat: { skipWhenBusy: true, every: "30m", includeReasoning: true },
+          },
           entries: { main: {} },
         },
         gateway: { mode: "local" },
@@ -221,7 +223,10 @@ describe("automatic startup config repair", () => {
 
     expect(plan?.config).toEqual({
       meta: { lastTouchedVersion: "2026.7.1-2" },
-      agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
+      agents: {
+        defaults: { heartbeat: { skipWhenBusy: true, every: "30m" } },
+        entries: { main: {} },
+      },
       gateway: { mode: "local" },
     });
     expect(plan?.snapshot.valid).toBe(true);
@@ -237,7 +242,10 @@ describe("automatic startup config repair", () => {
           lastTouchedVersion: "2026.7.1-2",
         },
         agents: {
-          defaults: { heartbeat: { skipWhenBusy: true }, workspace: "/tmp/workspace" },
+          defaults: {
+            heartbeat: { skipWhenBusy: true, includeReasoning: true },
+            workspace: "/tmp/workspace",
+          },
           entries: { main: {} },
         },
         gateway: { mode: "local" },
@@ -249,7 +257,10 @@ describe("automatic startup config repair", () => {
         lastTouchedVersion: VERSION,
         migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
       },
-      agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
+      agents: {
+        defaults: { heartbeat: { skipWhenBusy: true }, workspace: "/tmp/workspace" },
+        entries: { main: {} },
+      },
       gateway: { mode: "local" },
     } as OpenClawConfig;
     const after: ConfigFileSnapshot = {

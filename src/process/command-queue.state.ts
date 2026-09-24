@@ -158,13 +158,14 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 export function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
     lanes: new Map<string, LaneState>(),
     nextTaskId: 1,
     nextQueueSequence: 1,
     laneGroups: new Map<string, LaneGroupState>(),
     laneGroupByLane: new Map<string, string>(),
   }));
+  return state;
 }
 
 export function normalizeLane(lane: string): string {

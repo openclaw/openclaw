@@ -60,6 +60,7 @@ const RETRY_REASONS = new Set([
   "active-run",
   "requests-in-flight",
   "cron-in-progress",
+  "lanes-busy",
   "preempted",
   "channel-not-ready",
 ]);
@@ -277,7 +278,9 @@ function createSessionEventWakeRuntime() {
       result &&
       (result.reason === "preempted" ||
         result.reason === "channel-not-ready" ||
-        ((result.reason === "requests-in-flight" || result.reason === "active-run") &&
+        ((result.reason === "requests-in-flight" ||
+          result.reason === "active-run" ||
+          result.reason === "lanes-busy") &&
           (wake.intent === "scheduled" || wake.intent === "task")));
     const guard = idleGrace || (result && GUARD_REASONS.has(result.reason));
     const delay =
