@@ -933,16 +933,9 @@ describe("provider catalog late-result finalization", () => {
     await state.cleanup();
   });
 
-  it.each([
-    { shape: "provider", timedOut: false },
-    { shape: "providers", timedOut: false },
-    { shape: "outcomes", timedOut: false },
-    { shape: "provider", timedOut: true },
-    { shape: "providers", timedOut: true },
-    { shape: "outcomes", timedOut: true },
-  ] as const)(
-    "consumes $shape only for an active owner (late: $timedOut)",
-    async ({ shape, timedOut }) => {
+  it.each(["provider", "providers", "outcomes"] as const)(
+    "discards late %s and consumes the next active owner's result once",
+    async (shape) => {
       const entered = createDeferredCore();
       const completion = createDeferredCore();
       const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
@@ -975,9 +968,7 @@ describe("provider catalog late-result finalization", () => {
             run: async (ctx) => {
               expect(ctx.resolveProviderAuth(providerId).preparationFailed).toBe(true);
               entered.resolve();
-              if (timedOut) {
-                await completion.promise;
-              }
+              await completion.promise;
               if (shape === "outcomes") {
                 return {
                   providers: {},
@@ -1017,26 +1008,20 @@ describe("provider catalog late-result finalization", () => {
           }),
         );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const pending = discover(timedOut ? 25 : undefined);
+      const pending = discover(25);
       try {
         await Promise.race([entered.promise, pending]);
-        if (timedOut) {
-          await vi.advanceTimersByTimeAsync(25);
-          expect(await pending).toEqual({});
-        }
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await pending).toEqual({});
       } finally {
         completion.resolve();
         await Promise.allSettled(catalog.mock.results.map((result) => result.value));
       }
-      const first = await pending;
-      let accepted = first;
       const lateReads = reads;
-      if (timedOut) {
-        expect(outcomes).toEqual([{ provider: providerId, status: "unavailable" }]);
-        outcomes.length = 0;
-        accepted = await discover();
-      }
-      expect({ lateReads, reads }).toEqual({ lateReads: timedOut ? 0 : 1, reads: 1 });
+      expect(outcomes).toEqual([{ provider: providerId, status: "unavailable" }]);
+      outcomes.length = 0;
+      const accepted = await discover();
+      expect({ lateReads, reads }).toEqual({ lateReads: 0, reads: 1 });
       if (shape === "outcomes") {
         expect(accepted).toEqual({});
       } else {

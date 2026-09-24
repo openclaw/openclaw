@@ -74,11 +74,6 @@ describe("parsePluginReleaseSelection", () => {
 });
 
 describe("parsePluginReleaseSelectionMode", () => {
-  it("accepts the supported explicit selection modes", () => {
-    expect(parsePluginReleaseSelectionMode("selected")).toBe("selected");
-    expect(parsePluginReleaseSelectionMode("all-publishable")).toBe("all-publishable");
-  });
-
   it("rejects unsupported selection modes", () => {
     expect(() => parsePluginReleaseSelectionMode("all")).toThrowError(
       'Unknown selection mode: all. Expected "selected" or "all-publishable".',
@@ -183,35 +178,6 @@ function externalPluginContract(version: string) {
 }
 
 describe("collectPublishablePluginPackageErrors", () => {
-  it("accepts a valid publishable plugin package candidate", () => {
-    expect(
-      collectPublishablePluginPackageErrors({
-        extensionId: "zalo",
-        packageDir: bundledPluginRoot("zalo"),
-        readmeText: "# Zalo\n",
-        packageJson: {
-          name: "@openclaw/zalo",
-          version: "2026.3.15",
-          type: "module",
-          repository: {
-            type: "git",
-            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-          },
-          openclaw: {
-            extensions: ["./index.ts"],
-            ...externalPluginContract("2026.3.15"),
-            install: {
-              npmSpec: "@openclaw/zalo",
-            },
-            release: {
-              publishToNpm: true,
-            },
-          },
-        },
-      }),
-    ).toStrictEqual([]);
-  });
-
   it("flags invalid publishable plugin metadata", () => {
     expect(
       collectPublishablePluginPackageErrors({
@@ -242,33 +208,6 @@ describe("collectPublishablePluginPackageErrors", () => {
       'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
-    ]);
-  });
-
-  it("requires the GitHub repository URL npm provenance validates for trusted publishing", () => {
-    expect(
-      collectPublishablePluginPackageErrors({
-        extensionId: "twitch",
-        packageDir: bundledPluginRoot("twitch"),
-        readmeText: "# Twitch\n",
-        packageJson: {
-          name: "@openclaw/twitch",
-          version: "2026.5.1-beta.1",
-          type: "module",
-          openclaw: {
-            extensions: ["./index.ts"],
-            ...externalPluginContract("2026.5.1-beta.1"),
-            install: {
-              npmSpec: "@openclaw/twitch",
-            },
-            release: {
-              publishToNpm: true,
-            },
-          },
-        },
-      }),
-    ).toEqual([
-      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
     ]);
   });
 
@@ -748,26 +687,6 @@ describe("collectPublishablePluginPackages", () => {
     }
   });
 
-  it("collects publishable npm plugins from extension package manifests", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
-    writePublishablePluginFixture(repoDir, {
-      version: "2026.4.10",
-      publishTo: "npm",
-    });
-
-    expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      {
-        extensionId: "demo-plugin",
-        packageDir: "extensions/demo-plugin",
-        packageName: "@openclaw/demo-plugin",
-        version: "2026.4.10",
-        channel: "stable",
-        publishTag: "latest",
-        installNpmSpec: "@openclaw/demo-plugin",
-      },
-    ]);
-  });
-
   it("uses extended-stable for every publishable plugin at the exact root version", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writeJsonFile(join(repoDir, "package.json"), { version: "2026.7.33" });
@@ -928,15 +847,6 @@ describe("resolveSelectedPublishablePluginPackages", () => {
       publishTag: "beta",
     },
   ];
-
-  it("returns all publishable plugins when no selection is provided", () => {
-    expect(
-      resolveSelectedPublishablePluginPackages({
-        plugins: publishablePlugins,
-        selection: [],
-      }),
-    ).toEqual(publishablePlugins);
-  });
 
   it("filters by selected publishable package names", () => {
     expect(

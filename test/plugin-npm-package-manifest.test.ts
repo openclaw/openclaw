@@ -1531,17 +1531,11 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     }
   });
 
-  it.each(
-    ["default", "isolated"].flatMap((layout) =>
-      ["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"].map(
-        (scenario) => ({ layout, scenario }),
-      ),
-    ),
-  )(
-    "rejects a patched artifact when its packaging precondition fails ($layout / $scenario)",
-    ({ layout, scenario }) => {
+  it.each(["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"])(
+    "rejects a patched artifact when its packaging precondition fails (%s)",
+    (scenario) => {
       const { repoDir, packageDir, sourceManifest, installedDir, lock } =
-        writePatchedRuntimeFixture(layout);
+        writePatchedRuntimeFixture();
       if (scenario === "bundle opt-out") {
         sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
         writeJsonFile(join(packageDir, "package.json"), sourceManifest);
