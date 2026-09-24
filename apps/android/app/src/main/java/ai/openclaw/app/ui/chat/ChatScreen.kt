@@ -118,6 +118,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -3556,6 +3557,7 @@ private fun ChatThinkingLevelPicker(
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
+  val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
   Surface(
     onClick = onOpen,
     enabled = enabled,
@@ -3578,6 +3580,8 @@ private fun ChatThinkingLevelPicker(
           for (start in listOf(180f, 225f, 270f)) {
             drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
           }
+          // The red Fast zone remains part of the dial; the bolt separately marks Fast as active.
+          drawArc(fastZoneColor, 315f, 45f, false, bounds, dialSize, style = stroke)
           chatEffortNeedleAngle(position)?.let { angle ->
             rotate(angle, pivot = hub) {
               drawLine(
@@ -3596,6 +3600,7 @@ private fun ChatThinkingLevelPicker(
             modifier =
               Modifier
                 .align(AbsoluteAlignment.BottomRight)
+                .absoluteOffset(x = 5.dp, y = 5.dp)
                 .size(10.dp)
                 .background(ClawTheme.colors.surface, CircleShape)
                 .testTag("chat-fast-mode-badge"),
