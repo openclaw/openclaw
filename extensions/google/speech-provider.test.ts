@@ -32,7 +32,13 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
+  const data = typeof audio === "string" ? audio : audio.toString("base64");
   return Response.json({
+    output_audio: {
+      type: "audio",
+      mime_type: "audio/l16",
+      data,
+    },
     candidates: [
       {
         content: {
@@ -40,7 +46,7 @@ function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
             {
               inlineData: {
                 mimeType: "audio/L16;codec=pcm;rate=24000",
-                data: typeof audio === "string" ? audio : audio.toString("base64"),
+                data,
               },
             },
           ],
@@ -223,7 +229,10 @@ describe("Google speech provider", () => {
   it("advertises all documented Gemini TTS-capable models", () => {
     const provider = buildGoogleSpeechProvider();
 
+    expect(provider.defaultModel).toBe("gemini-3.8-flash-tts");
     expect(provider.models).toEqual([
+      "gemini-3.8-flash-tts",
+      "gemini-3.8-flash-lite-tts",
       "gemini-3.1-flash-tts-preview",
       "gemini-2.5-flash-preview-tts",
       "gemini-2.5-pro-preview-tts",
@@ -237,6 +246,7 @@ describe("Google speech provider", () => {
       text: "[whispers] The door is open.",
       cfg: {},
       providerConfig: {
+        model: "gemini-3.1-flash-tts-preview",
         promptTemplate: "audio-profile-v1",
         personaPrompt: "Keep a close-mic feel.",
       },
@@ -284,6 +294,7 @@ describe("Google speech provider", () => {
       text,
       cfg: {},
       providerConfig: {
+        model: "gemini-3.1-flash-tts-preview",
         promptTemplate: "audio-profile-v1",
       },
       persona: {
@@ -472,7 +483,7 @@ describe("Google speech provider", () => {
     });
 
     const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      url: "https://generativelanguage.googleapis.com/v1beta/interactions",
     }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
@@ -504,7 +515,7 @@ describe("Google speech provider", () => {
       });
 
       const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
-        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+        url: "https://generativelanguage.googleapis.com/v1beta/interactions",
       }) as { headers?: HeadersInit };
       expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
     },
@@ -604,6 +615,7 @@ describe("Google speech provider", () => {
       cfg: {},
       providerConfig: {
         apiKey: "google-test-key",
+        model: "gemini-3.1-flash-tts-preview",
         audioProfile: "Speak professionally with a calm executive tone.",
         speakerName: "Alex",
       },
@@ -781,5 +793,162 @@ describe("Google speech provider", () => {
       },
     );
     expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
+  });
+
+  it("sends Gemini 3.8 style as speech metadata and keeps the transcript verbatim", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    const prepared = await provider.prepareSynthesis?.({
+      text: "[whispers] Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        model: "gemini-3.8-flash-lite-tts",
+        promptTemplate: "audio-profile-v1",
+        personaPrompt: "Keep a close-mic feel.",
+      },
+      persona: { id: "alfred", label: "Alfred" },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    expect(prepared?.text).toBeUndefined();
+    expect(prepared?.providerConfig).toEqual({
+      personaPrompt: "Persona: Alfred\n\nKeep a close-mic feel.",
+    });
+
+    await provider.synthesize({
+      text: "[whispers] Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        model: "gemini-3.8-flash-lite-tts",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        speakerName: "Alex",
+        ...prepared?.providerConfig,
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    expect(requireFirstRecordArg(requestMock, "Google 3.8 TTS request")).toMatchObject({
+      url: "https://generativelanguage.googleapis.com/v1beta/interactions",
+      body: {
+        model: "gemini-3.8-flash-lite-tts",
+        input: [
+          {
+            type: "user_input",
+            content: [
+              {
+                type: "text",
+                text: "[whispers] Status update starts now.",
+                annotations: [
+                  {
+                    type: "speech_metadata",
+                    style:
+                      "Speak professionally with a calm executive tone.\n\n" +
+                      "Persona: Alfred\n\n" +
+                      "Keep a close-mic feel.\n\n" +
+                      "Speaker name: Alex",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        response_format: {
+          type: "audio",
+          mime_type: "audio/l16",
+          sample_rate: 24_000,
+        },
+        generation_config: {
+          speech_config: [{ voice: "Kore" }],
+        },
+      },
+    });
+  });
+
+  it("extracts the transcript from a wrapped audio profile before Gemini 3.8 synthesis", async () => {
+    const provider = buildGoogleSpeechProvider();
+    const prepared = await provider.prepareSynthesis?.({
+      text: [
+        "Synthesize speech from the TRANSCRIPT section only. Use the other sections only",
+        "as performance direction. Do not read section titles, notes, labels, or",
+        "configuration aloud.",
+        "",
+        "# AUDIO PROFILE: Alfred",
+        "",
+        "### TRANSCRIPT",
+        "Hello.",
+      ].join("\n"),
+      cfg: {},
+      providerConfig: { model: "gemini-3.8-flash-tts" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(prepared?.text).toBe("Hello.");
+  });
+
+  it("fails closed for unsupported Gemini 3.8 TTS model ids", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Do not call generateContent.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+          model: "gemini-3.8-flash-tts-preview",
+        },
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(/Interactions API/u);
+
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("strips a Gemini 3.8 WAV container before wrapping telephony PCM", async () => {
+    const pcm = Buffer.from([9, 0, 8, 0]);
+    const wav = Buffer.concat([
+      Buffer.from("RIFF"),
+      Buffer.alloc(4),
+      Buffer.from("WAVEfmt "),
+      Buffer.from([16, 0, 0, 0, 1, 0, 1, 0]),
+      Buffer.alloc(12),
+      Buffer.from("data"),
+      Buffer.from([pcm.length, 0, 0, 0]),
+      pcm,
+    ]);
+    wav.writeUInt32LE(wav.length - 8, 4);
+    postJsonRequestMock.mockImplementation(async () => ({
+      response: Response.json({
+        output_audio: {
+          type: "audio",
+          mime_type: "audio/wav",
+          data: wav.toString("base64"),
+        },
+      }),
+      release: vi.fn(async () => {}),
+    }));
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesizeTelephony?.({
+      text: "Phone call audio.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        model: "gemini-3.8-flash-tts",
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toEqual({
+      audioBuffer: pcm,
+      outputFormat: "pcm",
+      sampleRate: 24_000,
+    });
   });
 });
