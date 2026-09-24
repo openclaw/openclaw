@@ -9436,6 +9436,24 @@ public struct NodeHostStatsPayload: Codable, Sendable {
     }
 }
 
+public struct NodeInvokeCancelEvent: Codable, Sendable {
+    public let invokeid: String
+    public let nodeid: String
+
+    public init(
+        invokeid: String,
+        nodeid: String)
+    {
+        self.invokeid = invokeid
+        self.nodeid = nodeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case invokeid = "invokeId"
+        case nodeid = "nodeId"
+    }
+}
+
 public struct NodeInvokeInputEvent: Codable, Sendable {
     public let id: String
     public let nodeid: String
@@ -16426,21 +16444,25 @@ public struct SessionsCompanionAskParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let question: String
+    public let attachments: [[String: AnyCodable]]?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
-        question: String)
+        question: String,
+        attachments: [[String: AnyCodable]]? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.question = question
+        self.attachments = attachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case question
+        case attachments
     }
 }
 

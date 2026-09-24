@@ -38,6 +38,7 @@ import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const PRIMARY_PORT = 2222;
@@ -426,9 +427,9 @@ test("preserves ordered fallback through inventory rehydration, workspace sync, 
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: localWorkspace }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-    resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
-    reportWorkspaceResultConflict: async () => {},
-    resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+    ...createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: localWorkspace }),
+    }),
   });
 
   const active = await dispatch.dispatch({

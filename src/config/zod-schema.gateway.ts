@@ -166,6 +166,8 @@ export const GatewayConfigSchema = z
           .optional(),
         /** Show the Discord community invitation in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
+        /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
+        newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
         /** Optional service credential used only for Control UI GitHub previews and discovery. */
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })

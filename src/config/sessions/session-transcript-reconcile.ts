@@ -524,6 +524,7 @@ async function reconcilePreparedTranscriptIndexes(
           const releaseTask = operation.startTask({
             mode: "release",
             leaseId: input.leaseId,
+            path: input.path,
             stateDir: input.stateDir,
             externallySupervised: input.externallySupervised,
           });
@@ -550,6 +551,7 @@ async function reconcilePreparedTranscriptIndexes(
         operation.retainLeaseForCleanup({
           mode: "release",
           leaseId: input.leaseId,
+          path: input.path,
           stateDir: input.stateDir,
           externallySupervised: input.externallySupervised,
         });

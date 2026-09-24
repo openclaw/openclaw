@@ -8,7 +8,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/config.js";
-import { maybeLoadDotEnvForConfig } from "../config/io.read-helpers.js";
+import { maybeLoadDotEnvForConfig } from "../config/io.runtime-env.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";

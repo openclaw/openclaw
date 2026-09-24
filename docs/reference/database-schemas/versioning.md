@@ -23,12 +23,12 @@ Matching numeric versions are necessary but not sufficient. A release can add a 
 
 Admitted agent and cached shared-state handles retain their schema version and
 table facts. The handle owner revokes these facts after local DDL, transaction
-rollback, or a foreign commit; it checks `PRAGMA data_version` at most once per
-event-loop turn for cache freshness. Canonical session validation uses the same
-schema revision. A migration by another process is detected on the next turn.
-Shared-state worker admission waits for a preceding probe to expire before
-starting a new operation, so requests do not reuse an earlier freshness result.
-Migration and snapshot before/after consistency checks remain fresh reads.
+rollback, or a foreign commit. A fresh `PRAGMA data_version` probe observes foreign
+commits on the next unpinned read, even within the same event-loop turn. Actual
+SQLite read snapshots retain their view until they end; the next read then observes
+committed changes. Canonical session validation uses the same schema revision.
+Unchanged versions reuse parsed schema facts and prepared statements without
+repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
 This changes no stored schema, migration, durability, or update behavior.
 
 The nullable requester-authority columns on GitHub publication lifecycle and

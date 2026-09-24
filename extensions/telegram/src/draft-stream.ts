@@ -274,41 +274,32 @@ export function createTelegramDraftStream(params: {
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       let acceptedSnapshot = toDraftSnapshot(page);
-      if (page.richMessage) {
-        const richMessage = page.richMessage;
+      const richMessage = page.richMessage;
+      if (richMessage) {
         warnTelegramRichBlocksDegradations({
           context: "stream preview edit",
           reasons: page.degradationReasons ?? [],
           warn: (message) => params.warn?.(message),
         });
+      }
+      if (richMessage || page.sourceTextMode === "html") {
         acceptedSnapshot = await withTelegramPlainFallback<TelegramDraftMessageSnapshot>({
-          kind: "rich",
+          kind: richMessage ? "rich" : "html",
           context: "stream preview edit",
           plainText: page.plainText,
           warn: (message) => params.warn?.(message),
           sendFormatted: async () => {
-            await params.api.raw.editMessageText({
-              chat_id: chatId,
-              message_id: targetMessageId,
-              rich_message: richMessage,
-            });
-            return toDraftSnapshot(page);
-          },
-          sendPlain: async (plan) => {
-            await editMessageTextWithPreview(targetMessageId, plan.plainText);
-            return fallbackSnapshot(plan.plainText);
-          },
-        });
-      } else if (page.sourceTextMode === "html") {
-        acceptedSnapshot = await withTelegramPlainFallback<TelegramDraftMessageSnapshot>({
-          kind: "html",
-          context: "stream preview edit",
-          plainText: page.plainText,
-          warn: (message) => params.warn?.(message),
-          sendFormatted: async () => {
-            await editMessageTextWithPreview(targetMessageId, page.htmlText ?? page.sourceText, {
-              parse_mode: "HTML" as const,
-            });
+            if (richMessage) {
+              await params.api.raw.editMessageText({
+                chat_id: chatId,
+                message_id: targetMessageId,
+                rich_message: richMessage,
+              });
+            } else {
+              await editMessageTextWithPreview(targetMessageId, page.htmlText ?? page.sourceText, {
+                parse_mode: "HTML" as const,
+              });
+            }
             return toDraftSnapshot(page);
           },
           sendPlain: async (plan) => {

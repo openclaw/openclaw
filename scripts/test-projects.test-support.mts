@@ -944,7 +944,6 @@ const TOOLING_IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
-const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 /** Default no-output timeout applied to test-projects Vitest children. */
 const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
 /** Default heartbeat interval applied to test-projects Vitest children. */
@@ -1170,6 +1169,7 @@ function resolveInheritedIncludeScope(
 
 function createBoundedExtensionPlans(
   plan: VitestRunPlan,
+  cwd: string,
   env?: NodeJS.ProcessEnv,
   ownedTargets?: ReadonlySet<string>,
 ) {
@@ -1224,6 +1224,7 @@ function createBoundedExtensionPlans(
       ? plan.includePatterns
       : roots,
     forwardedArgs,
+    cwd,
   );
   if (chunks.length === 0) {
     // Preserve exact requests for Vitest's existing empty-test diagnostic, never a broad fallback.
@@ -4213,6 +4214,7 @@ export function buildVitestRunPlans(
             includePatterns: null,
             watchMode,
           },
+          cwd,
           options.env,
         ),
       );
@@ -4410,7 +4412,7 @@ export function buildVitestRunPlans(
           includePatterns: null,
           watchMode,
         };
-        plans.push(...createBoundedExtensionPlans(plan, options.env));
+        plans.push(...createBoundedExtensionPlans(plan, cwd, options.env));
       }
       continue;
     }
@@ -4489,6 +4491,7 @@ export function buildVitestRunPlans(
               includePatterns,
               watchMode,
             },
+            cwd,
             options.env,
             ownedTargets,
           )
@@ -4576,7 +4579,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
         } else {
           const roots = EXTENSION_TEST_PROCESS_ROOTS.get(config);
           if (roots) {
-            chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
+            chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs, cwd);
           }
         }
         if (chunks !== null) {
@@ -4810,35 +4813,6 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
       env: nextEnv,
     };
   });
-}
-
-export function shouldRetryVitestNoOutputTimeout(env = process.env) {
-  const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
-  if (value === undefined && isCiLikeEnv(env)) {
-    return false;
-  }
-  return !["0", "false", "no", "off"].includes(value ?? "");
-}
-
-// Shards may pin a short no-output window so the known warm-cache stall dies
-// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mts). A cold Vitest
-// module cache makes those same imports legitimately silent for minutes, so
-// the retry attempt must get the full watchdog window or it re-dies at the
-// short limit and the job fails without ever running a test.
-const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
-
-export function withRetryNoOutputTimeout<T extends { env?: NodeJS.ProcessEnv }>(spec: T): T {
-  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
-  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
-    return spec;
-  }
-  return {
-    ...spec,
-    env: {
-      ...spec.env,
-      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
-    },
-  };
 }
 
 export function createVitestRunSpecs(

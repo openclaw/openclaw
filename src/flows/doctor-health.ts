@@ -185,7 +185,15 @@ async function runDoctorHealthFlowWithResult(
           return undefined;
         }
       }
-      const schemas = databasePreflight ?? (await prepareDoctorDatabasePreflight());
+      // An update may supply discovery from before maintenance excluded config publishers.
+      const refreshRecoveryInventory =
+        maintenance &&
+        databasePreflight?.agentDatabaseMigrationDiscovery?.discovery.deletionJournal.status ===
+          "unavailable";
+      const schemas =
+        databasePreflight && !refreshRecoveryInventory
+          ? databasePreflight
+          : await prepareDoctorDatabasePreflight();
       const { recordAgentDatabaseAdmissions } =
         await import("../state/agent-database-admission.js");
       // Repair owns fresh file decisions until its migration graph finishes.
@@ -201,11 +209,27 @@ async function runDoctorHealthFlowWithResult(
         postCoreSchemaRepair: writeAuthority?.postCoreSchemaRepair,
       });
 
+      const { repairDoctorAgentDeletionJournal } =
+        await import("../commands/doctor-agent-deletion-journal.js");
+      const deletionJournal = await repairDoctorAgentDeletionJournal({
+        preflight: schemas,
+        shouldRepair: prompter.shouldRepair,
+        env: process.env,
+      });
+      for (const message of deletionJournal.changes) {
+        effectiveRuntime.log(message);
+      }
+      for (const message of deletionJournal.warnings) {
+        effectiveRuntime.log(message);
+      }
+
       if (maintenance && (options.repair === true || options.yes === true)) {
         const { repairOpenClawStateDatabaseReadabilityForDoctor } =
           await import("../state/openclaw-state-db.js");
         // Restore catalog reads before config discovery; versioned migrations remain in its graph.
-        const readability = repairOpenClawStateDatabaseReadabilityForDoctor({ env: process.env });
+        const readability = repairOpenClawStateDatabaseReadabilityForDoctor({
+          env: process.env,
+        });
         if (readability.warnings.length > 0) {
           throw new Error(readability.warnings.join("\n"));
         }
@@ -269,6 +293,7 @@ async function runDoctorHealthFlowWithResult(
         stateDirExistedAtStart,
         gatewayMaintenanceActive: maintenance !== undefined,
         agentDatabaseRefusals,
+        updateWarnings: deletionJournal.warnings,
         preparedAgentCount: Math.max(
           admissionSchemas.agentDatabaseMigrationDiscovery?.configuredAgentDatabaseTargets.length ??
             0,

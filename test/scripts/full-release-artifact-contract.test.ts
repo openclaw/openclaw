@@ -1249,7 +1249,6 @@ describe("full release artifact contract", () => {
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-          KNOWN_FLAKY_JOBS_JSON: "[]",
           PATH: process.env.PATH,
           RUNNER_TEMP: dir,
           GITHUB_RUN_ID: "124",

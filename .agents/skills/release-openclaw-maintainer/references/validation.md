@@ -45,8 +45,13 @@ non-root-skip mode, not permission to skip install proof. Published correction
 versions must prove upgrade from their base stable package. Postpublish use:
 
 ```bash
+OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
+OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
 node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ```
+
+Run it from a checkout of the Release SHA once the registry lists the version
+(see [regular release](regular-release.md#publish-and-verify)).
 
 `pnpm qa:otel:smoke` supplies local OTLP/redaction coverage without hosted
 telemetry credentials. Video-provider checks are conditional on release scope:
@@ -62,22 +67,22 @@ Use `release_profile=beta`, `run_release_soak=false` for beta and, with the
 stable soak waiver, for the default stable path. A qualifying `all` run for
 an actual beta on its canonical branch/tag records `npm-beta-v1`. Native app
 CI, performance, and published-package Telegram move to confidence. Required
-Node, Control UI, plugin, package, install/update, Linux cross-OS, QA parity,
+Node, Control UI, plugin, package, install/update, Linux/Windows/macOS cross-OS, QA parity,
 runtime-pair/restart and tool-coverage gates remain. Beta `all` without soak
 also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile main/alpha too, but those do
 not qualify for `npm-beta-v1`.
 
-Native app lanes (macos-swift, platform publishers) are advisory for the
-npm/ClawHub decision: record their conclusion and fix them in parallel.
-Windows node-test shards remain a required `ci.yml` check; repair and rerun
-that lane in parallel instead of re-cutting.
+Native app publishers run separately from npm/ClawHub publication. Selected
+macOS Swift and Windows Node CI lanes remain required; repair and rerun failed
+lanes before publication.
 
-Windows/macOS cross-OS are advisory for beta/stable/full. All-group
-`cross_os_suite_filter` may omit advisory OS lanes; `npm-beta-v1` and
-`npm-stable-v1` still require all Linux suites. Focused cross-OS rerun semantics
-remain unchanged. Read required versus advisory conclusions in the manifest
-and `release-ci-summary`.
+Linux, Windows, and macOS Gateway cross-OS install and upgrade suites block
+beta/stable/full validation. All-group `cross_os_suite_filter` selections must
+retain `packaged-fresh`, `installer-fresh`, and `packaged-upgrade` on all three
+OSes: all nine pairs are required for `npm-beta-v1` and `npm-stable-v1`. Focused
+`cross-os` reruns may select individual lanes. Retain each conclusion in the
+manifest and `release-ci-summary`.
 
 ## Postpublish confidence
 
@@ -124,10 +129,10 @@ proven by diagnosis), never for a flake or an advisory lane. When the
 instead of starting another full run.
 
 Native publication retains separate signing/notarization/promotion gates under
-[platform publication](platform-publication.md). Native app lanes stay
-advisory for the npm/ClawHub decision and are fixed in parallel; selected
-macos-swift and Windows node-test shards inside the `ci.yml` aggregate remain
-required checks, so repair and rerun that lane rather than re-cutting.
+[platform publication](platform-publication.md). Platform publisher failures
+are repaired in parallel. Selected macOS Swift and Windows Node shards inside
+the `ci.yml` aggregate remain required checks; repair and rerun failed lanes
+before publication.
 
 Local proof is targeted: never mirror Full Release Validation locally. Run a
 lane locally only after it failed in CI, to separate flake from defect, bounded

@@ -34,8 +34,6 @@ import {
   resolveChangedTargetArgs,
   resolveControlUiTestConsumers,
   resolveParallelFullSuiteConcurrency,
-  shouldRetryVitestNoOutputTimeout,
-  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
 import {
@@ -5555,29 +5553,6 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBeUndefined();
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("0");
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBe("25000");
-  });
-
-  it("allows changed checks to disable automatic silent-run retries", () => {
-    expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
-    expect(shouldRetryVitestNoOutputTimeout({ CI: "true" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ CI: "1" })).toBe(false);
-  });
-
-  it("raises short shard no-output timeouts for the retry attempt", () => {
-    const spec = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } };
-    expect(withRetryNoOutputTimeout(spec).env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
-    const generous = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "600000" } };
-    expect(withRetryNoOutputTimeout(generous)).toBe(generous);
-    const disabled = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" } };
-    expect(withRetryNoOutputTimeout(disabled)).toBe(disabled);
-    const unset = { env: {} };
-    expect(withRetryNoOutputTimeout(unset)).toBe(unset);
-    expect(shouldRetryVitestNoOutputTimeout({ GITHUB_ACTIONS: "true" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1" })).toBe(true);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0" })).toBe(false);
-    expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "false" })).toBe(
-      false,
-    );
   });
 });
 

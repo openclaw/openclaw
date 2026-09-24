@@ -9,7 +9,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   historicalV14AgentSchemaSql,
@@ -50,6 +53,7 @@ describe("legacy media persistence Doctor migration from historical schemas", ()
 
       const stateDir = makeTempDir(tempDirs, `media-persistence-historical-v${version}-`);
       const env = { OPENCLAW_STATE_DIR: stateDir };
+      openOpenClawStateDatabase({ env });
       const pristinePath = path.join(stateDir, "historical", `v${version}-pristine.sqlite`);
       const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(pristinePath), { recursive: true });

@@ -6,11 +6,8 @@ import {
 import { isTranscriptMessageAppendCurrentTail } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreReadCandidate,
-} from "../../config/sessions/session-store-read-candidates.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { captureSessionStoreReadCandidate } from "../../config/sessions/session-store-read-candidates.js";
 import {
   captureSessionTranscriptStorageEnvironment,
   captureSessionTranscriptTargetBinding,
@@ -164,7 +161,12 @@ export async function appendSessionTranscriptNote(
     }
     state.assertCurrent();
     assertOwned();
-    assertSessionStoreReadCandidate(candidate.path, [candidate]);
+    if (
+      captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
+      candidate.physicalPath
+    ) {
+      throw new Error("Session store alias changed before transcript append completion");
+    }
   };
   const input = {
     target: captured,
