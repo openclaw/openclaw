@@ -338,6 +338,8 @@ suite.define(() => {
 
           await page.locator(".chat-browser-panel-toggle").click();
           await sidePanel(page).locator('[data-panel-slot="browser"]:not([hidden])').waitFor();
+          // Session routes mount no standalone Browser dock, and the embedded panel
+          // never writes the reservation, so the saved open dock leaves it unset.
           await expect
             .poll(() =>
               page.evaluate(() => ({
@@ -349,7 +351,7 @@ suite.define(() => {
                 ),
               })),
             )
-            .toEqual({ marginRight: "0px", reservation: "0px" });
+            .toEqual({ marginRight: "0px", reservation: "" });
           await expect
             .poll(() =>
               page
@@ -382,7 +384,7 @@ suite.define(() => {
             )
             .toEqual({
               marginRight: "0px",
-              reservation: "0px",
+              reservation: "",
               spansRegion: dock === "bottom",
             });
         },

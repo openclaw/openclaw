@@ -141,13 +141,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
-    // Embedded docks live inside a parent layout that already owns their geometry.
-    // Reserving the viewport here would apply the standalone dock a second time.
-    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
-    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
+    const visible = this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -202,12 +199,23 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   private clearReservation(): void {
-    if (this.options.reserveViewport === false || this.isFullscreen()) {
+    if (!this.reservesViewport()) {
       return;
     }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
+  }
+
+  // Only a standalone dock owns its panel's viewport reservation. Embedded, fullscreen,
+  // and inline hosts are laid out by their parent, and the standalone dock of the same
+  // panel can be open at the same time, so they neither reserve nor clear its properties.
+  private reservesViewport(): boolean {
+    return (
+      this.options.reserveViewport !== false &&
+      !this.isFullscreen() &&
+      !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
+    );
   }
 
   private isFullscreen(): boolean {
