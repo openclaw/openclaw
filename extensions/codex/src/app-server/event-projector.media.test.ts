@@ -789,12 +789,6 @@ describe("CodexAppServerEventProjector media projection", () => {
           : [
               {
                 text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
-                mediaUrl:
-                  presentation === "replaced"
-                    ? replacementUrl
-                    : presentation === "file-url"
-                      ? pathToFileURL(stagedPath).href
-                      : stagedPath,
                 mediaUrls: [
                   presentation === "replaced"
                     ? replacementUrl

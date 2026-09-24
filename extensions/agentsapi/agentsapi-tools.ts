@@ -51,7 +51,7 @@ import {
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AgentsApiFunctionCall, AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
-import { recordAgentsApiToolTranscript } from "./agentsapi-messages.js";
+import { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
 
 type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   AgentHarnessToolMediaFacts &

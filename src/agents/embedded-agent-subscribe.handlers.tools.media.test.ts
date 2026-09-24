@@ -265,7 +265,6 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "visible in tui",
-        mediaUrl: "file:///tmp/reply.png",
         mediaUrls: ["file:///tmp/reply.png"],
         channelData: { source: "tui" },
         idempotencyKey: "stable-source-reply",

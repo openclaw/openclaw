@@ -40,18 +40,6 @@ const sessionSchema = z.looseObject({
     ]),
   ),
 });
-const turnSchema = z.looseObject({
-  id: z.string(),
-  session_id: z.string(),
-  subagent_id: z.string().nullable(),
-  status: z.enum(["queued", "in_progress", "waiting", "completed", "failed", "cancelled"]),
-  error: errorSchema.nullable(),
-  usage: usageSchema.nullable(),
-  agent_id: z.string().optional(),
-  created_at: z.number().optional(),
-  started_at: z.number().nullable().optional(),
-  completed_at: z.number().nullable().optional(),
-});
 const textPartSchema = z.looseObject({ type: z.string(), text: z.string().optional() });
 // Validate native correlation and projection fields while retaining complete payloads.
 const itemSchema = z.looseObject({
@@ -126,7 +114,6 @@ const eventSchema = z.looseObject({
 });
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
-export type AgentsApiTurn = z.infer<typeof turnSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
 export type AgentsApiFunctionDeclaration = {
   type: "function";
@@ -300,17 +287,6 @@ export class AgentsApiClient {
       { signal },
     );
     this.assertCurrent();
-  }
-
-  async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentsApiTurn> {
-    const turn = turnSchema.parse(
-      await this.sessions.turns.retrieve(turnId, { session_id: sessionId }, { signal }),
-    );
-    this.assertCurrent();
-    if (turn.id !== turnId || turn.session_id !== sessionId || turn.subagent_id !== null) {
-      throw new Error("Agents API returned a turn outside the requested root session");
-    }
-    return turn;
   }
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
