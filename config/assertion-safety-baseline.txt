@@ -498,10 +498,9 @@ extensions/googlechat/src/accounts.ts	1
 extensions/googlechat/src/actions.ts	1
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/google-auth.runtime.ts	7
+extensions/googlechat/src/google-auth.runtime.ts	5
 extensions/googlechat/src/monitor-access.ts	1
 extensions/googlechat/src/monitor-event.ts	2
-extensions/googlechat/src/monitor.ts	1
 extensions/googlechat/src/secret-contract.ts	3
 extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
@@ -518,7 +517,7 @@ extensions/imessage/src/approval-reaction-poller.ts	1
 extensions/imessage/src/approval-reactions.ts	2
 extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
-extensions/imessage/src/channel.ts	4
+extensions/imessage/src/channel.ts	2
 extensions/imessage/src/chat.ts	1
 extensions/imessage/src/cli-output.ts	1
 extensions/imessage/src/client.ts	3
@@ -768,11 +767,11 @@ extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
 extensions/msteams/src/media-helpers.ts	1
 extensions/msteams/src/messenger.ts	1
-extensions/msteams/src/monitor-handler.ts	5
+extensions/msteams/src/monitor-handler.ts	1
 extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
-extensions/msteams/src/monitor.ts	8
+extensions/msteams/src/monitor.ts	6
 extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
@@ -1023,7 +1022,7 @@ extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
 extensions/signal/src/approval-reactions.ts	1
 extensions/signal/src/channel.ts	2
-extensions/signal/src/client-container.ts	34
+extensions/signal/src/client-container.ts	30
 extensions/signal/src/client.ts	4
 extensions/signal/src/monitor/event-handler.ts	1
 extensions/signal/src/probe.ts	1

@@ -58,7 +58,6 @@ type IMessageReplyCacheCounter = { counter: number };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
 const imessageShortIdToUuid = new Map<string, string>();
-const imessageUuidToShortId = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
 function openReplyCacheStore(): IMessageReplyCacheStore {
@@ -102,7 +101,6 @@ function hydrateRows(entries: IMessageReplyCacheEntry[]): void {
     }
     imessageReplyCacheByMessageId.set(entry.messageId, entry);
     imessageShortIdToUuid.set(entry.shortId, entry.messageId);
-    imessageUuidToShortId.set(entry.messageId, entry.shortId);
   }
 }
 
@@ -219,12 +217,11 @@ export async function rememberIMessageReplyCache(
     return { ...entry, shortId: "" };
   }
 
-  let shortId = imessageUuidToShortId.get(messageId);
+  let shortId = imessageReplyCacheByMessageId.get(messageId)?.shortId;
   const isNewMessage = !shortId;
   if (!shortId) {
     shortId = generateShortId();
     imessageShortIdToUuid.set(shortId, messageId);
-    imessageUuidToShortId.set(messageId, shortId);
   }
 
   const fullEntry = buildReplyCacheEntry(entry, messageId, shortId);
@@ -241,7 +238,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(key);
     if (value.shortId) {
       imessageShortIdToUuid.delete(value.shortId);
-      imessageUuidToShortId.delete(key);
     }
   }
   while (imessageReplyCacheByMessageId.size > IMESSAGE_REPLY_CACHE_MAX_ENTRIES) {
@@ -254,7 +250,6 @@ export async function rememberIMessageReplyCache(
     deletedMessageIds.push(oldest);
     if (oldEntry?.shortId) {
       imessageShortIdToUuid.delete(oldEntry.shortId);
-      imessageUuidToShortId.delete(oldest);
     }
   }
 
@@ -495,11 +490,7 @@ function resolveCachedResourceBinding(
   if (entry.accountId !== ctx.accountId) {
     return "mismatch";
   }
-  const chatMatch = resolveIMessageChatMatch(entry, ctx);
-  if (chatMatch !== "match") {
-    return chatMatch;
-  }
-  return "match";
+  return resolveIMessageChatMatch(entry, ctx);
 }
 
 type CurrentMessageChatParams = {
