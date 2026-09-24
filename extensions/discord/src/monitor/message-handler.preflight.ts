@@ -240,7 +240,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsSetting = params.discordConfig?.allowBots ?? true;
   const allowBotsMode =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
