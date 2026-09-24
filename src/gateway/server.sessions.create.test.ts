@@ -1634,6 +1634,46 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
   expect(prepareLifecycle).not.toHaveBeenCalled();
 });
 
+test("createGatewaySession infers the child owner from a prefixed parent", async () => {
+  await withFixedOwnerSessionStore("per-sender", async ({ storePath, cfg }) => {
+    const parentSessionKey = "agent:ops:main";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: parentSessionKey, storePath },
+      { sessionId: "ops-parent", updatedAt: 1 },
+    );
+
+    const { createGatewaySession } = await import("./session-create-service.js");
+    const direct = await createGatewaySession({
+      cfg,
+      parentSessionKey,
+      commandSource: "test",
+    });
+
+    expect(direct.ok, JSON.stringify(direct)).toBe(true);
+    if (!direct.ok) {
+      return;
+    }
+    expect(direct.agentId).toBe("ops");
+    expect(direct.key).toMatch(/^agent:ops:dashboard:/);
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: direct.key, storePath })).toBeDefined();
+
+    const connection = await openClient();
+    try {
+      const rpc = await rpcReq<{ key: string }>(connection.ws, "sessions.create", {
+        agentId: "ops",
+        parentSessionKey,
+      });
+      expect(rpc.ok, JSON.stringify(rpc)).toBe(true);
+      expect(rpc.payload?.key).toMatch(/^agent:ops:dashboard:/);
+      expect(
+        loadSessionEntry({ agentId: "ops", sessionKey: rpc.payload?.key, storePath }),
+      ).toBeDefined();
+    } finally {
+      await closeGatewayTestWebSocket(connection.ws);
+    }
+  });
+});
+
 test.each(["rpc", "service"] as const)(
   "creates a fresh selected-agent child outside fixed global ownership through %s",
   (entrypoint) =>
