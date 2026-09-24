@@ -71,6 +71,7 @@ import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
+  configureCliStartupDiagnostics,
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./startup-trace.js";
@@ -1283,17 +1284,11 @@ async function runCliWithPreparedOutputMode(
   let unhandledRejectionHandlerInstalled = false;
 
   try {
-    const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-      (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
-    );
-    if (
-      !isDatabaseInvocation &&
-      (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
-        Boolean,
-      )
-    ) {
-      const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-      await Promise.all(startupTraces.map((trace) => trace.configureDiagnosticsTimeline(config)));
+    if (!isDatabaseInvocation) {
+      await configureCliStartupDiagnostics(
+        [startupTrace, options.additionalStartupTrace],
+        isGatewayRunInvocation ? readBestEffortCliConfig : undefined,
+      );
     }
     if (
       !isHelpOrVersionInvocation &&
