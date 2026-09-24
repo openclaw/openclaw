@@ -1,12 +1,24 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import * as sqlite from "../../infra/kysely-sync.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import {
+  resolveStateLifecycleRuntimeDirectory,
+  StateDatabaseCoordinatorContentionError,
+} from "../../infra/state-database-coordinator.js";
 import { createStateSchemaMigrationStep } from "../../infra/state-migrations.state-schema.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  recordOpenClawDatabaseQuarantine,
+} from "../../state/openclaw-quarantine-store.js";
+import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
@@ -14,8 +26,16 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
+  recordOpenClawStateDatabaseOpenFailure,
   runOpenClawStateWriteTransaction,
+  registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
+import {
+  isOpenClawStateWriteContentionError,
+  OpenClawStateExternalOwnershipError,
+} from "../../state/openclaw-state-ownership.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
@@ -55,6 +75,7 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
+  vi.unstubAllEnvs();
   delivery.afterTransition = undefined;
   delivery.commands = [];
   await closeOpenClawStateDatabaseAsync();
@@ -222,6 +243,100 @@ it("shares committed inventory and native pairing publications across database a
   expect(store.get(intent.environmentId)?.nodeDeviceId).toBe("alias-device");
   await closeOpenClawStateDatabaseByPathAsync(aliasPath);
   expect(() => store.get(intent.environmentId)).toThrow();
+});
+
+it("preserves admitted inventory after a refused native open but fences terminal failure", async () => {
+  const stateDir = tempDirs.make("worker-inventory-open-error-");
+  await withEnvAsync(
+    { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_SUPERVISOR_MODE: "external" },
+    async () => {
+      claimOpenClawStateOwnership("gateway-supervisor");
+      const databasePath = openOpenClawStateDatabase().path;
+      // The refused caller must take fresh admission, not the native handle cache.
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      const store = await createWorkerEnvironmentStore();
+      try {
+        const intent = await store.createIntent({
+          environmentId: "admitted-environment",
+          providerId: "provider",
+          profileId: "profile",
+          profileSnapshot: { settings: {} },
+          provisionOperationId: "admitted-provision",
+        });
+        expect(() =>
+          openOpenClawStateDatabase({
+            path: databasePath,
+            env: { OPENCLAW_STATE_DIR: stateDir },
+          }),
+        ).toThrow(OpenClawStateExternalOwnershipError);
+        expect(store.get(intent.environmentId)).toEqual(intent);
+        const changed = await store.transition({
+          environmentId: intent.environmentId,
+          from: "requested",
+          to: "provisioning",
+        });
+        expect(changed.state).toBe("provisioning");
+        expect(store.get(intent.environmentId)).toEqual(changed);
+
+        recordOpenClawStateDatabaseOpenFailure(
+          databasePath,
+          new Error("database disk image is malformed"),
+        );
+        expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
+        expect(() =>
+          store.transition({
+            environmentId: intent.environmentId,
+            from: "provisioning",
+            to: "failed",
+          }),
+        ).toThrow("inventory has closed");
+      } finally {
+        await store.close();
+      }
+    },
+  );
+});
+
+it("retires inventory when native admission discovers durable quarantine", async () => {
+  const stateDir = tempDirs.make("worker-inventory-quarantine-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    const store = await createWorkerEnvironmentStore();
+    let intent: Awaited<ReturnType<typeof store.createIntent>>;
+    try {
+      intent = await store.createIntent({
+        environmentId: "quarantined-environment",
+        providerId: "provider",
+        profileId: "profile",
+        profileSnapshot: { settings: {} },
+        provisionOperationId: "quarantined-provision",
+      });
+      // A different verifier can publish this fact without notifying our process.
+      expect(
+        recordOpenClawDatabaseQuarantine({
+          kind: "state",
+          path: databasePath,
+          reason: "verified corrupt index",
+        }),
+      ).toBe(true);
+      expect(() => openOpenClawStateDatabase()).toThrow(
+        expect.objectContaining({ name: "SqliteIntegrityError" }),
+      );
+      expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
+    } finally {
+      await store.close();
+    }
+
+    // Clearing the durable fact must not leave an unrelated process-local latch.
+    expect(clearOpenClawDatabaseQuarantine(databasePath)).toBe(true);
+    const reopened = await createWorkerEnvironmentStore();
+    try {
+      expect(reopened.get(intent.environmentId)).toEqual(intent);
+    } finally {
+      await reopened.close();
+    }
+  });
 });
 
 it("serves committed inventory and performs guarded mutations without host SQLite", async () => {
@@ -466,3 +581,99 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   });
   expect(revoked).toEqual([]);
 });
+
+// A transient native-open refusal must not retire an independently admitted inventory.
+it.each([
+  new StateDatabaseCoordinatorContentionError("state-lifecycle"),
+  Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
+])("keeps worker inventory usable after a transient database open failure: %s", async (error) => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-inventory-contention-") },
+  });
+  const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  openClawStateDatabaseCache.recordOpenClawStateDatabaseLifecycleOpenError(database.path, error);
+  expect(store.listForReconcile()).toEqual([]);
+  const intent = await store.createIntent({
+    environmentId: "after-contention",
+    providerId: "provider",
+    profileId: "profile",
+    profileSnapshot: { settings: {} },
+    provisionOperationId: "after-contention-provision",
+  });
+  expect(store.get(intent.environmentId)).toEqual(intent);
+  await closeOpenClawStateDatabaseByPathAsync(database.path);
+  expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
+});
+
+it("keeps the same inventory writable after a real interprocess open lock clears", async () => {
+  const stateDir = tempDirs.make("worker-inventory-contention-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const database = openOpenClawStateDatabase();
+  const pathname = database.path;
+  // Bootstrap before acquiring the inventory. The resident inventory and its
+  // worker admission do not require a cached host-native SQLite connection.
+  await closeOpenClawStateDatabaseAsync();
+  const store = await createWorkerEnvironmentStore();
+  await store.createIntent({
+    environmentId: "before-lock",
+    providerId: "provider",
+    profileId: "profile",
+    profileSnapshot: { settings: {} },
+    provisionOperationId: "before-operation",
+  });
+  const events: string[] = [];
+  const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind === "open-error" && event.path === pathname) {
+      expect(isOpenClawStateWriteContentionError(event.error)).toBe(true);
+      events.push(event.kind);
+    }
+  });
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `
+    import { acquireStateDatabaseCoordinator } from "./src/infra/state-database-coordinator.ts";
+    const lease = acquireStateDatabaseCoordinator({ databasePath: process.argv[1], runtimeDirectory: process.argv[2], busyTimeoutMs: 0 });
+    process.once("message", () => {
+      lease.release(); process.disconnect();
+    });
+    process.send({ locked: true });
+  `,
+      pathname,
+      resolveStateLifecycleRuntimeDirectory(),
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+    child.once("close", (code, signal) => resolve([code, signal]));
+  });
+  try {
+    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+    expect(ready).toEqual({ locked: true });
+    expect(() => openOpenClawStateDatabase()).toThrow(StateDatabaseCoordinatorContentionError);
+    expect(child.exitCode).toBeNull();
+    expect(events).toEqual(["open-error"]);
+    child.send({ release: true });
+    expect(await exited, stderr).toEqual([0, null]);
+    expect(openOpenClawStateDatabase().path).toBe(pathname);
+    expect(store.get("before-lock")?.state).toBe("requested");
+    await store.transition({ environmentId: "before-lock", from: "requested", to: "provisioning" });
+    expect(store.get("before-lock")?.state).toBe("provisioning");
+    expect(store.list()).toHaveLength(1);
+    await closeOpenClawStateDatabaseAsync();
+    expect(() => store.list()).toThrow("inventory has closed");
+  } finally {
+    unsubscribe();
+    await stopChildProcess(child, 5_000);
+    await exited;
+    await store.close();
+  }
+}, 30_000);

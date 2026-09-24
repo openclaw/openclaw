@@ -109,7 +109,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
     applyTranscriptCommit?: WorkerTranscriptCommitApplication;
     liveEvents?: Pick<
       WorkerLiveEventReceiver,
-      "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential"
+      "apply" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
     executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
@@ -244,7 +244,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
     if (to !== "attached") {
       inference.cancelEnvironment(record.environmentId);
-      options.liveEvents?.clearEnvironment(record.environmentId);
+      options.liveEvents?.clearEnvironment(record.environmentId, record.ownerEpoch);
     }
     return next;
   };
@@ -516,6 +516,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
     providerLifecycle.clearMachineShapeListeners();
     maintenanceAbort.abort();
@@ -659,6 +660,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    getDedicatedNodeLeaseSignal: providerLifecycle.getDedicatedNodeLeaseSignal,
     prepareProjectIntent: (...args: Parameters<typeof providerLifecycle.prepareIntent>) => {
       providerLifecycle.warmMachineShape(args[0]);
       return providerLifecycle.prepareIntent(...args);

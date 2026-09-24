@@ -591,11 +591,32 @@ describe("generate-npm-package-lock", () => {
       const packageDir = path.join(root, "plugin");
       mkdirSync(source);
       mkdirSync(packageDir);
-      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+      writeFileSync(
+        path.join(root, "pnpm-workspace.yaml"),
+        JSON.stringify(
+          scenario === "valid" ? { overrides: { "fixture-dep>fixture-extra": "3.0.0" } } : {},
+        ),
+      );
       writeFileSync(
         path.join(root, "pnpm-lock.yaml"),
         JSON.stringify({
-          packages: { "fixture-dep@1.0.0": { resolution: { integrity: "sha512-registry" } } },
+          packages: {
+            "fixture-dep@1.0.0": { resolution: { integrity: "sha512-registry" } },
+            ...(scenario === "valid"
+              ? {
+                  "fixture-child@1.0.0": {},
+                  "fixture-child@2.0.0": {},
+                  "fixture-extra@3.0.0": {},
+                }
+              : {}),
+          },
+          ...(scenario === "valid"
+            ? {
+                snapshots: {
+                  "fixture-dep@1.0.0": { dependencies: { "fixture-child": "1.0.0" } },
+                },
+              }
+            : {}),
         }),
       );
       writeFileSync(
@@ -648,7 +669,9 @@ describe("generate-npm-package-lock", () => {
             : {}),
         }),
       );
-      const script = `import { generateNpmPackageLock } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)}; console.log(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify([artifact])} }));`;
+      const script = `import { generateNpmPackageLock, readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
+      const lock = JSON.parse(generateNpmPackageLock(${JSON.stringify(packageDir)}, { localPackageArtifacts: ${JSON.stringify([artifact])} }));
+      console.log(JSON.stringify({ lock, overrides: readNpmLockOverrides() }));`;
       const result = spawnSync(
         process.execPath,
         ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
@@ -660,9 +683,15 @@ describe("generate-npm-package-lock", () => {
       );
       if (scenario === "valid") {
         expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout).packages["node_modules/fixture-dep"]).toMatchObject({
+        const generated = JSON.parse(result.stdout);
+        expect(generated.lock.packages["node_modules/fixture-dep"]).toMatchObject({
           version: "1.0.0",
           integrity,
+        });
+        expect(generated.overrides["fixture-dep"]).toEqual({
+          ".": "1.0.0",
+          "fixture-child": "1.0.0",
+          "fixture-extra": "3.0.0",
         });
       } else {
         expect(result.status).not.toBe(0);

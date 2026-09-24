@@ -272,17 +272,6 @@ export async function installPluginFromInstalledPackageDir(
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
-  return await installPluginFromInstalledPackageDirInternal(params);
-}
-
-async function installPluginFromInstalledPackageDirInternal(
-  params: {
-    additionalDependencyPackageDirs?: string[];
-    emitSuccessSecurityEvent?: boolean;
-    packageDir: string;
-    dependencyScanRootDir?: string;
-  } & PackageInstallCommonParams,
-): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger } = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
   const validated = await validatePackagePluginInstallSource({

@@ -2,14 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
   GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
 );
@@ -94,8 +97,7 @@ function walkCode(dir: string, entries: string[] = []): string[] {
 
 function findExtensionImports(source: string, fileName = "source.ts"): string[] {
   return (
-    collectModuleReferencesFromSource(source, {
-      fileName,
+    collectModuleReferencesFromSource(parser.parseSourceFile(fileName, source), {
       acceptSpecifier: (specifier) => /^(?:\.\.\/)+extensions\//u.test(specifier),
     })
       // This guard owns import specifiers, not URL construction for fixture roots or manifests.

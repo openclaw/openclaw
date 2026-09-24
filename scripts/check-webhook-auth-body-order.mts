@@ -2,7 +2,7 @@
 
 // Ensures webhook handlers authenticate before reading request bodies.
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
@@ -33,8 +33,11 @@ function getCalleeName(expression: ts.Expression): string | null {
 /**
  * Finds request body reads that occur before webhook auth validation.
  */
-function findBlockedWebhookBodyReadLines(content: string, fileName = "source.ts"): number[] {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+function findBlockedWebhookBodyReadLines(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+): number[] {
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
@@ -43,7 +46,7 @@ function findBlockedWebhookBodyReadLines(content: string, fileName = "source.ts"
         lines.push(toLine(sourceFile, node.expression));
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return lines;

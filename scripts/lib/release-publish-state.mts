@@ -5,7 +5,7 @@ import corePackagePolicy from "./npm-core-release-packages.json" with { type: "j
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
-  resolvePublishedNpmVersionRoute,
+  resolveNpmVersionPublicationDecision,
 } from "./npm-publish-plan.mjs";
 import {
   collectPluginReleaseVersionFloorErrors,
@@ -198,29 +198,32 @@ export async function observeReleaseNpmState(input: {
             "Core publication requires an existing package configured for trusted publishing; plugin token-bootstrap approval does not apply.",
           );
         }
-        const route = published
-          ? resolvePublishedNpmVersionRoute({
+        const { route, supersededBy } = bootstrap
+          ? { route: null, supersededBy: null }
+          : resolveNpmVersionPublicationDecision({
               packageVersion: pkg.version,
               publishPlan: plan,
               distTags: tags,
-            })
-          : undefined;
+              published,
+            });
         // Existing plugin versions take the readback path; this workflow does
         // not repair selectors with its OIDC identity. Surface that owner action.
         const pluginSelectorRepair = !core && route && route !== "npm-readback";
         const gate: ReleasePublishGate = {
           id,
           status: pluginSelectorRepair ? "FAIL" : bootstrap || published ? "WARN" : "PASS",
-          message: `${pkg.packageName}@${pkg.version}: ${bootstrap ? "not visible in npm; possible token bootstrap" : published ? `already published${route ? ` (${route})` : `; ${core ? "core subpackage" : "plugin"} publication skips this version`}` : `not published; ${plan.publishTag} publication planned`}.`,
+          message: `${pkg.packageName}@${pkg.version}: ${bootstrap ? "not visible in npm; possible token bootstrap" : supersededBy ? `already published; dist-tag ${plan.publishTag} stays at ${supersededBy} (superseded)` : published ? `already published (${route})` : `not published; ${plan.publishTag} publication planned`}.`,
           remediation: pluginSelectorRepair
             ? "Repair the reported npm dist-tag through credential-isolated release tooling, then repeat preflight; this plugin publisher only reads back existing versions."
-            : bootstrap
-              ? "If a recent run may have published this package, reconcile its registry readback first. Otherwise verify bootstrap approval eligibility and run the documented read-only whoami probe against the workflow's NPM_TOKEN before dispatch."
-              : published && pkg.packageName === "openclaw"
-                ? "Supply openclaw_npm_resume_run_id for the verified original successful publisher; resume rechecks immutable tarball identity."
-                : published
-                  ? "Retain the exact selection; published package versions are reused."
-                  : "",
+            : supersededBy
+              ? "No publication or dist-tag move; the newer release keeps the selector. Retain the exact selection."
+              : bootstrap
+                ? "If a recent run may have published this package, reconcile its registry readback first. Otherwise verify bootstrap approval eligibility and run the documented read-only whoami probe against the workflow's NPM_TOKEN before dispatch."
+                : published && pkg.packageName === "openclaw"
+                  ? "Supply openclaw_npm_resume_run_id for the verified original successful publisher; resume rechecks immutable tarball identity."
+                  : published
+                    ? "Retain the exact selection; published package versions are reused."
+                    : "",
         };
         return { gate, pkg, bootstrap, published, known: true };
       } catch (error) {

@@ -1,4 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose, sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
@@ -146,20 +147,7 @@ class GroupRequestScheduler {
 const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
 
 function getAccountThrottlers(): Map<string, TelegramAccountThrottler> {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] as
-    | Map<string, TelegramAccountThrottler>
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const created = new Map<string, TelegramAccountThrottler>();
-  globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] = created;
-  return created;
-}
-
-function readNumericId(value: unknown): number | undefined {
-  return parseStrictInteger(value);
+  return resolveGlobalMap(TELEGRAM_ACCOUNT_THROTTLERS_KEY);
 }
 
 function readPayload(payload: unknown): TelegramApiPayload | undefined {
@@ -167,20 +155,20 @@ function readPayload(payload: unknown): TelegramApiPayload | undefined {
 }
 
 function resolveGroupChatKey(payload: TelegramApiPayload): string | undefined {
-  const chatId = readNumericId(payload.chat_id);
+  const chatId = parseStrictInteger(payload.chat_id);
   return chatId !== undefined && chatId < 0 ? String(chatId) : undefined;
 }
 
 function resolveForumLaneKey(payload: TelegramApiPayload): string {
-  const threadId = readNumericId(payload.message_thread_id);
+  const threadId = parseStrictInteger(payload.message_thread_id);
   if (threadId !== undefined) {
     return `topic:${threadId}`;
   }
-  const directTopicId = readNumericId(payload.direct_messages_topic_id);
+  const directTopicId = parseStrictInteger(payload.direct_messages_topic_id);
   if (directTopicId !== undefined) {
     return `direct-topic:${directTopicId}`;
   }
-  const messageId = readNumericId(payload.message_id);
+  const messageId = parseStrictInteger(payload.message_id);
   if (messageId !== undefined) {
     return `message:${messageId}`;
   }

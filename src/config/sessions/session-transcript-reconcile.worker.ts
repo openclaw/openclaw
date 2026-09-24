@@ -42,7 +42,7 @@ type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
 export type SessionTranscriptReconcileWorkerInput =
   | (ReconcileWorkerPlanInput & { mode: "disk"; leaseId: string })
   | { mode: "memory"; sessionIds: string[] }
-  | (ReconcileWorkerOwner & { mode: "release"; leaseId: string });
+  | (ReconcileWorkerOwner & { mode: "release"; leaseId: string; path: string });
 
 export type SessionTranscriptReconcileWorkerTask = {
   input: SessionTranscriptReconcileWorkerInput;
@@ -94,8 +94,12 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
     return undefined;
   }
   const owner = { stateDir: input.stateDir, externallySupervised: input.externallySupervised };
-  if (input.mode === "release" && typeof input.leaseId === "string") {
-    return { ...owner, mode: "release", leaseId: input.leaseId };
+  if (
+    input.mode === "release" &&
+    typeof input.leaseId === "string" &&
+    typeof input.path === "string"
+  ) {
+    return { ...owner, mode: "release", leaseId: input.leaseId, path: input.path };
   }
   if (typeof input.agentId !== "string" || typeof input.path !== "string") {
     return undefined;
@@ -135,7 +139,7 @@ function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
 }
 
 function releaseLease(
-  owner: ReconcileWorkerOwner & { leaseId: string },
+  owner: ReconcileWorkerOwner & { leaseId: string; path: string },
   port: MessagePort,
   readOnlyClosed = false,
 ): void {
@@ -143,7 +147,7 @@ function releaseLease(
   try {
     releaseOpenClawAgentDatabaseLease(
       owner.leaseId,
-      { env: resolveLeaseEnvironment(owner) },
+      { env: resolveLeaseEnvironment(owner), initializationAgentPaths: [owner.path] },
       readOnlyClosed ? "read-only" : undefined,
     );
   } catch (error) {

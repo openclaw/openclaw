@@ -7,12 +7,9 @@ import type {
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerEnvironmentLeasedState, WorkerEnvironmentUnleasedState } from "./state.js";
 
-type WorkerEnvironmentProfileSnapshot = WorkerProfile;
-type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
-type WorkerBootstrapInstallKind = "bundle" | "local";
 export type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
   /** Provenance only; admission authority remains the exact stored build identity. */
-  installKind?: WorkerBootstrapInstallKind;
+  installKind?: "bundle" | "local";
 };
 export type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 export type WorkerEnvironmentPreparation = {
@@ -42,7 +39,7 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
+  profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
   nodeSetupId: string | null;
@@ -59,7 +56,6 @@ type RecordBase = RecordIdentity & {
   idleSinceAtMs: number | null;
   destroyRequestedAtMs: number | null;
 };
-type Ssh = WorkerEnvironmentSshEndpoint;
 type UnleasedRecord = {
   state: WorkerEnvironmentUnleasedState;
   leaseId: null;
@@ -68,11 +64,11 @@ type UnleasedRecord = {
 type LeasedRecord = {
   state: WorkerEnvironmentLeasedState;
   leaseId: string;
-  sshEndpoint: Ssh | null;
+  sshEndpoint: WorkerSshEndpoint | null;
 };
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export type WorkerEnvironmentIntentInput = RecordIdentity & {
   preparation?: WorkerEnvironmentPreparationIntent;
-  profileSnapshot: WorkerEnvironmentProfileSnapshot;
+  profileSnapshot: WorkerProfile;
   provisionOperationId: string;
 };

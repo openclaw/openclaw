@@ -33,6 +33,10 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import {
+  prepareStateDatabaseInitialization,
+  type StateDatabaseInitialization,
+} from "./openclaw-state-db-initialization.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
   assertSupportedStateSchemaVersion,
@@ -70,11 +74,17 @@ export function openUnpublishedStateDatabase(params: {
   env: NodeJS.ProcessEnv;
   busyTimeoutMs: number;
   lockFailureReporting: SqliteLockFailureReporting;
-  ensureSchema: (database: DatabaseSync) => void;
+  ensureSchema: (database: DatabaseSync, initialization: StateDatabaseInitialization) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
   existingSchema?: boolean;
+  initializationAgentPaths?: readonly string[];
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
+  const initialization = prepareStateDatabaseInitialization(
+    params.pathname,
+    params.env,
+    params.initializationAgentPaths,
+  );
   const runtimeDirectory = resolveStateLifecycleRuntimeDirectory();
   const original = params.existingSchema ? statSync(params.pathname) : undefined;
   if (original && !original.isFile()) {
@@ -98,7 +108,7 @@ export function openUnpublishedStateDatabase(params: {
     setSqliteBusyTimeout(db, busyTimeoutMs);
     if (params.existingSchema) {
       assertSameFile();
-      params.ensureSchema(db);
+      params.ensureSchema(db, initialization);
       assertSameFile();
       return {
         db,
@@ -140,7 +150,7 @@ export function openUnpublishedStateDatabase(params: {
           foreignKeys: true,
           synchronous: "NORMAL",
         });
-        params.ensureSchema(db);
+        params.ensureSchema(db, initialization);
         return walMaintenance;
       },
       { lockFailureReporting },

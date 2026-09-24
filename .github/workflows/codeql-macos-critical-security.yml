@@ -20,7 +20,8 @@ permissions:
 jobs:
   prepare-mermaid:
     name: Prepare Mermaid assets
-    if: github.event_name != 'schedule' || github.repository == 'openclaw/openclaw'
+    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
+    if: (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

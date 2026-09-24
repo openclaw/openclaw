@@ -615,7 +615,7 @@ def main():
                 check_cancelled()
                 if not reset:
                     raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                print(f"::warning::{label} attempt {attempt}/5 failed", flush=True)
                 backoff(attempt * 5)
         print(f"{label} failed after 5 attempts", file=sys.stderr)
         raise SystemExit(1)

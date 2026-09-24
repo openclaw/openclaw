@@ -196,7 +196,6 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   );
 
   it("keeps sending typing before Telegram expiry beyond the default pipeline cutoff", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const acceptedTypingAt: number[] = [];
     http.respondToCall = (call) => {
       if (call.method === "sendChatAction" && call.fields.action === "typing") {

@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +39,7 @@ import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
@@ -57,6 +59,72 @@ function context() {
 }
 
 describe("canonical shared-state worker admission", () => {
+  it.each(["key", "value"])("bounds captured environment %s bytes before opening", async (part) => {
+    const padding = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES);
+    const env = {
+      OPENCLAW_STATE_DIR: dirs.make("worker-environment-budget-"),
+      [part === "key" ? padding : "PADDING"]: part === "value" ? padding : "x",
+    };
+    const captured = captureOpenClawStateWorkerContext({ env });
+    await expect(
+      executeOpenClawStateWorker(captured, {
+        type: "flows.list",
+        input: { ownerKey: "agent:main:environment-budget" },
+      }),
+    ).rejects.toMatchObject({ code: "overloaded" });
+    expect(existsSync(captured.admission.databasePath)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "retains selected storage environment before worker initialization (retained: %s)",
+    async (retained) => {
+      const root = dirs.make("worker-selected-storage-");
+      const env = {
+        HOME: path.join(root, "home"),
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(root, "selected.json"),
+        STORE_ROOT: path.join(root, "retained"),
+      };
+      mkdirSync(env.HOME);
+      mkdirSync(env.STORE_ROOT);
+      const agentPath = path.join(env.STORE_ROOT, "openclaw-agent.sqlite");
+      if (retained) {
+        const database = nodeSqlite.openNodeSqliteDatabase(agentPath);
+        database.exec(
+          "CREATE TABLE retained_history (value TEXT); INSERT INTO retained_history VALUES ('kept')",
+        );
+        database.close();
+      }
+      const bytes = retained ? readFileSync(agentPath) : undefined;
+      writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ agents: { entries: { main: { agentDir: "${STORE_ROOT}" } } } }),
+      );
+      const captured = captureOpenClawStateWorkerContext({ env });
+      env.OPENCLAW_CONFIG_PATH = path.join(root, "later.json");
+      env.STORE_ROOT = path.join(root, "later");
+
+      await executeOpenClawStateWorker(captured, {
+        type: "flows.list",
+        input: { ownerKey: "agent:main:journal-freshness" },
+      });
+      expect(existsSync(captured.admission.databasePath)).toBe(true);
+      const database = openOpenClawStateDatabase({
+        path: captured.admission.databasePath,
+        env: captured.environment,
+      });
+      const journal = database.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+        .get();
+      if (retained) {
+        expect(journal).toBeUndefined();
+        expect(readFileSync(agentPath)).toEqual(bytes);
+      } else {
+        expect(journal).toEqual({ name: "agent_deletion_journal" });
+      }
+    },
+  );
+
   it.each(["open", "execute"] as const)(
     "keeps typed %s errors for a reloaded caller of the existing shared worker",
     async (phase) => {

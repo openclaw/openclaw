@@ -39,14 +39,14 @@ export function inspectDatabasePathIdentitySync(
     if (!file.isFile()) {
       return undefined;
     }
-    const canonicalPath = realpathSync(resolvedPath);
+    const canonicalPath = realpathSync.native(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
   const missing: string[] = [];
   let ancestor = resolvedPath;
   while (true) {
     try {
-      const canonicalPath = path.join(realpathSync(ancestor), ...missing);
+      const canonicalPath = path.join(realpathSync.native(ancestor), ...missing);
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
@@ -106,9 +106,17 @@ export async function readDatabasePathIdentity(
   }
 }
 
-export function assertExistingDatabaseIdentity(databasePath: string, expected: string): void {
+export function assertExistingDatabaseIdentity(
+  databasePath: string,
+  expected: string,
+  expectedBirthtime?: string,
+): void {
   const file = statSync(databasePath, { bigint: true });
-  if (!file.isFile() || `file:${file.dev}:${file.ino}` !== expected) {
+  if (
+    !file.isFile() ||
+    `file:${file.dev}:${file.ino}` !== expected ||
+    (expectedBirthtime !== undefined && file.birthtimeNs.toString() !== expectedBirthtime)
+  ) {
     throw new Error("SQLite database file identity changed before existing-only open");
   }
 }

@@ -260,6 +260,12 @@ export class PositionRailGutterController implements ReactiveController {
     }
     const left = viewport.getBoundingClientRect().left + viewport.clientLeft;
     const gutter = inner.getBoundingClientRect().left - left;
+    // Publish the resolved, unscaled column width: a saved percentage cannot be
+    // reused inside a descendant table without changing its containing block.
+    const columnWidth = inner.clientWidth;
+    if (columnWidth > 0) {
+      viewport.style.setProperty("--chat-transcript-column-width", `${columnWidth}px`);
+    }
     // The conversation region stays fixed when its composer resizes the scrollport.
     const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
     viewport.style.setProperty("--chat-position-rail-viewport-height", `${region.clientHeight}px`);

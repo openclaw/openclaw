@@ -24,10 +24,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -35,6 +32,7 @@ import {
   createSessionRowProjectionFixture,
 } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
 async function withStateDirEnv<T>(
   prefix: string,
@@ -55,9 +53,7 @@ import {
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const fixtureStorePath = useSessionStoreFixture("openclaw-session-subagent-list-");
 
 async function seedSessionEntry(
   storePath: string,
@@ -208,7 +204,7 @@ describe("session list subagent metadata", () => {
   test("searches channel-derived display names before row enrichment", async () => {
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:slack:group:general": {
           sessionId: "slack-general-session",
@@ -251,7 +247,7 @@ describe("session list subagent metadata", () => {
     const projection = createSessionRowProjectionFixture({
       cfg,
       store,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
     });
     const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     try {
@@ -306,7 +302,7 @@ describe("session list subagent metadata", () => {
     const listForOwner = async (ownerSessionKey: string) =>
       await listSessionFixture({
         cfg,
-        storePath: "/tmp/sessions.json",
+        storePath: fixtureStorePath(),
         store,
         opts: { spawnedBy: ownerSessionKey },
       });
@@ -322,7 +318,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -412,7 +408,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -479,7 +475,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -565,7 +561,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -654,7 +650,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -743,7 +739,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:subagent:old-parent-filter",
@@ -791,7 +787,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -839,7 +835,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -885,7 +881,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -938,7 +934,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -997,7 +993,7 @@ describe("session list subagent metadata", () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = await listSessionFixture({
             cfg,
-            storePath: "/tmp/sessions.json",
+            storePath: fixtureStorePath(),
             store: {
               [childSessionKey]: {
                 sessionId: "sess-disk-live",
@@ -1043,7 +1039,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1071,7 +1067,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1101,7 +1097,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1110,7 +1106,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1137,7 +1133,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1146,7 +1142,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1182,7 +1178,7 @@ describe("session list subagent metadata", () => {
       const list = (spawnedBy?: string) =>
         listSessionFixture({
           cfg,
-          storePath: "/tmp/sessions.json",
+          storePath: fixtureStorePath(),
           store,
           opts: { spawnedBy },
         });
@@ -1230,7 +1226,7 @@ describe("session list subagent metadata", () => {
 
     const all = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1239,7 +1235,7 @@ describe("session list subagent metadata", () => {
 
     const filtered = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -1296,7 +1292,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1324,7 +1320,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
@@ -1365,7 +1361,7 @@ describe("session list subagent metadata", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: {},
     });
