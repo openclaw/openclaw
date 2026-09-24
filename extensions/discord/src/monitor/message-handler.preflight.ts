@@ -242,7 +242,7 @@ export async function preflightDiscordMessage(
 
   const allowBotsSetting = params.discordConfig?.allowBots ?? true;
   const allowBotsMode =
-    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;

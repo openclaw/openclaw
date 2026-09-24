@@ -139,7 +139,7 @@ describe("Slack bot-message admission", () => {
     "honors explicit allowBots false at the %s scope",
     async (scope) => {
       const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
-      slackCtx.cfg.channels!.slack!.allowBots = scope === "root" ? false : true;
+      slackCtx.cfg.channels!.slack!.allowBots = scope !== "root";
       if (scope === "room") {
         slackCtx.channelsConfig = { C123: { allowBots: false } };
         slackCtx.channelsConfigKeys = ["C123"];
