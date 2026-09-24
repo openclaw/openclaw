@@ -323,6 +323,8 @@ export async function runAfterCompactionHooks(params: {
   messageCountAfter: number;
   tokensAfter?: number;
   compactedCount: number;
+  /** Internal-hook only: native skip completion, distinct from compactedCount 0 after a rewrite. */
+  compactionOutcome?: "skipped";
   sessionFile: string;
   previousSessionId?: string;
   summaryLength?: number;
@@ -344,6 +346,7 @@ export async function runAfterCompactionHooks(params: {
       messageCount: params.messageCountAfter,
       tokenCount: params.tokensAfter,
       compactedCount: params.compactedCount,
+      ...(params.compactionOutcome ? { compactionOutcome: params.compactionOutcome } : {}),
       summaryLength: params.summaryLength,
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
