@@ -953,7 +953,10 @@ class WearChatEventFlowTest {
     }
   }
 
-  private fun inFlightHistory(runId: String?, text: String): JsonObject =
+  private fun inFlightHistory(
+    runId: String?,
+    text: String,
+  ): JsonObject =
     buildJsonObject {
       runId?.let { put("runId", it) }
       put("text", text)
