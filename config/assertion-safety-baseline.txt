@@ -2553,9 +2553,9 @@ src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
-src/gateway/managed-image-attachments.ts	5
-src/gateway/mcp-app-operations.ts	3
-src/gateway/mcp-app-reconstruction.ts	3
+src/gateway/managed-image-attachments.ts	3
+src/gateway/mcp-app-operations.ts	1
+src/gateway/mcp-app-reconstruction.ts	1
 src/gateway/mcp-grant-store.ts	2
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	3
@@ -2571,7 +2571,6 @@ src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2
-src/gateway/portals/portal-service.ts	1
 src/gateway/probe.ts	2
 src/gateway/restart-trace.ts	3
 src/gateway/secret-input-paths.ts	1
@@ -2596,7 +2595,7 @@ src/gateway/server-methods/agent-wait.ts	1
 src/gateway/server-methods/approval-publication.ts	4
 src/gateway/server-methods/approval-request-delivery.ts	1
 src/gateway/server-methods/approval-shared.ts	1
-src/gateway/server-methods/approval.ts	4
+src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
 src/gateway/server-methods/channel-pairing.ts	3
@@ -2652,7 +2651,7 @@ src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/terminal-upload.ts	1
-src/gateway/server-methods/terminal.ts	6
+src/gateway/server-methods/terminal.ts	5
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1

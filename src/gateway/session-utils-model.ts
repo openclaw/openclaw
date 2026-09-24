@@ -534,6 +534,15 @@ export async function resolveGatewayModelSupportsImages(params: {
         normalizeLowercaseStringOrEmpty(params.model),
         normalizeLowercaseStringOrEmpty(modelEntry?.name),
       ].filter(Boolean);
+      const claudeCliSupportsImages =
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        );
       if (modelEntry) {
         if (modelSupportsInput(modelEntry, "image")) {
           return true;
@@ -553,16 +562,7 @@ export async function resolveGatewayModelSupportsImages(params: {
         ) {
           return true;
         }
-        if (
-          normalizedProvider === "claude-cli" &&
-          normalizedCandidates.some(
-            (candidate) =>
-              candidate === "opus" ||
-              candidate === "sonnet" ||
-              candidate === "haiku" ||
-              candidate.startsWith("claude-"),
-          )
-        ) {
+        if (claudeCliSupportsImages) {
           return true;
         }
         if (
@@ -579,16 +579,7 @@ export async function resolveGatewayModelSupportsImages(params: {
         }
         return false;
       }
-      if (
-        normalizedProvider === "claude-cli" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate === "opus" ||
-            candidate === "sonnet" ||
-            candidate === "haiku" ||
-            candidate.startsWith("claude-"),
-        )
-      ) {
+      if (claudeCliSupportsImages) {
         return true;
       }
       if (readOnly && snapshot?.catalogComplete) {
