@@ -422,6 +422,16 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
   contributor today, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
+Sandboxed `web_search` resolves providers through the same trust rule: bundled
+providers and verified official plugin installs are allowed, while third-party
+workspace or external plugins are excluded even when
+`tools.web.search.provider` names one. A sandboxed install that had selected such
+a provider loses `web_search` after upgrade and reports that the configured
+provider is unavailable to sandboxed agents. Restore search by pointing
+`tools.web.search.provider` at an enabled bundled or verified-official provider,
+or by installing a verified official provider; run `openclaw doctor --fix` if the
+selection only survives as stale plugin config.
+
 When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:
 
