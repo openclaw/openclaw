@@ -214,8 +214,15 @@ export const AgentDefaultsBaseSchema = z
           .object({
             /** Enable the pre-compaction memory flush (default: true). */
             enabled: z.boolean().optional(),
-            /** Optional provider/model override used only for pre-compaction memory flush turns. */
-            model: z.string().optional(),
+            /**
+             * Optional model override used only for pre-compaction memory flush turns.
+             *
+             * A bare string resolves exactly: a cheap or local maintenance model never
+             * silently falls through to the paid conversation model. Use the
+             * `{ primary, fallbacks }` form to name the models you accept paying for on
+             * this path instead.
+             */
+            model: AgentModelSchema.optional(),
             /** Run the memory flush when context is within this many tokens of the compaction threshold. */
             softThresholdTokens: z.number().int().nonnegative().optional(),
             /**

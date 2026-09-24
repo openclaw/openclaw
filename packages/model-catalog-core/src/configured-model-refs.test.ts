@@ -36,7 +36,14 @@ describe("configured model refs", () => {
             model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
             utilityModel: "google/gemini-3.1-flash-lite-preview",
             mediaModels: { image: "openai/gpt-image-2" },
-            compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
+            compaction: {
+              memoryFlush: {
+                model: {
+                  primary: "openai/gpt-5.5-mini",
+                  fallbacks: ["anthropic/claude-haiku-4-5", "  ", "openai/gpt-5.4"],
+                },
+              },
+            },
           },
           entries: {
             custom: {
@@ -71,8 +78,18 @@ describe("configured model refs", () => {
       },
       { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2", kind: "literal" },
       {
-        path: "agents.defaults.compaction.memoryFlush.model",
+        path: "agents.defaults.compaction.memoryFlush.model.primary",
         value: "openai/gpt-5.5-mini",
+        kind: "selector",
+      },
+      {
+        path: "agents.defaults.compaction.memoryFlush.model.fallbacks.0",
+        value: "anthropic/claude-haiku-4-5",
+        kind: "selector",
+      },
+      {
+        path: "agents.defaults.compaction.memoryFlush.model.fallbacks.2",
+        value: "openai/gpt-5.4",
         kind: "selector",
       },
       { path: "agents.entries.custom.model", value: "xai/grok-4-fast", kind: "selector" },
