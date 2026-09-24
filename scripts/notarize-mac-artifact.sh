@@ -83,9 +83,11 @@ fi
 
 notary_json_tmp=""
 staple_dir=""
+notary_upload_dir=""
 cleanup() {
   [[ -z "$notary_json_tmp" ]] || rm -f "$notary_json_tmp"
   [[ -z "$staple_dir" ]] || rm -rf "$staple_dir"
+  [[ -z "$notary_upload_dir" ]] || rm -rf "$notary_upload_dir"
   return 0
 }
 trap cleanup EXIT
@@ -147,39 +149,102 @@ else
   exit 1
 fi
 
+retry_notarization() {
+  local phase="$1" started now elapsed remaining timeout delay=5 attempts=0 history_result candidate variant tag source_ref upload_name
+  local id_filter='.id | select(type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))'
+  if [[ "$phase" == "submit" ]]; then
+    # Parallel release variants all use app.zip; bind Apple's history name to the bytes.
+    upload_name="$artifact_sha-$(basename "$ARTIFACT")"
+    notary_upload_dir="$(mktemp -d "$(dirname "$ARTIFACT")/.notary-upload.XXXXXX")"
+    ln "$ARTIFACT" "$notary_upload_dir/$upload_name"
+  fi
+  started="$(date +%s)"
+  while :; do
+    now="$(date +%s)"
+    elapsed=$((now - started))
+    remaining=$((1800 - elapsed))
+    [[ "$remaining" -gt 0 ]] || break
+    if [[ "$phase" == "submit" ]]; then
+      attempts=$((attempts + 1))
+      notary_result="$(xcrun notarytool submit "$notary_upload_dir/$upload_name" "${auth_args[@]}" \
+        --no-wait --no-s3-acceleration --output-format json)" || true
+      notary_id="$(jq -er "$id_filter" <<<"$notary_result" 2>/dev/null)" || notary_id=""
+      [[ -z "$notary_id" ]] || return 0
+      # A lost response can hide a successful upload. Reconcile before resubmitting.
+      history_result="$(xcrun notarytool history "${auth_args[@]}" --output-format json)" || history_result=""
+      now="$(date +%s)"
+      candidate="$(jq -c --arg name "$upload_name" --argjson now "$now" '
+        [.history[:100][] | select(.name == $name) |
+          select((try (.createdDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0) as $created |
+            $created >= ($now - 300) and $created <= $now)] | sort_by(.createdDate) | last
+      ' <<<"$history_result" 2>/dev/null)" || candidate=""
+      notary_id="$(jq -er "$id_filter" <<<"$candidate" 2>/dev/null)" || notary_id=""
+      if [[ -n "$notary_id" ]]; then
+        echo "Recovered notarization submission $notary_id from Apple history." >&2
+        return 0
+      fi
+      [[ "$attempts" -lt 5 ]] || break
+    else
+      timeout="$remaining"
+      [[ "$timeout" -le 60 ]] || timeout=60
+      notary_result="$(xcrun notarytool wait "$notary_id" "${auth_args[@]}" \
+        --timeout "${timeout}s" --output-format json)" || true
+      if jq -e --arg id "$notary_id" '.id == $id and (.status == "Accepted" or .status == "Invalid" or .status == "Rejected")' \
+        <<<"$notary_result" >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+    elapsed=$(($(date +%s) - started))
+    remaining=$((1800 - elapsed))
+    [[ "$remaining" -gt 0 ]] || break
+    [[ "$delay" -le "$remaining" ]] || delay="$remaining"
+    echo "Notarization $phase retry: submission ${notary_id:-unknown}, elapsed ${elapsed}s; retrying in ${delay}s." >&2
+    sleep "$delay"
+    delay=$((delay * 2))
+    [[ "$delay" -le 60 ]] || delay=60
+  done
+  if [[ "$phase" == "submit" ]]; then
+    echo "Error: notarization submit returned no id after $attempts attempts; inspect Apple history before retrying." >&2
+  else
+    variant="${ARTIFACT_VARIANT:-${BUILD_ARCHS:-<variant>}}"
+    [[ "$variant" != "all" ]] || variant=universal
+    tag="${RELEASE_TAG:-${APP_VERSION:+v$APP_VERSION}}"
+    source_ref="$(git -C "$(dirname "$0")/.." rev-parse HEAD 2>/dev/null)" || source_ref="<source-sha>"
+    echo "Error: notarization wait budget exhausted for submission $notary_id; the submission is still valid at Apple (no terminal verdict received). Checkpoint: $SUBMISSION_FILE" >&2
+    printf 'Resume: gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main -f preflight_only=true -f tag=%q -f source_ref=%q -f resume_notarization_run_id=%q -f resume_notarization_run_attempt=%q -f resume_notarization_variant=%q\n' \
+      "${tag:-<tag>}" "$source_ref" "${GITHUB_RUN_ID:-<run>}" "${GITHUB_RUN_ATTEMPT:-<attempt>}" "$variant" >&2
+  fi
+  return 1
+}
+
 echo "🧾 Notarizing: $ARTIFACT"
 if [[ -z "$SUBMISSION_FILE" ]]; then
   notary_result="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" \
-    --wait --no-s3-acceleration --output-format json)"
+    --wait --no-s3-acceleration --output-format json)" || true
 else
   if [[ -z "$checkpoint" ]]; then
-    submission_exit=0
-    submission_result="$(xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" \
-      --no-wait --no-s3-acceleration --output-format json)" || submission_exit=$?
-    notary_id="$(jq -er '.id | select(type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))' <<<"$submission_result")"
+    retry_notarization submit
     checkpoint="$(jq -n --arg name "$(basename "$ARTIFACT")" --arg sha "$artifact_sha" --arg id "$notary_id" \
       '{version: 1, artifactName: $name, artifactSha256: $sha, submissionId: $id}')"
     # Persist before waiting: a transport failure must never create a second submission.
     write_json "$SUBMISSION_FILE" "$checkpoint"
-    [[ "$submission_exit" -eq 0 ]] || exit "$submission_exit"
   fi
   notary_id="$(jq -r .submissionId <<<"$checkpoint")"
   notary_result="$(jq -c '.result // empty' <<<"$checkpoint")"
   if [[ -z "$notary_result" ]]; then
-    wait_exit=0
-    notary_result="$(xcrun notarytool wait "$notary_id" "${auth_args[@]}" --output-format json)" || wait_exit=$?
-    jq -e --arg id "$notary_id" '.id == $id and (.status == "Accepted" or .status == "Invalid" or .status == "Rejected")' \
-      <<<"$notary_result" >/dev/null || { echo "Error: unexpected notarization wait result." >&2; exit 1; }
+    retry_notarization wait
     checkpoint="$(jq --argjson result "$notary_result" '.result = $result' <<<"$checkpoint")"
     write_json "$SUBMISSION_FILE" "$checkpoint"
-    [[ "$wait_exit" -eq 0 ]] || exit "$wait_exit"
   fi
 fi
 printf '%s\n' "$notary_result"
 notary_status="$(jq -r '.status // empty' <<<"$notary_result")"
 notary_id="$(jq -r '.id // empty' <<<"$notary_result")"
 if [[ "$notary_status" != "Accepted" || -z "$notary_id" ]]; then
-  echo "Error: notarization did not return an accepted result with an id." >&2
+  if [[ -n "$notary_id" && ( "$notary_status" == "Invalid" || "$notary_status" == "Rejected" ) ]]; then
+    xcrun notarytool log "$notary_id" "${auth_args[@]}" || true
+  fi
+  echo "Error: notarization $notary_id returned ${notary_status:-no status}; expected Accepted." >&2
   exit 1
 fi
 if [[ -n "$NOTARY_RESULT_FILE" ]]; then
