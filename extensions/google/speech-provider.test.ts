@@ -836,6 +836,7 @@ describe("Google speech provider", () => {
       url: "https://generativelanguage.googleapis.com/v1beta/interactions",
       body: {
         model: "gemini-3.8-flash-lite-tts",
+        store: false,
         input: [
           {
             type: "user_input",

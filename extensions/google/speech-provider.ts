@@ -480,6 +480,8 @@ function buildGoogleInteractionsTtsBody(params: {
   }
   return {
     model: params.model,
+    // Interactions stores requests by default (55 days paid / 1 day free); TTS is stateless.
+    store: false,
     input: [{ type: "user_input", content: [textBlock] }],
     response_format: {
       type: "audio",
