@@ -287,6 +287,81 @@ describe("host-owned workspace access", () => {
 describe("workspace attachment preparation", () => {
   const turn = { timeoutMs: 1_000, media: [{ path: "media://inbound/report.pdf" }] };
 
+  it.each(["binding", "replacement", "caller", "abort"])(
+    "fences local attachment preparation when %s changes during an awaited step",
+    async (change) => {
+      const root = workspace();
+      const controller = new AbortController();
+      let active = true;
+      let release: (() => void) | undefined;
+      const pending = prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        localExecution: { readAllowed: true, maxChars: 60_000 },
+        turn: { ...turn, abortSignal: controller.signal },
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller closed");
+          }
+        },
+      });
+      if (change === "binding" || change === "replacement") {
+        release = registerAgentWorkspaceAccess(root, provider());
+        if (change === "replacement") {
+          release();
+          release = registerAgentWorkspaceAccess(root, provider());
+        }
+      } else if (change === "caller") {
+        active = false;
+      } else {
+        controller.abort(new Error("attachment cancelled"));
+      }
+      try {
+        await expect(pending).rejects.toThrow(
+          change === "caller"
+            ? "caller closed"
+            : change === "abort"
+              ? "attachment cancelled"
+              : "Workspace access changed",
+        );
+      } finally {
+        release?.();
+      }
+    },
+  );
+
+  it.each(["bridge", "ready", "stopped", "declared"])(
+    "never uses local attachment preparation for a %s remote binding",
+    async (state) => {
+      const root = workspace();
+      const prepare = vi.fn(async () => "remote note");
+      const release =
+        state === "declared"
+          ? undefined
+          : registerAgentWorkspaceAccess(root, {
+              ...provider(),
+              ...(state === "bridge" ? {} : { prepareTurnAttachments: prepare }),
+            });
+      if (state === "declared") {
+        declareAgentWorkspaceAccess(root);
+      } else if (state === "stopped") {
+        release?.();
+      }
+      try {
+        await expect(
+          prepareAgentWorkspaceAttachments({
+            workspaceDir: root,
+            localExecution: { readAllowed: true, maxChars: 60_000 },
+            turn,
+            assertCurrent: () => {},
+          }),
+        ).resolves.toBeUndefined();
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        release?.();
+      }
+    },
+  );
+
   it.each([false, true])("preserves bridge-only input handling after stop: %s", async (stopped) => {
     const root = workspace();
     const release = registerAgentWorkspaceAccess(root, provider());

@@ -1,9 +1,15 @@
 import { downloadArtifact } from "../../api/artifact-download.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
@@ -140,4 +146,20 @@ export function initialHistorySubmitState(state: ChatState, unavailable: boolean
     submitDisabledReason: unavailable ? (failure ?? t("chat.thread.loading")) : null,
     submitPending: unavailable && historyLoad.phase !== "failed",
   };
+}
+
+export function resolveChatPaneFollowUpMode(
+  state: Pick<ChatPageHost, "settings" | "chatEffectiveQueueMode" | "chatQueueModeOverride">,
+  session: GatewaySessionRow | undefined,
+  runtimeConfig: ApplicationContext["runtimeConfig"]["state"],
+) {
+  return resolveControlUiFollowUpMode(
+    state.settings.chatFollowUpMode,
+    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfig.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    }),
+  );
 }

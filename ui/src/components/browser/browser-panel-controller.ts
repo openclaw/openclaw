@@ -64,7 +64,7 @@ export class BrowserPanelController implements ReactiveController {
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
-  private readonly input: BrowserPanelInputController;
+  readonly input: BrowserPanelInputController;
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
@@ -704,10 +704,6 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  inspectHighlightRegion() {
-    return this.input.inspectHighlightRegion();
-  }
-
   handleStageClick(event: MouseEvent): void {
     if (!this.native.activeTab) {
       this.input.handleStageClick(event);
@@ -732,35 +728,11 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  handleOverlayPointerDown(event: PointerEvent): void {
-    this.input.handleOverlayPointerDown(event);
-  }
-
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.native.activeTab && this.mode === "inspect") {
       this.native.inspect(event);
     } else {
       this.input.handleOverlayPointerMove(event);
     }
-  }
-
-  handleOverlayPointerUp(event: PointerEvent): void {
-    this.input.handleOverlayPointerUp(event);
-  }
-
-  undoStroke(): void {
-    this.input.undoStroke();
-  }
-
-  clearStrokes(): void {
-    this.input.clearStrokes();
-  }
-
-  async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
-    await this.input.sendAnnotation(params);
-  }
-
-  paintOverlay(): void {
-    this.input.paintOverlay();
   }
 }

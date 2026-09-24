@@ -46,9 +46,6 @@ vi.mock("../../internal-session-effects.js", () => ({
 vi.mock("../requester-cron-authority.js", () => ({
   revokeRequesterCronAuthorityBatch: vi.fn(),
 }));
-vi.mock("./subagent-registry-memory.js", () => ({
-  subagentRuns: { confirmRetirement: vi.fn() },
-}));
 vi.mock("../../../runtime.js", () => ({ defaultRuntime: { log: vi.fn() } }));
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),

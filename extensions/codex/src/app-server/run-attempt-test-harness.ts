@@ -340,13 +340,21 @@ export function createNativeRunParams(
 /** Replaces the lightweight default with the admitted host boundary used in production. */
 export async function bindProductionHarnessHostCapabilitiesForTest(
   params: EmbeddedRunAttemptParams,
+  operatorSource?: Parameters<
+    typeof createAgentHarnessHostCapabilitiesForTest
+  >[0]["operatorSource"],
 ): Promise<() => void> {
   const factory = getCodexTestToolFactory(params);
   if (factory) {
     await setHostToolFactoryForTest(params, factory);
   }
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
-  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+  const host = await createAgentHarnessHostCapabilitiesForTest({
+    attempt,
+    pluginId: "codex",
+    nativeModelPolicySupport: "exact",
+    operatorSource,
+  });
   params.hostCapabilities = host.capabilities;
   let active = true;
   const close = () => {
@@ -411,6 +419,20 @@ export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.te
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
   const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
   return createThreadStartResult(threadId, cwd);
+}
+
+export function createThreadStartRequest(threadId = "thread-1") {
+  const responses: Record<string, unknown> = {
+    "configRequirements/read": { requirements: null },
+    "config/read": { config: {}, origins: {}, layers: [] },
+    "thread/start": threadStartResult(threadId),
+  };
+  return vi.fn(async (method: string, _params?: unknown) => {
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return responses[method];
+  });
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {

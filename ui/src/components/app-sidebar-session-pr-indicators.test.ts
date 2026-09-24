@@ -14,10 +14,16 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
+const testHosts = new Set<TestHost>();
+
 class TestHost implements ReactiveControllerHost {
   readonly controllers: ReactiveController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
+
+  constructor() {
+    testHosts.add(this);
+  }
 
   addController(controller: ReactiveController): void {
     this.controllers.push(controller);
@@ -120,6 +126,12 @@ function createGatewayHarness() {
 }
 
 afterEach(() => {
+  for (const host of testHosts) {
+    for (const controller of host.controllers) {
+      controller.hostDisconnected?.();
+    }
+  }
+  testHosts.clear();
   document.querySelectorAll(LIFECYCLE_HOST_TAG).forEach((host) => host.remove());
   vi.useRealTimers();
 });

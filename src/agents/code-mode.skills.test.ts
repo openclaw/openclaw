@@ -41,9 +41,9 @@ describe("Code Mode skills and read tools", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("keeps Code Mode skill parsing aligned with the production prompt renderer", async () => {

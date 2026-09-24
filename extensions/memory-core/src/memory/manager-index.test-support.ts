@@ -7,11 +7,12 @@ import type {
 } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -391,6 +392,7 @@ export function createManagerIndexFixture(deps: {
   let workspace = "";
   let memory = "";
   let state: OpenClawTestState;
+  let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
 
   const resetManager = (manager: MemoryIndexManager): void => {
@@ -525,6 +527,20 @@ export function createManagerIndexFixture(deps: {
     return manager.status().fts?.available ? manager : null;
   };
 
+  beforeAll(async () => {
+    workerState = await createOpenClawTestState({
+      prefix: "openclaw-mem-worker-fixture-",
+      layout: "state-only",
+      applyEnv: false,
+    });
+    // A file-owned store keeps shared SQLite workers available across complete case cleanup.
+    await createPluginStateKeyedStoreForTests<boolean>("memory-core", {
+      namespace: "index-fixture-worker",
+      maxEntries: 1,
+      env: workerState.env,
+    }).register("ready", true);
+  });
+
   afterEach(async () => {
     vi.useRealTimers();
     await Promise.all(Array.from(managers).map((manager) => manager.close()));
@@ -533,6 +549,10 @@ export function createManagerIndexFixture(deps: {
     resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managers.clear();
+  });
+
+  afterAll(async () => {
+    await workerState?.cleanup();
   });
 
   beforeEach(async () => {

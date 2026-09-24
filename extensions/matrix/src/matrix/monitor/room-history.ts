@@ -17,6 +17,7 @@
  */
 
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { setBoundedMap } from "./bounded-cache.js";
 
 /** Maximum entries retained per room (hard cap to bound memory). */
 const DEFAULT_MAX_QUEUE_SIZE = 200;
@@ -74,19 +75,13 @@ export function createRoomHistoryTracker(
   const agentWatermarks = new Map<string, number>();
   let nextQueueGeneration = 1;
 
-  function clearRoomWatermarks(roomId: string): void {
-    for (const key of agentWatermarks.keys()) {
-      const parsed = JSON.parse(key) as { roomId?: string } | null;
-      if (parsed?.roomId === roomId) {
-        agentWatermarks.delete(key);
-      }
-    }
-  }
-
-  function clearThreadWatermarks(roomId: string, threadRootId: string): void {
+  function clearWatermarks(roomId: string, threadRootId?: string): void {
     for (const key of agentWatermarks.keys()) {
       const parsed = JSON.parse(key) as { roomId?: string; scope?: string } | null;
-      if (parsed?.roomId === roomId && parsed.scope === threadRootId) {
+      if (
+        parsed?.roomId === roomId &&
+        (threadRootId === undefined || parsed.scope === threadRootId)
+      ) {
         agentWatermarks.delete(key);
       }
     }
@@ -114,7 +109,7 @@ export function createRoomHistoryTracker(
         const oldest = roomQueues.keys().next().value;
         if (oldest !== undefined) {
           roomQueues.delete(oldest);
-          clearRoomWatermarks(oldest);
+          clearWatermarks(oldest);
         }
       }
     }
@@ -134,7 +129,7 @@ export function createRoomHistoryTracker(
         const oldest = roomQueue.threadQueues.keys().next().value;
         if (oldest !== undefined) {
           roomQueue.threadQueues.delete(oldest);
-          clearThreadWatermarks(roomId, oldest);
+          clearWatermarks(roomId, oldest);
         }
       }
     }
@@ -188,13 +183,7 @@ export function createRoomHistoryTracker(
       // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
       agentWatermarks.delete(key);
     }
-    agentWatermarks.set(key, nextSnapshotIdx);
-    if (agentWatermarks.size > maxWatermarkEntries) {
-      const oldest = agentWatermarks.keys().next().value;
-      if (oldest !== undefined) {
-        agentWatermarks.delete(oldest);
-      }
-    }
+    setBoundedMap(agentWatermarks, key, nextSnapshotIdx, maxWatermarkEntries);
   }
 
   function markConsumedAfterReservedGap(
@@ -223,13 +212,7 @@ export function createRoomHistoryTracker(
       // Refresh insertion order so capped eviction keeps actively retried events hot.
       queue.preparedTriggers.delete(retryKey);
     }
-    queue.preparedTriggers.set(retryKey, prepared);
-    if (queue.preparedTriggers.size > maxPreparedTriggerEntries) {
-      const oldest = queue.preparedTriggers.keys().next().value;
-      if (oldest !== undefined) {
-        queue.preparedTriggers.delete(oldest);
-      }
-    }
+    setBoundedMap(queue.preparedTriggers, retryKey, prepared, maxPreparedTriggerEntries);
     return prepared;
   }
 
@@ -297,6 +280,23 @@ export function createRoomHistoryTracker(
     return prepared;
   }
 
+  function finalizePending(
+    roomId: string,
+    slot: ReservedHistorySlot,
+    entry: QueuedHistoryEntry,
+    threadRootId?: string,
+  ): void {
+    const queue = findScopedQueue(roomId, threadRootId);
+    if (!queue || queue.generation !== slot.queueGeneration) {
+      return;
+    }
+    const rel = slot.slotIdx - queue.baseIndex;
+    if (rel < 0 || rel >= queue.entries.length) {
+      return;
+    }
+    queue.entries[rel] = entry;
+  }
+
   return {
     recordPending(roomId: string, entry: HistoryEntry, threadRootId?: string) {
       const queue = getScopedQueue(roomId, threadRootId);
@@ -313,49 +313,23 @@ export function createRoomHistoryTracker(
       };
     },
 
-    finalizePending(
-      roomId: string,
-      slot: ReservedHistorySlot,
-      entry: HistoryEntry,
-      threadRootId?: string,
-    ) {
-      const queue = findScopedQueue(roomId, threadRootId);
-      if (!queue || queue.generation !== slot.queueGeneration) {
-        return;
-      }
-      const rel = slot.slotIdx - queue.baseIndex;
-      if (rel < 0 || rel >= queue.entries.length) {
-        return;
-      }
-      queue.entries[rel] = entry;
-    },
+    finalizePending,
 
     discardPending(roomId: string, slot: ReservedHistorySlot, threadRootId?: string) {
-      const queue = findScopedQueue(roomId, threadRootId);
-      if (!queue || queue.generation !== slot.queueGeneration) {
-        return;
-      }
-      const rel = slot.slotIdx - queue.baseIndex;
-      if (rel < 0 || rel >= queue.entries.length) {
-        return;
-      }
-      queue.entries[rel] = {
-        sender: "",
-        body: "",
-        messageId: undefined,
-        discarded: true,
-      };
+      finalizePending(
+        roomId,
+        slot,
+        {
+          sender: "",
+          body: "",
+          messageId: undefined,
+          discarded: true,
+        },
+        threadRootId,
+      );
     },
 
-    prepareTrigger(
-      agentId: string,
-      roomId: string,
-      limit: number,
-      entry: HistoryEntry,
-      threadRootId?: string,
-    ) {
-      return prepareTriggerInternal(agentId, roomId, limit, entry, threadRootId);
-    },
+    prepareTrigger: prepareTriggerInternal,
 
     prepareReservedTrigger(
       agentId: string,

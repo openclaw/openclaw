@@ -10,6 +10,7 @@ import { registerDiagnosticToolExecutionDeadline } from "../infra/diagnostic-too
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
+import { bindCreatedInputMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
@@ -26,6 +27,7 @@ type InProcessGatewayDispatchOptions = {
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   sessionMutationCommitGuard?: () => void;
+  assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
@@ -199,31 +201,36 @@ export async function dispatchGatewayRequestInProcessRaw(
     entry?.assertOpen();
     const execution = options.context
       .trackExecution(() =>
-        handleGatewayRequest({
-          req,
-          requestEntry: entry,
-          client: options.client,
-          isWebchatConnect: options.isWebchatConnect ?? (() => false),
-          respond: (ok, payload, error, meta) => {
-            const response = { ok, payload, error, ...(meta ? { meta } : {}) };
-            if (!firstResponse) {
-              firstResponse = response;
-              resolveFirstResponse?.(response);
-              return;
-            }
-            if (!finalResponse) {
-              finalResponse = response;
-              resolveFinalResponse?.(response);
-            }
-          },
-          context: options.context,
-          methodRegistry: options.methodRegistry,
-          sessionMutationCommitGuard: options.sessionMutationCommitGuard,
-          ...(options.hasCurrentClientAuthority
-            ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
-            : {}),
-          ...(options.signal ? { signal: options.signal } : {}),
-        })
+        handleGatewayRequest(
+          bindCreatedInputMutationAuthority(
+            {
+              req,
+              requestEntry: entry,
+              client: options.client,
+              isWebchatConnect: options.isWebchatConnect ?? (() => false),
+              respond: (ok, payload, error, meta) => {
+                const response = { ok, payload, error, ...(meta ? { meta } : {}) };
+                if (!firstResponse) {
+                  firstResponse = response;
+                  resolveFirstResponse?.(response);
+                  return;
+                }
+                if (!finalResponse) {
+                  finalResponse = response;
+                  resolveFinalResponse?.(response);
+                }
+              },
+              context: options.context,
+              methodRegistry: options.methodRegistry,
+              sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+              ...(options.hasCurrentClientAuthority
+                ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
+                : {}),
+              ...(options.signal ? { signal: options.signal } : {}),
+            },
+            options.assertCreatedInputSourceCurrent,
+          ),
+        )
           .then(() => {
             if (!firstResponse) {
               rejectFirstResponse?.(

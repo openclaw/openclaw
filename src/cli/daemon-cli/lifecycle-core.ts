@@ -215,7 +215,10 @@ export async function runServiceStart(params: {
 }) {
   const json = Boolean(params.opts?.json);
   const serviceCommand = formatCliCommand(`openclaw ${params.serviceNoun.toLowerCase()}`);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "start", json });
+  const { stdout, warnings, emitMessage, fail } = createDaemonActionContext({
+    action: "start",
+    json,
+  });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
   const emitStarted = async (result: {
     loaded: boolean;
@@ -223,16 +226,13 @@ export async function runServiceStart(params: {
     reportedWarnings?: readonly string[];
   }) => {
     await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
-    emit({
+    emitMessage({
       ok: true,
       result: "started",
       message: result.message,
       warnings: mergeWarnings(warnings, result.reportedWarnings),
       service: buildDaemonServiceSnapshot(params.service, result.loaded),
     });
-    if (!json && result.message) {
-      defaultRuntime.log(result.message);
-    }
   };
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -312,9 +312,8 @@ export async function runServiceStart(params: {
         serviceNoun: params.serviceNoun,
         service: params.service,
         pid: startResult.state.runtime?.pid,
-        json,
         warnings,
-        emit,
+        emitMessage,
       });
       return;
     }
@@ -367,7 +366,7 @@ export async function runServiceStop(params: {
   stopWhenNotLoaded?: boolean;
 }) {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
+  const { stdout, emit, emitMessage, fail } = createDaemonActionContext({ action: "stop", json });
   const gatewayStopAudit = createServiceLifecycleMutationAudit({
     serviceNoun: params.serviceNoun,
     action: "stop",
@@ -388,54 +387,29 @@ export async function runServiceStop(params: {
       return;
     }
   }
-  if (!loaded) {
-    if (params.stopWhenNotLoaded) {
-      try {
-        await params.service.stop({
-          env: process.env,
-          stdout,
-          disable: params.opts?.disable,
-          onMutation: gatewayStopAudit,
-        });
-      } catch (err) {
-        fail(`${params.serviceNoun} stop failed: ${String(err)}`);
-        return;
-      }
-      emit({
-        ok: true,
-        result: "stopped",
-        service: buildDaemonServiceSnapshot(params.service, false),
-      });
-      return;
-    }
+  if (!loaded && !params.stopWhenNotLoaded) {
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
-        emit({
+        emitMessage({
           ok: true,
           result: handled.result,
           message: handled.message,
           warnings: handled.warnings,
           service: buildDaemonServiceSnapshot(params.service, false),
         });
-        if (!json && handled.message) {
-          defaultRuntime.log(handled.message);
-        }
         return;
       }
     } catch (err) {
       fail(`${params.serviceNoun} stop failed: ${String(err)}`);
       return;
     }
-    emit({
+    emitMessage({
       ok: true,
       result: "not-loaded",
       message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
       service: buildDaemonServiceSnapshot(params.service, loaded),
     });
-    if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-    }
     return;
   }
   try {
@@ -450,12 +424,14 @@ export async function runServiceStop(params: {
     return;
   }
 
-  const finalLoaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-    inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
-  });
+  const finalLoaded = loaded
+    ? await resolveServiceLoadedOrFail({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        fail,
+        inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
+      })
+    : false;
   if (finalLoaded === null) {
     return;
   }
@@ -484,7 +460,10 @@ export async function runServiceRestart(params: {
   ) => Promise<ServiceRecoveryResult<"restarted"> | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "restart", json });
+  const { stdout, warnings, emitMessage, fail } = createDaemonActionContext({
+    action: "restart",
+    json,
+  });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
   const restartIntent = params.opts?.restartIntent;
   const gatewayRestartAudit = createServiceLifecycleMutationAudit({
@@ -505,8 +484,7 @@ export async function runServiceRestart(params: {
     serviceLoaded: boolean,
   ) => {
     return emitDaemonScheduledRestart({
-      json,
-      emit,
+      emitMessage,
       result: restartStatus.daemonActionResult,
       message: restartStatus.message,
       service: params.service,
@@ -700,17 +678,13 @@ export async function runServiceRestart(params: {
         }
       }
     }
-    emit({
+    emitMessage({
       ok: true,
       result: "restarted",
       message: handledRecovery?.message ?? handledRepair?.message,
       service: buildDaemonServiceSnapshot(params.service, loaded || recoveredLoadedState === true),
       warnings: warnings.length ? warnings : undefined,
     });
-    const actionMessage = handledRecovery?.message ?? handledRepair?.message;
-    if (!json && actionMessage) {
-      defaultRuntime.log(actionMessage);
-    }
     return true;
   } catch (err) {
     // A non-exiting runtime unwinds after emission; never replace that result.

@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "0.19.7",
+    "@anthropic-ai/vertex-sdk": "0.19.9",
     "google-auth-library": "11.0.2",
     "undici": "8.10.2"
   },

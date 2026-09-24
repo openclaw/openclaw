@@ -30,6 +30,14 @@ Queries reuse a process for each database, with at most two processes alive.
 Idle processes retire after 30 minutes or when another database needs capacity.
 Each query reopens the database so committed updates and replaced indexes remain visible.
 
+Keyword retrieval, recall metadata, curated trigger and project candidates, and
+source timestamps use the memory search worker. The Gateway awaits projected
+rows and applies the same ranking. Session-only searches retain their final
+metadata and timestamp reads on the caller because an additional worker request
+increased measured latency; other retrieval reads run off the Gateway event loop. Searches retain their index generation until the worker closes its
+reader; recall metadata is read after candidate retrieval so forgotten chunks
+are excluded. This does not change stored data, configuration, or upgrade behavior.
+
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
 partial-result warning. Session transcript hits require fresh visibility checks

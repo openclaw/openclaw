@@ -4,6 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -647,6 +648,49 @@ describe("typed in-process agent authorization", () => {
       },
     );
   });
+
+  it.each(["operator.write", "operator.sessions.write"] as const)(
+    "retains inherited System %s when a native agent launch has a broader ambient client",
+    async (sourceScope) => {
+      const owner = createOperatorClient({
+        profileId: "system-launch",
+        scopes: ["operator.admin"],
+      });
+      owner.internal = { operatorRoleActor: { kind: "system" } };
+      const context = createContext();
+      const result = { runId: "system-source-ceiling", status: "accepted" };
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.authenticatedUserProfile).toBeUndefined();
+        expect(principal.internal.operatorRoleActor).toEqual({ kind: "system" });
+        expect(principal.connect.scopes).toEqual(["operator.write"]);
+        io.emitAcceptance([true, result, undefined]);
+      });
+      const launch = withPluginRuntimeGatewayRequestScope(
+        { client: owner, context, isWebchatConnect: () => false },
+        () =>
+          withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: owner.authenticatedUserProfile!,
+              operatorRoleActor: { kind: "system" },
+              scopes: [sourceScope],
+            },
+            () =>
+              callAgentToolGatewayRequest({
+                method: "agent",
+                agentRunTracking: "native_subagent",
+                params: { message: "run child", idempotencyKey: result.runId },
+              }),
+          ),
+      );
+      if (sourceScope === "operator.write") {
+        await expect(launch).resolves.toEqual(result);
+        expect(startTurn).toHaveBeenCalledOnce();
+      } else {
+        await expect(launch).rejects.toThrow("missing scope: operator.write");
+        expect(startTurn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("rejects tracked agent launches when a scoped operator identity was dropped", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

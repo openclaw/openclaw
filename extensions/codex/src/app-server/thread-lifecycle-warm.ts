@@ -14,6 +14,11 @@ import {
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  assertCodexInferenceRouteConfig,
+  getCodexInferenceThread,
+  getCodexInferenceThreadQualification,
+} from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
@@ -202,8 +207,15 @@ export async function tryReuseCodexLiveThread(
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
-      await params.buildFinalConfigPatch?.({ action: "resume", binding });
+      await params.buildFinalConfigPatch?.({
+        action: "resume",
+        binding,
+        ...(options.nativeModelInputTools
+          ? { nativeModelInputTools: options.nativeModelInputTools }
+          : {}),
+      });
       throwIfAborted();
+      params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
     }
     return { kind: "rotate" };
@@ -277,6 +289,9 @@ export async function tryReuseCodexLiveThread(
     const prebuiltFinalConfigPatch = (await params.buildFinalConfigPatch?.({
       action: "resume",
       binding,
+      ...(options.nativeModelInputTools
+        ? { nativeModelInputTools: options.nativeModelInputTools }
+        : {}),
     })) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -318,6 +333,16 @@ export async function tryReuseCodexLiveThread(
         disableLoginShell: params.disableLoginShell,
       }),
     );
+    assertCodexInferenceRouteConfig(
+      params.client,
+      params.inferenceRoute,
+      resumeParams.config,
+      resumeParams.modelProvider ??
+        (binding.preserveNativeModel
+          ? nativeThread?.modelProvider?.trim() || binding.modelProvider
+          : undefined),
+      params.inferenceProviderRoutes,
+    );
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
       : fingerprintCodexThreadConfig(
@@ -339,7 +364,17 @@ export async function tryReuseCodexLiveThread(
           resumeAuthProfileId,
           dynamicToolsFingerprint,
         );
-    if (incognito && retainedThread.ephemeralPolicy !== resumeParams.developerInstructions) {
+    if (
+      incognito &&
+      (retainedThread.ephemeralPolicy !== resumeParams.developerInstructions ||
+        getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
+        [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
+          (provider) =>
+            !getCodexInferenceThreadQualification(params.client, binding.threadId)?.hasProvider(
+              provider,
+            ),
+        ))
+    ) {
       preserveSubscription = true;
       throw new CodexIncognitoPolicyChangeError();
     }

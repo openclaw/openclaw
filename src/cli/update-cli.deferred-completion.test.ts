@@ -141,11 +141,12 @@ describe("update-cli child-owned deferred completion", () => {
   });
 
   it("completes convergence-only post-core changes for a legacy parent", async () => {
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
       }),
-    );
+      config: cfg,
+    }));
 
     await runPostCoreCommand({ restart: false, json: true });
 
@@ -359,10 +360,11 @@ describe("update-cli child-owned deferred completion", () => {
         fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
         return { config: current, changed: true, outcomes: [repaired] };
       });
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
         ...postCoreConvergenceResult(),
         installRecords: records,
-      });
+        config: cfg,
+      }));
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 

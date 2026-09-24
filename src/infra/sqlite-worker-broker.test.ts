@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -5,7 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as logging from "../logging/logger.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  openSqliteWorkerStore,
+  runSqliteWorkerStoreOperation,
+  runSqliteWorkerStoreWrite,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -47,6 +53,52 @@ function read(store: SqliteWorkerStore<FixtureOperations>) {
 }
 
 const nodeIt = process.versions.bun ? it.skip : it;
+
+it.each([
+  { writeAdmission: false, revoke: false },
+  { writeAdmission: false, revoke: true },
+  { writeAdmission: true, revoke: false },
+  { writeAdmission: true, revoke: true },
+])(
+  "retains queued command context and live ownership (write admission: $writeAdmission, revoke: $revoke)",
+  async ({ writeAdmission, revoke }) => {
+    const file = databasePath();
+    const store = await open(file);
+    const caller = new AsyncLocalStorage<{ current: boolean }>();
+    const owner = { current: true };
+    const revoked = new Error("Queued command owner was revoked");
+    const assertCurrent = () => {
+      if (caller.getStore() !== owner) {
+        throw new Error("Queued command lost its caller context");
+      }
+      if (!owner.current) {
+        throw revoked;
+      }
+    };
+    const write = (scope: Pick<SqliteWorkerStore<FixtureOperations>, "execute">) =>
+      scope.execute({ type: "append", input: { value: "queued" } });
+
+    // Both commands enqueue before a Worker reply can dispatch the guarded follower.
+    const predecessor = append(store, "before");
+    const queued = caller.run(owner, () =>
+      writeAdmission
+        ? runSqliteWorkerStoreWrite(store, write, assertCurrent, [file])
+        : runSqliteWorkerStoreOperation(store, write, undefined, assertCurrent),
+    );
+    const outcomes = Promise.allSettled([predecessor, queued]);
+    owner.current = !revoke;
+
+    const [first, second] = await outcomes;
+    expect(first.status).toBe("fulfilled");
+    if (revoke) {
+      expect(second).toEqual({ status: "rejected", reason: revoked });
+    } else {
+      expect(second.status).toBe("fulfilled");
+    }
+    expect(await read(store)).toEqual(revoke ? ["before"] : ["before", "queued"]);
+    expect(caller.getStore()).toBeUndefined();
+  },
+);
 
 it.each(["abort", "drain", "timeout"] as const)(
   "releases admission waiters on %s without losing accepted writes",

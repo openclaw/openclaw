@@ -24,30 +24,33 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   type MigrationArtifactIdentity,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+} from "../infra/session-sqlite-migration-issues.js";
+import {
+  HISTORICAL_IMPORT_REASON,
   canonicalMigrationFilePath,
   assertSafeSessionSqliteMigrationDirectory,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
   readTranscriptFingerprint,
   type ReadOnlySqliteValidationSnapshot,
-} from "./doctor-session-sqlite-readers.js";
-import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
+} from "../infra/session-sqlite-migration-readers.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
-  isSessionSqliteMigrationWarning,
-  type DoctorSessionSqliteIssue,
-} from "./doctor-session-sqlite-types.js";
+  collectRecoveryInventory,
+  type RecoveryArtifactReference,
+} from "./doctor-session-sqlite-recovery-inventory.js";
 
-export const HISTORICAL_IMPORT_REASON = "indexed-historical-primary";
 export type LegacySessionRecord = {
   entry: SessionEntry;
   sessionKey: string;
@@ -73,26 +76,12 @@ export type HistoricalArchiveSources = Map<
 export function collectHistoricalArchiveSources(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): HistoricalArchiveSources {
+}) {
   const result: HistoricalArchiveSources = new Map();
   const inventory = collectRecoveryInventory(params);
+  const claims = new Map<string, RecoveryArtifactReference[][]>();
   for (const refs of inventory.references.values()) {
-    if (
-      refs.some(
-        (ref) =>
-          !ref.trusted || ref.consumedByRestore || ref.move.artifact?.disposal.state !== "retained",
-      )
-    ) {
-      continue;
-    }
-    // An acknowledged import stays acknowledged after explicit user deletion. Never resurrect it.
-    if (
-      refs.some(
-        ({ target, move }) =>
-          move.artifact?.reason === HISTORICAL_IMPORT_REASON &&
-          target.completedMoves.some((completed) => completed.archivePath === move.archivePath),
-      )
-    ) {
+    if (refs.some((ref) => !ref.trusted || ref.consumedByRestore)) {
       continue;
     }
     const first = refs[0]!;
@@ -101,6 +90,7 @@ export function collectHistoricalArchiveSources(params: {
         ({ target, move }) =>
           target.agentId === first.target.agentId &&
           target.storePath === first.target.storePath &&
+          target.sqlitePath === first.target.sqlitePath &&
           move.sourcePath === first.move.sourcePath,
       )
     ) {
@@ -123,11 +113,47 @@ export function collectHistoricalArchiveSources(params: {
     ) {
       continue;
     }
+    if (first.move.kind === "unreferenced-jsonl") {
+      const identity = first.move.artifact!.identity;
+      const key = JSON.stringify([
+        first.target.agentId,
+        first.target.storePath,
+        first.target.sqlitePath,
+        first.move.sourcePath,
+        identity.size,
+        identity.sha256,
+      ]);
+      claims.set(key, [...(claims.get(key) ?? []), refs]);
+    }
+    if (refs.some((ref) => ref.move.artifact?.disposal.state !== "retained")) {
+      continue;
+    }
+    // An acknowledged import stays acknowledged after explicit user deletion. Never resurrect it.
+    if (
+      refs.some(
+        ({ target, move }) =>
+          move.artifact?.reason === HISTORICAL_IMPORT_REASON &&
+          target.completedMoves.some((completed) => completed.archivePath === move.archivePath),
+      )
+    ) {
+      continue;
+    }
     const sources = result.get(first.target.storePath) ?? { transcripts: [], stores: [] };
     (first.move.kind === "legacy-store" ? sources.stores : sources.transcripts).push(first.move);
     result.set(first.target.storePath, sources);
   }
-  return result;
+  if (
+    inventory.report.artifacts.some((item) =>
+      ["unreadable-manifest", "manifest-directory-alias"].includes(item.reason),
+    )
+  ) {
+    claims.clear();
+  }
+  return {
+    sources: result,
+    claims: [...claims.values()].filter((group) => group.length > 1),
+    inventory,
+  };
 }
 
 /** Archived registries supply lineage only; never replay their entries over live SQLite state. */
@@ -325,13 +351,21 @@ export async function discoverLegacyHistoricalTranscripts(params: {
     }
   }
   for (const [sessionId, records] of candidates) {
-    if (records.length > 1) {
+    const first = records[0]!;
+    const identicalArchives = records.every(
+      (record) =>
+        record.historical?.archiveMove &&
+        record.historical.originalPath === first.historical!.originalPath &&
+        record.historical.identity.size === first.historical!.identity.size &&
+        record.historical.identity.sha256 === first.historical!.identity.sha256,
+    );
+    if (records.length > 1 && !identicalArchives) {
       params.issues.push({
         code: "historical_transcript_deferred",
         message: `${sessionId}: multiple primary files claim this identity; originals retained without importing`,
       });
     } else {
-      discovered.push(records[0]!);
+      discovered.push(first);
     }
   }
   return discovered;
@@ -439,6 +473,7 @@ export function gatherLegacyArchiveCoverage(
     }
   }
   return {
+    knownTargets,
     selectedStorePaths,
     referencedPaths,
     retainedPaths,

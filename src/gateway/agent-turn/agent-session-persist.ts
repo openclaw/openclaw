@@ -84,6 +84,7 @@ type AgentSessionPersistResult = {
 
 export async function persistAgentSessionPhase(params: {
   assertAdmissionCurrent?: () => void;
+  onSessionCommitted?: (entry: SessionEntry) => void;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   storePath: string;
@@ -415,6 +416,7 @@ export async function persistAgentSessionPhase(params: {
           },
           {
             fallbackEntry: params.entry ?? mergeSessionEntry(undefined, patchBuild.patch),
+            onCommitted: params.onSessionCommitted,
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,

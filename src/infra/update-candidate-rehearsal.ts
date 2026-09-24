@@ -6,6 +6,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -33,7 +34,8 @@ export type UpdateCandidateRehearsal = {
   port: number;
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
-  cleanup: () => Promise<void>;
+  pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
+  cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
 function isolatedConfig(
@@ -188,6 +190,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const {
     stateDir: tempDir,
     pluginPaths,
+    pluginCodeLinks,
     snapshotCapacity,
     cleanupDirectories,
   } = await prepareUpdateCandidateStateSnapshot({
@@ -198,8 +201,10 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
-  const cleanup = async () => {
+  const cleanup = async (assertDirectoryCurrent?: (directory: string) => void) => {
     for (const directory of cleanupDirectories) {
+      // A receiving owner can retain exact physical custody across inventory/Doctor.
+      assertDirectoryCurrent?.(directory);
       await fs.rm(directory, { recursive: true, force: true });
     }
   };
@@ -230,6 +235,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
       port,
       snapshotCapacity,
       cleanupDirectories,
+      pluginCodeLinks,
       cleanup,
     };
   } catch (error) {

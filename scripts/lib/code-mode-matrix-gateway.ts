@@ -1,29 +1,60 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
+import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
+import { resolveCodeModeConfig } from "../../src/agents/code-mode-runtime.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { mergeDeep } from "../../src/infra/deep-merge.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
 import {
   createGatewayMatrixFixture,
   createGatewayMatrixPluginManifest,
-  type GatewayMatrixTask,
+  createGatewayMatrixPluginSource,
+  type GatewayMatrixTask as GatewayMatrixContractTask,
+  type GatewayMatrixFixture,
 } from "./code-mode-matrix-gateway-fixtures.ts";
 import {
-  readSqliteTranscriptPayload,
-  sqliteTranscriptPayloadColumns,
-} from "./sqlite-transcript-payload.mjs";
+  createMatrixPerformanceFixture,
+  isMatrixPerformanceTask,
+  type MatrixPerformanceTask,
+} from "./code-mode-matrix-performance-fixtures.ts";
+import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
+import {
+  classifyCodeModeMatrixProviderFailure,
+  matrixModelConfig,
+  matrixProviderEnv,
+} from "./code-mode-matrix-provider.ts";
+import {
+  readMatrixSessionLedger,
+  captureMatrixLedgerBoundary,
+  selectMatrixLedgerRows,
+  collectMatrixUsage,
+  type MatrixLedgerBoundary,
+  type MatrixSessionLedger,
+  type MatrixUsageAccounting,
+} from "./code-mode-matrix-usage.ts";
+import { redactForDevToolLog } from "./dev-tooling-safety.ts";
+
+export type GatewayMatrixTask = GatewayMatrixContractTask | MatrixPerformanceTask;
 
 type RecordValue = Record<string, unknown>;
-type ToolCall = { id: string; name: string; args: RecordValue; eventIndex: number };
+type ToolCall = {
+  id: string;
+  name: string;
+  args: RecordValue;
+  eventIndex: number;
+  sessionKey?: string;
+};
 type ToolOutcome = {
   id: string;
   name: string;
@@ -31,6 +62,7 @@ type ToolOutcome = {
   content: unknown;
   isError: boolean;
   eventIndex: number;
+  sessionKey?: string;
 };
 type ToolActivity = {
   name: string;
@@ -39,11 +71,103 @@ type ToolActivity = {
   content?: unknown;
   isError: boolean;
   parentId?: string;
+  sessionKey?: string;
+  eventIndex?: number;
 };
 
-const EXEC_TIMEOUT_MS = 20_000;
-const MAX_OUTPUT_BYTES = 16_384;
+const SHIPPING_CODE_MODE = resolveCodeModeConfig();
+const EXEC_TIMEOUT_MS = SHIPPING_CODE_MODE.timeoutMs;
+const MAX_OUTPUT_BYTES = SHIPPING_CODE_MODE.maxOutputBytes;
 const MAX_MODEL_OUTPUT_TOKENS = 4_000;
+const PERFORMANCE_GRADING_REVISION = "performance-outcome-v4";
+
+export type GatewayMatrixActivationDiagnostic = {
+  runId: string;
+  active: boolean;
+  toolsEnabled: boolean;
+  toolsDisabled: boolean;
+  rawRun: boolean;
+  fallbackActive: boolean;
+  allowlist?: string;
+};
+
+export function parseGatewayMatrixActivationDiagnostic(
+  line: string,
+): GatewayMatrixActivationDiagnostic | undefined {
+  const marker = "code-mode diagnostic ";
+  const start = line.indexOf(marker);
+  if (start < 0) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(line.slice(start + marker.length, line.lastIndexOf("}") + 1));
+    if (
+      !record(value) ||
+      value.boundary !== "activation" ||
+      typeof value.runId !== "string" ||
+      typeof value.active !== "boolean" ||
+      typeof value.toolsEnabled !== "boolean" ||
+      typeof value.toolsDisabled !== "boolean" ||
+      typeof value.rawRun !== "boolean" ||
+      typeof value.fallbackActive !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      runId: value.runId,
+      active: value.active,
+      toolsEnabled: value.toolsEnabled,
+      toolsDisabled: value.toolsDisabled,
+      rawRun: value.rawRun,
+      fallbackActive: value.fallbackActive,
+      ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function evaluateGatewayMatrixActivation(params: {
+  diagnostics: readonly GatewayMatrixActivationDiagnostic[];
+  rootRunId?: string;
+  childRunIds: readonly string[];
+  expectedEnabled: boolean;
+}) {
+  const requiredActivationRuns = [
+    ...new Set([...(params.rootRunId ? [params.rootRunId] : []), ...params.childRunIds]),
+  ];
+  const observedActivation = params.diagnostics.filter((entry) =>
+    requiredActivationRuns.includes(entry.runId),
+  );
+  // Isolated no-tool finalization is outside the surface being compared.
+  const qualifyingActivation = observedActivation.filter(
+    (entry) => entry.toolsEnabled && !entry.toolsDisabled && !entry.rawRun,
+  );
+  const activationComplete =
+    Boolean(params.rootRunId) &&
+    requiredActivationRuns.every((runId) =>
+      qualifyingActivation.some((entry) => entry.runId === runId),
+    );
+  return {
+    requiredActivationRuns,
+    observedActivation,
+    qualifyingActivation,
+    activationComplete,
+    actualCodeMode: activationComplete && qualifyingActivation.every((entry) => entry.active),
+    engagement:
+      activationComplete &&
+      qualifyingActivation.every((entry) => entry.active === params.expectedEnabled),
+  };
+}
+
+type DeliveredFileEvidence = {
+  source: string;
+  status: "captured" | "unavailable";
+  path?: string;
+  bytes?: number;
+  sha256?: string;
+  reason?: string;
+};
 
 export type GatewayMatrixTrace = {
   calls: ToolCall[];
@@ -64,12 +188,16 @@ export type GatewayMatrixTrace = {
 export type GatewayMatrixWorkload = {
   promptSha256: string;
   fixtureSha256: string;
+  performanceGradingRevision?: string;
   settings: {
+    executor: CodeModeExecutorId;
     thinking: string;
     timeoutSeconds: number;
     execTimeoutMs: number;
     maxOutputBytes: number;
-    maxModelOutputTokens: number;
+    maxModelOutputTokens: number | null;
+    runtime: "openclaw";
+    fast: false;
     allowedTools: readonly string[];
   };
 };
@@ -77,13 +205,17 @@ export type GatewayMatrixWorkload = {
 export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
   behavior: Record<string, boolean>;
   taskElapsedMs?: number;
+  taskResponseAt?: number;
   startupMs: number;
   traceAvailable: boolean;
   upstreamCalls?: number;
   outerCalls?: number;
   outerOutputBytes?: number;
   taskAssistantTurns?: number;
+  deliveredFiles?: DeliveredFileEvidence[];
   interview: {
+    skipped?: boolean;
+    accounting?: MatrixUsageAccounting;
     elapsedMs?: number;
     traceAvailable: boolean;
     answer: unknown;
@@ -98,8 +230,28 @@ export type GatewayMatrixEvidence = GatewayMatrixWorkload & {
     taskReceipts: string;
     interviewReceipts: string;
     log: string;
+    deliveredFiles?: string;
   };
 };
+
+function matrixFixture(
+  task: GatewayMatrixTask,
+  repetition: number,
+): GatewayMatrixFixture & { performance?: MatrixPerformanceFixture } {
+  if (!isMatrixPerformanceTask(task)) {
+    return createGatewayMatrixFixture(task, repetition);
+  }
+  const performance = createMatrixPerformanceFixture(task, repetition);
+  return {
+    prompt: performance.prompt,
+    expected: { rubricVersion: performance.rubricVersion },
+    pluginSource: performance.pluginSource ?? createGatewayMatrixPluginSource(""),
+    requiredTools: performance.requiredTools,
+    workspaceFiles: performance.workspaceFiles,
+    interviewPrompt: "",
+    performance,
+  };
+}
 
 type BehaviorChecks = Record<string, boolean> & { answer: boolean; actualCodeMode: boolean };
 
@@ -109,9 +261,11 @@ export function createGatewayMatrixWorkload(
   repetition: number,
   thinking: string,
   timeoutSeconds: number,
+  executor: CodeModeExecutorId = "node",
 ): GatewayMatrixWorkload {
-  const fixture = createGatewayMatrixFixture(task, repetition);
+  const fixture = matrixFixture(task, repetition);
   return {
+    ...(fixture.performance ? { performanceGradingRevision: PERFORMANCE_GRADING_REVISION } : {}),
     promptSha256: createHash("sha256")
       .update(fixture.prompt)
       .update("\0")
@@ -123,14 +277,25 @@ export function createGatewayMatrixWorkload(
       .update(JSON.stringify(createGatewayMatrixPluginManifest(fixture.requiredTools)))
       .update(fixture.processHelperSource ?? "")
       .update(JSON.stringify(fixture.workspaceFiles ?? {}))
+      .update(JSON.stringify(fixture.performance?.configPatch ?? {}))
+      .update(fixture.performance?.rubricVersion ?? "contract")
+      .update(fixture.performance ? PERFORMANCE_GRADING_REVISION : "")
+      .update(fixture.performance ? JSON.stringify(fixture.performance.deliveredFiles) : "")
       .digest("hex"),
     settings: {
+      executor,
       thinking,
       timeoutSeconds,
       execTimeoutMs: EXEC_TIMEOUT_MS,
       maxOutputBytes: MAX_OUTPUT_BYTES,
-      maxModelOutputTokens: MAX_MODEL_OUTPUT_TOKENS,
-      allowedTools: gatewayAllowedTools(task, fixture.requiredTools),
+      maxModelOutputTokens: fixture.performance ? null : MAX_MODEL_OUTPUT_TOKENS,
+      runtime: "openclaw",
+      fast: false,
+      allowedTools: gatewayAllowedTools(
+        task,
+        fixture.requiredTools,
+        fixture.performance?.allowedTools,
+      ),
     },
   };
 }
@@ -138,7 +303,11 @@ export function createGatewayMatrixWorkload(
 function gatewayAllowedTools(
   task: GatewayMatrixTask,
   fixtureTools: readonly string[],
+  performanceTools?: readonly string[],
 ): readonly string[] {
+  if (performanceTools) {
+    return performanceTools;
+  }
   if (task === "automation-contracts") {
     return ["automations"];
   }
@@ -204,6 +373,8 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
       continue;
     }
     const message = record(event.message) ? event.message : event;
+    const sessionKey =
+      typeof event.matrixSessionKey === "string" ? event.matrixSessionKey : undefined;
     if (message.role === "assistant") {
       assistantTurns += 1;
       if (typeof message.provider === "string" && typeof message.model === "string") {
@@ -249,6 +420,7 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
             name: block.name,
             args: record(block.arguments) ? block.arguments : {},
             eventIndex,
+            ...(sessionKey ? { sessionKey } : {}),
           });
         }
       }
@@ -260,6 +432,7 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
         content: message.content,
         isError: message.isError === true,
         eventIndex,
+        ...(sessionKey ? { sessionKey } : {}),
       });
     } else if (message.customType === "openclaw.nested-tool.v1" && record(message.details)) {
       const data = message.details;
@@ -274,9 +447,36 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]): GatewayMa
         content: record(data.result) ? data.result.content : undefined,
         isError: data.isError === true,
         ...(typeof data.parentToolCallId === "string" ? { parentId: data.parentToolCallId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        eventIndex,
       });
     }
   }
+  // Deferred Tool Search and Code Mode already persist the underlying activity.
+  // Only ordinary direct calls need projection from their matching tool result.
+  for (const outcome of outcomes) {
+    const call = calls.find(
+      (item) => item.id === outcome.id && item.sessionKey === outcome.sessionKey,
+    );
+    if (
+      !call ||
+      (call.name === "exec" && typeof call.args.code === "string") ||
+      ["tool_search", "tool_describe", "tool_call", "wait"].includes(call.name) ||
+      activities.some((item) => item.parentId === call.id && item.sessionKey === call.sessionKey)
+    ) {
+      continue;
+    }
+    activities.push({
+      name: call.name,
+      input: call.args,
+      result: outcome.details,
+      content: outcome.content,
+      isError: outcome.isError,
+      ...(call.sessionKey ? { sessionKey: call.sessionKey } : {}),
+      eventIndex: outcome.eventIndex,
+    });
+  }
+  activities.sort((left, right) => (left.eventIndex ?? 0) - (right.eventIndex ?? 0));
   return {
     calls,
     outcomes,
@@ -438,7 +638,7 @@ function referenceIds(trace: GatewayMatrixTrace): string[] {
 }
 
 export function evaluateGatewayMatrixTask(params: {
-  task: GatewayMatrixTask;
+  task: GatewayMatrixContractTask;
   expected: RecordValue;
   final: string;
   trace: GatewayMatrixTrace;
@@ -522,8 +722,8 @@ export function evaluateGatewayMatrixTask(params: {
       read?.result.ok === true &&
       result?.path === "tools.codeMode" &&
       config?.enabled === true &&
-      config.timeoutMs === EXEC_TIMEOUT_MS &&
-      config.maxOutputBytes === MAX_OUTPUT_BYTES;
+      (config.timeoutMs === undefined || config.timeoutMs === EXEC_TIMEOUT_MS) &&
+      (config.maxOutputBytes === undefined || config.maxOutputBytes === MAX_OUTPUT_BYTES);
     checks.rawConfigReachedGuest =
       outcome !== undefined && isDeepStrictEqual(outcome.details.value, read?.result);
     checks.noFixtureEffects = receiptRows.length === 0;
@@ -876,7 +1076,7 @@ export function evaluateGatewayMatrixTask(params: {
 
 /** Claims support the interview; an attempted expired read also needs observed runtime evidence. */
 export function evaluateGatewayMatrixInterview(
-  task: GatewayMatrixTask,
+  task: GatewayMatrixContractTask,
   taskTrace: GatewayMatrixTrace,
   interviewTrace: GatewayMatrixTrace,
   final: string,
@@ -970,7 +1170,13 @@ async function waitReady(child: ManagedRun, port: number, signal?: AbortSignal):
   throw new Error("Owned benchmark Gateway did not become ready within 90 seconds");
 }
 
-type ResponseResult = { id?: string; status?: string; final: string; error?: string };
+type ResponseResult = {
+  id?: string;
+  status?: string;
+  final: string;
+  error?: string;
+  usage?: unknown;
+};
 
 async function agentRequest(
   port: number,
@@ -979,6 +1185,8 @@ async function agentRequest(
   timeoutSeconds: number,
   previousId?: string,
   abortSignal?: AbortSignal,
+  sessionKey?: string,
+  maxOutputTokens?: number,
 ): Promise<ResponseResult> {
   const url = `http://127.0.0.1:${port}/v1/responses`;
   const timeout = AbortSignal.timeout(timeoutSeconds * 1_000);
@@ -989,13 +1197,14 @@ async function agentRequest(
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
       "x-openclaw-agent-id": "qa",
+      ...(sessionKey ? { "x-openclaw-session-key": sessionKey } : {}),
       "x-openclaw-scopes": "operator.admin,operator.read,operator.write",
     },
     body: JSON.stringify({
       model: "openclaw/qa",
       input: prompt,
       ...(previousId ? { previous_response_id: previousId } : {}),
-      max_output_tokens: MAX_MODEL_OUTPUT_TOKENS,
+      ...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
       stream: false,
     }),
     signal,
@@ -1027,64 +1236,148 @@ async function agentRequest(
     ...(typeof value.id === "string" ? { id: value.id } : {}),
     ...(typeof value.status === "string" ? { status: value.status } : {}),
     final,
+    ...(value.usage !== undefined ? { usage: value.usage } : {}),
     ...(record(value.error) && typeof value.error.message === "string"
       ? { error: value.error.message }
       : {}),
   };
 }
 
-function transcriptRows(stateDir: string): { seq: number; event: unknown }[] {
-  const db = new DatabaseSync(
-    path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
-    { readOnly: true },
-  );
-  try {
-    return db
-      .prepare(
-        `SELECT seq, ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events ORDER BY session_id,seq`,
-      )
-      .all()
-      .map((row) => ({
-        seq: Number(row.seq),
-        event: JSON.parse(readSqliteTranscriptPayload(row)),
-      }));
-  } finally {
-    db.close();
+async function captureDeliveredFiles(params: {
+  workspace: string;
+  artifactDir: string;
+  outputDir: string;
+  files: readonly string[];
+  redact: (value: string) => string;
+}): Promise<DeliveredFileEvidence[]> {
+  const workspace = await fs.realpath(params.workspace);
+  const evidence: DeliveredFileEvidence[] = [];
+  const maxFileBytes = 1024 * 1024;
+  let totalBytes = 0;
+  for (const [index, relativeSource] of params.files.entries()) {
+    try {
+      if (index >= 16) {
+        throw new Error("Delivered-file count exceeds 16.");
+      }
+      const file = path.resolve(workspace, relativeSource);
+      if (path.isAbsolute(relativeSource) || !file.startsWith(`${workspace}${path.sep}`)) {
+        throw new Error("Delivered file must stay within the workspace.");
+      }
+      if (!(await fs.lstat(file)).isFile()) {
+        throw new Error("Delivered file must be a regular file, not a symlink.");
+      }
+      const resolved = await fs.realpath(file);
+      if (!resolved.startsWith(`${workspace}${path.sep}`)) {
+        throw new Error("Delivered file resolves outside the workspace.");
+      }
+      const handle = await fs.open(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      let content: string;
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > maxFileBytes) {
+          throw new Error(
+            "Delivered file must be a single-link regular file no larger than 1 MiB.",
+          );
+        }
+        const buffer = Buffer.alloc(stat.size + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          const read = await handle.read(buffer, length, buffer.length - length, length);
+          if (read.bytesRead === 0) {
+            break;
+          }
+          length += read.bytesRead;
+        }
+        if (length !== stat.size) {
+          throw new Error("Delivered file changed during capture.");
+        }
+        content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, length));
+      } finally {
+        await handle.close();
+      }
+      const redacted = redactForDevToolLog(params.redact(content));
+      const bytes = Buffer.byteLength(redacted);
+      if (bytes > maxFileBytes || totalBytes + bytes > 4 * maxFileBytes) {
+        throw new Error("Redacted deliverables exceed the 1 MiB file or 4 MiB cell limit.");
+      }
+      const destination = path.join(
+        params.artifactDir,
+        "delivered",
+        path.relative(workspace, file),
+      );
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, redacted, { flag: "wx", mode: 0o600 });
+      totalBytes += bytes;
+      evidence.push({
+        source: relativeSource,
+        status: "captured",
+        path: path.relative(params.outputDir, destination),
+        bytes,
+        sha256: createHash("sha256").update(redacted).digest("hex"),
+      });
+    } catch (error) {
+      evidence.push({
+        source: relativeSource,
+        status: "unavailable",
+        reason: redactForDevToolLog(
+          params.redact(error instanceof Error ? error.message : "Delivered-file capture failed."),
+        ).slice(0, 300),
+      });
+    }
   }
+  return evidence;
 }
 
-/** Run actual tool contracts and a separate interview through a disposable built Gateway. */
+/** Run a neutral workload or an explicit contract probe in a disposable Gateway. */
 export async function runGatewayMatrixCell(
   params: RunCellParams & { cell: RunCellParams["cell"] & { task: GatewayMatrixTask } },
 ): Promise<CodeModeMatrixCellResult> {
-  const key = process.env.OPENAI_API_KEY?.trim();
-  if (!key) {
-    throw new Error("OPENAI_API_KEY is required for Gateway interview tasks");
-  }
   if (!params.runtime) {
     throw new Error("Built runtime entrypoint was not prepared");
   }
-  const fixture = createGatewayMatrixFixture(params.cell.task, params.cell.repetition);
+  const executor = params.executor ?? "node";
+  const provider = params.cell.model.split("/")[0]!;
+  const providerConfig: OpenClawConfig = {
+    plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
+  };
+  const credentials = matrixProviderEnv(params.cell.model, providerConfig, process.env);
+  const credentialValues = Object.values(credentials).filter((value): value is string =>
+    Boolean(value),
+  );
+  if (credentialValues.length === 0) {
+    throw new Error(`No API key environment input available for provider ${provider}`);
+  }
+  const fixture = matrixFixture(params.cell.task, params.cell.repetition);
+  const performance = fixture.performance;
+  const allowedTools = gatewayAllowedTools(
+    params.cell.task,
+    fixture.requiredTools,
+    performance?.allowedTools,
+  );
   const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-interview-")),
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-")),
   );
   const stateDir = path.join(root, "state");
   const workspace = path.join(root, "workspace");
   const pluginDir = path.join(root, "fixture");
   const receiptsPath = path.join(root, "receipts.jsonl");
+  const artifactDir = path.join(params.outputDir, "cells", params.cell.id);
+  const rootSessionKey = `agent:qa:matrix:${randomUUID()}`;
+  const token = `synthetic-matrix-${randomUUID()}`;
+  const redact = (value: string) =>
+    credentialValues.reduce(
+      (text, secret) => text.replaceAll(secret, "[REDACTED]"),
+      value.replaceAll(token, "[SYNTHETIC_GATEWAY_TOKEN]"),
+    );
+  const write = async (name: string, value: unknown) =>
+    fs.writeFile(path.join(artifactDir, name), redact(`${JSON.stringify(value, null, 2)}\n`), {
+      mode: 0o600,
+    });
   const readReceipts = async (): Promise<unknown[]> =>
     (await fs.readFile(receiptsPath, "utf8"))
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-  const artifactDir = path.join(params.outputDir, "cells", params.cell.id);
-  const token = `synthetic-matrix-${randomUUID()}`;
-  const redact = (value: string) =>
-    value.replaceAll(key, "[REDACTED]").replaceAll(token, "[SYNTHETIC_GATEWAY_TOKEN]");
-  const write = async (name: string, value: unknown) =>
-    fs.writeFile(path.join(artifactDir, name), redact(`${JSON.stringify(value, null, 2)}\n`), {
-      mode: 0o600,
-    });
   await Promise.all(
     [
       stateDir,
@@ -1111,15 +1404,25 @@ export async function runGatewayMatrixCell(
     }),
   );
   for (const [name, content] of Object.entries(fixture.workspaceFiles ?? {})) {
-    await fs.writeFile(path.join(workspace, name), content);
+    const file = path.resolve(workspace, name);
+    if (!file.startsWith(`${workspace}${path.sep}`)) {
+      throw new Error(`Fixture path escapes its workspace: ${name}`);
+    }
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
   }
   if (fixture.processHelperSource !== undefined) {
     await fs.writeFile(path.join(workspace, "process-probe.mjs"), fixture.processHelperSource);
   }
   const port = await availablePort();
   const configPath = path.join(stateDir, "openclaw.json");
-  const cfg = {
-    logging: { level: "warn", consoleLevel: "warn", file: path.join(root, "gateway.log") },
+  const baseConfig = {
+    logging: {
+      level: "info",
+      consoleLevel: "info",
+      consoleStyle: "compact",
+      file: path.join(root, "gateway.log"),
+    },
     env: { shellEnv: { enabled: false } },
     agents: {
       defaults: {
@@ -1127,19 +1430,22 @@ export async function runGatewayMatrixCell(
         skipBootstrap: true,
         thinkingDefault: params.thinking,
         heartbeat: { every: "0m" },
-        model: { primary: params.cell.model },
-        models: { [params.cell.model]: { agentRuntime: { id: "openclaw" } } },
         systemAgent: { agentId: "qa" },
       },
       entries: { qa: {} },
     },
     plugins: {
-      allow: ["openai", ...(fixture.requiredTools.length > 0 ? ["code-mode-matrix-fixture"] : [])],
+      allow: [
+        provider,
+        ...(executor === "quickjs" ? ["code-mode-quickjs"] : []),
+        ...(fixture.requiredTools.length ? ["code-mode-matrix-fixture"] : []),
+      ],
       slots: { memory: "none" },
-      ...(fixture.requiredTools.length > 0 ? { load: { paths: [pluginDir] } } : {}),
+      ...(fixture.requiredTools.length ? { load: { paths: [pluginDir] } } : {}),
       entries: {
-        openai: { enabled: true },
-        ...(fixture.requiredTools.length > 0
+        [provider]: { enabled: true },
+        ...(executor === "quickjs" ? { "code-mode-quickjs": { enabled: true } } : {}),
+        ...(fixture.requiredTools.length
           ? { "code-mode-matrix-fixture": { enabled: true, config: { receiptsPath } } }
           : {}),
       },
@@ -1149,10 +1455,9 @@ export async function runGatewayMatrixCell(
     discovery: { mdns: { mode: "off" } },
     tools: {
       profile: "full",
-      allow: gatewayAllowedTools(params.cell.task, fixture.requiredTools),
+      allow: allowedTools,
       fs: { workspaceOnly: true },
       exec: { security: "full", ask: "off" },
-      codeMode: { enabled: true, timeoutMs: EXEC_TIMEOUT_MS, maxOutputBytes: MAX_OUTPUT_BYTES },
     },
     gateway: {
       mode: "local",
@@ -1163,18 +1468,25 @@ export async function runGatewayMatrixCell(
       http: { endpoints: { responses: { enabled: true } } },
     },
   };
+  // Task-specific limits cannot change the selected treatment, runtime, or model settings.
+  const cfg = mergeDeep(mergeDeep(baseConfig, performance?.configPatch ?? {}), {
+    agents: matrixModelConfig(params.cell.model, params.thinking),
+    tools: { codeMode: { enabled: params.cell.mode === "code", executor } },
+  });
   await fs.writeFile(configPath, JSON.stringify(cfg), { mode: 0o600 });
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
     HOME: path.join(root, "home"),
     USERPROFILE: path.join(root, "home"),
+    OPENCLAW_HOME: path.join(root, "home"),
     TMPDIR: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),
-    OPENAI_API_KEY: key,
+    ...credentials,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(params.runtime.cwd, "dist", "extensions"),
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CRON: "1",
@@ -1182,32 +1494,79 @@ export async function runGatewayMatrixCell(
     OPENCLAW_SKIP_ACPX_RUNTIME: "1",
     OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_DEBUG_CODE_MODE: "1",
+    NO_COLOR: "1",
   };
   const startedAt = Date.now();
   const { createProcessSupervisor } = await import("../../src/process/supervisor/supervisor.js");
+  const { runCommandWithTimeout } = await import("../../src/process/exec.js");
   const supervisor = createProcessSupervisor();
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   let child: ManagedRun | undefined;
   let log = "";
+  const pendingLogLines = { stdout: "", stderr: "" };
+  const retryWarnings = new Map<string, string>();
+  const activationDiagnostics = new Map<string, GatewayMatrixActivationDiagnostic>();
+  const inspectLogLine = (line: string) => {
+    for (const signature of ["[responses] retrying", "[session-recovery] Anthropic thinking"]) {
+      if (line.includes(signature) && !retryWarnings.has(signature)) {
+        retryWarnings.set(signature, line.slice(0, 4_096));
+      }
+    }
+    const diagnostic = parseGatewayMatrixActivationDiagnostic(line);
+    if (diagnostic) {
+      activationDiagnostics.set(JSON.stringify(diagnostic), diagnostic);
+    }
+  };
   let failure: unknown;
+  let cleanupCertain: boolean;
   let task: ResponseResult = { final: "" };
   let interview: ResponseResult = { final: "" };
   let taskEvents: unknown[] = [];
   let interviewEvents: unknown[] = [];
   let startupMs = 0;
   let taskElapsedMs: number | undefined;
+  let taskResponseAt: number | undefined;
   let interviewElapsedMs: number | undefined;
-  let taskTraceAvailable = false;
-  let interviewTraceAvailable = false;
-  let receipts: unknown[];
-  let taskReceipts: unknown[] | undefined;
   let taskStartedAt: number | undefined;
   let interviewStartedAt: number | undefined;
-  let interviewBoundary: number | undefined;
+  let beforeTask: MatrixLedgerBoundary | undefined;
+  let taskBoundary: MatrixLedgerBoundary | undefined;
+  let ledger: MatrixSessionLedger | undefined;
+  let taskRecords: unknown[] | undefined;
+  let receipts: unknown[] = [];
+  let taskReceipts: unknown[] | undefined;
+  const runCli = async (args: string[]) => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, ...params.runtime!.args, ...args],
+      {
+        cwd: workspace,
+        baseEnv: {},
+        env,
+        input: "",
+        timeoutMs: 40_000,
+        signal: params.abortSignal,
+        maxOutputBytes: 1024 * 1024,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+      },
+    );
+    if (result.code !== 0 || result.cleanup === "uncertain") {
+      throw new Error(
+        `Benchmark CLI failed: ${redact(result.stderr).slice(-2_000) || result.cleanup || result.code}`,
+      );
+    }
+    return JSON.parse(result.stdout) as unknown;
+  };
   try {
-    const capture = (chunk: string) => {
+    const capture = (stream: "stdout" | "stderr", chunk: string) => {
       log = `${log}${chunk}`.slice(-64 * 1024);
+      const lines = `${pendingLogLines[stream]}${chunk}`.split(/\r?\n/u);
+      pendingLogLines[stream] = (lines.pop() ?? "").slice(-16_384);
+      for (const line of lines) {
+        inspectLogLine(line);
+      }
     };
     child = await supervisor.spawn({
       mode: "child",
@@ -1226,53 +1585,29 @@ export async function runGatewayMatrixCell(
       env,
       exactEnv: true,
       stdinMode: "pipe-closed",
-      timeoutMs: (params.timeoutSeconds * 2 + 120) * 1_000,
+      timeoutMs: (params.timeoutSeconds * (performance ? 1 : 2) + 120) * 1_000,
       captureOutput: false,
-      onStdout: capture,
-      onStderr: capture,
+      onStdout: (chunk) => capture("stdout", chunk),
+      onStderr: (chunk) => capture("stderr", chunk),
     });
     await waitReady(child, port, params.abortSignal);
-    const { runCommandWithTimeout } = await import("../../src/process/exec.js");
-    const catalogCommand = await runCommandWithTimeout(
-      [
-        process.execPath,
-        ...params.runtime.args,
-        "gateway",
-        "call",
-        "tools.catalog",
-        "--params",
-        JSON.stringify({ agentId: "qa", includePlugins: true }),
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        token,
-        "--timeout",
-        "30000",
-        "--json",
-      ],
-      {
-        cwd: workspace,
-        baseEnv: {},
-        env,
-        input: "",
-        timeoutMs: 40_000,
-        signal: params.abortSignal,
-        maxOutputBytes: 1024 * 1024,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-      },
-    );
-    if (catalogCommand.code !== 0 || catalogCommand.cleanup === "uncertain") {
-      throw new Error(
-        `Fixture catalog preflight failed before model call: ${redact(catalogCommand.stderr).slice(-2_000) || catalogCommand.cleanup || catalogCommand.code}`,
-      );
-    }
-    const catalog: unknown = JSON.parse(catalogCommand.stdout);
-    requireGatewayMatrixTools(
-      catalog,
-      gatewayAllowedTools(params.cell.task, fixture.requiredTools),
-    );
+    const catalog = await runCli([
+      "gateway",
+      "call",
+      "tools.catalog",
+      "--params",
+      JSON.stringify({ agentId: "qa", includePlugins: true }),
+      "--url",
+      `ws://127.0.0.1:${port}`,
+      "--token",
+      token,
+      "--timeout",
+      "30000",
+      "--json",
+    ]);
+    requireGatewayMatrixTools(catalog, allowedTools);
     await write("tool-catalog.json", catalog);
+    beforeTask = captureMatrixLedgerBoundary(await readMatrixSessionLedger(stateDir));
     startupMs = Date.now() - startedAt;
     taskStartedAt = Date.now();
     try {
@@ -1283,30 +1618,39 @@ export async function runGatewayMatrixCell(
         params.timeoutSeconds,
         undefined,
         params.abortSignal,
+        rootSessionKey,
+        performance ? undefined : MAX_MODEL_OUTPUT_TOKENS,
       );
     } finally {
-      taskElapsedMs = Date.now() - taskStartedAt;
+      taskResponseAt = Date.now();
+      taskElapsedMs = taskResponseAt - taskStartedAt;
+      taskReceipts = await readReceipts();
     }
-    const rows = transcriptRows(stateDir);
-    taskTraceAvailable = true;
-    taskEvents = rows.map((row) => row.event);
-    interviewBoundary = Math.max(0, ...rows.map((row) => row.seq));
-    taskReceipts = await readReceipts();
-    if (!task.id) {
-      throw new Error("Task response lacks continuity id for the interview");
+    taskBoundary = captureMatrixLedgerBoundary(await readMatrixSessionLedger(stateDir));
+    if (performance?.inspectSubagents) {
+      const listed = await runCli(["tasks", "list", "--json", "--runtime", "subagent"]);
+      taskRecords = record(listed) && Array.isArray(listed.tasks) ? listed.tasks : [];
+      await write("task-records.json", taskRecords);
     }
-    interviewStartedAt = Date.now();
-    try {
-      interview = await agentRequest(
-        port,
-        token,
-        fixture.interviewPrompt,
-        params.timeoutSeconds,
-        task.id,
-        params.abortSignal,
-      );
-    } finally {
-      interviewElapsedMs = Date.now() - interviewStartedAt;
+    if (!performance) {
+      if (!task.id) {
+        throw new Error("Task response lacks continuity id for the interview");
+      }
+      interviewStartedAt = Date.now();
+      try {
+        interview = await agentRequest(
+          port,
+          token,
+          fixture.interviewPrompt,
+          params.timeoutSeconds,
+          task.id,
+          params.abortSignal,
+          rootSessionKey,
+          MAX_MODEL_OUTPUT_TOKENS,
+        );
+      } finally {
+        interviewElapsedMs = Date.now() - interviewStartedAt;
+      }
     }
   } catch (error) {
     failure = error;
@@ -1315,31 +1659,43 @@ export async function runGatewayMatrixCell(
       startupMs = Date.now() - startedAt;
     }
     child?.cancel("manual-cancel");
+    cleanupCertain = true;
     for (const settle of [() => child?.wait(), cleanup, () => supervisor.shutdown()]) {
       try {
         await settle();
       } catch (error) {
+        cleanupCertain = false;
         failure ??= error;
       }
     }
     if (taskStartedAt !== undefined) {
       try {
-        const rows = transcriptRows(stateDir);
-        taskTraceAvailable = true;
-        interviewTraceAvailable = interviewStartedAt !== undefined;
-        const boundary = interviewBoundary;
-        taskEvents = rows
-          .filter((row) => boundary === undefined || row.seq <= boundary)
-          .map((row) => row.event);
-        interviewEvents =
-          boundary === undefined
-            ? []
-            : rows.filter((row) => row.seq > boundary).map((row) => row.event);
+        ledger = await readMatrixSessionLedger(stateDir);
+        const events = (selection: ReturnType<typeof selectMatrixLedgerRows>) =>
+          selection.rows.map((row) =>
+            record(row.event) ? { ...row.event, matrixSessionKey: row.sessionKey } : row.event,
+          );
+        taskEvents = events(
+          selectMatrixLedgerRows({
+            ledger,
+            before: beforeTask,
+            ...(interviewStartedAt !== undefined ? { after: taskBoundary } : {}),
+            rootSessionKeys: [rootSessionKey],
+          }),
+        );
+        if (interviewStartedAt !== undefined) {
+          interviewEvents = events(
+            selectMatrixLedgerRows({
+              ledger,
+              before: taskBoundary,
+              rootSessionKeys: [rootSessionKey],
+            }),
+          );
+        }
       } catch (error) {
         failure ??= error;
       }
     }
-    receipts = [];
     try {
       receipts = await readReceipts();
     } catch (error) {
@@ -1351,70 +1707,196 @@ export async function runGatewayMatrixCell(
     await write("receipts.json", receipts);
     await write("task-receipts.json", taskReceipts);
     await write("interview-receipts.json", receipts.slice(taskReceipts.length));
+    if (ledger) {
+      await write("session-ledger.json", ledger);
+    }
+    for (const line of Object.values(pendingLogLines)) {
+      inspectLogLine(line);
+    }
+    await write("activation-diagnostics.json", [...activationDiagnostics.values()]);
     await fs.writeFile(path.join(artifactDir, "gateway.log"), redact(log), { mode: 0o600 });
   }
   const trace = collectGatewayMatrixTrace(taskEvents);
   const interviewTrace = collectGatewayMatrixTrace(interviewEvents);
-  const behavior = evaluateGatewayMatrixTask({
-    task: params.cell.task,
-    expected: fixture.expected,
-    final: task.final,
-    trace,
-    receipts: taskReceipts,
-    probeCode: fixture.probeCode,
+  const accounting = ledger
+    ? collectMatrixUsage({
+        ledger,
+        before: beforeTask,
+        ...(interviewStartedAt !== undefined ? { after: taskBoundary } : {}),
+        rootSessionKeys: [rootSessionKey],
+        settled: cleanupCertain,
+        terminalResponseObserved: task.status === "completed",
+        rootUsage: task.usage,
+        runtimeLog: [...retryWarnings.values(), log].join("\n"),
+      })
+    : undefined;
+  const interviewAccounting =
+    ledger && interviewStartedAt !== undefined
+      ? collectMatrixUsage({
+          ledger,
+          before: taskBoundary,
+          rootSessionKeys: [rootSessionKey],
+          settled: cleanupCertain,
+          terminalResponseObserved: interview.status === "completed",
+          rootUsage: interview.usage,
+          runtimeLog: [...retryWarnings.values(), log].join("\n"),
+        })
+      : undefined;
+  const sessionActivation = [
+    ...new Set(trace.calls.map((call) => call.sessionKey ?? rootSessionKey)),
+  ].map((sessionKey) => {
+    const calls = trace.calls.filter((call) => (call.sessionKey ?? rootSessionKey) === sessionKey);
+    return {
+      sessionKey,
+      codeMode: calls.some((call) => call.name === "exec" && typeof call.args.code === "string"),
+      toolCalls: calls.length,
+    };
   });
-  if (params.cell.task === "javascript-contracts") {
-    behavior.persistedFile =
-      (await fs.readFile(path.join(workspace, "result.txt"), "utf8").catch(() => undefined)) ===
-      fixture.expected.verificationCode;
+  const {
+    observedActivation,
+    qualifyingActivation,
+    activationComplete,
+    actualCodeMode,
+    engagement,
+  } = evaluateGatewayMatrixActivation({
+    diagnostics: [...activationDiagnostics.values()],
+    rootRunId: task.id,
+    childRunIds:
+      ledger?.runs
+        .filter((run) => run.requesterSessionKey === rootSessionKey)
+        .map((run) => run.runId) ?? [],
+    expectedEnabled: params.cell.mode === "code",
+  });
+  let behavior: Record<string, boolean>;
+  if (performance) {
+    try {
+      behavior = await performance.evaluate({
+        workspace,
+        trace,
+        receipts: taskReceipts,
+        taskResponseAt,
+        taskRecords,
+      });
+    } catch (error) {
+      failure ??= error;
+      behavior = { rubricCompleted: false };
+    }
+    behavior = {
+      ...behavior,
+      engagement,
+      underlyingToolExecution: trace.activities.length > 0,
+      finalResponsePresent: task.final.trim().length > 0,
+    };
+  } else {
+    if (isMatrixPerformanceTask(params.cell.task)) {
+      throw new Error("Missing performance fixture");
+    }
+    behavior = evaluateGatewayMatrixTask({
+      task: params.cell.task,
+      expected: fixture.expected,
+      final: task.final,
+      trace,
+      receipts: taskReceipts,
+      probeCode: fixture.probeCode,
+    });
+    if (params.cell.task === "javascript-contracts") {
+      behavior.persistedFile =
+        (await fs.readFile(path.join(workspace, "result.txt"), "utf8").catch(() => undefined)) ===
+        fixture.expected.verificationCode;
+    }
   }
-  const interviewChecks = evaluateGatewayMatrixInterview(
-    params.cell.task,
-    trace,
-    interviewTrace,
-    interview.final,
-  );
+  const deliveredFiles = performance
+    ? await captureDeliveredFiles({
+        workspace,
+        artifactDir,
+        outputDir: params.outputDir,
+        files: performance.deliveredFiles,
+        redact,
+      })
+    : undefined;
+  if (deliveredFiles) {
+    await write("delivered-files.json", deliveredFiles);
+  }
+  const interviewChecks =
+    !performance && !isMatrixPerformanceTask(params.cell.task)
+      ? evaluateGatewayMatrixInterview(params.cell.task, trace, interviewTrace, interview.final)
+      : {};
   const identity =
     trace.models.length > 0 &&
     trace.models.every((model) => model === params.cell.model) &&
-    interviewTrace.models.length > 0 &&
-    interviewTrace.models.every((model) => model === params.cell.model);
+    (performance !== undefined ||
+      (interviewTrace.models.length > 0 &&
+        interviewTrace.models.every((model) => model === params.cell.model)));
+  const behaviorPassed =
+    Object.values(behavior).length > 0 && Object.values(behavior).every(Boolean);
   const passed =
     !failure &&
+    cleanupCertain &&
     task.status === "completed" &&
-    interview.status === "completed" &&
     identity &&
-    Object.values(behavior).every(Boolean) &&
-    Object.values(interviewChecks).every(Boolean);
+    behaviorPassed &&
+    (performance !== undefined ||
+      (interview.status === "completed" && Object.values(interviewChecks).every(Boolean)));
+  const finalAssistants = new Map<string, RecordValue>();
+  for (const event of taskEvents) {
+    if (!record(event)) {
+      continue;
+    }
+    const message = record(event.message) ? event.message : event;
+    if (message.role === "assistant") {
+      finalAssistants.set(
+        typeof event.matrixSessionKey === "string" ? event.matrixSessionKey : rootSessionKey,
+        message,
+      );
+    }
+  }
+  const modelError = [...finalAssistants.values()]
+    .filter((message) => message.stopReason === "error" && typeof message.errorMessage === "string")
+    .map((message) => message.errorMessage)
+    .join("\n");
   const error =
-    failure instanceof Error ? redact(failure.message) : (task.error ?? interview.error);
-  const outerOutput = JSON.stringify(trace.outcomes.map((outcome) => outcome.content));
+    failure instanceof Error
+      ? redact(failure.message)
+      : (task.error ?? interview.error ?? (!passed && modelError ? redact(modelError) : undefined));
+  const providerFailure = !passed
+    ? classifyCodeModeMatrixProviderFailure(redact(`${error ?? ""}\n${modelError}`))
+    : null;
+  const timedOut =
+    failure instanceof Error &&
+    (failure.name === "TimeoutError" || /timed out|deadline|timeout/iu.test(failure.message));
   const gateway: GatewayMatrixEvidence = {
     ...createGatewayMatrixWorkload(
       params.cell.task,
       params.cell.repetition,
       params.thinking,
       params.timeoutSeconds,
+      executor,
     ),
     behavior,
-    ...(taskElapsedMs !== undefined ? { taskElapsedMs } : {}),
     startupMs,
-    traceAvailable: taskTraceAvailable,
-    ...(taskTraceAvailable
+    traceAvailable: ledger !== undefined,
+    ...(deliveredFiles ? { deliveredFiles } : {}),
+    ...(taskElapsedMs !== undefined ? { taskElapsedMs } : {}),
+    ...(taskResponseAt !== undefined ? { taskResponseAt } : {}),
+    ...(ledger
       ? {
           upstreamCalls: trace.activities.length,
           outerCalls: trace.calls.length,
-          outerOutputBytes: Buffer.byteLength(outerOutput),
+          outerOutputBytes: Buffer.byteLength(
+            JSON.stringify(trace.outcomes.map((outcome) => outcome.content)),
+          ),
           taskAssistantTurns: trace.assistantTurns,
         }
       : {}),
     interview: {
+      ...(performance ? { skipped: true } : {}),
+      traceAvailable: ledger !== undefined && interviewStartedAt !== undefined,
       ...(interviewElapsedMs !== undefined ? { elapsedMs: interviewElapsedMs } : {}),
-      traceAvailable: interviewTraceAvailable,
+      ...(interviewAccounting ? { accounting: interviewAccounting } : {}),
       answer: jsonAnswer(interview.final) ?? interview.final,
       rationaleReview: "required",
       checks: interviewChecks,
-      ...(interviewTraceAvailable ? { trace: interviewTrace } : {}),
+      ...(interviewStartedAt !== undefined ? { trace: interviewTrace } : {}),
     },
     artifacts: {
       taskTrace: path.relative(params.outputDir, path.join(artifactDir, "task-transcript.json")),
@@ -1429,13 +1911,31 @@ export async function runGatewayMatrixCell(
         path.join(artifactDir, "interview-receipts.json"),
       ),
       log: path.relative(params.outputDir, path.join(artifactDir, "gateway.log")),
+      ...(deliveredFiles
+        ? {
+            deliveredFiles: path.relative(
+              params.outputDir,
+              path.join(artifactDir, "delivered-files.json"),
+            ),
+          }
+        : {}),
     },
   };
-  await write("evidence.json", { gateway, task, interview });
-  if (params.keepState || failure) {
+  await write("evidence.json", {
+    gateway,
+    task,
+    interview,
+    accounting,
+    sessionActivation,
+    activationComplete,
+    observedActivation,
+    qualifyingActivation,
+    cleanupCertain,
+  });
+  if (params.keepState || failure || !passed) {
     await write("retained-state.json", {
       root,
-      reason: failure ? "failure inspection" : "requested",
+      reason: params.keepState ? "requested" : "failure inspection",
     });
   } else {
     await fs.rm(root, { recursive: true, force: true });
@@ -1443,6 +1943,7 @@ export async function runGatewayMatrixCell(
   const slash = params.cell.model.indexOf("/");
   return {
     id: params.cell.id,
+    executor,
     task: params.cell.task,
     model: params.cell.model,
     mode: params.cell.mode,
@@ -1453,37 +1954,42 @@ export async function runGatewayMatrixCell(
     sourcePatchSha256: params.sourcePatchSha256,
     timestamp: new Date().toISOString(),
     passed,
-    status: error ? "error" : "ok",
+    status: timedOut ? "timeout" : error ? "error" : "ok",
     elapsedMs: Date.now() - startedAt,
     expected: JSON.stringify(fixture.expected),
     final: redact(task.final),
     failureCategory: passed
       ? null
-      : failure
-        ? "harness_error"
-        : !identity
-          ? "model_mismatch"
-          : !behavior.answer
-            ? "answer_mismatch"
-            : task.status !== "completed" || !Object.values(behavior).every(Boolean)
-              ? "tool_execution"
-              : "interview_mismatch",
+      : (providerFailure ??
+        (timedOut ? "timeout" : null) ??
+        (failure
+          ? "harness_error"
+          : !identity
+            ? "model_mismatch"
+            : !engagement
+              ? "activation"
+              : !behaviorPassed || task.status !== "completed"
+                ? "tool_execution"
+                : "interview_mismatch")),
     ...(error
       ? {
           diagnostics: error.slice(0, 8_000),
           error: { kind: "gateway_benchmark", message: error.slice(0, 2_000) },
         }
       : {}),
-    codeModeEngaged: taskTraceAvailable ? behavior.actualCodeMode : null,
+    codeModeEngaged: activationComplete ? actualCodeMode : null,
     observedProvider: identity ? params.cell.model.slice(0, slash) : null,
     observedModel: identity ? params.cell.model.slice(slash + 1) : null,
-    ...(taskTraceAvailable ? { assistantTurns: trace.assistantTurns } : {}),
+    ...(accounting ? { accounting } : {}),
+    ...(ledger ? { assistantTurns: trace.assistantTurns } : {}),
     ...(trace.usage ? { usage: trace.usage } : {}),
-    ...(trace.costUsd !== undefined ? { costUsd: trace.costUsd } : {}),
+    ...(accounting?.costComplete && accounting.costUsd !== null
+      ? { costUsd: accounting.costUsd }
+      : {}),
     oracle: {
-      answer: behavior.answer,
-      effect: Object.values(behavior).every(Boolean),
-      engagement: behavior.actualCodeMode,
+      answer: performance ? null : behavior.answer === true,
+      effect: behaviorPassed,
+      engagement,
       identity,
       toolExecution: trace.activities.length > 0,
     },

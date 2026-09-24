@@ -81,23 +81,29 @@ describe("resolveConfiguredSetupModelForAgent", () => {
     );
   });
 
-  it("keeps the primary for setup unless verification explicitly selects the utility role", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5@openai:primary",
-          utilityModel: "local-utility/tiny",
+  it.each([false, true])(
+    "keeps the native primary for setup unless utility is selected (ACP=%s)",
+    (acp) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5@openai:primary",
+            utilityModel: "local-utility/tiny",
+          },
+          entries: {
+            main: acp ? { model: "harness-only", runtime: { type: "acp" } } : {},
+          },
         },
-      },
-    };
+      };
 
-    expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
-      modelRef: "openai/gpt-5.5@openai:primary",
-    });
-    expect(
-      resolveConfiguredSetupModelForAgent({ cfg, agentId: "main", modelTarget: "utility" }),
-    ).toEqual({ modelRef: "local-utility/tiny", modelTarget: "utility" });
-  });
+      expect(resolveConfiguredSetupModelForAgent({ cfg, agentId: "main" })).toEqual({
+        modelRef: "openai/gpt-5.5@openai:primary",
+      });
+      expect(
+        resolveConfiguredSetupModelForAgent({ cfg, agentId: "main", modelTarget: "utility" }),
+      ).toEqual({ modelRef: "local-utility/tiny", modelTarget: "utility" });
+    },
+  );
 
   it.each([undefined, "", "   "])(
     "does not fall back to a primary or automatic utility during utility verification: %j",
@@ -202,15 +208,23 @@ describe("resolveUtilityModelRefForAgent", () => {
     );
   });
 
-  it("carries the primary model's auth profile onto the derived default", () => {
-    const cfg = {
-      agents: { defaults: { model: "openai/gpt-5.5@work" } },
-    } as OpenClawConfig;
+  it.each([false, true])(
+    "carries the native primary auth profile onto the utility default (ACP=%s)",
+    (acp) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "openai/gpt-5.5@work" },
+          entries: {
+            main: acp ? { model: "harness-only@harness-profile", runtime: { type: "acp" } } : {},
+          },
+        },
+      };
 
-    expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
-      "openai/gpt-5.6-luna@work",
-    );
-  });
+      expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
+        "openai/gpt-5.6-luna@work",
+      );
+    },
+  );
 
   it("prefers caller-resolved session provider and profile context", () => {
     const cfg = {

@@ -11,6 +11,74 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reconciles a fallback notice around one streamed terminal answer", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "fallback-terminal-run";
+      const answer = "The workspace check is complete.";
+      const notice =
+        "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
+      const terminalAnswer = [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        answer,
+      ].join("\n");
+      const user = {
+        role: "user",
+        content: [{ type: "text", text: "Check the workspace." }],
+        __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
+      };
+      const streamedAnswer = {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+        openclawStreamFallback: {
+          itemId: "fallback-answer-item",
+          replacementText: answer,
+          runId,
+          source: "segment",
+        },
+      };
+      const gateway = await installMockGateway(page, {
+        historyMessages: [user, streamedAnswer],
+        inFlightRun: { runId, startedAt: 1_000, text: "" },
+        sessionInfo: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey: "agent:main:main",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: notice, openclawStatusNotice: true },
+            { type: "text", text: terminalAnswer },
+          ],
+        },
+      });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(suite.artifactDir, "fallback-terminal-answer.png"),
+        });
+      }
+
+      const answerOccurrences = async () =>
+        (await page.locator(".chat-group.assistant .chat-text").allTextContents()).filter((text) =>
+          text.includes(answer),
+        ).length;
+      await expect.poll(answerOccurrences).toBe(1);
+    });
+  });
+
   it.each([
     { order: "before hydration", tool: false, steer: false },
     { order: "after hydration", tool: false, steer: false },
@@ -187,7 +255,7 @@ suite.define(() => {
       const items = [
         { itemId: "commentary-item-one", text: "Inspecting the workspace." },
         { itemId: "commentary-item-two", text: "Checking the result." },
-      ];
+      ] as const;
       const events = items.map(({ itemId, text }, index) => ({
         data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
@@ -215,7 +283,9 @@ suite.define(() => {
       });
       const transcript = page.locator(".chat-thread-inner");
       const itemOccurrences = async () => {
-        const bubbles = await transcript.locator(".chat-bubble").allTextContents();
+        const bubbles = await transcript
+          .locator(".chat-bubble, .chat-working-indicator__preamble")
+          .allTextContents();
         return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
       };
 
@@ -225,6 +295,9 @@ suite.define(() => {
         await gateway.emitGatewayEvent("agent", event);
       }
       await expect.poll(itemOccurrences).toEqual([1, 1]);
+      await expect
+        .poll(() => transcript.locator(".chat-working-indicator__preamble").textContent())
+        .toBe(items[1].text);
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setMethodResponse("chat.startup", {
@@ -304,7 +377,10 @@ suite.define(() => {
         (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
           value.trim(),
         );
-      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
+      await expect.poll(assistantTexts).toEqual([commentary[0], "Still working."]);
+      await expect
+        .poll(() => page.locator(".chat-working-indicator__preamble").textContent())
+        .toBe(commentary[1]);
       expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {

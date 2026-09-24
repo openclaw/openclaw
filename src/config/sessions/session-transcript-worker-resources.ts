@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -9,17 +10,23 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  createOwnedWorkerTaskPool,
+  WorkerTaskError,
+  WorkerTaskPool,
+} from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
+  matchesAgentDatabaseReadCandidatePath,
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   sessionHistoryCleanupError,
+  decodeSessionTranscriptWorkerReadError,
   unwrapSessionTranscriptWorkerReply,
 } from "./session-history-worker-errors.js";
 import {
@@ -33,59 +40,29 @@ import type {
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
 import type {
-  SessionEntryListWorkerInput,
-  SessionExactEntriesWorkerInput,
-  SessionStoreTargetWorkerInput,
-  SessionTargetInventoryWorkerInput,
-  SessionIdentityEvidenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionPreviewWorkerInput,
-  SessionTitleFieldsWorkerInput,
-  SessionRowPresenceWorkerInput,
-  SessionTranscriptHistoryWorkerInput,
+  SessionHistoryWorkerInput,
   SessionTranscriptWorkerReply,
-  SessionUsageCacheWorkerInput,
-  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-export const historyPages = new WorkerTaskPool<
-  | SessionTranscriptHistoryWorkerInput
-  | SessionPreviewWorkerInput
-  | SessionTitleFieldsWorkerInput
-  | SessionRowPresenceWorkerInput
-  | SessionMembersWorkerInput
-  | SessionEntryListWorkerInput
-  | SessionExactEntriesWorkerInput
-  | SessionStoreTargetWorkerInput
-  | SessionTargetInventoryWorkerInput
-  | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput
-  | SessionTranscriptSearchWorkerInput,
-  SessionTranscriptWorkerReply<
-    | "history-page"
-    | "session-preview"
-    | "session-title-fields"
-    | "session-row-presence"
-    | "session-members"
-    | "session-entry-list"
-    | "session-exact-entries"
-    | "session-store-target"
-    | "session-target-inventory"
-    | "session-identity-evidence"
-    | "usage-cache"
-    | "transcript-search"
-  >
->({
-  workerUrl,
-  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-  maxWorkers: 1,
-  idleTimeoutMs: 0,
-  prepareWorker: () => {
-    ensureSqliteLibrarySelected();
-    return { options: {} };
-  },
-});
+function createHistoryPool() {
+  return createOwnedWorkerTaskPool<
+    SessionHistoryWorkerInput,
+    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
+  >({
+    workerUrl,
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    maxWorkers: 1,
+    idleTimeoutMs: 0,
+    prepareWorker: () => {
+      ensureSqliteLibrarySelected();
+      return { options: {} };
+    },
+  });
+}
+
+const historyPages = createHistoryPool();
+const maintenancePages = createHistoryPool();
 
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
@@ -121,6 +98,10 @@ export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
   pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
 };
 
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createHistoryPool>;
+};
+
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
 export type HistoryDatabaseResource = {
@@ -140,9 +121,17 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-export const historyLane: SessionDatabaseWorkerLane = {
+export const historyLane: SessionHistoryWorkerLane = {
   name: "Session history",
   pool: historyPages,
+  nativeSequence: 0,
+  retiredSequence: 0,
+  pending: 0,
+};
+// Full-store validation cannot yield its snapshot to a foreground history read.
+export const maintenanceLane: SessionHistoryWorkerLane = {
+  name: "Session maintenance",
+  pool: maintenancePages,
   nativeSequence: 0,
   retiredSequence: 0,
   pending: 0,
@@ -162,8 +151,10 @@ export const costRefreshLane: SessionCostWorkerLane = {
   pending: 0,
 };
 
+const databaseWorkerLanes = [historyLane, maintenanceLane, costReadLane, costRefreshLane];
+
 channel("openclaw.memory.critical").subscribe(() => {
-  for (const lane of [historyLane, costReadLane, costRefreshLane]) {
+  for (const lane of databaseWorkerLanes) {
     if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
       continue;
     }
@@ -279,9 +270,9 @@ export function acquireHistoryDatabaseResource(
         })().finally(() => {
           owned.closing = undefined;
           pruneHistoryDatabases();
-          armDatabaseWorkerIdleRetirement(historyLane);
-          armDatabaseWorkerIdleRetirement(costReadLane);
-          armDatabaseWorkerIdleRetirement(costRefreshLane);
+          for (const lane of databaseWorkerLanes) {
+            armDatabaseWorkerIdleRetirement(lane);
+          }
         });
         void owned.closing.catch(() => {});
       }
@@ -310,20 +301,35 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   operation: (scope: {
     assertCurrent: () => void;
     readStoreTarget: (
-      request: SessionStoreTargetReadRequest,
+      request: Omit<SessionStoreTargetReadRequest, "candidates">,
     ) => Promise<SessionStoreTargetReadResult>;
+    readStoreTargetResult: (
+      request: Omit<SessionStoreTargetReadRequest, "candidates">,
+    ) => Promise<Result<SessionStoreTargetReadResult, unknown>>;
     readTargetInventory: (
-      request: SessionStoreTargetInventoryRequest,
+      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
     ) => Promise<SessionStoreTargetInventoryResult>;
   }) => Promise<T>,
+  lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
-  historyClearTimeout(historyLane.idleTimer);
-  historyLane.pending++;
+  const capturedCandidates = candidates.map(({ path, physicalPath, scope }) => ({
+    path,
+    physicalPath,
+    scope,
+  }));
+  const selected = capturedCandidates.map(({ physicalPath, scope }) => ({
+    path: physicalPath,
+    ...(scope ? { scope } : {}),
+  }));
+  historyClearTimeout(lane.idleTimer);
+  lane.pending++;
   try {
     let revoked = false;
     let closing: Promise<void> | undefined;
     let nativeCleanupPending = false;
+    let candidateCleanupPending = false;
     let dispatched = false;
+    let discoveryFailed = false;
     let outcome: { value: T } | { error: unknown };
     const assertCurrent = () => {
       if (revoked) {
@@ -340,7 +346,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       closing ??= (async () => {
         nativeCleanupPending = true;
         try {
-          await rotateDatabaseWorkers(historyLane);
+          await rotateDatabaseWorkers(lane);
           nativeCleanupPending = false;
         } finally {
           closing = undefined;
@@ -354,7 +360,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     };
     const retained = new Set<string>();
     try {
-      for (const candidate of candidates) {
+      for (const candidate of capturedCandidates) {
         for (const pathname of [candidate.path, candidate.physicalPath]) {
           const key = JSON.stringify([pathname, candidate.scope]);
           if (retained.has(key)) {
@@ -374,72 +380,60 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         }
       }
       assertCurrent();
+      const readStoreTargetResult = async (
+        request: Omit<SessionStoreTargetReadRequest, "candidates">,
+      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+        const preparedRequest = { ...request, candidates: capturedCandidates };
+        const reply = await lane.pool.run(
+          () => {
+            assertCurrent();
+            dispatched = true;
+            lane.nativeSequence++;
+            return { kind: "session-store-target", request: preparedRequest };
+          },
+          { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+        );
+        const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        if (
+          typeof result === "boolean" ||
+          Array.isArray(result) ||
+          (result.kind !== "session-store-target" &&
+            result.kind !== "session-target-registry-required")
+        ) {
+          throw new Error("Session history worker returned another result instead of store target");
+        }
+        assertCurrent();
+        discoveryFailed ||= "readError" in result;
+        return "readError" in result
+          ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+          : ok(result);
+      };
       const value = await operation({
         assertCurrent,
+        readStoreTargetResult,
         readStoreTarget: async (request) => {
-          const reply = await historyPages.run(
-            () => {
-              assertCurrent();
-              dispatched = true;
-              historyLane.nativeSequence++;
-              return { kind: "session-store-target", request };
-            },
-            { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
-          );
-          const result = unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-preview"
-            | "session-title-fields"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-exact-entries"
-            | "session-store-target"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-            | "transcript-search"
-          >(reply);
-          if (
-            typeof result === "boolean" ||
-            Array.isArray(result) ||
-            (result.kind !== "session-store-target" &&
-              result.kind !== "session-target-registry-required")
-          ) {
-            throw new Error(
-              "Session history worker returned another result instead of store target",
-            );
+          const read = await readStoreTargetResult(request);
+          if (!read.ok) {
+            throw read.error;
           }
-          assertCurrent();
-          return result;
+          return read.value;
         },
         readTargetInventory: async (request) => {
-          const reply = await historyPages.run(
+          const preparedRequest = { ...request, candidates: capturedCandidates };
+          const reply = await lane.pool.run(
             () => {
               assertCurrent();
               dispatched = true;
-              historyLane.nativeSequence++;
-              return { kind: "session-target-inventory", request };
+              lane.nativeSequence++;
+              return { kind: "session-target-inventory", request: preparedRequest };
             },
             {
-              inputBytes: measureSessionStoreTargetInventoryInputBytes(request),
+              inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
               timeoutMs: 60_000,
             },
           );
-          const result = unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-preview"
-            | "session-title-fields"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-exact-entries"
-            | "session-store-target"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-            | "transcript-search"
-          >(reply);
+          const result =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||
@@ -448,6 +442,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           ) {
             throw new Error(
               "Session history worker returned another result instead of target inventory",
+            );
+          }
+          if (result.kind === "session-target-inventory") {
+            // Best-effort inventory can encode a failed read instead of throwing it.
+            discoveryFailed ||= result.agents.some(
+              ({ result: inventory }) =>
+                !inventory.available && inventory.reason !== "database-missing",
             );
           }
           if (result.kind === "session-target-registry-required") {
@@ -468,7 +469,38 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     // settle; a later close through an alias must never miss a retained handle.
     if (dispatched) {
       try {
-        await retire();
+        // Bun retains native statements after close; failed reads may leave unowned handles.
+        if ("error" in outcome || discoveryFailed || process.versions.bun) {
+          await retire();
+        } else {
+          const through = lane.nativeSequence;
+          candidateCleanupPending = true;
+          try {
+            await lane.pool.closeResources(JSON.stringify(selected));
+            candidateCleanupPending = false;
+            for (const resource of historyDatabases.values()) {
+              const sequence = resource.nativeSequences.get(lane);
+              if (
+                sequence !== undefined &&
+                sequence <= through &&
+                selected.some((candidate) =>
+                  matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+                )
+              ) {
+                resource.nativeSequences.delete(lane);
+              }
+            }
+            pruneHistoryDatabases();
+          } catch (error) {
+            try {
+              await retire();
+              candidateCleanupPending = false;
+            } catch (retirementError) {
+              throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+            }
+            throw error;
+          }
+        }
       } catch (cleanupError) {
         outcome = {
           error:
@@ -478,7 +510,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
         };
       }
     }
-    if (!nativeCleanupPending) {
+    if (!nativeCleanupPending && !candidateCleanupPending) {
       release();
     }
     if ("error" in outcome) {
@@ -487,7 +519,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     assertCurrent();
     return outcome.value;
   } finally {
-    historyLane.pending--;
-    armDatabaseWorkerIdleRetirement(historyLane);
+    lane.pending--;
+    armDatabaseWorkerIdleRetirement(lane);
   }
 }

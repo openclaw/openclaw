@@ -215,6 +215,9 @@ plugins, and installed skills.
     | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
 
+    `/session idle` and `/session max-age` wait for the channel's binding update
+    before confirming success. A failed update does not produce a success reply.
+
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 

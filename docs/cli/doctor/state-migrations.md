@@ -63,6 +63,14 @@ legacy workspace files it left untouched; it does not retire their files or
 proposal history. After the candidate is installed, the real Doctor runs the
 normal import, archival, and relocation against the operator's state.
 
+Completed agent deletions that intentionally kept their files are held back during
+update and migration discovery. Doctor records a recoverable warning naming the
+agent, database path, and `openclaw doctor --fix` guidance. These stores do not
+block active agents' migrations or update rehearsals. If the shared auth source
+is held, its migration records a skip and dependent auth repairs wait; unrelated
+Doctor repairs continue. Restore an intended agent before migrating its retained
+store. Pending file deletion keeps the deletion owner's existing safety checks.
+
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current canonical store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.
@@ -74,6 +82,12 @@ For malformed legacy `exec-approvals.json`, Doctor preserves the original bytes 
 Repair the preserved file locally, then rerun `openclaw doctor --fix` with the same `OPENCLAW_STATE_DIR` setting (leave it unset if it was unset before). Exec approvals remain blocked until migration succeeds. Explicit repair exits nonzero while the legacy file or an interrupted `.doctor-importing` claim remains, before restarting any Gateway stopped for that repair. Do not delete the file or broaden its policy to bypass validation.
 
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
+
+Media repair detection stops at the first event that needs repair. The repair
+transaction still validates every transcript and trajectory row before committing;
+invalid JSON later in either store rolls back the media changes. Databases with
+no media repairs still receive a complete validation scan, including after imports
+or restores.
 
 Doctor shares its initial fleet schema and ownership inspection across the update
 guard and admission checks. Database readers use a bounded worker pool, including

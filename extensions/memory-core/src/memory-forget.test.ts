@@ -681,7 +681,7 @@ describe("memory forget", () => {
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
-      expect(schema.ftsAvailable).toBe(true);
+      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
       db.exec(`
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY, embedding FLOAT[2]

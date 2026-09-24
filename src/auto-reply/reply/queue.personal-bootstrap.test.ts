@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
   createQueueTestRun,
@@ -33,7 +33,7 @@ describe("session personal bootstrap in collected turns", () => {
   ])(
     "preserves the source turn's session profile with $kind",
     async ({ kind, secondParticipant, selectedProfile }) => {
-      const cleanupEvidence = configureChannelAdmissionEvidenceCollection(true);
+      const audit = createChannelAdmissionAudit({ enabled: true });
       const key = `personal-bootstrap-collect-${kind}`;
       const { calls, done, runFollowup } = createDrainRecorder();
       const settings = createQueueSettings();
@@ -53,6 +53,7 @@ describe("session personal bootstrap in collected turns", () => {
           run.run.traceAuthorized = true;
           if (participantId) {
             run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+              audit,
               channelId: "slack",
               participantId,
             });
@@ -75,7 +76,7 @@ describe("session personal bootstrap in collected turns", () => {
         }
       } finally {
         clearFollowupQueue(key);
-        cleanupEvidence();
+        audit.close();
       }
     },
   );

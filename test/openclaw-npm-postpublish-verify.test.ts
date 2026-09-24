@@ -42,11 +42,16 @@ import {
 } from "../scripts/runtime-postbuild.mts";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
+import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 import { createScriptTestHarness } from "./scripts/test-helpers.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
@@ -784,11 +789,13 @@ describe("collectInstalledPackageErrors", () => {
       const probe = spawnSync(
         process.execPath,
         [
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish),
+          ).slice(0, -1),
+          "--input-type=module",
           "--eval",
           [
-            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
+            `import { collectInstalledBundledExtensionManifestErrors } from ${JSON.stringify(resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish).href)};`,
             `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
           ].join("\n"),
         ],
@@ -1197,6 +1204,23 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       },
     },
   };
+  const legacyCompanionSource = [
+    'import { createRequire } from "node:module";',
+    "//#region extensions/discord/src/voice/sdk-runtime.ts",
+    'const voice = createRequire(import.meta.url)("@discordjs/voice");',
+    "//#endregion",
+    "export { voice };",
+    "",
+  ].join("\n");
+  const writeTrustedDiscordManifest = (installRoot: string) => {
+    const manifestRoot = join(installRoot, "trusted-extensions");
+    writePackageFile(manifestRoot, "discord/package.json", {
+      name: "@openclaw/discord",
+      version: "2026.7.33",
+      dependencies: { "@discordjs/voice": "0.19.2" },
+    });
+    return manifestRoot;
+  };
 
   it.each(["2026.7.33", "2026.9.8"])(
     "accepts byte-matched companion ownership for %s",
@@ -1222,17 +1246,47 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       ownership: companionOwnership,
       source: companionSource,
     });
-    const trustedManifestRoot = join(installRoot, "trusted-extensions");
-    writePackageFile(trustedManifestRoot, "discord/package.json", {
-      name: "@openclaw/discord",
-      version: "2026.7.33",
-      dependencies: { "@discordjs/voice": "0.19.2" },
-    });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
 
     try {
       expect(
         collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot]),
       ).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("uses generated region ownership only when the compatibility gate is enabled", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [],
+      source: legacyCompanionSource,
+    });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
+    const missingDependency =
+      "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.";
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        missingDependency,
+      ]);
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a generated region mask the same root-owned dependency", () => {
+    const source = `${legacyCompanionSource}const rootVoice = require("@discordjs/voice");\n`;
+    const { installRoot, packageRoot } = makeCompanionImportFixture({ companions: [], source });
+    const trustedManifestRoot = writeTrustedDiscordManifest(installRoot);
+
+    try {
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot], true),
+      ).toEqual([expect.stringContaining("@discordjs/voice")]);
     } finally {
       rmSync(installRoot, { recursive: true, force: true });
     }

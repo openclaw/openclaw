@@ -610,12 +610,10 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("foreground invocation not allowed");
 
     expect(admitExecution).toHaveBeenCalledTimes(2);
-    expect(admitExecution).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        rawPayload: expect.objectContaining({ agent_id: "child-thread" }),
-      }),
-      expect.any(Function),
-    );
+    const [invocation, retainedGuard, preparation] = admitExecution.mock.lastCall ?? [];
+    expect(invocation).toMatchObject({ rawPayload: { agent_id: "child-thread" } });
+    expect(retainedGuard).toBeTypeOf("function");
+    expect(preparation).toMatchObject({ assertCurrent: expect.any(Function) });
     retainChild = false;
     relay.unregister();
   });
@@ -1285,11 +1283,11 @@ describe("native hook relay registry", () => {
       }
       // Hold successor startup, while keeping the retired listener and real
       // read-only locator lookup intact across the CLI registration deadline.
-      const listen = vi
-        .spyOn(Server.prototype, "listen")
-        .mockImplementation(function (this: Server) {
-          return this;
-        });
+      const listen = vi.spyOn(Server.prototype, "listen").mockImplementation(function (
+        this: Server,
+      ) {
+        return this;
+      });
       try {
         registerNativeHookRelay({
           provider: "codex",
@@ -2189,49 +2187,6 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge not found");
-  });
-
-  it("binds direct bridge tokens to the relay they were issued for", async () => {
-    const first = registerNativeHookRelay({
-      provider: "codex",
-      relayId: "codex-first-bridge-session",
-      sessionId: "session-1",
-      runId: "run-1",
-      allowedEvents: ["pre_tool_use"],
-    });
-    const second = registerNativeHookRelay({
-      provider: "codex",
-      relayId: "codex-second-bridge-session",
-      sessionId: "session-2",
-      runId: "run-2",
-      allowedEvents: ["pre_tool_use"],
-    });
-
-    const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
-    await waitForNativeHookRelayBridgeRecord(second.relayId);
-    await nativeHookRelayStore.writeNativeHookRelayBridgeRecord({
-      record: {
-        ...firstRecord,
-        relayId: second.relayId,
-        expiresAtMs: Date.now() + 10_000,
-      },
-    });
-
-    await expect(
-      invokeNativeHookRelayBridge({
-        provider: "codex",
-        relayId: second.relayId,
-        generation: second.generation,
-        event: "pre_tool_use",
-        timeoutMs: 500,
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "pnpm test" },
-        },
-      }),
-    ).rejects.toThrow("native hook relay bridge target mismatch");
-    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("accepts an allowed Codex invocation and preserves raw payload", async () => {

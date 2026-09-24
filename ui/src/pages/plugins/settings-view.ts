@@ -272,7 +272,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
   return renderSettingsPage(
     html`
       ${renderSettingsPageHeader({
-        title: html`<h1 class="plugins-settings-title">${t("tabs.plugins")}</h1>`,
+        title: t("tabs.plugins"),
         subtitle: t("pluginsPage.settingsDescription"),
       })}
       <div class="plugins-settings-content">
@@ -422,14 +422,14 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
               .progress=${props.installProgress}
             ></openclaw-plugin-install-action
             >${renderPluginAskAction(props.onAskPlugin, false)}`
-        : html`${renderPluginAskAction(props.onAskPlugin)}${renderPluginLifecycle(
+        : renderPluginLifecycle(
             {
               ...props,
               settingsHref: props.settingsHref ?? "#configuration",
               onSettings: () => props.onTabChange("configuration"),
             },
             plugin,
-          )}`,
+          ),
       sidebar:
         catalog || plugin.version || props.inspection?.overview || props.catalogLoading
           ? renderPluginMetadata(

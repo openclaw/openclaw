@@ -392,9 +392,15 @@ describe("runCliAgentWithLifecycle", () => {
         stream: "assistant",
         data: { text: "Silent answer", delta: "Silent answer" },
       });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { completedText: "Silent answer", assistantMessageIndex: 0 },
+      });
       return { payloads: [], meta: { durationMs: 1 } };
     });
     const onActivity = vi.fn();
+    const onCompletedReply = vi.fn(async (_text: string) => {});
     const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
     const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
       async () => undefined,
@@ -406,6 +412,7 @@ describe("runCliAgentWithLifecycle", () => {
       suppressAssistantBridge: true,
       onActivity,
       onAssistantText,
+      onCompletedReply,
       onReasoningProgress,
       runParams: {
         sessionId: "session-1",
@@ -424,8 +431,9 @@ describe("runCliAgentWithLifecycle", () => {
     // liveness evidence — without these stamps a healthy silent run would be
     // reclaimed as run_stalled at the takeover window.
     expect(onAssistantText).not.toHaveBeenCalled();
+    expect(onCompletedReply).not.toHaveBeenCalled();
     expect(onReasoningProgress).not.toHaveBeenCalled();
-    expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
   });
 
   it("stamps onActivity for assistant text without caller callbacks for that stream", async () => {
@@ -750,6 +758,7 @@ describe("clearCliSessionInStore", () => {
 
       let open = true;
       const clear = clearCliSessionInStore({
+        agentId: "main",
         provider: "claude-cli",
         expectedCliSessionId: "stale-session",
         expectedSessionId: activeEntry.sessionId,
@@ -800,6 +809,7 @@ describe("clearCliSessionInStore", () => {
     };
 
     await clearCliSessionInStore({
+      agentId: "main",
       provider: "claude-cli",
       expectedCliSessionId: "stale-session",
       activeSessionEntry: entry,

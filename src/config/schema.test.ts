@@ -1127,58 +1127,6 @@ describe("config schema", () => {
     );
   });
 
-  it("accepts Code Mode config in the runtime zod schema", () => {
-    expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
-    expect(
-      ToolsSchema.parse({
-        codeMode: {
-          enabled: true,
-          runtime: "quickjs-wasi",
-          mode: "only",
-          timeoutMs: 5000,
-          memoryLimitBytes: 67_108_864,
-          maxOutputBytes: 65_536,
-          maxSnapshotBytes: 10_485_760,
-          maxPendingToolCalls: 8,
-          snapshotTtlSeconds: 900,
-          searchDefaultLimit: 4,
-          maxSearchLimit: 12,
-        },
-      })?.codeMode,
-    ).toEqual({
-      enabled: true,
-      runtime: "quickjs-wasi",
-      mode: "only",
-      timeoutMs: 5000,
-      memoryLimitBytes: 67_108_864,
-      maxOutputBytes: 65_536,
-      maxSnapshotBytes: 10_485_760,
-      maxPendingToolCalls: 8,
-      snapshotTtlSeconds: 900,
-      searchDefaultLimit: 4,
-      maxSearchLimit: 12,
-    });
-    expect(
-      ToolsSchema.safeParse({
-        codeMode: {
-          enabled: true,
-          runtime: "node",
-        },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("accepts the Code Mode auto tier and rejects unknown tiers", () => {
-    expect(ToolsSchema.parse({ codeMode: "auto" })?.codeMode).toBe("auto");
-    expect(ToolsSchema.parse({ codeMode: false })?.codeMode).toBe(false);
-    expect(ToolsSchema.parse({ codeMode: { enabled: "auto" } })?.codeMode).toEqual({
-      enabled: "auto",
-    });
-    expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
-    expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
-    expect(ToolsSchema.safeParse({ codeMode: { languages: ["javascript"] } }).success).toBe(false);
-  });
-
   it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
     "preserves authored Swarm config %j without materializing defaults",
     (swarm) => {

@@ -324,7 +324,11 @@ function renderSection(params: {
 
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
   const activeAll = props.intent === "all" && props.category === null;
-  return html`<div class="plugin-catalog-chips" aria-label=${t("pluginsPage.categoriesLabel")}>
+  return html`<div
+    class="plugin-catalog-chips"
+    role="group"
+    aria-label=${t("pluginsPage.categoriesLabel")}
+  >
     <button
       type="button"
       class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"

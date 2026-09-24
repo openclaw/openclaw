@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { describe, expect, it, vi } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   withRetentionFixture,
@@ -161,17 +161,17 @@ describe("Control UI retention cancellation", () => {
       if (boundary === "before-start") {
         cancel();
       }
-      const nativeConfig = getFsSafeNativeConfig();
+      const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
       try {
         if (boundary === "retained-read") {
           // Inject a deterministic abort during hashing through the supported JS backend.
-          configureFsSafeNative({ mode: "off" });
+          setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
         }
         await expect(owner.prepare({ signal: controller.signal })).rejects.toMatchObject({
           name: "AbortError",
         });
       } finally {
-        configureFsSafeNative(nativeConfig);
+        nativeModeEnv.restore();
       }
       expect(controller.signal.aborted).toBe(true);
       expect(readsAfterAbort).toBe(0);

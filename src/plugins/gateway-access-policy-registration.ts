@@ -1,5 +1,8 @@
 import { types } from "node:util";
-import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
+import type {
+  PluginGatewayAccessAuthority,
+  PluginGatewayAccessPolicy,
+} from "./gateway-access-policy.types.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 
@@ -55,6 +58,27 @@ function bindAccessSignal(signal: AbortSignal, instance: PluginInstanceHandle): 
   return controller.signal;
 }
 
+function bindAccessAuthority(
+  authority: PluginGatewayAccessAuthority | undefined,
+  instance: PluginInstanceHandle,
+): PluginGatewayAccessAuthority | undefined {
+  if (!authority) {
+    return undefined;
+  }
+  const grantId = authority.grantId;
+  if (grantId !== undefined && typeof grantId !== "string") {
+    throw new TypeError("Gateway access grant identity must be a string");
+  }
+  return {
+    grantId,
+    signal: bindAccessSignal(authority.signal, instance),
+    assertCurrent: () =>
+      instance.run(() => {
+        authority.assertCurrent();
+      }),
+  };
+}
+
 /** Preserve native signals while every plugin callback retains its original owner. */
 export function bindPluginGatewayAccessPolicy(
   policy: PluginGatewayAccessPolicy,
@@ -63,21 +87,15 @@ export function bindPluginGatewayAccessPolicy(
   if (!instance) {
     return policy;
   }
-  return {
+  const bound: PluginGatewayAccessPolicy = {
     authorize(context) {
-      return instance.run(() => {
-        const authority = policy.authorize(context);
-        if (!authority) {
-          return undefined;
-        }
-        return {
-          signal: bindAccessSignal(authority.signal, instance),
-          assertCurrent: () =>
-            instance.run(() => {
-              authority.assertCurrent();
-            }),
-        };
-      });
+      return instance.run(() => bindAccessAuthority(policy.authorize(context), instance));
     },
   };
+  const resume = instance.run(() => policy.resume);
+  if (resume) {
+    bound.resume = (context) =>
+      instance.run(() => bindAccessAuthority(resume.call(policy, context), instance));
+  }
+  return bound;
 }

@@ -5,7 +5,8 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { updateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
+import type { McpOAuthStore } from "./mcp-oauth-store.js";
+import { seedMcpOAuthStoreForTest } from "./mcp-oauth.test-support.js";
 
 const names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
 const requesterScope = {
@@ -49,7 +50,7 @@ describe("requester MCP status read batching", () => {
           `https://${name}.example.test/mcp`,
           requesterScope,
         );
-        updateMcpOAuthStore(identity.storeKey, () => store);
+        seedMcpOAuthStoreForTest(identity.storeKey, store);
       }
       await closeOpenClawStateDatabaseAsync();
 

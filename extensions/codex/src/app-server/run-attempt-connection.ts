@@ -1,3 +1,4 @@
+import { createAgentHarnessAttemptCancellation } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   isActiveHarnessContextEngine,
   resolveSandboxContext,
@@ -6,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
@@ -207,19 +209,28 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  const { binding: admittedBinding, assertCurrent } = await resolveCodexSessionBinding({
-    reclaimStale: true,
-    bindingStore,
-    identity: bindingIdentity,
-    config: params.config,
-    storePath: params.sessionTarget?.storePath,
-    assertCurrent: params.hostCapabilities.assertActive,
-    signal: params.abortSignal,
-    assertBinding: params.expectedSessionRuntimeOwnership
-      ? (binding) =>
-          assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
-      : undefined,
-  });
+  let modelExecution:
+    | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
+    | undefined;
+  const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
+  const { binding: admittedBinding, assertCurrent: assertBindingCurrent } =
+    await resolveCodexSessionBinding({
+      reclaimStale: true,
+      bindingStore,
+      identity: bindingIdentity,
+      config: params.config,
+      storePath: params.sessionTarget?.storePath,
+      assertCurrent: params.hostCapabilities.assertActive,
+      signal: params.abortSignal,
+      assertBinding: params.expectedSessionRuntimeOwnership
+        ? (binding) =>
+            assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
+        : undefined,
+    });
+  const assertCurrent = () => {
+    assertBindingCurrent();
+    assertModelExecutionCurrent();
+  };
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -395,35 +406,40 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     terminalOutcomeFrozen: false,
     sharedAbortAllowedAfterTerminalOutcome: false,
   };
-  const runAbortController = new AbortController();
-  let attemptAbortNotified = false;
-  const notifyAttemptAbort = () => {
-    if (attemptAbortNotified) {
+  const cancellation = createAgentHarnessAttemptCancellation({
+    upstreamSignal: params.abortSignal,
+    onAttemptAbort: () => params.onAttemptAbort?.(),
+    state: terminalState,
+  });
+  const { controller: runAbortController, abortExplicitly } = cancellation;
+  let detachModelAbort: (() => void) | undefined;
+  const releaseModelExecution = () => {
+    detachModelAbort?.();
+    detachModelAbort = undefined;
+    modelExecution?.release();
+  };
+  const bindModelExecution = (
+    model: Parameters<NonNullable<typeof params.hostCapabilities.bindModelExecution>>[0],
+  ) => {
+    assertCurrent();
+    const bind = params.hostCapabilities.bindModelExecution;
+    if (!bind) {
+      throw new Error("Codex inference requires host model execution authority.");
+    }
+    const execution = bind(model);
+    releaseModelExecution();
+    modelExecution = execution;
+    if (!execution) {
       return;
     }
-    attemptAbortNotified = true;
-    params.onAttemptAbort?.();
-  };
-  const abortExplicitly = (reason: unknown) => {
-    if (terminalState.terminalOutcomeFrozen) {
-      if (terminalState.sharedAbortAllowedAfterTerminalOutcome) {
-        notifyAttemptAbort();
-      }
-      return;
+    const abortModelExecution = () => abortExplicitly(execution.signal.reason);
+    execution.signal.addEventListener("abort", abortModelExecution, { once: true });
+    detachModelAbort = () => execution.signal.removeEventListener("abort", abortModelExecution);
+    if (execution.signal.aborted) {
+      abortModelExecution();
     }
-    notifyAttemptAbort();
-    terminalState.explicitCancellationObserved = true;
-    terminalState.explicitCancellationReason ??= reason;
-    runAbortController.abort(reason);
+    execution.assertCurrent();
   };
-  const abortFromUpstream = () => {
-    abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
-  };
-  if (params.abortSignal?.aborted) {
-    abortFromUpstream();
-  } else {
-    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
-  }
   try {
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
@@ -487,7 +503,58 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // Host capabilities are identity-keyed; carry generation proof separately.
     return {
       params,
+      prepareInputAttachments: async (
+        request: Omit<
+          Parameters<NonNullable<typeof params.hostCapabilities.prepareInputAttachments>>[0],
+          "placement"
+        >,
+      ) => {
+        const assertPreparationCurrent = () => {
+          assertCurrent();
+          request.signal?.throwIfAborted();
+          request.assertCurrent();
+        };
+        assertPreparationCurrent();
+        if (request.turn) {
+          const remoteNote = await prepareAgentWorkspaceAttachments({
+            workspaceDir: params.workspaceDir,
+            turn: {
+              ...request.turn,
+              config: params.config,
+              timeoutMs: params.timeoutMs,
+              abortSignal: request.signal,
+            },
+            assertCurrent: assertPreparationCurrent,
+          });
+          assertPreparationCurrent();
+          if (remoteNote) {
+            return remoteNote;
+          }
+        }
+        if (
+          sandbox?.enabled ||
+          params.disableTools ||
+          params.toolsAllow?.length === 0 ||
+          params.toolExecutionAllow?.length === 0 ||
+          remoteExec ||
+          appServer.start.transport !== "stdio" ||
+          appServer.remoteWorkspaceRoot ||
+          (params.permissionMode && params.permissionMode !== "full")
+        ) {
+          return undefined;
+        }
+        const note = await params.hostCapabilities.prepareInputAttachments?.({
+          ...request,
+          placement: "local-host",
+          assertCurrent: assertPreparationCurrent,
+        });
+        assertPreparationCurrent();
+        return note;
+      },
       assertCurrent,
+      assertModelExecutionCurrent,
+      bindModelExecution,
+      releaseModelExecution,
       options,
       attemptStartedAt,
       profilerEnabled,
@@ -527,7 +594,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       runAbortController,
       terminalState,
       abortExplicitly,
-      abortFromUpstream,
+      cancellation,
       resolveReviewerPolicyContext,
       resolveRuntimeOptionsForCurrentBinding,
       mutable,
@@ -536,7 +603,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     };
   } catch (error) {
     // The attempt owns this listener only after connection preparation returns.
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    cancellation.dispose();
+    releaseModelExecution();
     throw error;
   }
 }

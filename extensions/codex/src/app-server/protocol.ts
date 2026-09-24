@@ -571,6 +571,11 @@ export type CodexErrorNotification = {
     message?: string;
     codexErrorInfo?: "misalignmentPolicyViolation" | (string & {}) | JsonObject | null;
     additionalDetails?: string | null;
+    misalignment?: {
+      errorType?: string | null;
+      detailedExplanation?: string | null;
+      steer?: { message: string } | null;
+    } | null;
     [key: string]: unknown;
   };
   willRetry?: boolean;
@@ -699,7 +704,7 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": { data: { processId: string }[] };
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

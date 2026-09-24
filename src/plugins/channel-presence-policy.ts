@@ -216,14 +216,6 @@ function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlo
   }
 }
 
-function resolveBasePolicyBlockedReason(params: {
-  plugin: Pick<PluginManifestRecord, "id">;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  allowRestrictiveAllowlistBypass?: boolean;
-}): ConfiguredChannelBlockedReason | null {
-  return resolveManifestOwnerBasePolicyBlock(params);
-}
-
 function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
@@ -277,7 +269,7 @@ function evaluateEffectiveChannelPlugin(params: {
       config: params.activationSource.rootConfig ?? params.config,
       channelId: params.channelId,
     });
-  const baseBlockedReason = resolveBasePolicyBlockedReason({
+  const baseBlockedReason = resolveManifestOwnerBasePolicyBlock({
     plugin: params.plugin,
     normalizedConfig: params.normalizedConfig,
     allowRestrictiveAllowlistBypass: explicitBundledChannelConfig,
@@ -647,7 +639,8 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   );
 }
 
-function resolveScopedChannelOwnerPluginIds(params: {
+/** Resolves plugin ids discoverable for scoped channel activation. */
+export function resolveDiscoverableScopedChannelPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
@@ -706,18 +699,6 @@ function resolveScopedChannelOwnerPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Resolves plugin ids discoverable for scoped channel activation. */
-export function resolveDiscoverableScopedChannelPluginIds(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  channelIds: readonly string[];
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] {
-  return resolveScopedChannelOwnerPluginIds(params);
-}
-
 /** Resolves plugin ids that own currently configured channels. */
 export function resolveConfiguredChannelPluginIds(params: {
   config: OpenClawConfig;
@@ -745,7 +726,7 @@ export function resolveConfiguredChannelPluginIds(params: {
   if (configuredChannelIds.length === 0) {
     return [];
   }
-  return resolveScopedChannelOwnerPluginIds({
+  return resolveDiscoverableScopedChannelPluginIds({
     ...params,
     channelIds: configuredChannelIds,
   });

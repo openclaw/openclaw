@@ -1,19 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  constants as fsConstants,
-  cpSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMergeGitFixtureFactory } from "./pr-merge-fixture-git.test-support.js";
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
@@ -23,6 +15,7 @@ export function createMergeOutcomeFixtureHarness() {
   let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
   const scripts = join(process.cwd(), "scripts");
   const nodeExecutable = requireNodeTool("node");
+  const nodeArgs = resolveVitestNodeArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
   const lockRef = "refs/openclaw/pr-operation-locks/123";
   const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -42,59 +35,25 @@ export function createMergeOutcomeFixtureHarness() {
   const supportsNoLazyFetch =
     spawnSync("git", ["--no-lazy-fetch", "--version"], { env: gitEnv }).status === 0;
 
-  function createFixtureGit(repo: string) {
-    const git = (args: string[], input?: string, cwd = repo, env?: NodeJS.ProcessEnv) =>
-      execFileSync(
-        "git",
-        ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
-        {
-          cwd,
-          env: { ...gitEnv, ...env },
-          input,
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-        },
-      ).trim();
-    const tree = (owner: string, sibling = "stable\n") => {
-      const a = git(["hash-object", "-w", "--stdin"], owner);
-      const b = git(["hash-object", "-w", "--stdin"], sibling);
-      return git(["mktree"], `100644 blob ${a}\towner.txt\n100644 blob ${b}\tsibling.txt\n`);
-    };
-    const commit = (
-      contents: string,
-      parents: string[],
-      message = "Fixture commit\n",
-      author?: { name: string; email: string },
-    ) =>
-      git(
-        ["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])],
-        message,
-        repo,
-        author
-          ? {
-              GIT_AUTHOR_NAME: author.name,
-              GIT_AUTHOR_EMAIL: author.email,
-              GIT_COMMITTER_NAME: author.name,
-              GIT_COMMITTER_EMAIL: author.email,
-            }
-          : undefined,
-      );
-    return { git, tree, commit };
-  }
-
   function createFixtureTemplate(directory: string) {
     const root = realpathSync(directory);
-    const repo = join(root, "repo");
-    const remote = join(root, "remote.git");
-    mkdirSync(repo);
-    const { git, tree, commit } = createFixtureGit(repo);
-    git(["init", "-q", "-b", "main"]);
-    git(["config", "user.name", "Merge Fixture"]);
-    git(["config", "user.email", "fixture@example.invalid"]);
-    git(["init", "-q", "--bare", remote]);
-    const base = commit(tree("before\n"), []);
-    git(["update-ref", "refs/heads/main", base]);
-    return { repo, remote, base };
+    const programs = new Map<string, string>();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    return {
+      bin,
+      gitFixture: createMergeGitFixtureFactory(root, gitEnv),
+      compileCache: join(root, "node-compile-cache"),
+      program(name: string, contents: string, executable = false) {
+        let path = programs.get(name);
+        if (!path) {
+          path = join(root, name);
+          writeFileSync(path, contents, executable ? { mode: 0o755 } : undefined);
+          programs.set(name, path);
+        }
+        return path;
+      },
+    };
   }
 
   function fixture(
@@ -104,59 +63,11 @@ export function createMergeOutcomeFixtureHarness() {
     sourceAuthor?: { name: string; email: string },
   ) {
     const root = realpathSync(temps.make("pr-merge-outcome-"));
-    const remote = join(root, "remote.git");
-    const repo = join(root, "repo");
     const template = (fixtureTemplate ??= createFixtureTemplate(
       templateDirs.make("pr-merge-outcome-template-"),
     ));
-    // Only the common base is reused. Source commits stay fresh, loose and private
-    // so corruption, GC, attribution and multi-commit rebase cases keep their proof.
-    const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-    cpSync(template.repo, repo, copyOptions);
-    cpSync(template.remote, remote, copyOptions);
-    const { base } = template;
-    const { git, tree, commit } = createFixtureGit(repo);
-    git(["remote", "add", "origin", remote]);
-    const sourceCommits: string[] = [];
-    let head = base;
-    for (const [owner, sibling] of sourceVersions) {
-      head = commit(tree(owner, sibling), [head], sourceMessage, sourceAuthor);
-      sourceCommits.push(head);
-    }
-    git(["update-ref", "refs/heads/topic", head]);
-    git(["push", "-q", "origin", "main", "topic:refs/pull/123/head", "topic"]);
-    if (promisor) {
-      git(["--git-dir=" + remote, "config", "uploadpack.allowFilter", "true"]);
-      renameSync(repo, join(root, "seed"));
-      git(
-        [
-          "clone",
-          "--no-checkout",
-          "--filter=blob:none",
-          "--branch=topic",
-          `file://${remote}`,
-          repo,
-        ],
-        undefined,
-        root,
-      );
-      expect(git(["config", "--bool", "remote.origin.promisor"])).toBe("true");
-      expect(
-        readdirSync(join(repo, ".git/objects/pack")).some((name) => name.endsWith(".promisor")),
-      ).toBe(true);
-    }
-    // Production URLs still use the real Git transport, redirected only in this disposable repo.
-    git(["config", `url.file://${remote}.insteadOf`, "https://github.com/fixture/repo"]);
-    git([
-      "config",
-      "--add",
-      `url.file://${remote}.insteadOf`,
-      "https://github.com/fixture/repo.git",
-    ]);
-    const worktree = join(repo, ".worktrees/pr-123");
-    git(["worktree", "add", "-q", "-b", "pr-123-prep", worktree, head]);
-    // Match the real repository: native review artifacts are ignored generated files.
-    writeFileSync(join(repo, ".git/info/exclude"), ".local/\n");
+    const { repo, remote, worktree, base, head, sourceCommits, git, tree, commit } =
+      template.gitFixture(root, sourceMessage, sourceVersions, promisor, sourceAuthor);
     mkdirSync(join(worktree, ".local"));
     const prepare = (preparedHead: string, main = base, localHead = preparedHead) => {
       const review = validReview(preparedHead);
@@ -282,6 +193,7 @@ export function createMergeOutcomeFixtureHarness() {
       }>,
       mainAdvances: [] as string[],
       calls: [] as string[][],
+      nodeArgs: [] as string[],
       mutations: 0,
       cancellations: 0,
       cancellation: "success",
@@ -304,6 +216,7 @@ export function createMergeOutcomeFixtureHarness() {
         user: { id: number; login: string; type: string };
       }>,
       issueCommentReads: 0,
+      tamperCorrectionAtFinalReview: false,
       issueCommentsErrorAt: 0,
       comments: [] as { body: string; html_url: string }[],
       posts: 0,
@@ -319,7 +232,14 @@ export function createMergeOutcomeFixtureHarness() {
       requiredCheckName: "CI",
       refusalCapture: "error: string rewrite protection blocked unsafe input\n",
       ciExit: 0,
-      duringChecks: null as null | { head?: string; artifact?: string; bodyPath?: string },
+      duringChecks: null as null | {
+        head?: string;
+        preparedHead?: string;
+        artifact?: string;
+        artifactContents?: string;
+        bodyPath?: string;
+        receiptField?: "LOCAL_PREP_HEAD_SHA" | "PREP_HEAD_SHA";
+      },
       review: true,
       ready: true,
       cleanup: "",
@@ -345,9 +265,8 @@ export function createMergeOutcomeFixtureHarness() {
     };
     const state = (): typeof initial => JSON.parse(readFileSync(statePath, "utf8"));
     save(initial);
-    const gh = join(root, "gh.mjs");
-    writeFileSync(
-      gh,
+    const gh = template.program(
+      "gh.mjs",
       `
 import fs from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -367,6 +286,7 @@ if(route==="watch") {
   process.exit(s.ciExit);
 }
 if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
+s.nodeArgs=process.execArgv;
 s.calls.push([route,...args]);save();
 if(args.some(arg=>arg.includes("{owner}")||arg.includes("{repo}"))) fail("protected unresolved repository placeholder");
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
@@ -554,7 +474,13 @@ else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/actio
 else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.bodyPath) fs.writeFileSync(s.duringChecks.bodyPath,"Changed later");
   if(s.duringChecks?.head) s.pr.headRefOid=s.duringChecks.head;
-  if(s.duringChecks?.artifact) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact,"\\n# changed during checks\\n");
+  if(s.duringChecks?.preparedHead) git(["update-ref","refs/heads/pr-123-prep",s.duringChecks.preparedHead]);
+  if(s.duringChecks?.artifact) {
+    const path=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact;
+    if(typeof s.duringChecks.artifactContents==="string") fs.writeFileSync(path,s.duringChecks.artifactContents);
+    else fs.appendFileSync(path,"\\n# changed during checks\\n");
+  }
+  if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
   out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const fields=args[args.indexOf("--json")+1].split(",");
@@ -669,6 +595,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   } else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing live comment header");
     s.issueCommentReads++;
+    if(s.issueCommentReads>1&&s.tamperCorrectionAtFinalReview) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/correction-review.json","\\n");
     if(s.tamperMergeBody) {
       const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
       for(const name of fs.readdirSync(local).filter(name=>name.startsWith("merge-body."))) fs.writeFileSync(local+name,"Tampered");
@@ -689,9 +616,8 @@ else if(args[0]==="pr"&&args[1]==="view") {
 save();
 `,
     );
-    const shell = join(root, "invoke.sh");
-    writeFileSync(
-      shell,
+    const shell = template.program(
+      "invoke.sh",
       `#!/usr/bin/env bash
 set -euo pipefail
 script_parent_dir="$FIXTURE_SCRIPTS"
@@ -701,6 +627,7 @@ source "$script_parent_dir/pr-lib/operation-lock.sh"
 source "$script_parent_dir/pr-lib/common.sh"
 source "$script_parent_dir/pr-lib/merge.sh"
 source "$script_parent_dir/pr-lib/review.sh"
+source "$script_parent_dir/pr-lib/gates.sh"
 repo_root() { printf '%s\\n' "$FIXTURE_REPO"; }
 ensure_gh_api_auth() { :; }
 verify_prep_branch_matches_prepared_head() { [ "$(command git rev-parse HEAD)" = "$2" ]; }
@@ -749,23 +676,32 @@ pr_git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
-if [ -n "\${5:-}" ]; then
+if [ "\${9:-}" = verify ]; then
+  merge_verify 123 '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
+elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
   merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}"
 fi
 `,
+      true,
     );
-    chmodSync(shell, 0o755);
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    writeFileSync(join(bin, "gh"), '#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_GH" direct "$@"\n', {
-      mode: 0o755,
-    });
+    const { bin } = template;
+    // The fixture isolates its environment; carry the test runner's Node 24
+    // shutdown policy through shell-launched helpers as well as the supervisor.
+    template.program(
+      "bin/node",
+      `#!/bin/sh\nexec "$FIXTURE_NODE" ${nodeArgs.map((arg) => JSON.stringify(arg)).join(" ")} "$@"\n`,
+      true,
+    );
+    template.program("bin/gh", '#!/bin/sh\nexec node "$FIXTURE_GH" direct "$@"\n', true);
+    const tracePath = join(root, "git.trace.jsonl");
     const env = {
       ...gitEnv,
       PATH: `${bin}:${gitEnv.PATH}`,
       TMPDIR: root,
+      // Reuse compiled owner modules across native children, never mutable fixture state.
+      NODE_COMPILE_CACHE: template.compileCache,
       FIXTURE_STATE: statePath,
       FIXTURE_ROOT: root,
       FIXTURE_REPO: repo,
@@ -775,7 +711,8 @@ fi
       FIXTURE_NODE: nodeExecutable,
       OPENCLAW_PR_MERGE_METHOD: "squash",
       OPENCLAW_PR_STRICT_DRIFT: "",
-      GIT_TRACE2_EVENT: join(root, "git.trace.jsonl"),
+      // Only partial-clone cases consume trace evidence to reject implicit hydration.
+      GIT_TRACE2_EVENT: promisor ? tracePath : undefined,
     };
     const run = (
       auto = false,
@@ -788,10 +725,12 @@ fi
       legacyDirectory = "",
       cancelAuto = false,
       refusalDirectory = "",
+      verifyOnly = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
         [
+          ...nodeArgs,
           join(scripts, "pr-lib/process-group-runner.mjs"),
           repo,
           shell,
@@ -803,6 +742,7 @@ fi
           legacyDirectory,
           String(cancelAuto),
           refusalDirectory,
+          verifyOnly ? "verify" : "",
         ],
         {
           cwd,
@@ -874,7 +814,7 @@ fi
       JSON.parse(
         execFileSync(
           nodeExecutable,
-          [gh, "path", "pr", "view", "123", "--json", "state,headRefOid,mergeCommit"],
+          [...nodeArgs, gh, "path", "pr", "view", "123", "--json", "state,headRefOid,mergeCommit"],
           { cwd: repo, env, encoding: "utf8" },
         ),
       );
@@ -912,6 +852,7 @@ fi
       save,
       run,
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
+      verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
       recover,
       advance,
@@ -922,7 +863,7 @@ fi
       replacePreparedHead,
       ordinaryRead,
       trace: () =>
-        readFileSync(env.GIT_TRACE2_EVENT, "utf8")
+        readFileSync(tracePath, "utf8")
           .trim()
           .split("\n")
           .map((line): { event: string; sid: string; argv?: string[] } => JSON.parse(line)),

@@ -482,6 +482,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           'repo_root() { printf "%s\\n" "$PWD"; }',
           'source "$script_parent_dir/pr-lib/gates.sh"',
           'source "$script_parent_dir/pr-lib/merge.sh"',
+          'source "$script_parent_dir/pr-lib/review.sh"',
           command,
         ].join("\n"),
       ],
@@ -585,7 +586,7 @@ refresh_main_snapshot() { PR_MAIN_SHA=${mainSha}; }
 verify_prep_branch_matches_prepared_head() { :; }
 review_artifact_preflight() { :; }
 validate_review_artifact_data() { :; }
-require_ready_review_recommendation() { :; }
+require_prepared_review() { :; }
 mark_pr_operation_side_effects_started() { :; }
 is_canonical_pr_number() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 merge_outcome_load_local() { MERGE_OUTCOME_OID=""; MERGE_OUTCOME_RECORD=""; }

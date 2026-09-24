@@ -253,11 +253,20 @@ describe("new-session model runtime", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
-  it("shows the known default immediately without inventing catalog choices", async () => {
+  it("waits for a catalog receipt before presenting the configured default", async () => {
     const pending = deferred<{ models: ModelCatalogEntry[] }>();
     const { context, request } = contextWith([]);
     request.mockReturnValueOnce(pending.promise);
-    const control = new NewSessionModelControl(() => undefined);
+    const ready = deferred();
+    const control = new NewSessionModelControl(() => {
+      if (
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="openai/gpt-5.6-luna"]',
+        )
+      ) {
+        ready.resolve();
+      }
+    });
 
     control.load(context, "main", true);
 
@@ -270,18 +279,26 @@ describe("new-session model runtime", () => {
       ".skeleton.chat-controls__model-trigger-skeleton",
     );
     expect(loadingModelTrigger).not.toBeNull();
-    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("false");
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
     expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
-      false,
+      true,
     );
-    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("gpt-5.6-luna");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toContain("Loading models…");
+    expect(container.textContent).not.toContain("gpt-5.6-luna");
     expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
-    expect(loadingSkeleton).toBeNull();
+    expect(loadingSkeleton).not.toBeNull();
     expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     expect(control.modelForSubmission()).toBe("");
     expect(control.modelSelectionBlockedReason({ id: "main" })).toBeUndefined();
-    pending.resolve({ models: [] });
+    pending.resolve({ models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }] });
+    await ready.promise;
+    const settled = renderControl(control, context);
+    expect(settled.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]')).not.toBeNull();
+    expect(settled.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
+      "false",
+    );
+    control.reset();
   });
 
   it("waits for selected-agent defaults after chat metadata resolves", async () => {

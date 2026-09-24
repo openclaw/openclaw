@@ -50,6 +50,14 @@ mixed group retains its product tests and uses separate subset timing identities
 The five `test/scripts/*.e2e.test.ts` product integration gates remain outside
 this maintainer tier.
 
+The shipped-updater composition in
+`src/cli/update-cli/update-command-legacy-finalize.test.ts` uses the existing
+`tooling-isolated` project in this tier. Its real finalizer, native restart,
+lease-authority and cancellation-cleanup cases stay intact. Ordinary product
+PRs and main pushes omit it; tooling-owner PRs and manual/full-release validation
+retain it. Direct file runs and broad `pnpm test src/cli` runs still select its
+isolated owner.
+
 Every CI manual dispatch includes the full tooling family. Full Release
 Validation's `normal_ci` child dispatches CI on the frozen candidate, where
 `Run Node test shard` executes those unchanged tests before the regular release
@@ -79,35 +87,35 @@ the job's uploaded artifacts.
 
 ## Pipeline overview
 
-| Job                              | Purpose                                                                                                                                                                                                                                                                                                  | When it runs                                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `preflight`                      | Detect changed scopes and build the CI manifest; all-Blacksmith canonical Node-relevant runs also restore the exact dependency cache before fanout                                                                                                                                                       | Always on non-draft pushes and PRs                 |
-| `security-fast`                  | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                                                                                                                                | Always on non-draft pushes and PRs                 |
-| `build-artifacts`                | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                              |
-| `control-ui-performance`         | Compare Control UI CSS with the exact base revision and enforce asset budgets independently of artifact generation                                                                                                                                                                                       | UI/build/dependency/import owners and manual CI    |
-| `control-ui-i18n`                | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI     |
-| `checks-fast-core`               | Fast Linux correctness lanes: environment-variable, max-lines suppression and PR line-cap growth ratchets, assertion-safety baseline, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                     | Node-relevant changes                              |
-| `qa-smoke-ci-profile`            | Self-contained balanced parts of the automatic QA Smoke coverage set; one private-overlay build per part (the smoke set has no docker-lane or Control UI scenarios; the run step fails closed if one returns)                                                                                            | QA-owned main changes and ordinary manual CI       |
-| `checks-fast-contracts-plugins`  | One setup shared by two sequential weighted plugin contract processes; frozen targets keep separate rows                                                                                                                                                                                                 | Node-relevant changes                              |
-| `checks-fast-contracts-channels` | One setup shared by two sequential weighted channel contract envelopes; frozen targets keep separate rows                                                                                                                                                                                                | Node-relevant changes                              |
-| `checks-node-*`                  | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                              |
-| `docker-seed-e2e`                | One Docker scheduler job for the executable MCP, update-channel, Fleet cache, and published-upgrade owner lanes; the published upgrade seeds legacy operator state on an exact published predecessor                                                                                                     | Owner main changes; survivor on ordinary manual CI |
-| `check-*`                        | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                              |
-| `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                              |
-| `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only |
-| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)             |
-| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI                                                                                                                | Native i18n-relevant changes                       |
-| `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                      |
-| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                           |
-| `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                             |
-| `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                             |
-| `ios-build`                      | Debug build and Swift lint smoke; full manual CI adds separate Release device and native test phases                                                                                                                                                                                                     | iOS/capture changes and full manual CI             |
-| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Full manual CI only                                |
-| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                       |
-| `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                           |
-| `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                             |
-| `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                      |
-| `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                      |
+| Job                              | Purpose                                                                                                                                                                                                                                                                                                  | When it runs                                          |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `preflight`                      | Detect changed scopes and build the CI manifest; all-Blacksmith canonical Node-relevant runs also restore the exact dependency cache before fanout                                                                                                                                                       | Always on non-draft pushes and PRs                    |
+| `security-fast`                  | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                                                                                                                                | Always on non-draft pushes and PRs                    |
+| `build-artifacts`                | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                                 |
+| `control-ui-performance`         | Compare Control UI CSS with the exact base revision and enforce asset budgets independently of artifact generation                                                                                                                                                                                       | UI/build/dependency/import owners and manual CI       |
+| `control-ui-i18n`                | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI        |
+| `checks-fast-core`               | Fast Linux correctness lanes: environment-variable, max-lines suppression and PR line-cap growth ratchets, assertion-safety baseline, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                     | Node-relevant changes                                 |
+| `qa-smoke-ci-profile`            | Self-contained balanced parts of the automatic QA Smoke coverage set; one private-overlay build per part (the smoke set has no docker-lane or Control UI scenarios; the run step fails closed if one returns)                                                                                            | QA-owned main changes and ordinary manual CI          |
+| `checks-fast-contracts-plugins`  | One setup shared by two sequential weighted plugin contract processes; frozen targets keep separate rows                                                                                                                                                                                                 | Node-relevant changes                                 |
+| `checks-fast-contracts-channels` | One setup shared by two sequential weighted channel contract envelopes; frozen targets keep separate rows                                                                                                                                                                                                | Node-relevant changes                                 |
+| `checks-node-*`                  | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                 |
+| `docker-seed-e2e`                | One Docker scheduler job; main retains the published-upgrade survivor with legacy operator state and an authenticated managed restart; ordinary manual/release CI adds the five MCP, update-channel, and Fleet cache lanes                                                                               | Every admitted canonical main run; ordinary manual CI |
+| `check-*`                        | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                 |
+| `check-additional-*`             | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                 |
+| `checks-node-compat-node24`      | Node 24 minimum compatibility build and smoke lane                                                                                                                                                                                                                                                       | Full Release Validation and manual dispatches only    |
+| `check-docs`                     | Docs formatting, lint, and broken-link checks                                                                                                                                                                                                                                                            | Docs changed (PRs and manual dispatch)                |
+| `native-i18n`                    | Verify native source extraction and localization safety on source PRs and release gates; enforce generated parity on generated PRs, generated-scope release gates, and ordinary manual CI                                                                                                                | Native i18n-relevant changes                          |
+| `skills-python`                  | Ruff + pytest for Python-backed skills                                                                                                                                                                                                                                                                   | Python-skill-relevant changes                         |
+| `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                              |
+| `macos-node`                     | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                |
+| `macos-swift`                    | Swift lint and build for the macOS app, plus tests for the app, shared OpenClawKit, and standalone Swabble package                                                                                                                                                                                       | macOS-relevant changes                                |
+| `ios-build`                      | Debug build and Swift lint smoke; full manual CI adds separate Release device and native test phases                                                                                                                                                                                                     | iOS/capture changes and full manual CI                |
+| `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Full manual CI only                                   |
+| `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                          |
+| `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                              |
+| `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                |
+| `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
+| `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                         |
 
 ### Test runtime selection
 
@@ -115,8 +123,11 @@ Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
 failures or additional skips stay on Node, and the compatible remainder runs on
 Bun. Those Node files still execute; they are not excluded from CI. The complete
-fake-timer lane also supports Bun. UI and other families retain Node until they
-pass on the pinned fork within their existing CI resource budgets. Precise PR targets use the existing
+fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
+files on Node (`chat-pane-retained-presentation.test.ts` and
+`usage-page-details.test.ts`) and runs the remaining files on Bun.
+Other families retain Node until they pass on the pinned fork within their
+existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. Mixed or ambiguous selections retain
 Node, and no tests are removed from the selected inventory.
 
@@ -125,6 +136,32 @@ Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun
 within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
 without the runtime-selection capability keep their original Node behavior.
+The UI job probes its actual config and arguments through the target's runtime
+owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
+and legacy compatibility targets retain Node.
+Current-runner targets use three native shards and three workers per row,
+including exact-target Full Release Validation dispatches. Historical
+compatibility targets retain their unsharded package command.
+The UI runtime partition is applied after Vitest selects each native shard, so
+files keep their original shard ownership. A shard with no Node-only files
+finishes that partition without running other UI files. Dual validation runs
+the complete UI selection on Node, then excludes only those two files from Bun;
+their assertions remain required on Node, with no added skips.
+
+The nonbrowser Control UI projects load `bun-css-tokenizer.setup.ts`. On Bun,
+this setup resolves jsdom's native CSS tokenizer and prevents inlining only its
+`endOfFile` predicate. The pinned fork can otherwise
+enter an unbounded CSS-tokenizer loop after an ordered sequence of UI files.
+Baseline, DFG, and FTL JIT remain enabled; Node and Chromium are unaffected.
+The UI runtime owner delays FTL compilation with warmup/soon thresholds of
+512000/8000. These short-lived workers benefit from less compilation work;
+the protected cache publisher uses the same policy when collecting its seven
+canonical UI seed files on Bun. PR jobs restore that Bun seed alongside the
+Node seed, with separate transform-cache leaves.
+The setup leaves tokenizer exports and CSS behavior unchanged. Remove it
+only after a corrected pinned runtime passes the original ordered reproduction,
+the complete UI config, and all three native shards within their existing memory
+budgets.
 
 The test-runtime setup action installs a checksum-pinned build of the Bun fork
 only for jobs that need it. The source commit, archive checksum, and executable
@@ -134,8 +171,8 @@ Vitest and its workers use the selected runtime. Bun and Node have separate
 transform-cache directories and timing identities. Either runtime failing fails
 the job. This adds no matrix rows or runner registrations.
 
-`NODE_OPTIONS` continues to limit Node heaps; Bun does not use that V8 heap
-limit. Compare observed memory use alongside elapsed time before admitting more
+`NODE_OPTIONS`, where configured, limits Node heaps; the UI lane retains Node's
+default heap limit. Bun does not use that V8 limit. Compare observed memory use alongside elapsed time before admitting more
 lanes. Compatibility evidence must use the exact fork build installed by CI;
 stock Bun results and different fork revisions are separate measurements.
 
@@ -258,7 +295,9 @@ Gateway startup checks. The explicit step prepares the runtime once with
 `pnpm build qaRuntime`, then runs the config corpus and all eight state files in
 one Vitest process with at most four workers. A failed preparation stops the step
 before workers consume memory or attempt their own builds. Frozen targets from
-before the file split retain their config process and four state processes.
+before the file split retain their config process and four state processes,
+admitted in batches with one slot per four available CPUs (at least one slot).
+A failed corpus run is reported while the remaining shards still run.
 The corpus uses the normal bundled-plugin resolver to select the prepared
 runtime from this checkout instead of forcing TypeScript plugin entrypoints.
 Plugins whose Doctor contracts require source loading retain that behavior;
@@ -271,32 +310,37 @@ fixtures/helpers, production or build inputs, and tests imported by another
 owner retain E2E coverage. Main pushes, manual validation, and frozen targets
 keep their existing selection.
 
-The `docker-seed-e2e` job selects the executable owners of changed E2E helpers
-and the published-upgrade regression gate through one scheduler invocation.
-The published lane runs `legacy-operator-state` against an exact published
-predecessor on affected canonical `main` pushes. Canonical manual CI
-retains it when the target declares the Docker seed capability. Unknown changed
-paths retain survivor coverage; docs-only pushes remain excluded at the trigger.
-It uses `auto-auth`: every supported baseline must replace the running managed
-Gateway through its own updater. Schema refusal or rollback fails the gate.
-Main selection includes `src/cli/update-cli/**`, `src/infra/update-*`,
-`src/infra/package-update-*`, `src/plugins/update.ts`, `src/plugins/update-*`,
-`src/commands/doctor*`, `src/commands/doctor/**`, all `src/state/**`, and
-`package.json` (including its packaged schema-version metadata). It also includes
-`scripts/e2e/upgrade-survivor*`, `scripts/e2e/lib/upgrade-survivor/**`, the survivor
-policy and baseline resolver, the Docker planner/catalog, and this gate's CI
-workflow, Docker selector (`scripts/lib/ci-docker-seed-plan.mts`), and shared
-test-path classifier. Node-only planner edits do not select Docker lanes. The
-Node planner retains its selector export for older target/harness combinations.
-Tests independently pin both state and agent schema-version constant owners to
-the published lane.
+The `docker-seed-e2e` job uses `resolveDockerSeedLanes` from
+`scripts/lib/ci-docker-seed-plan.mts` to select exactly
+`published-upgrade-survivor` on every admitted canonical `main` run, independently
+of changed paths. Docs-only pushes remain excluded at the trigger. The lane runs
+`legacy-operator-state` against an exact published predecessor with `auto-auth`:
+the published driver must update and replace the running managed Gateway.
+Schema refusal or rollback fails the gate. Operator state, plugin convergence,
+cron ownership, agent turns, no-op updates, and backup rollback assertions remain.
+
+Main prepares its smoke tarball with `pnpm build:ci-artifacts` followed by
+`scripts/package-openclaw-for-docker.mjs --skip-build`. This retains all runtime
+JavaScript, plugin assets, Control UI, metadata, and public SDK declarations;
+the canonical packer still runs its complete tarball integrity check. The
+scheduler consumes that tarball through `OPENCLAW_CURRENT_PACKAGE_TGZ` without
+rebuilding it. Manual and release CI retain the declaration-complete full
+package build.
+
+Ordinary canonical manual CI retains the survivor and adds
+`cron-mcp-cleanup`, `fleet-cache`, `mcp-channels`, `mcp-code-mode-gateway`, and
+`update-channel-switch`. This includes Full Release Validation's `normal_ci`
+child in `full`, `npm-beta`, and `npm-stable` scopes. Frozen targets
+must declare the Docker seed capability; targets without `resolveDockerSeedLanes`
+retain the survivor fallback. CI loads the target's Docker tier planner directly.
+
 The scheduler retains one 16-class Blacksmith runner on eligible main pushes
 and its existing serial main/manual lane admission. Pull requests and their
 exact-head fallback dispatches do not select this proof. Installed-driver
-upgrade coverage remains required when selected on main and ordinary manual
-release CI; the existing infrastructure timeout stays unchanged.
+upgrade coverage remains required on every admitted canonical main run and
+ordinary manual/release CI; the existing infrastructure timeout stays unchanged.
 The job is part of `openclaw/ci-gate`. It uses at most one runner registration per
-selected run; adding the survivor does not increase the existing full-inventory
+selected run; widening survivor selection does not increase the full-inventory
 registration cap, job count, or matrix fanout.
 
 Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
@@ -368,11 +412,16 @@ within the original 30-second request timeout. These retries exclude writes,
 caller cancellation, certificate errors, and unrecognized errors. HTTP and
 connection errors identify the request method and endpoint.
 
-If GitHub's changed-file count and file list disagree, the guards retry the complete
-file-list read after one, two, and four seconds. Each retry rereads PR metadata;
-changes to the head, target branch, or author still invalidate the evaluation.
-Both guards share the validated result and retry budget. A persistent mismatch
-fails the review and reports the expected, returned, and current file counts.
+If GitHub's changed-file count and file list disagree, or the count changes after
+validation, the script restarts the complete evaluation after one, two, and four
+minutes. These retries share the three-restart limit and job deadline with API
+recovery. Each attempt rereads the full file list, PR metadata, approvals, roles,
+and CI state; target, author, and other approval-relevant metadata must still
+match the original evaluation. A newer head supersedes the obsolete run.
+Both guards share each attempt's validated file list. Recovery also runs within
+the detection step, so a recovered mismatch does not leave an earlier step red.
+A persistent mismatch fails the review and reports the expected, returned, and
+current file counts.
 
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway

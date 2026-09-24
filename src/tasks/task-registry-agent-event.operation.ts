@@ -27,7 +27,6 @@ export type TaskAgentEventChange = {
   kind: "progress" | "start" | "terminal";
   at: number;
   toolStarts: number;
-  refreshStartedAt?: boolean;
   refreshError?: boolean;
   patch: Pick<Partial<TaskRecord>, "status" | "startedAt" | "endedAt" | "lastToolName" | "error">;
 };
@@ -47,7 +46,6 @@ export function captureTaskAgentEventChange(
 ): TaskAgentEventChange | undefined {
   const change: TaskAgentEventChange = { kind: "progress", at: event.ts, toolStarts: 0, patch: {} };
   if (event.stream === "lifecycle") {
-    change.refreshStartedAt = true;
     const { phase, startedAt } = event.data;
     if ((phase === "end" || phase === "error") && !projectTerminal) {
       return undefined;
@@ -106,8 +104,10 @@ export function prepareTaskAgentEventUpdate(current: TaskRecord, input: TaskAgen
   }
   const { change } = input;
   const patch: Partial<TaskRecord> = { ...change.patch };
-  if (change.refreshStartedAt && patch.startedAt === undefined && current.startedAt !== undefined) {
-    patch.startedAt = current.startedAt;
+  // Repeated attempt timestamps are activity, not a change. Compare after
+  // coalescing against the authoritative row so queued corrections still win.
+  if (patch.startedAt === current.startedAt) {
+    delete patch.startedAt;
   }
   if (change.refreshError && patch.error === undefined) {
     patch.error = current.error;

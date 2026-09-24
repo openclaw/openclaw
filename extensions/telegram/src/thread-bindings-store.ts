@@ -13,7 +13,7 @@ export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 const TELEGRAM_THREAD_BINDINGS_STORE_VERSION = 1;
 
-export type TelegramBindingTargetKind = "subagent" | "acp";
+type TelegramBindingTargetKind = "subagent" | "acp";
 
 export type TelegramThreadBindingRecord = {
   accountId: string;
@@ -28,6 +28,30 @@ export type TelegramThreadBindingRecord = {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
   metadata?: Record<string, unknown>;
+};
+
+export type TelegramThreadBindingManager = {
+  accountId: string;
+  shouldPersistMutations: () => boolean;
+  getIdleTimeoutMs: () => number;
+  getMaxAgeMs: () => number;
+  getByConversationId: (conversationId: string) => TelegramThreadBindingRecord | undefined;
+  listBySessionKey: (targetSessionKey: string) => TelegramThreadBindingRecord[];
+  listBindings: () => TelegramThreadBindingRecord[];
+  touchConversation: (conversationId: string, at?: number) => TelegramThreadBindingRecord | null;
+  unbindConversation: (params: {
+    conversationId: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => TelegramThreadBindingRecord | null;
+  unbindBySessionKey: (params: {
+    targetSessionKey: string;
+    reason?: string;
+    sendFarewell?: boolean;
+    throwOnPersistError?: boolean;
+  }) => TelegramThreadBindingRecord[];
+  stop: () => void;
 };
 
 type StoredTelegramBindingState = {

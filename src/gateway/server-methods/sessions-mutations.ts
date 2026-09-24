@@ -18,7 +18,9 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   projectAssignableSessionOwner,
@@ -53,8 +55,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     context,
     client,
     sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+    hasCurrentClientAuthority,
+    signal,
   }) => {
     const diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
     try {
       if (
         !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
@@ -77,10 +83,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         return;
       }
       const targets = params.targets;
+      if (params.patch.model !== undefined) {
+        capturedOperator = captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: { assertCurrent: () => sessionMutationCommitGuard?.(), signal },
+        });
+      }
       const executed = await executeSessionPatchMutations({
         client,
         context,
         diagnostics,
+        operatorAuthority: capturedOperator?.authority,
         patch: params.patch,
         targets: targets.map((target) => ({
           ...target,
@@ -110,11 +125,22 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       respond(true, { outcomes }, undefined);
     } finally {
+      capturedOperator?.release();
       diagnostics?.finish();
     }
   },
-  "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.patch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    sessionMutationCommitGuard,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     const diagnostics = startSessionPatchDiagnostics("sessions.patch");
+    let capturedOperator: ReturnType<typeof captureGatewayOperatorRunAuthority>;
     try {
       if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
         return;
@@ -140,10 +166,25 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       const patch = { ...params, key };
       const target = sessionPatchTargetIdentity(patch);
+      if (params.model !== undefined) {
+        capturedOperator = captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: {
+            assertCurrent: () => {
+              sessionMutationCommitGuard?.();
+              sessionMutationAuthorization?.assertCurrent();
+            },
+            signal,
+          },
+        });
+      }
       const executed = await executeSessionPatchMutations({
         client,
         context,
         diagnostics,
+        operatorAuthority: capturedOperator?.authority,
         patch,
         targets: [
           {
@@ -176,6 +217,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } finally {
+      capturedOperator?.release();
       diagnostics?.finish();
     }
   },
@@ -285,7 +327,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "sessions.assignOwner": async ({ params, respond, context, client }) => {
+  "sessions.assignOwner": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
     ) {
@@ -352,39 +400,45 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const owner = { type: projectedOwner.type, id: projectedOwner.id };
-    const assignment = assignSessionOwner(
-      {
-        agentId: target.agentId,
-        sessionKey: target.storeKey,
-        storePath: target.storePath,
-      },
-      {
-        owner,
-        assignedBy,
-        assertCurrent: () => {
-          const current = resolveSessionSharingTarget({
-            cfg: context.getRuntimeConfig(),
-            sessionKey: target.canonicalKey,
+    const assignment = await runExclusiveSessionLifecycleMutation({
+      scope: target.storePath,
+      identities: [target.storeKey, target.entry.sessionId],
+      run: async () =>
+        assignSessionOwner(
+          {
             agentId: target.agentId,
-          });
-          const currentError = current ? authorizeView(current) : null;
-          if (
-            !current ||
-            current.entry.sessionId !== target.entry.sessionId ||
-            current.storeKey !== target.storeKey ||
-            currentError
-          ) {
-            throw new SessionMutationAuthorizationChangedError(
-              currentError ??
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "session changed before sessions.assignOwner; retry the request",
-                ),
-            );
-          }
-        },
-      },
-    );
+            sessionKey: target.storeKey,
+            storePath: target.storePath,
+          },
+          {
+            owner,
+            assignedBy,
+            assertCurrent: () => {
+              sessionMutationAuthorization?.assertCurrent();
+              const current = resolveSessionSharingTarget({
+                cfg: context.getRuntimeConfig(),
+                sessionKey: target.canonicalKey,
+                agentId: target.agentId,
+              });
+              const currentError = current ? authorizeView(current) : null;
+              if (
+                !current ||
+                current.entry.sessionId !== target.entry.sessionId ||
+                current.storeKey !== target.storeKey ||
+                currentError
+              ) {
+                throw new SessionMutationAuthorizationChangedError(
+                  currentError ??
+                    errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      "session changed before sessions.assignOwner; retry the request",
+                    ),
+                );
+              }
+            },
+          },
+        ),
+    });
     const projectedActor = assignment
       ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
       : null;

@@ -22,7 +22,9 @@ IMAGE_NAME="$(
 )"
 SKIP_BUILD="${OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT:-1200s}"
-ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat}"
+# Space- or comma-separated recorded release versions; empty runs every recorded source.
+SOURCE_VERSION_FILTER="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS:-}"
+ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/update-first-hop-compat${SOURCE_VERSION_FILTER:+-${SOURCE_VERSION_FILTER//[ ,]/-}}}"
 SOURCE_PACKAGE="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ:-}"
 FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-first-hop.XXXXXX")"
 PACKAGE_TGZ=""
@@ -42,6 +44,10 @@ chmod -R a+rwX "$ARTIFACT_DIR" || true
 
 if [ -n "$SOURCE_PACKAGE" ] && [ ! -f "$SOURCE_PACKAGE" ]; then
   echo "source package tarball does not exist: $SOURCE_PACKAGE" >&2
+  exit 2
+fi
+if [ -n "$SOURCE_PACKAGE" ] && [ -n "$SOURCE_VERSION_FILTER" ]; then
+  echo "an explicit source tarball cannot be combined with OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS" >&2
   exit 2
 fi
 
@@ -76,7 +82,7 @@ SOURCE_VERSIONS=("")
 if [ -z "$SOURCE_PACKAGE" ]; then
   SOURCE_VERSIONS=()
   node "$FIXTURE_HELPER" sources "$FIXTURE_ROOT/packages/original/package" \
-    >"$FIXTURE_ROOT/source-versions.txt"
+    "$SOURCE_VERSION_FILTER" >"$FIXTURE_ROOT/source-versions.txt"
   while IFS= read -r version; do
     SOURCE_VERSIONS+=("$version")
   done <"$FIXTURE_ROOT/source-versions.txt"

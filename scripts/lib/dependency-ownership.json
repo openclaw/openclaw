@@ -251,8 +251,9 @@
       "risk": ["formatting"]
     },
     "quickjs-wasi": {
-      "owner": "core:code-mode",
-      "class": "core-runtime",
+      "owner": "plugin:code-mode-quickjs",
+      "class": "plugin-runtime",
+      "activation": ["tools.codeMode.executor.quickjs"],
       "risk": ["wasm", "sandboxed-js"]
     },
     "clawpdf": {
