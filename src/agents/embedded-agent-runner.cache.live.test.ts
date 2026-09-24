@@ -6,6 +6,7 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -13,6 +14,10 @@ import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -160,6 +165,33 @@ async function expectCacheTraceStages(
   for (const stage of requiredStages) {
     expect(stages.has(stage)).toBe(true);
   }
+}
+
+async function readEmbeddedSessionMessages(sessionId: string): Promise<Record<string, unknown>[]> {
+  const sessionTarget = buildRunnerSessionPaths(sessionId).sessionTarget;
+  return (await loadTranscriptEvents(sessionTarget))
+    .map((event) =>
+      event && typeof event === "object" && "message" in event ? event.message : undefined,
+    )
+    .filter(
+      (message): message is Record<string, unknown> =>
+        message !== null && typeof message === "object" && !Array.isArray(message),
+    );
+}
+
+function hasSignedThinking(messages: Record<string, unknown>[]): boolean {
+  return messages.some((message) =>
+    Array.isArray(message.content)
+      ? message.content.some(
+          (block) =>
+            block !== null &&
+            typeof block === "object" &&
+            (block as { type?: unknown }).type === "thinking" &&
+            typeof (block as { thinkingSignature?: unknown }).thinkingSignature === "string" &&
+            (block as { thinkingSignature: string }).thinkingSignature.trim().length > 0,
+        )
+      : false,
+  );
 }
 
 function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
@@ -329,6 +361,8 @@ async function runEmbeddedCacheProbe(params: {
   providerTag: "anthropic" | "openai";
   sessionId: string;
   suffix: string;
+  runtimeContext?: string;
+  thinkLevel?: "low";
   transport?: "sse" | "websocket";
   promptSections?: number;
 }): Promise<CacheRun> {
@@ -353,11 +387,19 @@ async function runEmbeddedCacheProbe(params: {
         workspaceDir: sessionPaths.workspaceDir,
         agentDir: sessionPaths.agentDir,
         config,
-        prompt: buildEmbeddedCachePrompt(params.suffix, params.promptSections),
+        prompt: [
+          buildEmbeddedCachePrompt(params.suffix, params.promptSections),
+          params.runtimeContext
+            ? `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${params.runtimeContext}\n${INTERNAL_RUNTIME_CONTEXT_END}`
+            : undefined,
+        ]
+          .filter((value): value is string => value !== undefined)
+          .join("\n\n"),
         provider: params.model.provider,
         model: params.model.id,
         timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
         runId,
+        ...(params.thinkLevel ? { thinkLevel: params.thinkLevel } : {}),
         extraSystemPrompt: params.prefix,
         disableTools: true,
         cleanupBundleMcpOnRunEnd: true,
@@ -1141,6 +1183,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
 
   describe("anthropic", () => {
     let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
+    let retainedThinkingFixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
     beforeAll(async () => {
       fixture = await resolveLiveDirectModel({
@@ -1149,7 +1192,16 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
         preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
       });
+      retainedThinkingFixture = await resolveLiveDirectModel({
+        provider: "anthropic",
+        api: "anthropic-messages",
+        envVar: "OPENCLAW_LIVE_ANTHROPIC_RETAINED_CONTEXT_MODEL",
+        preferredModelIds: ["claude-fable-5-1"],
+      });
       logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);
+      logLiveCache(
+        `anthropic retained-context model=${retainedThinkingFixture.model.provider}/${retainedThinkingFixture.model.id}`,
+      );
     }, 120_000);
 
     it(
@@ -1327,6 +1379,86 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
         await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps cache reuse ahead of changing transient runtime context",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-transient-context`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          runtimeContext: "Transient live context for the warmup turn.",
+          sessionId,
+          suffix: "transient-context-warmup",
+        });
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          runtimeContext: "Different transient live context for hit A.",
+          sessionId,
+          suffix: "transient-context-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          runtimeContext: "Different transient live context for hit B.",
+          sessionId,
+          suffix: "transient-context-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic transient-context best-hit cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "replays retained runtime context with signed thinking",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-retained-context`;
+        await runEmbeddedCacheProbe({
+          ...retainedThinkingFixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          runtimeContext: "Retained live context for the first turn.",
+          sessionId,
+          suffix: "retained-context-first",
+          thinkLevel: "low",
+        });
+        expect(hasSignedThinking(await readEmbeddedSessionMessages(sessionId))).toBe(true);
+
+        const replay = await runEmbeddedCacheProbe({
+          ...retainedThinkingFixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          runtimeContext: "Retained live context for the replay turn.",
+          sessionId,
+          suffix: "retained-context-replay",
+          thinkLevel: "low",
+        });
+        logLiveCache(
+          `anthropic retained-context replay cacheWrite=${replay.usage.cacheWrite} cacheRead=${replay.usage.cacheRead} input=${replay.usage.input} rate=${replay.hitRate.toFixed(3)}`,
+        );
+
+        expect(hasSignedThinking(await readEmbeddedSessionMessages(sessionId))).toBe(true);
+        expect(replay.usage.cacheRead ?? 0).toBeGreaterThan(0);
       },
       8 * 60_000,
     );

@@ -35,7 +35,6 @@ import {
   applyClaudeRequestContract,
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
-  bindsClaudeThinkingPrefix,
   defaultsClaudeAdaptiveThinking,
   mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
@@ -350,7 +349,6 @@ async function convertAnthropicMessages(
   },
 ): Promise<Array<Record<string, unknown>>> {
   const params: Array<Record<string, unknown>> = [];
-  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -370,7 +368,7 @@ async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+          if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
             options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
           }
           const userParam = {
@@ -421,7 +419,7 @@ async function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+      if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam = {

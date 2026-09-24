@@ -26,6 +26,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
@@ -33,15 +34,15 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();
-  const convertToLlm = vi.fn((input: AgentMessage[]) => input as never);
+  const convertMessages = vi.fn((input: AgentMessage[]) => input as never);
   const activeSession = {
     agent: {
       reset,
       state: { messages },
-      convertToLlm,
+      convertToLlm: convertMessages,
     },
   } as unknown as Pick<AgentSession, "agent">;
-  return { activeSession, convertToLlm, reset };
+  return { activeSession, convertToLlm: convertMessages, reset };
 }
 
 function createSessionManager(
@@ -206,6 +207,35 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(next.at(-1)).toBe(nextCarrier);
         expect(next[0]!.content).not.toContain("Conversation info:");
       }
+    },
+  );
+
+  it.each([false, true])(
+    "records runtime-context cache retention at the LLM boundary (%s)",
+    async (appendOnlyRuntimeContext) => {
+      const { activeSession } = createActiveSession();
+      activeSession.agent.convertToLlm = convertToLlm;
+      await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        appendOnlyRuntimeContext,
+        attempt: { prompt: "question", trigger: "user" },
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager: createSessionManager(),
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
+
+      const user = { role: "user" as const, content: "question", timestamp: 1 };
+      const carrier = buildRuntimeContextCustomMessage("context")!;
+      const converted = await activeSession.agent.convertToLlm(
+        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
+      );
+      const message = converted.at(-1);
+      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
+      expect(
+        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
+      ).toBe(appendOnlyRuntimeContext ? true : undefined);
     },
   );
 

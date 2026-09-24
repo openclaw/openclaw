@@ -345,6 +345,8 @@ export interface UserMessage {
    * carriers are stable prompt-cache anchors.
    */
   runtimeContextCarrier?: boolean;
+  /** True when the owning replay policy retains this carrier across turns. */
+  runtimeContextCarrierRetained?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */

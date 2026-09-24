@@ -75,7 +75,6 @@ import {
   applyClaudeRequestContract,
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
-  bindsClaudeThinkingPrefix,
   mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
@@ -1194,7 +1193,6 @@ async function convertMessages(
 ): Promise<MessageParam[]> {
   const params: MessageParam[] = [];
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
 
   // Transform messages for cross-provider compatibility
@@ -1212,7 +1210,7 @@ async function convertMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+          if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
             cacheBreakpointOptOutMessageIndexes.add(params.length);
           }
           params.push({
@@ -1247,7 +1245,7 @@ async function convertMessages(
         if (filteredBlocks.length === 0) {
           continue;
         }
-        if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+        if (msg.runtimeContextCarrier && !msg.runtimeContextCarrierRetained) {
           cacheBreakpointOptOutMessageIndexes.add(params.length);
         }
         params.push({

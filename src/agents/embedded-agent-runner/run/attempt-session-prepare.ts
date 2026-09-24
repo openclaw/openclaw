@@ -477,13 +477,20 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
     activeSession.agent.convertToLlm = async (messages) => {
       const normalized = normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions());
-      return await baseConvertToLlm(
+      const converted = await baseConvertToLlm(
         // Persisted carriers stay after their user turn, including during tool loops;
         // moving one would change the prefix bound to later thinking signatures.
         input.appendOnlyRuntimeContext
           ? normalized
           : relocateCurrentRuntimeContextCarrierToTail(normalized),
       );
+      return input.appendOnlyRuntimeContext
+        ? converted.map((message) =>
+            message.role === "user" && message.runtimeContextCarrier
+              ? { ...message, runtimeContextCarrierRetained: true }
+              : message,
+          )
+        : converted;
     };
   }
 

@@ -156,9 +156,10 @@ describe("Anthropic thinking-binding transport parity", () => {
         content: carrierContent,
         timestamp: 2,
         runtimeContextCarrier: true,
+        ...(retained ? { runtimeContextCarrierRetained: true } : {}),
       },
     ];
-    const model = retained ? { id: "claude-fable-5-1" } : undefined;
+    const model = { id: "claude-fable-5-1" };
     for (const implementation of ["provider", "transport"] as const) {
       const { payload } = await captureAnthropicRequest(implementation, {
         model,

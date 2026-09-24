@@ -133,10 +133,12 @@ export function buildNativeAnthropicReplayPolicyForModel(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
 ): ProviderReplayPolicy {
-  return {
-    ...buildAnthropicReplayPolicyForModel(modelId, model),
+  return buildStrictAnthropicReplayPolicy({
+    dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
+    appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({ id: modelId, params: model?.params }),
+    sanitizeToolCallIds: true,
     preserveNativeAnthropicToolUseIds: true,
-  };
+  });
 }
 
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
