@@ -807,7 +807,8 @@ openclaw-settings-save-indicator:empty {
   min-width: 0;
 }
 
-.settings-save-indicator--recovery {
+.settings-save-indicator--recovery,
+.settings-save-indicator--rejected {
   flex-direction: column;
   align-items: flex-start;
   white-space: pre-line;

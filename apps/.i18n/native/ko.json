@@ -1450,7 +1450,6 @@
     "native.android.cee2b043b9ff723d": "그룹",
     "native.android.cee7ae53f86ff1c8": "${skill.reference}의 ClawHub 세부 정보를 불러오지 못했습니다.",
     "native.android.cee89e52e2b139f2": "작업 요청",
-    "native.android.cf320580ecbef407": "업무",
     "native.android.cf52b615bd004b95": "연결 문제",
     "native.android.cf576be7d9474fa6": "텍스트: $value",
     "native.android.cf7b99fc56670b51": "스냅샷: $snapshotLabel",

@@ -50,6 +50,7 @@ export abstract class CodexTurnProjection {
   protected readonly assistantProjection: CodexAssistantProjection;
   protected readonly reasoningProjection: CodexReasoningProjection;
   readonly settlement: CodexProjectionSettlement;
+  protected readonly observedItemIds = new Set<string>();
   protected readonly activeItemIds = new Set<string>();
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
@@ -173,6 +174,7 @@ export abstract class CodexTurnProjection {
     } = this.terminalFailure;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
+    const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
     const activeItemCount = this.activeItemIds.size;
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
@@ -342,7 +344,7 @@ export abstract class CodexTurnProjection {
         replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
-        startedCount: activeItemCount + completedItemCount,
+        startedCount: observedItemCount,
         completedCount: completedItemCount,
         activeCount: activeItemCount,
       },

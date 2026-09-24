@@ -252,7 +252,7 @@ describe("context-engine maintenance transcript ownership", () => {
         });
         let run: Promise<unknown> | undefined;
         try {
-          await foreignStarted.promise;
+          await Promise.race([foreignStarted.promise, ...deferred]);
           expect(foreignMaintain).toHaveBeenCalledOnce();
           const tasksBefore = listTasksForOwnerKey(target.sessionKey);
           const maintain = vi.fn(async () => ({

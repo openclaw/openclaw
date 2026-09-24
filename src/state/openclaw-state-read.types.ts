@@ -15,6 +15,7 @@ import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   CronRunRecoveryReadCommand,
@@ -85,6 +86,7 @@ import type {
   UserChannelIdentityAuthorityFacts,
   UserChannelIdentityResult,
   CachedGitHubIdentity,
+  UserProfileGitHubAttributionRead,
   UserProfileDisplay,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -105,6 +107,7 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
+  | { type: "config.snapshot.read" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -148,6 +151,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentity }
   | { type: "userProfiles.authority.resolve"; profileId: string }
   | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {
@@ -200,6 +204,12 @@ export type OpenClawStateReadReply = (
       type: "deliveryQueue.outbound";
       sourceAdmitted: true;
       entries: OutboundDeliveryStorageEntry[];
+    }
+  | {
+      ok: true;
+      type: "config.snapshot.read";
+      sourceAdmitted: true;
+      snapshot: ConfigSnapshotAuditRecord | null;
     }
   | {
       ok: true;
@@ -380,6 +390,11 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       identity: CachedGitHubIdentity | undefined;
     }
+  | ({
+      ok: true;
+      type: "userProfiles.githubAttribution.resolve";
+      sourceAdmitted: true;
+    } & UserProfileGitHubAttributionRead)
   | {
       ok: true;
       type: "audit.run.inspect";

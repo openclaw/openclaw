@@ -426,6 +426,14 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
+On Windows, Scheduled Task autostart stays suspended until the candidate finalizer
+activates the updated Gateway. After migration, the retained updater checks its
+live executor lease without reopening the newer state database. Plugin version
+drift remains a warning while the candidate completes activation. This handoff
+repair applies when the updated driver runs the next upgrade; it cannot change
+an already-running 2026.9.5 updater. If that older driver stops with recovery
+pending, use the installed version's `openclaw update repair`.
+
 When Doctor cannot acquire maintenance before repair writes begin, finalization
 restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and
@@ -807,7 +815,13 @@ the sentinel.
   <Step title="Activate and verify">
     Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
+    Every activated Git build runs post-update checks in a fresh process, including when local commits already ahead of upstream rebase without changing the commit or version. Activation captures the built commit and runtime content digest. At convergence completion, the update records one comparison against that activated runtime, including when finalization runs in the migrated candidate worker. A changed identity is reported as a verification failure.
+
+    The previous checkout and runtime remain available until final verification completes. A late verification failure restores the original configuration, source, and runtime and restarts a previously verified running service when the state-safety checks permit rollback. Incompatible state changes or independent source edits refuse destructive restoration and retain the named backups for recovery.
+
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
+
+    The installed updater owns fresh-process selection and backup retention. The published 2026.9.5 driver can still keep its old module graph after a same-commit rebuild and discard its previous runtime before verification. Installing newer candidate code cannot change that first hop. Use the [source-checkout manual update procedure](/install/updating/update-methods#source-checkout-servers-reference-script) to install the repaired driver, stopping the Gateway through its service manager before rebuilding. Subsequent updates use fresh verification and retained rollback.
 
   </Step>
   <Step title="Sync plugins">

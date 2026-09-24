@@ -381,17 +381,20 @@ suite.define(() => {
         };
         await gateway.rejectDeferred("config.set", rejection);
 
-        const status = page.locator('.settings-save-indicator--danger[role="status"]');
-        await expect.poll(() => status.isVisible()).toBe(true);
-        await expect
-          .poll(() => status.getAttribute("title"))
-          .toBe(
-            `GatewayRequestError: invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
-          );
-        expect(await status.getAttribute("aria-label")).toContain(
+        const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
+        await expect.poll(() => status.textContent()).toContain("Settings not applied");
+        // Opening the reason blurs the edited field without resubmitting its rejected value.
+        await status.getByText("Show reason", { exact: true }).click();
+        await status
+          .getByText(
+            `invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
+            { exact: true },
+          )
+          .waitFor();
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
+        expect(await status.ariaSnapshot()).toContain(
           `models.providers.${providerId}.models.#4.name`,
         );
-        expect(await status.textContent()).toContain("Save failed");
         expect(issue.path).toBe(`models.providers.${providerId}.models.3.name`);
         expect(rejection.message).toContain(".3.name");
 

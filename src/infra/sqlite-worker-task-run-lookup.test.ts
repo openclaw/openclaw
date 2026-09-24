@@ -9,6 +9,7 @@ import { createAcpTaskBackingDetail } from "../tasks/task-backing-records.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -126,16 +127,9 @@ describe("registered task run lookup", () => {
   it("reads a persisted point without main-thread SQLite execution", async () => {
     seed([task("persisted", { runtime: "subagent" })]);
     await closeOpenClawStateDatabaseAsync();
-    const native = requireNodeSqlite();
-    const counters = [
-      ...(["prepare", "exec"] as const).map((method) =>
-        vi.spyOn(native.DatabaseSync.prototype, method),
-      ),
-      ...(["iterate", "get", "all", "run"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql();
     expect((await findTaskViewByRunIdAsync(runId, () => {}))?.taskId).toBe("persisted");
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    counters.expectIdle();
   });
 });

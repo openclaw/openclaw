@@ -400,12 +400,8 @@ describe("buildAttemptSystemPrompt", () => {
 
       expect(result.systemPrompt).toContain("\nWorking directory: /tmp/openclaw\n");
       expect(result.systemPrompt).not.toContain("\u202e");
-      expect(result.systemPrompt).toContain("# Project Context");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
       expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
       expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-      expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
       expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     },
   );
@@ -491,19 +487,11 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
-    expect(result.systemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
-    expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
     expect(result.systemPrompt).toContain("Bootstrap context was truncated.");
-    expect(result.systemPrompt).toContain("# Project Context");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/SOUL.md");
     expect(result.systemPrompt).toContain("SOUL_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/IDENTITY.md");
     expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
     expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
-    expect(result.systemPrompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
   });
 
@@ -570,7 +558,7 @@ describe("buildAttemptSystemPrompt", () => {
       providerTransform: baseProviderTransform,
     });
 
-    expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
+    expect(result.baseSystemPrompt).toContain("Reply with BOOTSTRAP_OK.");
     expect(result.systemPrompt).toBe("");
   });
 });

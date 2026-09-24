@@ -137,13 +137,23 @@ export function modelMetadataInvalidationFragment(payload: unknown): string | un
   if (keys.length === 0) {
     return ',"payload":{}';
   }
-  if (keys.length !== 1 || keys[0] !== "modelSelectionChanged") {
-    return undefined;
+  const fields: Record<string, boolean> = {};
+  for (const key of keys) {
+    if (key !== "modelSelectionChanged" && key !== "modelCatalogChanged" && key !== "authChanged") {
+      return undefined;
+    }
+    const field = Object.getOwnPropertyDescriptor(payload, key);
+    if (
+      !field?.enumerable ||
+      !("value" in field) ||
+      typeof field.value !== "boolean" ||
+      (key === "modelSelectionChanged" && !field.value)
+    ) {
+      return undefined;
+    }
+    fields[key] = field.value;
   }
-  const field = Object.getOwnPropertyDescriptor(payload, "modelSelectionChanged");
-  return field?.value === true && field.enumerable
-    ? ',"payload":{"modelSelectionChanged":true}'
-    : undefined;
+  return `,"payload":${JSON.stringify(fields)}`;
 }
 
 export function hasEventScope(

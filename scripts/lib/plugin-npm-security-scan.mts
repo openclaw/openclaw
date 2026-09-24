@@ -330,6 +330,14 @@ const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
   findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
 };
 
+const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
+  id: "extended-stable-2026.8.33",
+  findings: new Map<string, number>([
+    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+    ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts", 1],
+  ]),
+};
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
   [
     "release/2026.9.1",
@@ -389,6 +397,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
+  [
+    "extended-stable/2026.8.33",
+    {
+      layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
 ]);
 
 function selectPluginSecurityInventoryPolicy(
@@ -402,6 +418,7 @@ function selectPluginSecurityInventoryPolicy(
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
+  ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 
 function expandFindingCounts(counts: ReadonlyMap<string, number>): string[] {

@@ -20,12 +20,24 @@ const migrationLabels = {
   manifest: "session migration manifest",
   failureReport: "session migration failure report",
 };
+const siblingRefusalLogs = [
+  "sibling-refusal-update.json",
+  "sibling-refusal-update.err",
+  "sibling-refusal-status.json",
+  "sibling-refusal-status.err",
+  "sibling-refusal-baseline.json",
+  "sibling-refusal-worker.json",
+  "sibling-refusal-child.json",
+  "sibling-refusal-cleanup.json",
+  "sibling-refusal-registrations.jsonl",
+];
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
   "update.json",
   "update.err",
+  ...siblingRefusalLogs,
   "repair.json",
   "repair.err",
   "recovery-update.json",
@@ -39,6 +51,12 @@ const logNames = [
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
   "workshop-candidate-doctor.json",
+  "physical-baseline-update.json",
+  "physical-baseline-update.err",
+  "physical-baseline-refusal.json",
+  "physical-baseline-restoration.json",
+  "physical-candidate-doctor.log",
+  "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
@@ -1638,8 +1656,18 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "update.json",
         "repair.json",
         "recovery-update.json",
+        ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
-          ? ["workshop-doctor-recovery.json", "baseline-doctor.log", "doctor.log"]
+          ? [
+              "workshop-doctor-recovery.json",
+              "baseline-doctor.log",
+              "doctor.log",
+              "physical-baseline-update.json",
+              "physical-baseline-refusal.json",
+              "physical-baseline-restoration.json",
+              "physical-candidate-doctor.log",
+              "physical-candidate-repair.json",
+            ]
           : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&

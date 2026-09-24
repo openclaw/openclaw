@@ -9,7 +9,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
+  bindPreparedModelRuntimeAuth,
 } from "../../agents/prepared-model-runtime-auth.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -78,7 +78,7 @@ beforeEach(() => {
         ...preset,
       };
       const retainedAuth = preset ? getPreparedModelRuntimeAuthStore(preset) : undefined;
-      setPreparedModelRuntimeAuthStore(owner, retainedAuth ?? catalogMocks.authStore);
+      bindPreparedModelRuntimeAuth(owner, { store: retainedAuth ?? catalogMocks.authStore });
       return preparedCatalog.materializePreparedModelCatalogOwner(owner);
     },
   );
@@ -223,7 +223,7 @@ describe("/models browse catalog recovery", () => {
         }),
         isCurrent: () => true,
       };
-      setPreparedModelRuntimeAuthStore(preparedOwner, catalogMocks.authStore);
+      bindPreparedModelRuntimeAuth(preparedOwner, { store: catalogMocks.authStore });
       catalogMocks.getPreparedOwner.mockReturnValue(preparedOwner);
       catalogMocks.readSnapshot.mockImplementation(() => {
         throw new Error("Published browsing consulted pending acquisition");

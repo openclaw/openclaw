@@ -81,7 +81,6 @@ function prepareDocsPublisher() {
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "tsx.mjs",
-    "lib/mintlify-accordion.mjs",
     "docs-mdx-repair.md",
   ]) {
     const output = path.join(target, ".openclaw-sync", name);
