@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayService } from "../../daemon/service.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -14,7 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 
 const native = vi.hoisted(() => ({
-  runtime: vi.fn<() => Promise<GatewayServiceRuntime>>(),
+  runtime: vi.fn<GatewayService["readRuntime"]>(),
   command: vi.fn(),
   reachable: vi.fn(),
   http: vi.fn<typeof import("../daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness>(),
@@ -174,6 +175,7 @@ describe("managed Windows update after the startup canary", () => {
       });
       try {
         await awaitProbe(probe.entered, pending);
+        expect(native.runtime).toHaveBeenCalledWith(f.params.env, { timeoutMs: 5_000 });
         expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
         expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
         expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
@@ -202,6 +204,11 @@ describe("managed Windows update after the startup canary", () => {
         expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith("powershell.exe"))).toBe(
           true,
         );
+        expect(
+          native.runtime.mock.calls.every(
+            ([, opts]) => opts?.timeoutMs !== undefined && opts.timeoutMs <= 5_000,
+          ),
+        ).toBe(true);
       } finally {
         abort.abort(new Error("fixture completed"));
         probe.release();

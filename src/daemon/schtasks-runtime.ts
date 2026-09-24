@@ -52,7 +52,6 @@ import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract
 
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
-const SCHEDULED_TASK_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 
 /** Read policy independently of runtime state; unavailable policy is not disabled. */
 export async function isScheduledTaskEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
@@ -459,12 +458,7 @@ export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  // One synchronous observation must not consume the caller's entire readiness window.
-  const timeoutMs = Math.min(
-    opts?.timeoutMs ?? SCHEDULED_TASK_RUNTIME_PROBE_TIMEOUT_MS,
-    SCHEDULED_TASK_RUNTIME_PROBE_TIMEOUT_MS,
-  );
-  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
     return (await isStartupEntryInstalled(env))
       ? resolveFallbackRuntime(env)

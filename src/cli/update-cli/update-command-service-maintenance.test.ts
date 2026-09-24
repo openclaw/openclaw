@@ -541,7 +541,7 @@ it.each([
     });
 
     if (scenario.admitted) {
-      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 5000 ms");
+      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
     } else {
       const inspected = await inspection;
       expect(inspected.blockMessage).toBeUndefined();
@@ -555,7 +555,7 @@ it.each([
         );
         if (scenario.code === "ETIMEDOUT") {
           expect(inspected.serviceMutationSkipMessage).toContain(
-            "Scheduled Task probe timed out after 5000 ms",
+            "Scheduled Task probe timed out after 30000 ms",
           );
           expect(inspected.serviceMutationSkipMessage).toContain("ETIMEDOUT");
         }
@@ -565,7 +565,7 @@ it.each([
     expect(spawnSync).toHaveBeenCalledTimes(attempts);
     expect(service.readCommand).toHaveBeenCalledTimes(attempts);
     for (const call of vi.mocked(spawnSync).mock.calls) {
-      expect(call[2]?.timeout).toBe(5_000);
+      expect(call[2]?.timeout).toBe(30_000);
     }
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();

@@ -32,24 +32,22 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { budget: undefined, expected: 5_000 },
-  { budget: 40 * 60_000, expected: 5_000 },
+  { budget: 5_000, expected: 5_000 },
+  { budget: 60_000, expected: 60_000 },
   { budget: 750, expected: 750 },
-])(
-  "bounds one runtime inspection within the readiness budget $budget",
-  async ({ budget, expected }) => {
-    await expect(readScheduledTaskRuntime({}, { timeoutMs: budget })).resolves.toEqual({
-      status: "unknown",
-      detail: "service runtime inspection failed",
-      inspectionFailure: {
-        code: "service-runtime-inspection-failed",
-        detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
-        timeoutMs: expected,
-      },
-      missingUnit: false,
-    });
-    expect(spawnSync).toHaveBeenCalledOnce();
-    expect(vi.mocked(spawnSync).mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
-    expect(vi.mocked(spawnSync).mock.calls[0]?.[2]?.timeout).toBe(expected);
-    expect(spawn).not.toHaveBeenCalled();
-  },
-);
+])("preserves the caller's native inspection budget $budget", async ({ budget, expected }) => {
+  await expect(readScheduledTaskRuntime({}, { timeoutMs: budget })).resolves.toEqual({
+    status: "unknown",
+    detail: "service runtime inspection failed",
+    inspectionFailure: {
+      code: "service-runtime-inspection-failed",
+      detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
+      timeoutMs: expected,
+    },
+    missingUnit: false,
+  });
+  expect(spawnSync).toHaveBeenCalledOnce();
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[2]?.timeout).toBe(expected);
+  expect(spawn).not.toHaveBeenCalled();
+});

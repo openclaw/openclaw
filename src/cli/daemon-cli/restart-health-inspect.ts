@@ -45,12 +45,16 @@ export async function inspectGatewayRestart(params: {
       ? params.deadline.read(`${params.phase ?? "inspection"}:${phase}`, operation)
       : operation();
   const startedAtMs = performance.now();
-  const remainingTimeoutMs = () =>
-    params.deadline
-      ? Math.max(1, params.deadline.remainingMs())
-      : params.timeoutMs === undefined
+  const remainingTimeoutMs = () => {
+    const remaining =
+      params.timeoutMs === undefined
         ? undefined
         : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
+    // The overall readiness deadline must not replace a shorter inspection budget.
+    return params.deadline
+      ? Math.min(Math.max(1, params.deadline.remainingMs()), remaining ?? Infinity)
+      : remaining;
+  };
   const env = params.env ?? process.env;
   const probeHosts =
     params.probeHosts ??
