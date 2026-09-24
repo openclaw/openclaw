@@ -18,7 +18,7 @@ import {
 } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;

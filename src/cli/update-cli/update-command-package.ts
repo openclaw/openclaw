@@ -42,7 +42,8 @@ import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
 } from "../../infra/update-runner-doctor.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";

@@ -32,12 +32,8 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type {
-  CommandRunner,
-  UpdateRunResult,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;

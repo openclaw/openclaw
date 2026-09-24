@@ -17,12 +17,8 @@ import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import type {
-  CommandRunner,
-  RunStepOptions,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UNVERIFIED_GIT_CORRUPTION =
   /(?:in the commit graph file but not in the object database|probably due to repo corruption)/iu;
