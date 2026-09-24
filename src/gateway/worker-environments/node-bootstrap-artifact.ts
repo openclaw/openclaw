@@ -311,6 +311,7 @@ async function prepareNodeBootstrapArtifact(
       const contents = await readFileHandleBounded(handle, before.size);
       const current = await fs.lstat(source);
       if (
+        contents.byteLength !== before.size ||
         current.isSymbolicLink() ||
         current.dev !== before.dev ||
         current.ino !== before.ino ||
