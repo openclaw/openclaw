@@ -1659,7 +1659,6 @@ private fun ChatScrollToLatestButton(
   onClick: () -> Unit,
 ) {
   val animationsEnabled = rememberSystemAnimationsEnabled()
-  val touchTarget = 56.dp
   val offsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
   val enterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
   val exitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
@@ -1667,7 +1666,7 @@ private fun ChatScrollToLatestButton(
   visibility.targetState = visible
 
   Box(
-    modifier = Modifier.size(touchTarget).semantics { if (!visible) hideFromAccessibility() },
+    modifier = Modifier.size(scrollToLatestButtonSize).semantics { if (!visible) hideFromAccessibility() },
     contentAlignment = Alignment.Center,
   ) {
     AnimatedVisibility(
@@ -1693,7 +1692,7 @@ private fun ChatScrollToLatestButton(
         onClick = onClick,
         enabled = visible,
         modifier =
-          Modifier.size(touchTarget).semantics {
+          Modifier.size(scrollToLatestButtonSize).semantics {
             if (visible) {
               contentDescription = nativeString("Jump to latest")
               role = Role.Button

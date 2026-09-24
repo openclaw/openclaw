@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import androidx.window.layout.DisplayFeature
 
+internal val scrollToLatestButtonSize = 56.dp
+
 @Composable
 internal fun ChatPaneLayout(
   tabletopPanes: TabletopPaneBounds?,
@@ -46,6 +48,7 @@ internal fun ChatPaneLayout(
     val headerFloor = minimumHeaderHeight.roundToPx()
     val readerFloor = minimumReaderHeight.roundToPx()
     val statusFloor = touchTarget.roundToPx()
+    val jumpHeight = scrollToLatestButtonSize.roundToPx()
     val widthFloor = 320.dp.roundToPx()
     layout(width, height) {
       // This host is already inside scaffold/IME padding. Translate window facts only here.
@@ -66,6 +69,8 @@ internal fun ChatPaneLayout(
       val inset = if (tabletop || !compact) padding else 0
       val spacing = if (tabletop || !compact) gap else 0
       val jumpGap = 16.dp.roundToPx()
+      // Ordinary panes already leave spacing between reader and composer; compact panes do not.
+      val jumpClearance = jumpHeight + jumpGap - (if (tabletop) 0 else spacing)
       subcompose(Unit) {
         SubcomposeLayout { _ ->
           val upperHeight = (upperBounds.height - inset * 2).coerceAtLeast(0)
@@ -80,7 +85,7 @@ internal fun ChatPaneLayout(
           val composerSpace =
             if (tabletop) lowerAvailable else (lowerAvailable - headerPlaceable.height - headerGap - spacing).coerceAtLeast(0)
           val composerLimit =
-            if (!tabletop && composerSpace >= inputFloor + statusFloor + jumpGap) composerSpace - statusFloor - jumpGap else composerSpace
+            if (!tabletop && composerSpace >= inputFloor + jumpClearance) composerSpace - jumpClearance else composerSpace
           val composerPlaceable =
             subcompose("composer") { Box(Modifier.clipToBounds()) { composer(compact, tabletop) } }
               .single()
@@ -103,7 +108,7 @@ internal fun ChatPaneLayout(
             subcompose("reader") { Box(Modifier.recalculateWindowInsets().clipToBounds()) { transcript() } }
               .single()
               .measure(Constraints.fixed(upperBounds.width, readerHeight))
-          val jumpAvailable = readerHeight >= statusFloor + jumpGap
+          val jumpAvailable = readerHeight >= jumpClearance
           val scrollToLatestPlaceable =
             subcompose("scrollToLatest") { Box { scrollToLatest(jumpAvailable) } }.single().measure(Constraints())
           layout(width, height) {
@@ -115,9 +120,9 @@ internal fun ChatPaneLayout(
             val readerTop = upperBounds.top + inset + headerPlaceable.height + headerGap
             val aboveComposerTop =
               if (tabletop) {
-                readerTop + readerHeight - scrollToLatestPlaceable.height - 16.dp.roundToPx()
+                readerTop + readerHeight - scrollToLatestPlaceable.height - jumpGap
               } else {
-                composerTop - scrollToLatestPlaceable.height - 16.dp.roundToPx()
+                composerTop - scrollToLatestPlaceable.height - jumpGap
               }
             val overlayBounds = if (tabletop) upperBounds else lowerBounds
             scrollToLatestPlaceable.place(

@@ -594,6 +594,8 @@ class ChatComposerLayoutTest {
       val compactJump = readerJumpControl().assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
       val detailsBounds = composeRule.onNode(detailsPane).getUnclippedBoundsInRoot()
       assertTrue("The floating jump stays above Details: $compactJump versus $detailsBounds", compactJump.bottom <= detailsBounds.top)
+      val compactReader = transcript.getUnclippedBoundsInRoot()
+      assertTrue("The floating jump stays inside the reader: $compactJump versus $compactReader", compactJump.top >= compactReader.top)
       val compactViewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
       composeRule.runOnIdle { height.value = 720.dp }
       composeRule.waitForIdle()
