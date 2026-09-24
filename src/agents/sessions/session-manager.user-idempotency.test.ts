@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  appendTranscriptEventSync,
   appendTranscriptMessage,
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -304,6 +305,212 @@ describe("SessionManager user idempotency", () => {
     expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
       parentId: compactionId,
     });
+    expect(
+      events.filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("degrades instead of throwing when the transcript index is dirty after a side-append (#152511)", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-side-append-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-side-append-dirty",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-side-append-dirty",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-side-append:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+
+    // Simulate conversation-turn-capture writing a side-append custom audit
+    // artifact directly to the transcript store, which marks the projection
+    // index dirty. Custom entries are context metadata — the turn resolver
+    // skips them — so the keyed user remains the current turn entry even
+    // though readActiveTranscriptEntryAnchor returns undefined while dirty.
+    appendTranscriptEventSync(scope, {
+      type: "custom",
+      id: "turn-capture-audit",
+      parentId: "pre-persisted-user",
+      timestamp: new Date().toISOString(),
+      customType: "turn-capture",
+      data: { captured: true },
+      appendMode: "side",
+    });
+
+    // The keyed-user dedup path must reload the canonical transcript, confirm
+    // the cached user is still the current turn entry, and return the dedup
+    // hit without an anchor — rather than throwing "Session transcript anchor
+    // was not returned".
+    const result = sessionManager.appendMessageWithTranscriptAnchor(userMessage);
+    expect(result).toMatchObject({
+      entryId: "pre-persisted-user",
+      message: userMessage,
+      appended: false,
+    });
+    expect(result).not.toHaveProperty("anchor");
+
+    // Subsequent assistant persistence must succeed after the anchorless dedup.
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const events = await loadTranscriptEvents(scope);
+    expect(events.find((event) => (event as { id?: string }).id === assistantId)).toMatchObject({
+      parentId: "turn-capture-audit",
+    });
+  });
+
+  it("rejects an anchorless cached replay after a concurrent branch change displaces the user (#152511)", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-branch-change-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-branch-change",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-branch-change",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-branch-change:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+
+    // Another manager appends a competing user + assistant on a different
+    // branch, displacing the cached keyed user, then writes a side-append
+    // custom artifact that dirties the projection index.
+    const competingUser = {
+      role: "user" as const,
+      content: "competing question",
+      idempotencyKey: "competing-branch:user",
+      timestamp: 2,
+    };
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "competing-user",
+      message: competingUser,
+      now: 2,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "competing-assistant",
+      message: buildAssistantMessage("competing answer"),
+      parentId: "competing-user",
+    });
+    appendTranscriptEventSync(scope, {
+      type: "custom",
+      id: "turn-capture-audit",
+      parentId: "competing-assistant",
+      timestamp: new Date().toISOString(),
+      customType: "turn-capture",
+      data: { captured: true },
+      appendMode: "side",
+    });
+
+    // After reload, resolveCurrentTurnEntryId returns the competing assistant,
+    // not the cached keyed user. The dedup path must NOT return a stale
+    // dedup hit; it falls through to the normal append path which rejects
+    // the keyed user as outside the current turn.
+    expect(() => sessionManager.appendMessageWithTranscriptAnchor(userMessage)).toThrow(
+      "Session transcript keyed user is outside the current turn",
+    );
+
+    // Only one entry with the original key should exist in the transcript.
+    const events = await loadTranscriptEvents(scope);
+    expect(
+      events.filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("rejects an anchorless cached replay after a concurrent turn completion (#152511)", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-user-idempotency-turn-completion-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-runtime-user-turn-completion",
+      sessionKey: "agent:main:dashboard:sqlite-runtime-user-turn-completion",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-turn-completion:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+
+    // Another manager appends an assistant reply (completing the turn) and
+    // then a side-append custom artifact that dirties the projection index.
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "assistant-reply",
+      message: buildAssistantMessage("answer"),
+      parentId: "pre-persisted-user",
+    });
+    appendTranscriptEventSync(scope, {
+      type: "custom",
+      id: "turn-capture-audit",
+      parentId: "assistant-reply",
+      timestamp: new Date().toISOString(),
+      customType: "turn-capture",
+      data: { captured: true },
+      appendMode: "side",
+    });
+
+    // After reload, resolveCurrentTurnEntryId returns the assistant reply,
+    // not the cached keyed user — the turn has completed. The dedup path
+    // must NOT return a stale dedup hit; it falls through to the normal
+    // append path which rejects the keyed user as outside the current turn.
+    expect(() => sessionManager.appendMessageWithTranscriptAnchor(userMessage)).toThrow(
+      "Session transcript keyed user is outside the current turn",
+    );
+
+    const events = await loadTranscriptEvents(scope);
     expect(
       events.filter(
         (event) =>
