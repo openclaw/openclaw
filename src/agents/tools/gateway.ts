@@ -452,7 +452,9 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
-    const activeAuthority = getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
+    const activeAuthority =
+      identity.approvalAuthority ??
+      getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
     const executionLineage = readAgentRuntimeExecutionLineage(sessionSpawnContext);
     if (executionLineage && !activeAuthority) {
       throw new Error("execution lineage handoff requires active parent authority");
@@ -482,7 +484,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
       const approvalAuthority =
         activeAuthority && approvalSignals?.length
           ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
-          : undefined;
+          : activeAuthority;
       const prepared: AgentRuntimeIdentityTokenParams = {
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,

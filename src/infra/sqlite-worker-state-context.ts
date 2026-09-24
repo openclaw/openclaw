@@ -11,16 +11,23 @@ export type SqliteWorkerStateContext = {
   };
   /** Selected config inputs for native shared-state initialization, not command environment. */
   initializationEnvironment?: NodeJS.ProcessEnv;
+  /** Known agent paths preserve deletion-history uncertainty during native initialization. */
+  initializationAgentPaths?: readonly string[];
   coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
 };
 
-/** Charge the captured environment together with the request bytes retained by admission. */
+/** Charge captured initialization facts together with the request bytes retained by admission. */
 export function sqliteWorkerRequestBytes(
   input: Uint8Array,
   context?: SqliteWorkerStateContext,
   preparation?: Uint8Array,
 ): number {
+  const agentPathBytes =
+    context?.initializationAgentPaths?.reduce(
+      (bytes, agentPath) => bytes + Buffer.byteLength(agentPath, "utf8"),
+      0,
+    ) ?? 0;
   return [context?.environment, context?.initializationEnvironment].reduce(
     (bytes, environment) =>
       Object.entries(environment ?? {}).reduce(
@@ -28,7 +35,7 @@ export function sqliteWorkerRequestBytes(
           total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
         bytes,
       ),
-    input.byteLength + (preparation?.byteLength ?? 0),
+    input.byteLength + (preparation?.byteLength ?? 0) + agentPathBytes,
   );
 }
 

@@ -239,6 +239,114 @@ describe("combined security review entry point", () => {
     expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
   });
 
+  it.each([
+    {
+      name: "HTTP permission denial",
+      response: { httpError: 403, message: "Resource not accessible by integration" },
+      unavailable: true,
+    },
+    {
+      name: "GraphQL permission denial",
+      response: {
+        errors: [
+          {
+            type: "FORBIDDEN",
+            path: ["createCommitOnBranch"],
+            message: "Resource not accessible by integration",
+          },
+        ],
+      },
+      unavailable: true,
+    },
+    { name: "unknown HTTP 403", response: { httpError: 403 }, unavailable: false },
+    { name: "invalid credentials", response: { httpError: 401 }, unavailable: false },
+    { name: "missing repository", response: { httpError: 404 }, unavailable: false },
+    {
+      name: "stale head",
+      response: { errors: [{ type: "STALE_DATA", message: "Expected branch head to match" }] },
+      unavailable: false,
+    },
+    {
+      name: "mixed GraphQL errors",
+      response: {
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch"] }, { type: "INTERNAL" }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "commit response field denial",
+      response: {
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch", "commit", "oid"] }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "partial commit response",
+      response: {
+        data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } },
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch"] }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "base read permission denial",
+      response: { httpError: 403, message: "Resource not accessible by integration" },
+      unavailable: false,
+      baseReadDenied: true,
+    },
+  ])("keeps cleanup $name separate from dependency approval", (scenario) => {
+    const { response, unavailable } = scenario;
+    const baseReadDenied = "baseReadDenied" in scenario && scenario.baseReadDenied;
+    const routes = {
+      [`GET ${pullPath}`]: {
+        ...pr,
+        changed_files: 1,
+        maintainer_can_modify: true,
+        head: { ...pr.head, repo: { id: 2, full_name: "contributor/openclaw" } },
+      },
+      [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+      [rolePath]: { role_name: "read" },
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+      [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+        base_commit: { sha: pr.base.sha },
+        merge_base_commit: { sha: pr.base.sha },
+      },
+      [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: baseReadDenied
+        ? response
+        : {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+          },
+      "POST /graphql": response,
+    };
+    const cleanup = evaluate(routes, "autoscrub");
+    expect(cleanup.status, cleanup.stderr).toBe(unavailable ? 0 : 1);
+    expect(cleanup.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(
+      baseReadDenied ? 0 : 1,
+    );
+    expect(cleanup.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(cleanup.waits).toEqual([]);
+    if (unavailable) {
+      const notice = cleanup.requests.find(
+        (entry) => entry.method === "POST" && entry.path.endsWith("/comments"),
+      );
+      expect(notice?.body?.body).toContain("Automatic lockfile cleanup is best effort.");
+      const enforcement = evaluate(routes);
+      expect(enforcement.status, enforcement.stderr).toBe(0);
+      expect(enforcement.combined.at(-1)).toBe("failure");
+      expect(
+        enforcement.reviews.findLast(
+          (entry) => entry.body?.context === "openclaw/dependency-review",
+        )?.body?.state,
+      ).toBe("failure");
+      expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
+    } else {
+      expect(cleanup.combined.at(-1)).toBe("failure");
+      expect(cleanup.stderr).toContain("autoscrub failed");
+    }
+  });
+
   it("does not replay a failed notice write when a sibling read later times out", () => {
     const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
     const result = evaluate({

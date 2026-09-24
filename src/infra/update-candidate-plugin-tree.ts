@@ -16,6 +16,7 @@ import {
   resolveUpdateCandidatePluginTreeTargets,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
+import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
   relocateRuntimeEntry,
@@ -127,15 +128,25 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const retainedHostRoot = params.retainedHostRoot;
   const isOwnedHostEdge = (file: string) =>
     path.basename(file) === "openclaw" && moduleOwners.has(path.dirname(file));
-  const covered = (file: string) => [...roots.keys()].some((root) => isPathInside(root, file));
+  const lookupRoots = (values: Iterable<string>) =>
+    createRuntimePathLookup(Array.from(values, (root) => [root, root] as const));
+  let rootLookup: ReturnType<typeof lookupRoots> | undefined;
+  let retainedRootLookup: ReturnType<typeof lookupRoots> | undefined;
+  let hostLookup = lookupRoots(hosts);
+  let hostRootLookup = lookupRoots(hostRoots);
+  const invalidateRoots = () => {
+    rootLookup = undefined;
+    retainedRootLookup = undefined;
+  };
+  const covered = (file: string) => (rootLookup ??= lookupRoots(roots.keys()))(file) !== undefined;
   const insideHost = (file: string) =>
-    [...hosts].some((root) => isPathInside(root, file)) &&
+    hostLookup(file) !== undefined &&
     !(
       retainedHostRoot &&
       isPathInside(retainedHostRoot, file) &&
-      [...roots.keys()].some(
-        (root) => isPathInside(retainedHostRoot, root) && isPathInside(root, file),
-      )
+      (retainedRootLookup ??= lookupRoots(
+        [...roots.keys()].filter((root) => isPathInside(retainedHostRoot, root)),
+      ))(file) !== undefined
     );
   const isRetainedDependency = (root: string) =>
     retainedHostRoot !== undefined &&
@@ -147,6 +158,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   function addRoot(source: string) {
     if (!roots.has(source)) {
       roots.set(source, params.project(source));
+      invalidateRoots();
     }
   }
   async function measureEntry(file: string): Promise<UpdateCandidatePluginEntry> {
@@ -362,12 +374,15 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         hostRoots.add(host.real);
       }
     }
+    hostLookup = lookupRoots(hosts);
+    hostRootLookup = lookupRoots(hostRoots);
     // A later module alias can identify a host subtree that an earlier root
     // already scanned. Its discoveries must not become private dependency copies
     // or nested aliases beneath the immutable staged host edge.
     for (const root of roots.keys()) {
       if (excludesInferredRoot(root)) {
         roots.delete(root);
+        invalidateRoots();
       }
     }
     for (const file of edges.keys()) {
@@ -396,19 +411,19 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     }
     // Module ownership is a complete-wave fact, independent of root order.
     await refreshHostEdges();
+    const storeLookup = lookupRoots(stores);
     let added = false;
     for (const [file, { real }] of edges) {
       if (
         (covered(real) && !(insideHost(real) && isRetainedDependency(real))) ||
         hostRoots.has(real) ||
-        (isUpdateCandidateHostLauncher(file) &&
-          [...hostRoots].some((root) => isPathInside(root, real)))
+        (isUpdateCandidateHostLauncher(file) && hostRootLookup(real) !== undefined)
       ) {
         continue;
       }
       // Internal dangling links remain dangling. External missing targets cannot
       // be materialized without leaving an escape into the serving filesystem.
-      const store = [...stores].find((root) => isPathInside(root, real));
+      const store = storeLookup(real);
       // The enclosing store excludes host contents; select the reached host package,
       // or another discovery wave would keep selecting that same incomplete store.
       const retainedDependency = insideHost(real) && isRetainedDependency(real);
@@ -434,8 +449,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     ([source]) =>
       ![...roots.keys()].some((other) => other !== source && isPathInside(other, source)),
   );
+  const copyOwner = createRuntimePathLookup(copies.map((copy) => [copy[0], copy] as const));
   function projected(file: string): string {
-    const copy = copies.find(([source]) => isPathInside(source, file));
+    const copy = copyOwner(file);
     if (!copy) {
       throw new Error("Plugin dependency has no private copy owner");
     }
@@ -455,9 +471,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     relocations.push({ sourceRoot: host, destinationRoot: candidateRoot });
   }
   for (const [file, { target, real }] of edges) {
-    const host = [...hostRoots].find(
-      (root) => real === root || (isUpdateCandidateHostLauncher(file) && isPathInside(root, real)),
-    );
+    const host = isUpdateCandidateHostLauncher(file)
+      ? hostRootLookup(real)
+      : hostRoots.has(real)
+        ? real
+        : undefined;
     relocations.push({
       sourceRoot: target,
       destinationRoot: host ? path.join(candidateRoot, path.relative(host, real)) : projected(real),
@@ -468,8 +486,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
   const entries = [...footprints.values()].filter(
-    (entry) =>
-      !insideHost(entry.path) && copies.some(([source]) => isPathInside(source, entry.path)),
+    (entry) => !insideHost(entry.path) && copyOwner(entry.path) !== undefined,
   );
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
   const bytes = entries.reduce(
@@ -477,7 +494,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     (hostLinks.size + moduleAliases.size) * 4096,
   );
   const aliases = [...moduleAliases].map<[string, string]>(([source, real]) => {
-    const owner = copies.find(([root]) => isPathInside(root, source));
+    const owner = copyOwner(source);
     const alias = owner
       ? path.join(owner[1], path.relative(owner[0], source))
       : params.project(source);

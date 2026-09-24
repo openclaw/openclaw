@@ -1988,7 +1988,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
       expect(prompt).toContain(
-        "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.",
+        "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.",
       );
       expect(prompt).toContain("current source is default target");
       expect(prompt).toContain("never repeat in final");
@@ -2013,7 +2013,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
     expect(prompt).toContain(
-      "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.",
+      "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.",
     );
     expect(prompt).not.toContain("current source is default target");
   });

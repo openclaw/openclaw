@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { beforeAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -584,14 +585,14 @@ describe("test-projects args", () => {
       { encoding: "utf8" },
     );
     expect(grep.status).toBe(0);
+    using parser = createNativeTypeScriptParser();
     const directImporterTests = grep.stdout
       .split("\n")
       .map((line) => line.trim())
       .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
       .filter((file) => {
         const source = fs.readFileSync(file, "utf8");
-        return collectModuleReferencesFromSource(source, {
-          fileName: file,
+        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
           acceptSpecifier: (specifier) => {
             if (!specifier.startsWith(".")) {
               return false;

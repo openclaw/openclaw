@@ -293,23 +293,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
-          if (producerClaimId) {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              producerClaimId,
-              params.deliveryQueueStateContext,
-            );
-          } else {
-            await markDeliveryPlatformSendDispatched(
-              platformQueueId,
-              platformQueueStateDir,
-              platformSendRoute,
-              undefined,
-              params.deliveryQueueStateContext,
-            );
-          }
+          await markDeliveryPlatformSendDispatched(
+            platformQueueId,
+            platformQueueStateDir,
+            platformSendRoute,
+            producerClaimId || undefined,
+            params.deliveryQueueStateContext,
+          );
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
           // Any SQLite-fenced live producer must prove it still owns the row at

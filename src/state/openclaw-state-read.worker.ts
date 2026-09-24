@@ -640,7 +640,7 @@ serveOwnedWorkerTasks(
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    placements: readWorkerPlacementChangeSnapshotInDatabase(db),
+                    placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
                   };
                 }
                 if (command.type === "workers.placementProjection") {

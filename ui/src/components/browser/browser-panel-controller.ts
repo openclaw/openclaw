@@ -69,7 +69,7 @@ export class BrowserPanelController implements ReactiveController {
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
   private readonly viewport = new BrowserPanelViewportController(this);
-  private readonly snapshot = new BrowserPanelSnapshotController(this, this.viewport);
+  private readonly snapshot = new BrowserPanelSnapshotController(this);
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
@@ -111,6 +111,9 @@ export class BrowserPanelController implements ReactiveController {
       this.stream.close();
     }
     Object.assign(this, { [key]: value });
+    if (key === "view" && this.view) {
+      this.viewport.captured();
+    }
     this.host.requestUpdate();
     if (key === "activeTargetId" || key === "mode") {
       this.native.presentation.update();
@@ -296,12 +299,9 @@ export class BrowserPanelController implements ReactiveController {
     return this.viewport.observedViewportSize;
   }
 
-  scheduleViewportSync(): void {
-    this.viewport.schedule();
-  }
-
   handleViewportResize(width: number, height: number): void {
     this.viewport.resize(width, height);
+    this.stream.resize();
   }
 
   async startBrowserNow(): Promise<void> {

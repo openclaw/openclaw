@@ -340,11 +340,20 @@ workers reuse the selected runtime capture for provider discovery and remove
 their scratch tree when its owner retires.
 
 Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
-`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+On Linux and macOS, `openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
 when no other OpenClaw process is running. Do not delete captures based on their
 age or absence from open-file or memory-map lists: an idle owner can still need
 them. Modern captures use SQLite custody to prove retirement. See
 [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+Unrelated Node services running `node dist/index.js` do not count as OpenClaw
+owners. Doctor resolves generic entrypoints against their installation's package
+identity and honors OpenClaw service markers. If a live PID cannot be classified,
+Doctor preserves the captures and reports that PID and the inspection failure
+(including a missing or unreadable package manifest);
+this remains a maintenance warning and does not fail the update. Retry
+`openclaw doctor --fix` after resolving the reported inspection problem.
+Windows host-wide capture cleanup remains report-only.
 
 ## Reason codes
 

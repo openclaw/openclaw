@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -14,8 +13,9 @@ import {
   normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
 import { scheduleReplySessionMaintenance } from "./agent-runner-maintenance.js";
-import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
+import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -30,19 +30,11 @@ import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
-type PreparedReplyAgentPayloads = {
-  kind: "continue";
-  activeSessionEntry: SessionEntry | undefined;
-  completedSourceReplyDelivery: boolean;
-  guardedReplyPayloads: ReplyPayload[];
-  responseUsageLine: string | undefined;
-};
 
 export async function completeReplyAgentRun(input: {
   context: FinalizeReplyAgentRunInput;
-  accounting: ReplyAgentAccounting;
-  prepared: PreparedReplyAgentPayloads;
+  accounting: AccountedAgentTurn;
+  prepared: Extract<Awaited<ReturnType<typeof prepareReplyAgentPayloads>>, { kind: "continue" }>;
 }) {
   const { context, accounting, prepared } = input;
   const {
@@ -111,7 +103,6 @@ export async function completeReplyAgentRun(input: {
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
   }
-  const prefixPayloads = [...prefixNotices];
   const trailingPluginStatusPayload = await buildReplyDiagnosticsPayload({
     activeSessionEntry,
     followupRun,
@@ -127,8 +118,8 @@ export async function completeReplyAgentRun(input: {
   const rawAssistantText = isHookBlockedRun
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
-  if (prefixPayloads.length > 0) {
-    finalPayloads = [...prefixPayloads, ...finalPayloads];
+  if (prefixNotices.length > 0) {
+    finalPayloads = [...prefixNotices, ...finalPayloads];
   }
   if (trailingPluginStatusPayload) {
     finalPayloads = [...finalPayloads, trailingPluginStatusPayload];

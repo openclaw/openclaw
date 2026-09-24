@@ -1046,6 +1046,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     frozenTarget: options.frozenTarget,
     hostedRunnerProfileContract: options.types?.hostedContract ?? true,
     runnerProfile: options.types?.profile ?? "hybrid",
+    steps: { "npm-lock-scope": { outputs: { skip: "false" } } },
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
@@ -1098,6 +1099,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
           HOSTED_RUNNER_STRIPES: "true",
           CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
+          SKIP_NPM_LOCK: "false",
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
           TASK: options.task ?? "guards",
@@ -1277,19 +1279,13 @@ describe("ci workflow guards", () => {
     });
     expect(manifest.status, manifest.output).toBe(0);
     expect(manifest.output).toContain("max-lines-guard:true");
-    const tasks = JSON.parse(
-      expectDefined(manifest.outputs.checks_fast_core_matrix, "fast ratchet matrix"),
-    ).include;
-    expect(tasks).toContainEqual({
-      check_name: "checks-fast-baseline-ratchets",
-      runtime: "node",
-      task: "baseline-ratchets",
-    });
+    expect(manifest.outputs.run_baseline_ratchets).toBe("true");
     const context = { preflightOutputs: manifest.outputs };
     expect(runCiGateFixture(renderCiGateEnvironment(context)).status).toBe(0);
     for (const result of ["failure", "skipped"]) {
       expect(
-        runCiGateFixture(renderCiGateEnvironment(context, { "checks-fast-core": result })).status,
+        runCiGateFixture(renderCiGateEnvironment(context, { "checks-baseline-ratchets": result }))
+          .status,
       ).toBe(1);
     }
   });
@@ -5332,7 +5328,7 @@ describe("ci workflow guards", () => {
       evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
         eventName: "pull_request",
         repository: "openclaw/openclaw",
-        matrix: { task: "baseline-ratchets" },
+        matrix: { task: "startup-corpus" },
         runAttempt: 1,
         preflightOutputs: { ...manifest.outputs, checkout_revision: revision },
       }),
@@ -5428,7 +5424,7 @@ describe("ci workflow guards", () => {
         evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
           eventName: "pull_request",
           repository: "openclaw/openclaw",
-          matrix: { task: "baseline-ratchets" },
+          matrix: { task: "startup-corpus" },
           runAttempt: 1,
           preflightOutputs: {
             startup_corpus_node_revision: revision,
@@ -5467,7 +5463,7 @@ describe("ci workflow guards", () => {
               eventName: "push",
               repository: "openclaw/openclaw",
               ref: "refs/heads/main",
-              matrix: { task: "baseline-ratchets" },
+              matrix: { task: "startup-corpus" },
               runCheck: true,
               runAttempt: 1,
             })),
@@ -5593,7 +5589,7 @@ describe("ci workflow guards", () => {
       repository,
       releaseGate,
       frozenTarget,
-      matrix: { task: "baseline-ratchets" },
+      matrix: { task: "startup-corpus" },
       runAttempt: 1,
       preflightOutputs: manifest.outputs,
     };
@@ -5715,11 +5711,60 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("gates Node fanout on selected ratchets without waiting for startup or unrelated checks", () => {
+    const workflow = readCiWorkflow();
+    const nodeJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    expect(nodeJob.needs).toEqual(["preflight", "checks-baseline-ratchets"]);
+    expect(workflow.jobs["checks-fast-core"].needs).toEqual(["preflight"]);
+    const ratchet = workflow.jobs["checks-baseline-ratchets"];
+    expect(ratchet.steps.some((step: WorkflowStep) => step.name === "Check startup corpus")).toBe(
+      false,
+    );
+    expect(ratchet.env.CHECKOUT_BASE_SHA).toBe("${{ needs.preflight.outputs.diff_base_revision }}");
+    for (const selected of ["true", "false"]) {
+      for (const result of ["success", "failure", "cancelled", "skipped"]) {
+        for (const nodeSelected of ["true", "false"]) {
+          for (const cancelled of [true, false]) {
+            const admitted = evaluateWorkflowExpression(nodeJob.if, {
+              eventName: "pull_request",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              cancelled,
+              preflightOutputs: {
+                run_baseline_ratchets: selected,
+                run_checks_node_core_nondist: nodeSelected,
+              },
+              jobResults: { "checks-baseline-ratchets": result },
+            });
+            expect(admitted).toBe(
+              !cancelled &&
+                nodeSelected === "true" &&
+                (result === "success" || (selected === "false" && result === "skipped")),
+            );
+          }
+        }
+      }
+    }
+    expect(
+      evaluateWorkflowExpression(nodeJob.if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { run_baseline_ratchets: "true", run_checks_node_core_nondist: "true" },
+        jobResults: { preflight: "failure" },
+      }),
+    ).toBe(false);
+  });
+
   it("runs all baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
     const maxLinesRatchet = readFileSync("scripts/check-max-lines-ratchet.mts", "utf8");
     const checksFastJob = workflow.jobs["checks-fast-core"];
     const checksFastSteps = checksFastJob.steps;
+    const ratchetJob = workflow.jobs["checks-baseline-ratchets"];
+    const ratchetRun = ratchetJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run baseline ratchets",
+    );
     const checkout = checksFastSteps.find((step: WorkflowStep) => step.name === "Checkout");
     const checksFastRun = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
@@ -5737,9 +5782,9 @@ describe("ci workflow guards", () => {
     });
     expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
-      "(matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
+      "(matrix.task == 'startup-corpus' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(checksFastRun.run).toContain("baseline-ratchets)");
+    expect(checksFastRun.run).toContain("startup-corpus)");
     expect(checksFastRun.run).toContain("coercion-helpers)");
     expect(checksFastRun.run).toContain("pnpm check:coercion-helpers");
     expect(checksFastRun.run).toContain("bun-launcher)");
@@ -5752,17 +5797,17 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).toContain(
       'elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then',
     );
-    expect(checksFastRun.run).toContain(
+    expect(ratchetRun.run).toContain(
       "for required_script in check:max-lines-ratchet check:assertion-safety config:docs:check plugins:inventory:check; do",
     );
-    expect(checksFastRun.run).toContain('has_package_script "$required_script"');
-    expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
+    expect(ratchetRun.run).toContain('has_package_script "$required_script"');
+    expect(ratchetRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
     );
-    expect(checksFastRun.env).not.toHaveProperty("RATCHET_EVENT_BASE_SHA");
-    expect(checksFastRun.env).not.toHaveProperty("RATCHET_MANUAL_TARGET_SHA");
-    expect(checksFastRun.env).not.toHaveProperty("GH_TOKEN");
-    expect(checksFastRun.env).not.toHaveProperty("PROTOCOL_MANUAL_BASE_SHA");
+    expect(ratchetRun.env).not.toHaveProperty("RATCHET_EVENT_BASE_SHA");
+    expect(ratchetRun.env).not.toHaveProperty("RATCHET_MANUAL_TARGET_SHA");
+    expect(ratchetRun.env).not.toHaveProperty("GH_TOKEN");
+    expect(ratchetRun.env).not.toHaveProperty("PROTOCOL_MANUAL_BASE_SHA");
     expect(checksFastRun.env.PROTOCOL_SINCE_BASE_SHA).toBe(
       "${{ needs.preflight.outputs.diff_base_revision }}",
     );
@@ -5797,27 +5842,27 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).toContain(
       'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
     );
-    expect(checksFastRun.run).toContain(
+    expect(ratchetRun.run).toContain(
       'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',
     );
-    expect(checksFastRun.run).toContain('git cat-file -e "${base_ref}^{commit}"');
-    expect(checksFastRun.run).toContain(
+    expect(ratchetRun.run).toContain('git cat-file -e "${base_ref}^{commit}"');
+    expect(ratchetRun.run).toContain(
       "mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')",
     );
-    expect(checksFastRun.run).toContain('"${#merge_parents[@]}" != "2"');
-    expect(checksFastRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
-    expect(checksFastRun.run).toContain('prepared_base="$(git rev-parse "$base_ref")"');
-    expect(checksFastRun.run).toContain('"${merge_parents[0]}" != "$prepared_base"');
-    expect(checksFastRun.run).not.toContain("ci-ratchet-target^");
-    expect(checksFastRun.run).not.toContain("resolve_manual_merge_base");
-    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
-    expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
-    expect(checksFastRun.run).toMatch(
+    expect(ratchetRun.run).toContain('"${#merge_parents[@]}" != "2"');
+    expect(ratchetRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
+    expect(ratchetRun.run).toContain('prepared_base="$(git rev-parse "$base_ref")"');
+    expect(ratchetRun.run).toContain('"${merge_parents[0]}" != "$prepared_base"');
+    expect(ratchetRun.run).not.toContain("ci-ratchet-target^");
+    expect(ratchetRun.run).not.toContain("resolve_manual_merge_base");
+    expect(ratchetRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
+    expect(ratchetRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
+    expect(ratchetRun.run).toMatch(
       /if \[\[ -n "\$\{RATCHET_PR_HEAD_SHA:-\}" \]\]; then\s+pnpm check:line-cap-ratchet --base "\$base_ref"\s+fi/u,
     );
-    expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
-    expect(checksFastRun.run).toContain("pnpm config:docs:check");
-    expect(checksFastRun.run).toContain("pnpm plugins:inventory:check");
+    expect(ratchetRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
+    expect(ratchetRun.run).toContain("pnpm config:docs:check");
+    expect(ratchetRun.run).toContain("pnpm plugins:inventory:check");
     expect(maxLinesRatchet).toContain('} from "./check-env-var-count.mts";');
     expect(maxLinesRatchet).toContain(
       "checkEnvVarCount(envVarCountArgs(argv), root, envVarNames);",
@@ -5847,9 +5892,9 @@ describe("ci workflow guards", () => {
         .include,
     ).toEqual([
       {
-        check_name: "checks-fast-baseline-ratchets",
+        check_name: "checks-fast-startup-corpus",
         runtime: "node",
-        task: "baseline-ratchets",
+        task: "startup-corpus",
       },
       {
         check_name: "checks-fast-coercion-helpers",
@@ -5929,6 +5974,7 @@ describe("ci workflow guards", () => {
           .map(([key]) => key)
           .toSorted(),
       ).toEqual([
+        "run_baseline_ratchets",
         "run_checks_fast_core",
         "run_format_check",
         "run_node",
@@ -5950,7 +5996,7 @@ describe("ci workflow guards", () => {
         expectDefined(manifest.outputs.checks_fast_core_matrix, "fast checks matrix"),
       ).include as Array<{ task: string }>;
       expect(fastTasks.map(({ task }) => task)).toEqual([
-        "baseline-ratchets",
+        "startup-corpus",
         "coercion-helpers",
         "ci-routing",
       ]);
@@ -8609,6 +8655,7 @@ describe("ci workflow guards", () => {
       "checks-ui-e2e",
       "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
+      "checks-baseline-ratchets",
       "checks-fast-core",
       "qa-smoke-ci-profile",
       "checks-fast-plugin-contracts-shard",
@@ -8701,6 +8748,10 @@ describe("ci workflow guards", () => {
       const eligible = workflow.jobs[job].if
         .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
         .replace(/!cancelled\(\)\s*&&\s*always\(\)\s*&&\s*/gu, "")
+        .replace(
+          /!cancelled\(\) && needs\.preflight\.result == 'success' && \(needs\.checks-baseline-ratchets\.result == 'success' \|\| \(needs\.preflight\.outputs\.run_baseline_ratchets == 'false' && needs\.checks-baseline-ratchets\.result == 'skipped'\)\) && /u,
+          "",
+        )
         .replace(/\s+/gu, " ")
         .trim();
       const projected = /^needs\.preflight\.outputs\.\w+$/u.test(selection)

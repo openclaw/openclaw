@@ -47,7 +47,12 @@ export type AgentWorkspaceAccess = {
   >;
   bridge: Pick<
     SandboxFsBridge,
-    "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
+    | "readFile"
+    | "readFileWithSource"
+    | "readDirectory"
+    | "writeFile"
+    | "createFileExclusive"
+    | "stat"
   >;
   /** Purpose-scoped output reads; the document bridge need not allow attachment paths. */
   outboundMedia?: {
@@ -132,6 +137,15 @@ export function registerAgentWorkspaceAccess(
       return result;
     },
   };
+  const createFileExclusive = access.bridge.createFileExclusive?.bind(access.bridge);
+  if (createFileExclusive) {
+    bridge.createFileExclusive = async (params) => {
+      assertCurrent();
+      const result = await createFileExclusive(params);
+      assertCurrent();
+      return result;
+    };
+  }
   const readFileWithSource = access.bridge.readFileWithSource?.bind(access.bridge);
   if (readFileWithSource) {
     bridge.readFileWithSource = async (params) => {

@@ -97,6 +97,7 @@ export function createWorkerSessionToolExecutor(params: {
           sessionKey: owner.sessionKey,
           gatewayContextResolver: params.resolveGatewayContext,
           operationalRunInstance: owner.operationalRunInstance,
+          approvalAuthority: owner.delegatedAuthority,
           ...(owner.operatorAuthority ? { operatorAuthority: owner.operatorAuthority } : {}),
           executionIdentityToken: owner.executionIdentityToken,
           receiptAuthority: owner.receiptAuthority,

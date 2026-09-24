@@ -612,6 +612,105 @@ describe("verify-stable-main-closeout", () => {
     expect(replay.status, replay.stderr).toBe(0);
     expect(readFileSync(outputPath, "utf8")).toBe(readFileSync(originalPath, "utf8"));
   });
+
+  it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-withdrawn-closeout-"));
+    tempDirs.push(dir);
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    const mainSha = "a".repeat(40);
+    for (const name of ["main", "tag"]) {
+      const root = path.join(dir, name);
+      mkdirSync(root);
+      execFileSync("git", ["init", "--quiet", root]);
+      writeFileSync(path.join(root, ".git/HEAD"), `${mainSha}\n`);
+      writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      writeFileSync(
+        path.join(root, "CHANGELOG.md"),
+        `# Changelog\n\n## ${version}\n\n- Released.\n`,
+      );
+      writeFileSync(
+        path.join(root, "appcast.xml"),
+        "<rss><sparkle:shortVersionString>2026.9.5</sparkle:shortVersionString></rss>",
+      );
+    }
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env node
+const expected = 'repos/openclaw/openclaw/commits?sha=${mainSha}&path=appcast.xml&per_page=100';
+if (process.argv[2] !== 'api' || process.argv[3] !== expected || process.env.WITHDRAWAL_LOOKUPS !== 'allowed') {
+  throw new Error('Unexpected GitHub operation: ' + process.argv.slice(2).join(' '));
+}
+process.stdout.write(JSON.stringify([
+  { sha: 'b'.repeat(40), commit: { message: 'chore(release): update appcast for ${version}' } },
+  { sha: 'c'.repeat(40), commit: { message: 'chore(release): withdraw the ${version} macOS build from the Sparkle feed\\n\\nRefs #156861\\n' } },
+]));
+`,
+      { mode: 0o755 },
+    );
+    const releasePath = path.join(dir, "release.json");
+    const outputPath = path.join(dir, "closeout.json");
+    const originalPath = path.join(dir, "original.json");
+    writeFileSync(
+      releasePath,
+      JSON.stringify({
+        tagName: tag,
+        isDraft: false,
+        isPrerelease: false,
+        assets: ["", "-arm64", "-x86_64"]
+          .flatMap((suffix) =>
+            ["zip", "dmg", "dSYM.zip"].map(
+              (extension) => `OpenClaw-${version}${suffix}.${extension}`,
+            ),
+          )
+          .map((name) => ({ name, digest: `sha256:${"c".repeat(64)}` })),
+      }),
+    );
+    const args = [
+      "--tag",
+      tag,
+      "--main-dir",
+      path.join(dir, "main"),
+      "--tag-dir",
+      path.join(dir, "tag"),
+      "--release-json",
+      releasePath,
+      "--full-release-validation-run-id",
+      "11",
+      "--full-release-validation-run-attempt",
+      "2",
+      "--release-publish-run-id",
+      "12",
+      "--rollback-drill-id",
+      "synthetic-drill",
+      "--rollback-drill-date",
+      new Date().toISOString().slice(0, 10),
+      "--output",
+      outputPath,
+    ];
+    const run = (lookups: "allowed" | "forbidden", ...extra: string[]) =>
+      spawnSync(process.execPath, ["scripts/verify-stable-main-closeout.mjs", ...args, ...extra], {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WITHDRAWAL_LOOKUPS: lookups },
+      });
+
+    const initial = run("allowed");
+    expect(initial.status, initial.stderr).toBe(0);
+    const initialBytes = readFileSync(outputPath, "utf8");
+    expect(JSON.parse(initialBytes)).toMatchObject({
+      apps: "pending",
+      appPlatforms: { macos: "withdrawn" },
+      appcast: "withdrawn",
+      appcastWithdrawal: { commit: "c".repeat(40), reason: "Refs #156861" },
+    });
+    writeFileSync(originalPath, initialBytes);
+    const replay = run("forbidden", "--existing-manifest", originalPath);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(outputPath, "utf8")).toBe(initialBytes);
+  });
 });
 
 describe("stable closeout workflow publication routing", () => {

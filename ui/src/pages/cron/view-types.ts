@@ -69,6 +69,7 @@ export type CronProps = {
   thinkingSuggestions: string[];
   timezoneSuggestions: string[];
   deliveryToSuggestions: string[];
+  failureAlertToSuggestions: string[];
   accountSuggestions: string[];
   onListTabChange: (tab: CronListTab) => void;
   onDetailTabChange: (tab: CronDetailTab) => void;
