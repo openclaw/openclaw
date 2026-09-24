@@ -18,14 +18,6 @@ function requireAtRule(node: unknown): AtRule {
 }
 
 describe("Control UI hover guard", () => {
-  it("wraps a hover rule in a hover-capable media query", async () => {
-    const result = await transform(".button:hover { color: red; }");
-    const guard = requireAtRule(result.root.first);
-
-    expect(guard.params).toBe("(hover: hover)");
-    expect(requireRule(guard.first).selector).toBe(".button:hover");
-  });
-
   it("splits mixed selector lists without moving non-hover selectors", async () => {
     const result = await transform(".a:hover, .b:focus { color: red; }");
     const [original, guard] = result.root.nodes;

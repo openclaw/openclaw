@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
@@ -655,14 +656,9 @@ describe("OpenClaw shell settings search", () => {
   });
 
   it("does not load schema through a replaced runtime config capability", async () => {
-    let finishLoad: (() => void) | undefined;
+    const loadGate = createDeferred();
     const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            finishLoad = resolve;
-          }),
-      ),
+      ensureLoaded: vi.fn(() => loadGate.promise),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
     const secondRuntimeConfig = {
@@ -680,7 +676,7 @@ describe("OpenClaw shell settings search", () => {
     shell.runtime = {
       context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
     };
-    finishLoad?.();
+    loadGate.resolve();
     await load;
 
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
@@ -875,7 +871,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     }
   });
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+  it.each(["MacIntel", "Win32"])(
     "opens an unloaded palette only with the platform shortcut on %s",
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);

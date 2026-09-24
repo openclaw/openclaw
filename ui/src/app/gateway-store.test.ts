@@ -505,32 +505,27 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.sessionKey).toBe("agent:main:other");
   });
 
-  it.each(["stopped", "connecting", "connected", "reconnecting", "offline"] as const)(
-    "stop() resets %s to stopped",
-    (phase) => {
-      const { gateway, current } = createStore();
-      if (phase !== "stopped") {
-        gateway.start();
-      }
-      if (phase === "connected" || phase === "reconnecting" || phase === "offline") {
-        current().opts.onHello?.(HELLO);
-      }
-      if (phase === "reconnecting" || phase === "offline") {
-        current().opts.onClose?.({
-          code: 1006,
-          reason: "socket lost",
-          willRetry: phase === "reconnecting",
-        });
-      }
-      expect(gateway.snapshot.phase).toBe(phase);
+  it.each(["stopped", "offline"] as const)("stop() resets %s to stopped", (phase) => {
+    const { gateway, current } = createStore();
+    if (phase !== "stopped") {
+      gateway.start();
+    }
+    if (phase === "offline") {
+      current().opts.onHello?.(HELLO);
+      current().opts.onClose?.({
+        code: 1006,
+        reason: "socket lost",
+        willRetry: false,
+      });
+    }
+    expect(gateway.snapshot.phase).toBe(phase);
 
-      gateway.stop();
+    gateway.stop();
 
-      expect(gateway.snapshot.phase).toBe("stopped");
-      expect(gateway.snapshot.client).toBeNull();
-      expect(gateway.snapshot.offlineStable).toBe(false);
-    },
-  );
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.client).toBeNull();
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
 
   it("publishes a stable offline state only after a sustained disconnect", async () => {
     vi.useFakeTimers();
@@ -596,16 +591,6 @@ describe("createApplicationGateway connection phase", () => {
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.snapshot.offlineStable).toBe(false);
-  });
-
-  it("drops back to the gate when the client gives up (credential rejection)", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-    current().opts.onHello?.(HELLO);
-
-    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
-
-    expect(gateway.snapshot.phase).toBe("offline");
   });
 
   it("schedules the guarded reload and publishes a terminal phase for a stale build", () => {

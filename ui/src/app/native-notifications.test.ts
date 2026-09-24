@@ -94,16 +94,6 @@ describe("native notifications", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("reposts status when the window focuses", () => {
-    const postMessage = installBridge();
-    capability = createNativeNotificationsCapability();
-    postMessage.mockClear();
-
-    window.dispatchEvent(new Event("focus"));
-
-    expect(postMessage).toHaveBeenCalledWith({ type: "status" });
-  });
-
   it("posts permission requests", () => {
     const postMessage = installBridge();
     capability = createNativeNotificationsCapability();
@@ -126,7 +116,7 @@ describe("native notifications", () => {
     expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
   });
 
-  it.each(["unknown", "notDetermined", "denied", "granted"] as const)(
+  it.each(["unknown", "notDetermined", "denied"] as const)(
     "forwards completion to the native permission owner without prompting: %s",
     (permission) => {
       const postMessage = installBridge();

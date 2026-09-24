@@ -1,15 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  GatewayBrowserClient,
-  GatewayBrowserClientOptions,
-  GatewayEventFrame,
-  GatewayHelloOk,
-} from "../api/gateway.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { createApplicationGateway } from "./gateway-store.ts";
-import { loadSettings } from "./settings.ts";
+import {
+  createGatewayEvent as gatewayEvent,
+  createGatewayStoreTestStore as createGatewayStore,
+  GATEWAY_STORE_TEST_HELLO as HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 
 vi.mock("../build-info.ts", () => ({
   CONTROL_UI_BUILD_INFO: { version: "2026.7.2", buildId: "test" },
@@ -19,66 +16,13 @@ vi.mock("../build-info.ts", () => ({
       : Boolean(identity.version && identity.version !== "2026.7.2"),
 }));
 
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
-
-function createGatewayEvent(seq: number): GatewayEventFrame {
-  return {
-    type: "event",
-    event: "chat",
-    payload: { text: `event-${seq}` },
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
-}
-
-function createGatewayStore() {
-  const clients: Array<{
-    opts: GatewayBrowserClientOptions;
-    start: ReturnType<typeof vi.fn>;
-    stop: ReturnType<typeof vi.fn>;
-    request: ReturnType<typeof vi.fn<(method: string) => Promise<unknown>>>;
-  }> = [];
-  const gateway = createApplicationGateway(loadSettings(), "", "", (opts) => {
-    const client = {
-      opts,
-      instanceId: opts.instanceId ?? "",
-      request: vi
-        .fn<(method: string) => Promise<unknown>>()
-        .mockRejectedValue(new Error("unexpected gateway request")),
-      start: vi.fn(),
-      stop: vi.fn(),
-    };
-    clients.push(client);
-    return client as unknown as GatewayBrowserClient;
-  });
-  return {
-    gateway,
-    clients,
-    current: () => {
-      const client = clients.at(-1);
-      if (!client) {
-        throw new Error("expected a gateway client");
-      }
-      return client;
-    },
-  };
+function createGatewayEvent(seq: number) {
+  return gatewayEvent("chat", { text: `event-${seq}` }, seq);
 }
 
 describe("application gateway observer ownership", () => {
   beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("location", {
-      protocol: "http:",
-      host: "127.0.0.1:18789",
-      hostname: "127.0.0.1",
-      pathname: "/",
-    } as Location);
+    stubGatewayStoreTestGlobals();
   });
 
   afterEach(() => {
@@ -379,9 +323,9 @@ describe("application gateway observer ownership", () => {
     gateway.start();
 
     expect(clients).toHaveLength(2);
-    expect(clients[0]?.stop).toHaveBeenCalledOnce();
-    expect(clients[0]?.start).not.toHaveBeenCalled();
-    expect(clients[1]?.start).toHaveBeenCalledOnce();
+    expect(clients[0]?.stopped).toBe(1);
+    expect(clients[0]?.started).toBe(0);
+    expect(clients[1]?.started).toBe(1);
   });
 
   it("does not start a client stopped by a connecting snapshot observer", () => {
@@ -397,8 +341,8 @@ describe("application gateway observer ownership", () => {
     gateway.start();
 
     expect(clients).toHaveLength(1);
-    expect(clients[0]?.stop).toHaveBeenCalledOnce();
-    expect(clients[0]?.start).not.toHaveBeenCalled();
+    expect(clients[0]?.stopped).toBe(1);
+    expect(clients[0]?.started).toBe(0);
     expect(gateway.snapshot.phase).toBe("stopped");
   });
 
@@ -419,7 +363,7 @@ describe("application gateway observer ownership", () => {
 
     expect(replaced).toBe(true);
     expect(clients).toHaveLength(2);
-    expect(clients[1]?.start).toHaveBeenCalledOnce();
+    expect(clients[1]?.started).toBe(1);
     expect(gateway.snapshot.client).toBe(clients[1]);
   });
 
@@ -440,7 +384,7 @@ describe("application gateway observer ownership", () => {
 
     expect(halted).toBe(true);
     expect(clients).toHaveLength(1);
-    expect(retired?.start).toHaveBeenCalledOnce();
+    expect(retired?.started).toBe(1);
     expect(gateway.snapshot.phase).toBe("stopped");
   });
 });
