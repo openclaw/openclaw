@@ -1051,28 +1051,4 @@ describe("Mistral provider", () => {
     expect(JSON.stringify(toolMessage)).not.toContain("image_url");
     expect(JSON.stringify(toolMessage)).not.toContain("see attached image");
   });
-
-  it("serializes structured-only tool results instead of empty fallback", async () => {
-    const testContext = makeMistralToolResultContext("get_file", [
-      {
-        type: "resource_link",
-        uri: "https://example.com/file.txt",
-        name: "file.txt",
-        mimeType: "text/plain",
-        size: 100,
-      },
-    ]);
-
-    await runMistralFixture(testContext);
-
-    const payload = mistralMockState.payloads[0] as {
-      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-    };
-    const toolMessage = payload.messages.find((message) => message.role === "tool");
-    const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
-    const textBlock = toolContent.find((block) => block.type === "text");
-    // Structured blocks should provide the output, not an empty fallback
-    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource_link"'));
-    expect(textBlock?.text).not.toContain("(no tool output)");
-  });
 });

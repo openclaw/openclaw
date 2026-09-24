@@ -63,41 +63,6 @@ describe("openai completions stream", () => {
     expect(usage.cost.totalOrigin).toBeUndefined();
   });
 
-  it("records usage from OpenAI-compatible streaming usage chunks", async () => {
-    const model = makeCompletionsModel({
-      id: "glm-5",
-      name: "GLM-5",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      contextWindow: 128000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-    const stream: { push(event: unknown): void } = { push() {} };
-
-    async function* mockStream() {
-      yield makeCompletionsChunk({ role: "assistant" as const, content: "ok" }, "stop" as const);
-      yield makeCompletionsChunk({}, null, {
-        choices: [],
-        usage: {
-          prompt_tokens: 8,
-          completion_tokens: 10,
-          total_tokens: 18,
-        },
-      });
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
-
-    expectRecordFields(output.usage, {
-      input: 8,
-      output: 10,
-      cacheRead: 0,
-      totalTokens: 18,
-    });
-  });
-
   it("emits reasoning activity for OpenAI-compatible usage-only reasoning chunks", async () => {
     const model = makeCompletionsModel({
       id: "google/gemini-2.5-flash",

@@ -8,6 +8,7 @@ import {
   expectRecordFields,
   makeCompletionsChunk,
   makeCompletionsModel,
+  streamChunks,
 } from "./openai-completions.test-support.js";
 
 function geminiToolReplayContext(
@@ -86,13 +87,7 @@ describe("openai completions params", () => {
           "tool_calls" as const,
         ),
       ] as const;
-      async function* mockStream() {
-        for (const chunk of chunks) {
-          yield chunk as never;
-        }
-      }
-
-      await processCompletionsStream(mockStream(), output, geminiModel, {
+      await processCompletionsStream(streamChunks(chunks), output, geminiModel, {
         push() {},
       });
 
@@ -128,13 +123,7 @@ describe("openai completions params", () => {
         }),
         makeCompletionsChunk({}, "tool_calls" as const),
       ] as const;
-      async function* mockStream() {
-        for (const chunk of chunks) {
-          yield chunk as never;
-        }
-      }
-
-      await processCompletionsStream(mockStream(), output, veniceGeminiModel, {
+      await processCompletionsStream(streamChunks(chunks), output, veniceGeminiModel, {
         push() {},
       });
 

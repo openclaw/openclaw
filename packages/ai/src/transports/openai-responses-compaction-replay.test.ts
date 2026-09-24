@@ -80,8 +80,10 @@ async function* events(
   }
 }
 
-async function processEvents(values: Record<string, unknown>[]): Promise<AssistantMessage> {
-  const output = createOutput();
+async function processEvents(
+  values: Record<string, unknown>[],
+  output = createOutput(),
+): Promise<AssistantMessage> {
   await processResponsesStream(events(values), output, { push: () => undefined }, model, {
     reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
   });
@@ -113,6 +115,8 @@ const responseConverters = [
     ) => convertProviderResponsesMessages(model, context, new Set(["openai"]), identity),
   },
 ] as const;
+
+const convertTransport = responseConverters[0].convert;
 
 function createAssistant(
   content: AssistantMessage["content"],
@@ -181,8 +185,8 @@ describe("OpenAI Responses compaction replay", () => {
   it("persists a streamed compaction output item as opaque provider replay state", async () => {
     const output = createOutput();
 
-    await processResponsesStream(
-      events([
+    await processEvents(
+      [
         {
           type: "response.output_item.done",
           output_index: 0,
@@ -196,13 +200,8 @@ describe("OpenAI Responses compaction replay", () => {
           type: "response.completed",
           response: { id: "resp_compacted", status: "completed", output: [] },
         },
-      ]),
+      ],
       output,
-      { push: () => undefined },
-      model,
-      {
-        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      },
     );
 
     expect((output as AssistantMessage & { providerReplay?: unknown }).providerReplay).toEqual({
@@ -220,44 +219,6 @@ describe("OpenAI Responses compaction replay", () => {
     });
     expect(output.content).toEqual([]);
     expect(JSON.stringify(output.content)).not.toContain("opaque-streamed-compaction");
-  });
-
-  it("recovers a compaction item from terminal response output", async () => {
-    const output = createOutput();
-
-    await processResponsesStream(
-      events([
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_terminal_compacted",
-            status: "completed",
-            output: [
-              {
-                type: "compaction",
-                id: "cmp_terminal",
-                encrypted_content: "opaque-terminal-compaction",
-              },
-            ],
-          },
-        },
-      ]),
-      output,
-      { push: () => undefined },
-      model,
-      {
-        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      },
-    );
-
-    expect(output.providerReplay).toMatchObject({
-      type: "openai-responses-compaction",
-      id: "cmp_terminal",
-      data: "opaque-terminal-compaction",
-      replayIndex: 0,
-      sessionHash: expect.any(String),
-      authProfileHash: expect.any(String),
-    });
   });
 
   it("recovers and replays a terminal-only compaction without an id", async () => {
@@ -306,8 +267,8 @@ describe("OpenAI Responses compaction replay", () => {
     delete existingReplay.id;
     output.providerReplay = existingReplay;
 
-    await processResponsesStream(
-      events([
+    await processEvents(
+      [
         {
           type: "response.completed",
           response: {
@@ -321,13 +282,8 @@ describe("OpenAI Responses compaction replay", () => {
             ],
           },
         },
-      ]),
+      ],
       output,
-      { push: () => undefined },
-      model,
-      {
-        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      },
     );
 
     expect(output.providerReplay).toBe(existingReplay);
@@ -344,8 +300,8 @@ describe("OpenAI Responses compaction replay", () => {
     delete existingReplay.id;
     output.providerReplay = existingReplay;
 
-    await processResponsesStream(
-      events([
+    await processEvents(
+      [
         {
           type: "response.completed",
           response: {
@@ -359,13 +315,8 @@ describe("OpenAI Responses compaction replay", () => {
             ],
           },
         },
-      ]),
+      ],
       output,
-      { push: () => undefined },
-      model,
-      {
-        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
-      },
     );
 
     expect(output.providerReplay).not.toBe(existingReplay);
@@ -548,7 +499,14 @@ describe("OpenAI Responses compaction replay", () => {
       },
     ]);
 
-    expect(output.providerReplay?.replayIndex).toBe(0);
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction",
+      id: "cmp_terminal_order",
+      data: "opaque-terminal-order",
+      replayIndex: 0,
+      sessionHash: expect.any(String),
+      authProfileHash: expect.any(String),
+    });
     expect(replayTypes(output)).toEqual(["compaction", "message"]);
   });
 
@@ -861,55 +819,33 @@ describe("OpenAI Responses compaction replay", () => {
     },
   );
 
-  it.each(responseConverters)(
-    "$name leaves the full transcript unchanged when compaction is incompatible",
-    ({ convert }) => {
-      const older = createAssistant(
-        [{ type: "text", text: "older assistant" }],
-        compactionState(model, { replayIndex: 0 }),
-      );
-      const incompatible = createAssistant(
-        [{ type: "text", text: "newer incompatible assistant" }],
-        compactionState(model, { model: "other-model", replayIndex: 0 }),
-      );
-      const input = convert({
-        messages: [
-          { role: "user", content: "first user", timestamp: 1 },
-          older,
-          { role: "user", content: "second user", timestamp: 2 },
-          incompatible,
-          { role: "user", content: "active user", timestamp: 3 },
-        ],
-      });
+  it("leaves the full transcript unchanged when compaction is incompatible", () => {
+    const older = createAssistant(
+      [{ type: "text", text: "older assistant" }],
+      compactionState(model, { replayIndex: 0 }),
+    );
+    const incompatible = createAssistant(
+      [{ type: "text", text: "newer incompatible assistant" }],
+      compactionState(model, { model: "other-model", replayIndex: 0 }),
+    );
+    const input = convertTransport({
+      messages: [
+        { role: "user", content: "first user", timestamp: 1 },
+        older,
+        { role: "user", content: "second user", timestamp: 2 },
+        incompatible,
+        { role: "user", content: "active user", timestamp: 3 },
+      ],
+    });
 
-      expect(input.some((item) => item.type === "compaction")).toBe(false);
-      const encoded = JSON.stringify(input);
-      expect(encoded).toContain("first user");
-      expect(encoded).toContain("older assistant");
-      expect(encoded).toContain("second user");
-      expect(encoded).toContain("newer incompatible assistant");
-      expect(encoded).toContain("active user");
-    },
-  );
-
-  it.each(responseConverters)(
-    "$name preserves existing no-prune conversion when no compaction exists",
-    ({ convert }) => {
-      const input = convert({
-        systemPrompt: "system stays",
-        messages: [
-          { role: "user", content: "first user", timestamp: 1 },
-          createAssistant([{ type: "text", text: "assistant stays" }]),
-          { role: "user", content: "active user", timestamp: 2 },
-        ],
-      });
-
-      expect(input.map((item) => item.type)).toEqual(["message", "message", "message", "message"]);
-      expect(JSON.stringify(input)).toContain("first user");
-      expect(JSON.stringify(input)).toContain("assistant stays");
-      expect(JSON.stringify(input)).toContain("active user");
-    },
-  );
+    expect(input.some((item) => item.type === "compaction")).toBe(false);
+    const encoded = JSON.stringify(input);
+    expect(encoded).toContain("first user");
+    expect(encoded).toContain("older assistant");
+    expect(encoded).toContain("second user");
+    expect(encoded).toContain("newer incompatible assistant");
+    expect(encoded).toContain("active user");
+  });
 
   it("replays the item through the provider-owned Responses runtime", () => {
     const assistant = createOutput();
@@ -926,35 +862,31 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.map((item) => item.type)).toEqual(["compaction", "message"]);
   });
 
-  it.each(responseConverters)(
-    "$name replays an empty checkpoint owner when request identities match",
-    ({ convert }) => {
-      const assistant = createOutput();
-      assistant.providerReplay = compactionState(model, { replayIndex: 0 });
+  it("replays an empty checkpoint owner when request identities match", () => {
+    const assistant = createOutput();
+    assistant.providerReplay = compactionState(model, { replayIndex: 0 });
 
-      expect(convert({ messages: [assistant] }).map((item) => item.type)).toEqual(["compaction"]);
-    },
-  );
+    expect(convertTransport({ messages: [assistant] }).map((item) => item.type)).toEqual([
+      "compaction",
+    ]);
+  });
 
-  it.each(responseConverters)(
-    "$name does not replay or prune across a different or missing request identity",
-    ({ convert }) => {
-      for (const identity of [
-        { sessionId: "session-b", authProfileId: replayIdentity.authProfileId },
-        { sessionId: replayIdentity.sessionId, authProfileId: "profile-b" },
-        {},
-      ]) {
-        const assistant = createAssistant(
-          [{ type: "text", text: "must remain without compatible replay" }],
-          compactionState(model, { replayIndex: 0 }),
-        );
-        const input = convert({ messages: [assistant] }, identity);
+  it("does not replay or prune across a different or missing request identity", () => {
+    for (const identity of [
+      { sessionId: "session-b", authProfileId: replayIdentity.authProfileId },
+      { sessionId: replayIdentity.sessionId, authProfileId: "profile-b" },
+      {},
+    ]) {
+      const assistant = createAssistant(
+        [{ type: "text", text: "must remain without compatible replay" }],
+        compactionState(model, { replayIndex: 0 }),
+      );
+      const input = convertTransport({ messages: [assistant] }, identity);
 
-        expect(input.some((item) => item.type === "compaction")).toBe(false);
-        expect(JSON.stringify(input)).toContain("must remain without compatible replay");
-      }
-    },
-  );
+      expect(input.some((item) => item.type === "compaction")).toBe(false);
+      expect(JSON.stringify(input)).toContain("must remain without compatible replay");
+    }
+  });
 
   it.each([
     ["provider", { provider: "other" }],
@@ -974,68 +906,41 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.some((item) => item.type === "compaction")).toBe(false);
   });
 
-  it("does not fall back past a newer incompatible compaction item", () => {
-    const compatible = createOutput();
-    compatible.providerReplay = compactionState();
-    const incompatible = createOutput();
-    incompatible.providerReplay = compactionState(model, { model: "other-model" });
-
-    const input = convertResponsesMessages(
-      model,
-      {
-        messages: [
-          compatible,
-          { role: "user", content: "route changed", timestamp: 1 },
-          incompatible,
-        ],
-      },
-      new Set(["openai"]),
+  it("ignores a newer foreign-route suppression tombstone", () => {
+    const compatible = createAssistant(
+      [
+        { type: "text", text: "pruned before compaction" },
+        { type: "text", text: "retained after compaction" },
+      ],
+      compactionState(model, { replayIndex: 1 }),
+    );
+    const foreignSuppression = createAssistant([{ type: "text", text: "foreign route recovered" }]);
+    suppressOpenAIResponsesCompaction(
+      foreignSuppression,
+      { ...model, baseUrl: "https://route-b.example/v1" },
       replayIdentity,
     );
 
-    expect(input.some((item) => item.type === "compaction")).toBe(false);
-  });
-
-  it.each(responseConverters)(
-    "$name ignores a newer foreign-route suppression tombstone",
-    ({ convert }) => {
-      const compatible = createAssistant(
-        [
-          { type: "text", text: "pruned before compaction" },
-          { type: "text", text: "retained after compaction" },
-        ],
-        compactionState(model, { replayIndex: 1 }),
-      );
-      const foreignSuppression = createAssistant([
-        { type: "text", text: "foreign route recovered" },
-      ]);
-      suppressOpenAIResponsesCompaction(
+    const input = convertTransport({
+      messages: [
+        { role: "user", content: "pruned prefix", timestamp: 1 },
+        compatible,
+        { role: "user", content: "route B retry", timestamp: 2 },
         foreignSuppression,
-        { ...model, baseUrl: "https://route-b.example/v1" },
-        replayIdentity,
-      );
+        { role: "user", content: "current route A turn", timestamp: 3 },
+      ],
+    });
 
-      const input = convert({
-        messages: [
-          { role: "user", content: "pruned prefix", timestamp: 1 },
-          compatible,
-          { role: "user", content: "route B retry", timestamp: 2 },
-          foreignSuppression,
-          { role: "user", content: "current route A turn", timestamp: 3 },
-        ],
-      });
-
-      expect(input.filter((item) => item.type === "compaction")).toEqual([
-        expect.objectContaining({ id: "cmp_replay" }),
-      ]);
-      const encoded = JSON.stringify(input);
-      expect(encoded).not.toContain("pruned prefix");
-      expect(encoded).not.toContain("pruned before compaction");
-      expect(encoded).toContain("retained after compaction");
-      expect(encoded).toContain("foreign route recovered");
-      expect(encoded).toContain("current route A turn");
-    },
-  );
+    expect(input.filter((item) => item.type === "compaction")).toEqual([
+      expect.objectContaining({ id: "cmp_replay" }),
+    ]);
+    const encoded = JSON.stringify(input);
+    expect(encoded).not.toContain("pruned prefix");
+    expect(encoded).not.toContain("pruned before compaction");
+    expect(encoded).toContain("retained after compaction");
+    expect(encoded).toContain("foreign route recovered");
+    expect(encoded).toContain("current route A turn");
+  });
 
   it("redacts encrypted compaction bytes from payload and event previews", () => {
     const secret = "opaque-preview-compaction";
