@@ -683,10 +683,13 @@ export function createWorkerSessionPlacementStore(
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
 
-    async readChangeSnapshot() {
+    async readChangeSnapshot(profileIds?: readonly string[]) {
       const reply = await executeExistingOpenClawStateRead(
         { path },
-        { type: "workerPlacements.changeSnapshot" },
+        {
+          type: "workerPlacements.changeSnapshot",
+          profileIds: profileIds ? [...profileIds] : undefined,
+        },
         { current: true },
       );
       if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {

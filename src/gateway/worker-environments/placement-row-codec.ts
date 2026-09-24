@@ -28,7 +28,10 @@ import { parseWorkerSessionPlacementState } from "./placement-state.js";
 type PlacementRow = Selectable<WorkerSessionPlacements>;
 type PlacementDatabase = Pick<
   StateDatabase,
-  "worker_session_placements" | "worker_session_tool_operations" | "worker_turn_tool_authorities"
+  | "worker_environments"
+  | "worker_session_placements"
+  | "worker_session_tool_operations"
+  | "worker_turn_tool_authorities"
 >;
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
@@ -124,10 +127,48 @@ export function find(
 
 export function readWorkerPlacementChangeSnapshotInDatabase(
   db: DatabaseSync,
+  profileIds?: readonly string[],
 ): WorkerSessionPlacementChangeSnapshot[] {
+  if (profileIds?.length === 0) {
+    return [];
+  }
+  let select = query(db)
+    .selectFrom("worker_session_placements")
+    .selectAll("worker_session_placements");
+  if (profileIds) {
+    select = select
+      .innerJoin(
+        "worker_environments",
+        "worker_environments.environment_id",
+        "worker_session_placements.environment_id",
+      )
+      .where(
+        "worker_session_placements.environment_id",
+        "in",
+        query(db)
+          .selectFrom("worker_environments")
+          .select("environment_id")
+          .where("profile_id", "in", profileIds),
+      )
+      // Match the instance correlation used by readWorkerPlacementIdentity, including
+      // terminal provenance and pre-epoch dispatch states.
+      .where((eb) =>
+        eb.or([
+          eb(
+            "worker_session_placements.active_owner_epoch",
+            "=",
+            eb.ref("worker_environments.owner_epoch"),
+          ),
+          eb.and([
+            eb("worker_session_placements.active_owner_epoch", "is", null),
+            eb("worker_session_placements.state", "in", ["provisioning", "syncing", "starting"]),
+          ]),
+        ]),
+      );
+  }
   return executeSqliteQuerySync(
     db,
-    query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
+    select.orderBy("worker_session_placements.session_id"),
   ).rows.map((row) => {
     const { sessionId, state, generation, updatedAtMs, sessionKey, agentId } = fromRow(row);
     return {
