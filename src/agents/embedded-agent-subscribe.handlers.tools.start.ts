@@ -12,6 +12,7 @@ import {
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
+import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -296,6 +297,48 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
     ...event,
   });
   emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
+}
+
+export function finalizeToolActivity(ctx: ToolHandlerContext): void {
+  const prefix = `${ctx.params.runId}:`;
+  const active = [...toolStartData].flatMap(([key, start]) =>
+    key.startsWith(prefix)
+      ? [
+          {
+            runId: ctx.params.runId,
+            callId: key.slice(prefix.length),
+            parentToolCallId: start.parentToolCallId,
+            activity: undefined,
+          },
+        ]
+      : [],
+  );
+  // Keyed active state cannot represent overlapping duplicate starts. Keep the
+  // original summaries when lifecycle accounting cannot prove a complete graph.
+  if (
+    active.length !== ctx.state.itemActiveIds.size ||
+    ctx.state.itemStartedCount !== ctx.state.itemCompletedCount + active.length ||
+    ctx.state.toolMetas.length !== ctx.state.itemCompletedCount
+  ) {
+    return;
+  }
+  const calls = [
+    ...ctx.state.toolMetas.map((meta) => ({
+      runId: ctx.params.runId,
+      callId: meta.toolCallId,
+      parentToolCallId: meta.parentToolCallId,
+      activity: meta.activity,
+    })),
+    ...active,
+  ];
+  for (const call of resolveCompletedActivityWrappers(calls)) {
+    if (call.activity && !call.activity.hideFromChannelProgress) {
+      emitToolActivityEvent(ctx, {
+        stream: "item",
+        data: { ...call.activity, hideFromChannelProgress: true },
+      });
+    }
+  }
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
