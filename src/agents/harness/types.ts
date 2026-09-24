@@ -105,6 +105,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
+  | "inputAttachmentMedia"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps

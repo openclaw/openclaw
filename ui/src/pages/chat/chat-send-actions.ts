@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
   chatQueueMovableSegments,
+  compareChatQueueOrder,
   isMovableChatQueueItem,
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
@@ -153,6 +154,15 @@ export function moveQueuedChatMessage(
   const segmentTargetIndex = segment?.findIndex((row) => row.id === targetId) ?? -1;
   const moves = reorderChatQueueItems(segment ?? [], id, segmentTargetIndex);
   if (moves.length === 0) {
+    return "noop";
+  }
+  const movedById = new Map(moves.map((item) => [item.id, item]));
+  const segmentIds = new Set(segment!.map((item) => item.id));
+  const reordered = scope
+    .map((item) => movedById.get(item.id) ?? item)
+    .toSorted(compareChatQueueOrder);
+  // Expanding equal positions must not carry a row across a locked neighbor.
+  if (reordered.some((item, index) => !segmentIds.has(item.id) && scope[index]?.id !== item.id)) {
     return "noop";
   }
   const applied = updateQueuedMessagesForSession(

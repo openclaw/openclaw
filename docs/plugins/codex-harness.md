@@ -291,6 +291,19 @@ even when the stored or staged copy has a generated name. This also applies to
 adopted and forked Codex sessions with locked model selection. Images continue
 through Codex's native image input.
 
+For an unsandboxed local Codex process with file-read permission, OpenClaw also
+supplies verified paths to saved documents. Codex can process the complete file
+when inline extraction is bounded. OpenClaw adds the paths to the admitted native
+input without changing its canonical attachment references or transcript text.
+If the path note cannot fit the native input budget, OpenClaw omits it and retains
+the original request and inline attachment context.
+JSON escapes keep mention characters in attachment metadata from selecting skills
+or plugins while preserving the decoded filenames and paths.
+Codex retains that input in its own native conversation history. The path note
+identifies a file; later turns still use the existing execution and tool-policy
+admission. This does not expand workspace-only policies or expose Gateway paths
+to remote app-servers.
+
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
 transfers authoritative attachment bytes over the existing app-server connection

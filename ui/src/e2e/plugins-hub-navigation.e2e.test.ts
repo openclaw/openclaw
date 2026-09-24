@@ -203,6 +203,48 @@ async function expectActivePanelLabel(page: Page, labelId: string) {
 }
 
 suite.define(() => {
+  it("loads category filters independently of cards and recovers a failed category read", async () => {
+    const context = await createContext({ width: 1200, height: 928 });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
+      deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
+      methodResponses,
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}plugins`);
+      await gateway.waitForRequest("plugins.catalog.browse");
+      const chips = page.locator(".plugin-catalog-chips");
+      await chips.locator(".plugin-catalog-chip--skeleton").first().waitFor();
+      expect(await chips.getByRole("button").count()).toBe(3);
+      expect(await chips.getByRole("button", { name: "All", exact: true }).isEnabled()).toBe(true);
+      await expectHeaderCopy(page, "plugins");
+      await gateway.rejectDeferred("plugins.catalog.categories", {
+        message: "Categories temporarily unavailable",
+      });
+      const error = page
+        .getByRole("alert")
+        .filter({ hasText: "Categories temporarily unavailable" });
+      await error.waitFor();
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      await error.getByRole("button", { name: "Try again" }).click();
+      await chips.getByRole("button", { name: "Channels", exact: true }).waitFor();
+      expect(await page.locator(".plugin-catalog-grid--skeleton").count()).toBeGreaterThan(0);
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+      await gateway.resolveDeferred("plugins.catalog.browse");
+      await page
+        .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
+        .first()
+        .waitFor();
+      await chips.getByRole("button", { name: "Featured", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("redirects the retired discovery URL to the Plugins workspace", async () => {
     const context = await createContext({ height: 768, width: 1366 });
     const page = await context.newPage();
@@ -231,7 +273,7 @@ suite.define(() => {
 
   it.each([
     { label: "desktop", viewport: { height: 1053, width: 2048 } },
-    { label: "laptop", viewport: { height: 768, width: 1366 } },
+    { label: "laptop", viewport: { height: 928, width: 1200 } },
     { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(

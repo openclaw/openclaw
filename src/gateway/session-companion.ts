@@ -5,6 +5,7 @@ import type {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import type { ChatAttachment } from "./chat-attachments.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
@@ -20,6 +21,7 @@ export type SessionCompanionService = {
     agentId: string;
     sessionKey: string;
     question: string;
+    attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
