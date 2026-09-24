@@ -464,14 +464,15 @@ describe("getOrCreateAccountThrottler", () => {
     }
   });
 
-  it("backs off without retry_after and yields previews to a pending group reply", async () => {
+  it("pauses a fixed second for a 429 without retry_after and yields previews to the reply", async () => {
     vi.useFakeTimers();
-    const sent: string[] = [];
-    const api = new Api("123:flood-backoff", {
+    const startedAt = Date.now();
+    const sent: number[] = [];
+    const api = new Api("123:flood-bare", {
       buildUrl: (root, _token, method) => `${root}/${method}`,
       fetch: asTelegramClientFetch(async (_input: unknown, init?: { body?: unknown }) => {
         const body = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
-        sent.push(body.text);
+        sent.push(Date.now() - startedAt);
         return new Response(
           JSON.stringify(
             sent.length <= 2
@@ -489,23 +490,95 @@ describe("getOrCreateAccountThrottler", () => {
         );
       }),
     });
-    api.config.use(getOrCreateAccountThrottler("flood-backoff").transformer);
+    api.config.use(getOrCreateAccountThrottler("flood-bare").transformer);
     const final = api.sendMessage(-100333, "final answer", { message_thread_id: 1 });
     try {
       await vi.advanceTimersByTimeAsync(100);
-      expect(sent).toEqual(["final answer"]);
-      // The reply is waiting out its backoff; the preview neither sends nor queues.
+      expect(sent).toHaveLength(1);
+      // The reply is waiting out its pause; the preview neither sends nor queues.
       await expect(
         runReplaceableTelegramRequest(() =>
           api.editMessageText(-100333, 4, "preview", { message_thread_id: 2 } as never),
         ),
       ).rejects.toMatchObject({ error_code: 429 });
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       await expect(final).resolves.toMatchObject({ text: "final answer" });
-      expect(sent).toEqual(["final answer", "final answer", "final answer"]);
+      expect(sent).toHaveLength(3);
+      // Each bare 429 pauses about one second; repeated ones do not grow the wait.
+      for (const gap of [sent[1]! - sent[0]!, sent[2]! - sent[1]!]) {
+        expect(gap).toBeGreaterThanOrEqual(1_000);
+        expect(gap).toBeLessThan(1_500);
+      }
     } finally {
       await vi.advanceTimersByTimeAsync(60_000);
       await Promise.allSettled([final]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the later deadline when overlapping 429s carry different retry_after", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const longFlood = deferred<Response>();
+    const shortFlood = deferred<Response>();
+    const sentAt = new Map<number, number>();
+    const flood = (retryAfter: number) =>
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error_code: 429,
+          description: `Too Many Requests: retry after ${retryAfter}`,
+          parameters: { retry_after: retryAfter },
+        }),
+      );
+    const api = new Api("123:flood-overlap", {
+      buildUrl: (root, _token, method) => `${root}/${method}`,
+      fetch: asTelegramClientFetch(async (_input: unknown, init?: { body?: unknown }) => {
+        const body = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
+        if (!sentAt.has(body.chat_id)) {
+          sentAt.set(body.chat_id, Date.now() - startedAt);
+          if (body.chat_id === 111) {
+            return await longFlood.promise;
+          }
+          if (body.chat_id === 222) {
+            return await shortFlood.promise;
+          }
+        }
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result: {
+              message_id: 1,
+              date: 0,
+              chat: { id: body.chat_id, type: "private", first_name: "Fixture" },
+              text: body.text,
+            },
+          }),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("flood-overlap").transformer);
+    const first = api.sendMessage(111, "first");
+    const second = api.sendMessage(222, "second");
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect([...sentAt.keys()]).toEqual([111, 222]);
+      longFlood.resolve(flood(10));
+      await vi.advanceTimersByTimeAsync(0);
+      // A shorter 429 that lands later must not shorten the active pause.
+      shortFlood.resolve(flood(2));
+      await vi.advanceTimersByTimeAsync(0);
+      const third = api.sendMessage(333, "third");
+      await vi.advanceTimersByTimeAsync(9_500);
+      expect(sentAt.has(333)).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(third).resolves.toMatchObject({ text: "third" });
+      expect(sentAt.get(333)).toBeGreaterThanOrEqual(10_000);
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    } finally {
+      longFlood.resolve(flood(10));
+      shortFlood.resolve(flood(2));
+      await vi.advanceTimersByTimeAsync(60_000);
       vi.useRealTimers();
     }
   });

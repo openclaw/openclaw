@@ -1513,6 +1513,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
           gatewayHealth: gatewayHealthSamples,
           telegramApiResponseHolds: creds.telegramProxy.getResponseHoldEvents(),
           telegramApiRequestRejections: creds.telegramProxy.getRequestRejectionEvents(),
+          telegramApiRequestLog: creds.telegramProxy.getRequestLog(),
         },
       });
     }

@@ -83,6 +83,7 @@ export async function startTelegramTestApiProxy({
   const upstreamControllers = new Set();
   const holdEvents = [];
   const rejectionEvents = [];
+  const requestLog = [];
   const methodOrdinals = new Map();
   const heldWaiters = new Set();
   const sockets = new Set();
@@ -148,6 +149,8 @@ export async function startTelegramTestApiProxy({
       upstreamUrl.search = incoming.search;
       const method = telegramApiMethod(incoming.pathname);
       const ordinal = (methodOrdinals.get(method) ?? 0) + 1;
+      // Timing facts only (no bodies or ids): proves when calls reached the proxy.
+      if (method && method !== "getUpdates") requestLog.push({ method, at: Date.now() });
       methodOrdinals.set(method, ordinal);
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       let body = hasBody ? request : undefined;
@@ -186,8 +189,13 @@ export async function startTelegramTestApiProxy({
                 ? {
                     ok: false,
                     error_code: 429,
-                    description: `Too Many Requests: retry after ${rejection.retryAfter}`,
-                    parameters: { retry_after: rejection.retryAfter },
+                    // retryAfter 0 models a bare 429 without parameters.retry_after.
+                    ...(rejection.retryAfter > 0
+                      ? {
+                          description: `Too Many Requests: retry after ${rejection.retryAfter}`,
+                          parameters: { retry_after: rejection.retryAfter },
+                        }
+                      : { description: "Too Many Requests" }),
                   }
                 : {
                     ok: false,
@@ -329,6 +337,7 @@ export async function startTelegramTestApiProxy({
     },
     getResponseHoldEvents: () => holdEvents.map((event) => ({ ...event })),
     getRequestRejectionEvents: () => rejectionEvents.map((event) => ({ ...event })),
+    getRequestLog: () => requestLog.map((event) => ({ ...event })),
     close: () => {
       closing ??= (async () => {
         stop(new Error("Telegram Test Server proxy closed."));

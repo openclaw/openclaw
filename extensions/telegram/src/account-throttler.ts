@@ -4,12 +4,10 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
-  computeBackoff,
   createSubsystemLogger,
   logVerbose,
   sleepWithAbort,
   waitForAbortSignal,
-  type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
@@ -25,12 +23,9 @@ type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
 // (final replies, deletes, reactions) retry within this budget, and replaceable
 // calls (stream previews, typing) yield instead of queueing behind the penalty.
 const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
-const FLOOD_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 1_000,
-  maxMs: 30_000,
-  factor: 2,
-  jitter: 0.2,
-};
+// Telegram 429s carry retry_after; a bare 429 gets one short fixed pause, with
+// no state carried into later responses.
+const FLOOD_PAUSE_WITHOUT_RETRY_AFTER_MS = 1_000;
 const floodLog = createSubsystemLogger("telegram/flood");
 type TelegramRequestScope = { replaceable?: true; assertCurrent?: () => void };
 const requestScopes = new AsyncLocalStorage<TelegramRequestScope>();
@@ -105,24 +100,19 @@ function admitAtNetwork(
 
 class TelegramFloodGate {
   #untilMs = 0;
-  #strikes = 0;
 
   remainingMs(): number {
     return Math.max(0, this.#untilMs - Date.now());
   }
 
   close(retryAfterSeconds: number | undefined): number {
-    this.#strikes += 1;
     const waitMs =
       retryAfterSeconds !== undefined && retryAfterSeconds > 0
         ? retryAfterSeconds * 1000
-        : computeBackoff(FLOOD_BACKOFF_POLICY, this.#strikes);
+        : FLOOD_PAUSE_WITHOUT_RETRY_AFTER_MS;
+    // Keep the later deadline: a shorter concurrent 429 never shortens an active pause.
     this.#untilMs = Math.max(this.#untilMs, Date.now() + waitMs);
     return this.remainingMs();
-  }
-
-  open(): void {
-    this.#strikes = 0;
   }
 }
 
@@ -187,11 +177,7 @@ function callThroughFloodGate(
         }
         throw error;
       }
-      if (result.ok) {
-        gate.open();
-        return result;
-      }
-      if (result.error_code !== 429) {
+      if (result.ok || result.error_code !== 429) {
         return result;
       }
       flooded = result;

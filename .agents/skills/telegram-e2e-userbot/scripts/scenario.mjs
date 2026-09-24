@@ -153,7 +153,7 @@ export function parseScenario(value) {
           ? {
               times: positiveInteger(action.times, `${label}.times`, 1),
               ...(action.retryAfter !== undefined
-                ? { retryAfter: positiveInteger(action.retryAfter, `${label}.retryAfter`) }
+                ? { retryAfter: nonNegativeInteger(action.retryAfter, `${label}.retryAfter`) }
                 : {}),
             }
           : {}),

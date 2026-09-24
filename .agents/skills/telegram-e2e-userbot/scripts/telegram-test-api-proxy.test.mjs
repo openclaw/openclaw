@@ -191,11 +191,25 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
     [200, undefined],
   ]);
   assert.deepEqual(forwarded, ["preview", "FINAL"]);
+  proxy.rejectNextRequest({ method: "sendMessage", retryAfter: 0 });
+  const bare = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "bare" }),
+  });
+  const bareBody = await bare.json();
+  assert.equal(bare.status, 429);
+  assert.equal(bareBody.parameters, undefined);
+  assert.deepEqual(
+    proxy.getRequestLog().map(({ method }) => method),
+    Array(5).fill("sendMessage"),
+  );
   assert.deepEqual(
     proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
     [
       [429, 3],
       [429, 3],
+      [429, 0],
     ],
   );
 });

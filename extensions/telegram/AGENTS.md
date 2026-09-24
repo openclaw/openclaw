@@ -62,7 +62,8 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   one funnel only.
 - Outbound flood waits have one owner: the per-token account limiter in
   `account-throttler.ts`. A 429 pauses every call for that bot token until
-  `retry_after` (bounded exponential backoff with jitter when it is missing).
+  `retry_after` (one fixed 1 s pause when it is missing; a shorter concurrent
+  429 never shortens an active pause).
   Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
   stream previews and typing run as replaceable requests and are skipped, not
   queued. Send retry runners must not retry 429 themselves.

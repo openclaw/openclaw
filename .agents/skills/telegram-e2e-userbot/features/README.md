@@ -106,6 +106,10 @@ list means the fault did not fire and cannot support a failure claim.
 For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
 429 `Too Many Requests` and `parameters.retry_after`. `times` (default 1)
 rejects that many consecutive matching requests before the control disarms.
+`retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
+`scenario.telegramApiRequestLog` lists every proxied Bot API call except
+`getUpdates` as `{ method, at }`, so a run can show that no call reached Telegram
+inside a flood window.
 
 ```json
 {
