@@ -177,6 +177,9 @@ export function unbindThreadBindingsBySessionKey(params: {
       continue;
     }
     const manager = MANAGERS_BY_ACCOUNT_ID.get(record.accountId);
+    if (manager?.isStopping()) {
+      throw new Error("Discord thread binding manager is stopping");
+    }
     const unbound = removeBindingRecordSync(bindingKey);
     if (unbound) {
       if (manager) {

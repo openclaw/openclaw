@@ -16,10 +16,8 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../channel.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import {
-  unbindThreadBindingsBySessionKey,
-  unbindThreadBindingsBySessionKeyAsync,
-} from "./thread-bindings.lifecycle.js";
+import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
+import { unbindThreadBindingsBySessionKey } from "./thread-bindings.lifecycle.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
 import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
@@ -503,13 +501,22 @@ describe("Discord thread binding restoration", () => {
       return removed;
     });
     const removed = manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
-    await entered.promise;
-    getSessionBindingService().touch(saved.key, 200, { channel: "discord", accountId: "work" });
-    expect(rows.has(saved.key)).toBe(false);
-    expect(manager.getByThreadId("thread-1")).toBeUndefined();
-    finish.resolve();
-    expect(await removed).toEqual(saved.value);
-    await manager.stop();
+    try {
+      await entered.promise;
+      getSessionBindingService().touch(saved.key, 200, { channel: "discord", accountId: "work" });
+      expect(rows.has(saved.key)).toBe(false);
+      expect(manager.getByThreadId("thread-1")).toEqual(saved.value);
+      finish.resolve();
+      expect(await removed).toEqual(saved.value);
+      expect(manager.getByThreadId("thread-1")).toBeUndefined();
+    } finally {
+      finish.resolve();
+      try {
+        await removed;
+      } finally {
+        await manager.stop();
+      }
+    }
   });
 
   it("captures nested metadata before waiting behind another mutation", async () => {
@@ -548,173 +555,7 @@ describe("Discord thread binding restoration", () => {
     await manager.stop();
   });
 
-  it.each([
-    "before-write",
-    "committed-write",
-    "committed-delete-touch",
-    "committed-delete-unbind",
-    "missing-delete-unbind",
-    "queued-unbind",
-    "queued-idle",
-    "queued-age",
-  ] as const)("settles real SQLite compatibility at %s", async (boundary) => {
-    await withOpenClawTestState({ label: "discord-binding-commit-order" }, async () => {
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const deleting = boundary.includes("delete");
-      const queuedOperation = boundary.startsWith("queued-") ? boundary.slice(7) : undefined;
-      let deletingMissing = false;
-      stores.openKeyedStore.mockImplementation((options) => {
-        const store = createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
-        return {
-          ...store,
-          entries: async () => {
-            if (deletingMissing) {
-              entered.resolve();
-              await finish.promise;
-            }
-            return await store.entries();
-          },
-          register: async (...args: Parameters<typeof store.register>) => {
-            if (boundary === "before-write") {
-              entered.resolve();
-              await finish.promise;
-            }
-            await store.register(...args);
-            if (boundary === "committed-write" || queuedOperation) {
-              entered.resolve();
-              await finish.promise;
-            }
-          },
-          delete: async (...args: Parameters<typeof store.delete>) => {
-            const removed = await store.delete(...args);
-            entered.resolve();
-            await finish.promise;
-            return removed;
-          },
-        };
-      });
-      stores.openSyncKeyedStore.mockImplementation((options) =>
-        createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options),
-      );
-      const saved = persistedBinding();
-      const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
-        namespace: "thread-bindings",
-        maxEntries: 10_000,
-      });
-      store.register(saved.key, saved.value);
-      const manager = await persistentManager();
-      if (boundary === "missing-delete-unbind") {
-        store.delete(saved.key);
-        deletingMissing = true;
-      }
-      const notify = vi.spyOn(manager, "notifyUnbound").mockImplementation(() => {});
-      const mutation = deleting
-        ? manager.unbindThread({ threadId: "thread-1" })
-        : manager.bindTarget({
-            threadId: "thread-1",
-            channelId: "parent-1",
-            targetKind: "subagent",
-            targetSessionKey: "agent:main:subagent:replacement",
-            agentId: "main",
-            webhookId: "synthetic-webhook",
-            webhookToken: "synthetic-token",
-          });
-      const outcome =
-        boundary === "before-write"
-          ? expect(mutation).rejects.toThrow("changed during persistence")
-          : expect(mutation).resolves.toMatchObject({
-              targetSessionKey: deleting
-                ? saved.value.targetSessionKey
-                : "agent:main:subagent:replacement",
-            });
-      let stopping: Promise<void> | undefined;
-      let followup: Promise<unknown[]> | undefined;
-      let followupFailure: unknown;
-      try {
-        await entered.promise;
-        expect(store.lookup(saved.key)?.targetSessionKey).toBe(
-          deleting
-            ? undefined
-            : boundary === "before-write"
-              ? saved.value.targetSessionKey
-              : "agent:main:subagent:replacement",
-        );
-        if (queuedOperation) {
-          const params = { targetSessionKey: "agent:main:subagent:replacement", accountId: "work" };
-          followup =
-            queuedOperation === "unbind"
-              ? unbindThreadBindingsBySessionKeyAsync({ ...params, sendFarewell: false })
-              : queuedOperation === "idle"
-                ? discordPlugin.conversationBindings!.setIdleTimeoutBySessionKeyAsync!({
-                    ...params,
-                    idleTimeoutMs: 500,
-                  })
-                : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
-                    ...params,
-                    maxAgeMs: 1000,
-                  });
-          followup = followup.catch((error: unknown) => {
-            followupFailure = error;
-            return [];
-          });
-        } else if (boundary.endsWith("delete-unbind")) {
-          const removed = unbindThreadBindingsBySessionKey({
-            targetSessionKey: saved.value.targetSessionKey,
-          });
-          expect(removed).toEqual([]);
-          expect(notify).not.toHaveBeenCalled();
-        } else {
-          const at = Date.now() + 1;
-          getSessionBindingService().touch(saved.key, at, {
-            channel: "discord",
-            accountId: "work",
-          });
-          expect(store.lookup(saved.key)?.lastActivityAt).toBe(deleting ? undefined : at);
-          expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(deleting ? undefined : at);
-        }
-        if (boundary === "committed-write" || queuedOperation) {
-          let stopped = false;
-          stopping = manager.stop().then(() => {
-            stopped = true;
-          });
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(stopped).toBe(false);
-        }
-        finish.resolve();
-        await outcome;
-        await stopping;
-        if (followup) {
-          const changed = await followup;
-          expect(followupFailure).toBeUndefined();
-          expect(changed).toHaveLength(1);
-          if (queuedOperation !== "unbind") {
-            const field = queuedOperation === "idle" ? "idleTimeoutMs" : "maxAgeMs";
-            const expected = queuedOperation === "idle" ? 500 : 1000;
-            expect(store.lookup(saved.key)?.[field]).toBe(expected);
-            expect(manager.getByThreadId("thread-1")?.[field]).toBe(expected);
-          }
-        }
-        const expectedTarget =
-          deleting || queuedOperation === "unbind"
-            ? undefined
-            : boundary === "before-write"
-              ? saved.value.targetSessionKey
-              : "agent:main:subagent:replacement";
-        expect(store.lookup(saved.key)?.targetSessionKey).toBe(expectedTarget);
-        expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(expectedTarget);
-        expect(notify).toHaveBeenCalledTimes(deleting || queuedOperation === "unbind" ? 1 : 0);
-      } finally {
-        finish.resolve();
-        await outcome;
-        await manager.stop();
-        await resetThreadBindingsForTests();
-        resetPluginStateStoreForTests();
-      }
-    });
-  });
+  registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });
 
   it("refuses to acquire a manager that appeared after session mutation admission", async () => {
     const saved = persistedBinding();

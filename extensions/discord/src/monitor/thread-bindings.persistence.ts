@@ -199,12 +199,14 @@ function persistBindingsSync(
     observe?: (record: ThreadBindingRecord | undefined) => void;
   },
   removedKey?: string,
-): void {
+): ThreadBindingRecord | undefined {
   const store = openThreadBindingsStore();
   const active = THREAD_BINDINGS_STATE.activePersistence;
+  let updatedRecord: ThreadBindingRecord | undefined;
   for (const [key, record] of BINDINGS_BY_THREAD_ID) {
     if (
       key === update?.bindingKey ||
+      (active?.targetKey === key && active.deletingTarget) ||
       active?.writingKey === key ||
       active?.committedKeys.has(key)
     ) {
@@ -234,9 +236,15 @@ function persistBindingsSync(
         next = base ? (key === update?.bindingKey ? update.transform(base) : base) : undefined;
         return next ? toPersistedBindingRecord(next) : undefined;
       });
+      if (key === update?.bindingKey) {
+        updatedRecord = next;
+      }
+      // No-op reconciliation must not revoke the admitted mutation's settlement authority.
       if (next) {
-        setBindingRecord(next);
-      } else {
+        if (next !== record) {
+          setBindingRecord(next);
+        }
+      } else if (!(active?.targetKey === key && active.deletingTarget)) {
         removeBindingRecord(key);
       }
     } else {
@@ -257,6 +265,7 @@ function persistBindingsSync(
   }
   THREAD_BINDINGS_STATE.loadedPersistentBindings = BINDINGS_BY_THREAD_ID.size > 0;
   THREAD_BINDINGS_STATE.lastPersistedAtMs = Date.now();
+  return updatedRecord;
 }
 
 /** Public SDK compatibility only; bundled callers await worker mutations. */
@@ -280,13 +289,13 @@ export function updateBindingRecordSync(params: {
   let observed: ThreadBindingRecord | undefined;
   if (persist) {
     try {
-      persistBindingsSync({
+      const updated = persistBindingsSync({
         ...params,
         observe: (current) => {
           observed = current;
         },
       });
-      return BINDINGS_BY_THREAD_ID.get(params.bindingKey) ?? null;
+      return updated ?? null;
     } catch {
       THREAD_BINDINGS_STATE.persistenceAvailable = false;
       logVerbose("discord thread binding persistence unavailable; keeping bindings in memory");
