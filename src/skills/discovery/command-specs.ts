@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import { resolveSelectedPluginCommandRegistry } from "../../plugins/plugin-command-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import {
@@ -248,6 +249,42 @@ function assembleWorkspaceSkillCommandSpecs(
       promptTemplate: entry.promptTemplate,
       sourceFilePath: entry.sourceFilePath,
     });
+  }
+  // Project friendly invocations only after reserving every existing command.
+  // The pinned manifest, not a mutable library slug/title, owns the short name.
+  const shortNames = new Map<SkillEntry, string>();
+  const counts = new Map<string, number>();
+  for (const entry of userInvocable) {
+    if (entry.skill.source !== "openclaw-library" || !entry.frontmatter.name?.trim()) {
+      continue;
+    }
+    const short = sanitizeSkillCommandName(entry.frontmatter.name);
+    shortNames.set(entry, short);
+    counts.set(short, (counts.get(short) ?? 0) + 1);
+  }
+  // /skill and inline references also accept original, unsanitized skill names.
+  for (const spec of specs) {
+    used.add(sanitizeSkillCommandName(spec.skillName));
+  }
+  // Inspect the selected registry without loading plugins or changing registration.
+  for (const { command } of resolveSelectedPluginCommandRegistry()?.commands ?? []) {
+    for (const name of [command.name, ...Object.values(command.nativeNames ?? {})]) {
+      if (typeof name === "string") {
+        used.add(sanitizeSkillCommandName(name));
+      }
+    }
+  }
+  for (const [index, spec] of specs.entries()) {
+    // Bundle commands follow the skill entries and cannot inherit their aliases.
+    const entry = userInvocable[index];
+    const short = entry && shortNames.get(entry);
+    if (!short || counts.get(short) !== 1 || used.has(short)) {
+      continue;
+    }
+    // Never choose a winner by discovery order when two owners want one alias.
+    // Keep the stable command available in text without adding native menu slots.
+    spec.aliases = [spec.name];
+    spec.name = short;
   }
   return specs;
 }

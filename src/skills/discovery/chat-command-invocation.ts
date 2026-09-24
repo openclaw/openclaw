@@ -67,18 +67,13 @@ function findSkillCommand(
   }
   const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
   const normalized = normalizeSkillCommandLookup(trimmed);
-  return skillCommands.find((entry) => {
-    if (normalizeOptionalLowercaseString(entry.name) === lowered) {
-      return true;
-    }
-    if (normalizeOptionalLowercaseString(entry.skillName) === lowered) {
-      return true;
-    }
-    return (
-      normalizeSkillCommandLookup(entry.name) === normalized ||
-      normalizeSkillCommandLookup(entry.skillName) === normalized
-    );
-  });
+  return skillCommands.find((entry) =>
+    [entry.name, entry.skillName, ...(entry.aliases ?? [])].some(
+      (name) =>
+        normalizeOptionalLowercaseString(name) === lowered ||
+        normalizeSkillCommandLookup(name) === normalized,
+    ),
+  );
 }
 
 function skillReferenceMatches(text: string): IterableIterator<RegExpMatchArray> {
@@ -148,7 +143,9 @@ export function resolveSkillCommandInvocation(params: {
       return { command: skillCommand, args: args || undefined };
     }
     const command = params.skillCommands.find(
-      (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
+      (entry) =>
+        normalizeOptionalLowercaseString(entry.name) === commandName ||
+        entry.aliases?.some((alias) => normalizeOptionalLowercaseString(alias) === commandName),
     );
     if (command) {
       const args = match[2]?.trim();

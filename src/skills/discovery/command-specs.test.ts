@@ -13,6 +13,14 @@ const bundleCommandState = vi.hoisted(() => ({
   }>,
 }));
 
+const registeredCommands = vi.hoisted(() => ({
+  entries: [] as Array<{ command: { name: string; nativeNames?: Record<string, string> } }>,
+}));
+
+vi.mock("../../plugins/plugin-command-registry.js", () => ({
+  resolveSelectedPluginCommandRegistry: () => ({ commands: registeredCommands.entries }),
+}));
+
 const skillsLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
   trace: vi.fn(),
@@ -34,6 +42,7 @@ vi.mock("../loading/workspace-skill-loader.js", () => ({
 beforeEach(() => {
   vi.resetModules();
   bundleCommandState.entries = [];
+  registeredCommands.entries = [];
   skillsLoggerMock.debug.mockClear();
   skillsLoggerMock.trace.mockClear();
 });
@@ -107,6 +116,62 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       promptTemplate: "Run the bundled command.",
     });
   });
+
+  it("does not let a managed short name displace a bundle command or a truncated alias", async () => {
+    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+    const first = createFixtureSkillEntry("s_review_00000000000000000001", {
+      source: "openclaw-library",
+    });
+    first.frontmatter.name = "review";
+    bundleCommandState.entries = [
+      {
+        pluginId: "review-plugin",
+        rawName: "review",
+        description: "Review a change",
+        promptTemplate: "Review $ARGUMENTS",
+        sourceFilePath: "/plugins/review/commands/review.md",
+      },
+    ];
+    const specs = buildWorkspaceSkillCommandSpecs("/workspace", { entries: [first] });
+    expect(specs.map((spec) => spec.name)).toEqual([first.skill.name, "review"]);
+    bundleCommandState.entries[0]!.rawName = first.skill.name;
+    const copiedIdentity = buildWorkspaceSkillCommandSpecs("/workspace", { entries: [first] });
+    expect(copiedIdentity.map((spec) => spec.name)).toEqual(["review", first.skill.name + "_2"]);
+    expect(copiedIdentity[1]?.aliases).toBeUndefined();
+    bundleCommandState.entries = [];
+    first.frontmatter.name = "x".repeat(32) + "-first";
+    const second = createFixtureSkillEntry("s_review_00000000000000000002", {
+      source: "openclaw-library",
+    });
+    second.frontmatter.name = "x".repeat(32) + "-second";
+    expect(
+      buildWorkspaceSkillCommandSpecs("/workspace", { entries: [first, second] }).map(
+        (spec) => spec.name,
+      ),
+    ).toEqual([first.skill.name, second.skill.name]);
+  });
+
+  it.each(["text", "native"])(
+    "reserves registered plugin %s command names before offering a short alias",
+    async (surface) => {
+      const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+      const entry = createFixtureSkillEntry("s_review_00000000000000000001", {
+        source: "openclaw-library",
+      });
+      entry.frontmatter.name = "review";
+      registeredCommands.entries = [
+        {
+          command:
+            surface === "text"
+              ? { name: "review" }
+              : { name: "plugin_review", nativeNames: { discord: "review" } },
+        },
+      ];
+      expect(buildWorkspaceSkillCommandSpecs("/workspace", { entries: [entry] })[0]?.name).toBe(
+        entry.skill.name,
+      );
+    },
+  );
 
   it("bounds the skill command debug cache and re-logs evicted keys", async () => {
     const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");

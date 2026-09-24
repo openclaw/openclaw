@@ -146,9 +146,26 @@ An administrator can **transfer to team**, changing management ownership while
 retaining the original author. Sharing and transfer do not move files or change
 the skill's stable ID. Profile merges retain existing revision paths.
 
-Use the skill picker or returned command identity when invoking a managed
-skill. Different owners can use the same friendly name without one skill
-silently replacing another.
+Managed skills expose the `name` from their selected `SKILL.md` as a short
+command when it is unambiguous in the session. For example, `name: review`
+can be invoked as `/review <PR-or-issue>`, `/skill review <PR-or-issue>`, or
+`$review` in a message. Command names are lowercased, punctuation is normalized
+to underscores, and native commands are limited to 32 characters. The picker
+shows the available command.
+
+If multiple selected skills normalize to the same short name, or the name
+conflicts with another skill, bundle command, registered plugin command, or
+reserved command, managed
+skills keep their unique commands instead of choosing one by discovery order.
+Their stable identity commands remain available in text even when a short
+command is shown. Different owners can use the same friendly name without one
+skill silently replacing another.
+
+The short command comes from the pinned instructions, not the library slug or
+display title. Renaming a library entry does not change existing sessions;
+change its `SKILL.md` name and refresh the session selection to change the
+short command. Only selected, eligible, user-invocable skills participate;
+short commands do not search or attach other private library entries.
 
 <Warning>
 A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).

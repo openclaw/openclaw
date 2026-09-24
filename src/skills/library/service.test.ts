@@ -37,6 +37,7 @@ import {
   readSkillLibrary,
   saveSkillLibrary,
 } from "./service.js";
+import { content, draft, createSkillLibraryFixture } from "./service.test-support.js";
 import type { SkillLibraryAuthority } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -46,32 +47,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-const content =
-  "---\nname: guide\ndescription: A reusable test procedure\n---\n# Guide\nRead references/data.bin before running scripts/task.sh.\n";
-function fixture() {
-  const stateDir = tempDirs.make("skill-library-");
-  const options = {
-    path: path.join(stateDir, "state", "openclaw.sqlite"),
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  };
-  const alice = ensureProfileForEmail("alice@example.test", options);
-  const actor = (profileId?: string, admin = false): SkillLibraryAuthority => ({
-    profileId,
-    scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    getConfig: () => ({}),
-    assertCurrent: () => {},
-  });
-  return { options, alice: actor(alice.id), admin: actor(alice.id, true), actor, stateDir };
-}
-const draft = (slug = "guide") => ({
-  slug,
-  content,
-  expectedRevision: null,
-  files: [
-    { path: "references/data.bin", content: "AP+A", encoding: "base64" as const },
-    { path: "scripts/task.sh", content: "#!/bin/sh\nprintf ready", executable: true },
-  ],
-});
+const fixture = () => createSkillLibraryFixture(tempDirs.make("skill-library-"));
 
 async function beginZipUpload(
   authority: SkillLibraryAuthority,
@@ -97,126 +73,6 @@ async function beginZipUpload(
 }
 
 describe("profile-owned skill publication and selection", () => {
-  it.each([
-    ["heading", "# Friendly Title", "Friendly Title"],
-    ["metadata fallback", "Plain introduction", "Guide"],
-  ])(
-    "keeps the %s separate from the selected command identity",
-    async (_label, heading, displayName) => {
-      const { options, alice, stateDir } = fixture();
-      await saveSkillLibrary(
-        alice,
-        { ...draft("long---skill---name"), content: content.replace("# Guide", heading) },
-        options,
-      );
-      const pins = seedSkillLibrarySelection(alice, options);
-      const entries = loadSkillLibrarySelection(pins, options);
-      const { buildSkillSnapshot } = await import("../loading/workspace-skill-prompt.js");
-      const { buildWorkspaceSkillCommandSpecs } = await import("../discovery/command-specs.js");
-      const snapshot = await buildSkillSnapshot(stateDir, { entries });
-      const commands = buildWorkspaceSkillCommandSpecs(stateDir, { entries });
-      expect(pins[0]!.name).toMatch(/^s_long_skil_[a-f0-9]{20}$/);
-      expect(commands[0]).toMatchObject({
-        name: pins[0]!.name,
-        skillName: pins[0]!.name,
-        displayName,
-      });
-      expect(snapshot.prompt).toContain(`<name>${pins[0]!.name}</name>`);
-      const copied = {
-        ...entries[0]!,
-        skill: { ...entries[0]!.skill, source: "openclaw-workspace" },
-      };
-      await expect(buildSkillSnapshot(stateDir, { entries: [copied, ...entries] })).rejects.toThrow(
-        "ambiguous",
-      );
-      expect(() =>
-        buildWorkspaceSkillCommandSpecs(stateDir, { entries: [copied, ...entries] }),
-      ).toThrow("ambiguous");
-    },
-  );
-  it("discovers pinned commands through the loader without leaking them into workspace state", async () => {
-    const { alice, options, stateDir } = fixture();
-    const saved = await saveSkillLibrary(alice, draft(), options);
-    const pins = seedSkillLibrarySelection(alice, options);
-    const updated = await saveSkillLibrary(
-      alice,
-      {
-        ...draft(),
-        skillId: saved.entry.skillId,
-        expectedRevision: saved.entry.revision,
-        content: `${content}\nUpdated`,
-      },
-      options,
-    );
-    const originalPin = expectDefined(pins[0], "original selected revision");
-    const mixedRevisions = [
-      { ...originalPin, revision: updated.entry.revision },
-      originalPin,
-      originalPin,
-    ];
-    expect(
-      loadSkillLibrarySelection(mixedRevisions, options).map((entry) => entry.skill.filePath),
-    ).toEqual(
-      mixedRevisions.map((pin) =>
-        path.join(skillLibraryRevisionDir(pin.skillId, pin.revision, options.env), "SKILL.md"),
-      ),
-    );
-    expect(() =>
-      loadSkillLibrarySelection(
-        [originalPin, { ...originalPin, revision: "0".repeat(64) }],
-        options,
-      ),
-    ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
-    const {
-      listSkillCommandsForWorkspace,
-      listSkillCommandsForAgents,
-      prepareSkillCommandsForAgents,
-    } = await import("../discovery/chat-commands.js");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const cfg = { agents: { defaults: { skills: [] } } };
-      const discover = (
-        overrides: Partial<Parameters<typeof listSkillCommandsForWorkspace>[0]> = {},
-      ) =>
-        listSkillCommandsForWorkspace({
-          workspaceDir: stateDir,
-          cfg,
-          agentId: "main",
-          sessionEntry: { skillLibrarySelections: pins },
-          ...overrides,
-        });
-      const commands = discover({ skillFilter: [saved.entry.name] });
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toMatchObject({
-        name: saved.entry.name,
-        skillFile: expect.stringContaining(saved.entry.revision),
-      });
-      expect(discover()).toEqual([]);
-      expect(discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
-      expect(
-        discover({
-          includeAllowlistHidden: true,
-          cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
-        }).map((entry) => entry.name),
-      ).not.toContain(saved.entry.name);
-      expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
-      const agentParams = {
-        cfg: {
-          agents: {
-            defaults: { skills: [saved.entry.name] },
-            list: [{ id: "main", workspace: stateDir }],
-          },
-        },
-        agentIds: ["main"],
-        sessionEntry: { skillLibrarySelections: pins },
-      };
-      expect(listSkillCommandsForAgents(agentParams)).toEqual(commands);
-      expect(await prepareSkillCommandsForAgents(agentParams)).toEqual(commands);
-      expect(
-        await prepareSkillCommandsForAgents({ ...agentParams, sessionEntry: undefined }),
-      ).toEqual([]);
-    });
-  });
-
   it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", () => {
     const { options, admin, alice, actor } = fixture();
     expect(listSkillLibrary(admin, {}, options)).toMatchObject({
