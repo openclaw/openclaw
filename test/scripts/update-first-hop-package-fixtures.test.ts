@@ -127,6 +127,13 @@ describe("first-hop package fixtures", () => {
     expect(listFirstHopSourceVersions(root)).toEqual(
       Object.values(sources).map(({ version }) => version),
     );
+    expect(listFirstHopSourceVersions(root, "2026.9.3, 2026.9.1")).toEqual([
+      "2026.9.1",
+      "2026.9.3",
+    ]);
+    expect(() => listFirstHopSourceVersions(root, "2026.9.2 2026.9.9")).toThrow(
+      "first-hop sources are not recorded in the candidate: 2026.9.9",
+    );
     const inspect = ({ version, tarball }: ReturnType<typeof createSource>) =>
       inspectFirstHopSource(root, tarball, { version });
     const contracts = {

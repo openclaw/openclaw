@@ -767,8 +767,12 @@ it("refuses a foreign lifecycle holder before stopping the service", async () =>
 });
 
 it.each([
-  { catalog: "exact", continuation: "manual", message: "is still in progress" },
-  { catalog: "conflict-on-recheck", continuation: undefined, message: "is still in progress" },
+  { catalog: "exact", continuation: "manual", message: "remains recorded as running" },
+  {
+    catalog: "conflict-on-recheck",
+    continuation: undefined,
+    message: "remains recorded as running",
+  },
   {
     catalog: "future-version",
     continuation: undefined,
@@ -817,7 +821,7 @@ it.each([
   { continuation: "competing", name: "an owning continuation alongside a different live driver" },
 ] as const)("refuses $name while another update owns the service", async ({ continuation }) => {
   await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-    /is still in progress.*liveness: alive/,
+    /remains recorded as running.*liveness: alive/,
   );
   expect(mocks.stops).toBe(0);
 });
@@ -844,7 +848,7 @@ it("never lets the Doctor child stop or restart its parent's running service", a
 
 it("rechecks continuation before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("retained", "lost-before-stop")).rejects.toThrow(
-    "is still in progress",
+    "remains recorded as running",
   );
 });
 
@@ -854,7 +858,7 @@ it("rechecks continuation before restoring the service", async () => {
     "lost-before-restart",
   );
   expect(finishError).toMatchObject({
-    message: expect.stringContaining("is still in progress"),
+    message: expect.stringContaining("remains recorded as running"),
   });
   expect(restartCalls).toBe(0);
 });
@@ -897,7 +901,7 @@ it.each([
 it("does not treat an inconclusive inspection as admission to a competing update", async () => {
   const result = await runDoctorFinishForStoppedUnit("inspection-competing");
   expect(result.finishError).toMatchObject({
-    message: expect.stringContaining("is still in progress"),
+    message: expect.stringContaining("remains recorded as running"),
   });
   expect(result.startCalls).toBe(0);
   expect(result.restartCalls).toBe(0);
@@ -942,7 +946,9 @@ it("rechecks update admission after passive native inspection before restoring t
   const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
     "competing-during-inspection",
   );
-  expect(finishError).toMatchObject({ message: expect.stringContaining("is still in progress") });
+  expect(finishError).toMatchObject({
+    message: expect.stringContaining("remains recorded as running"),
+  });
   expect(restartCalls).toBe(0);
 });
 

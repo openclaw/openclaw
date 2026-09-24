@@ -86,12 +86,5 @@ export function resolveSingleAccountPromotionTarget(params: {
       return onlyAccount[0];
     }
   }
-  if (
-    namedAccounts.length > 1 &&
-    accounts[DEFAULT_ACCOUNT_ID] &&
-    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
-  ) {
-    return DEFAULT_ACCOUNT_ID;
-  }
   return DEFAULT_ACCOUNT_ID;
 }

@@ -196,6 +196,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.backendId === "string" &&
         typeof input.command.scopeKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
+      input.command.type === "worktrees.cleanupState" ||
       input.command.type === "workerPlacements.changeSnapshot" ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&

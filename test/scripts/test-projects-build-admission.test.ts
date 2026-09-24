@@ -12,6 +12,7 @@ import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/proce
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
+import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
 const commands = vi.hoisted(() => ({ prepare: vi.fn(), prepareE2e: vi.fn(), reader: vi.fn() }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => ({
@@ -315,6 +316,11 @@ syncFixtureBuiltinExports();\n`,
             const readersFile = path.join(root, "readers");
             const builder = path.join(root, "build.mjs");
             const preload = path.join(root, "preload.mjs");
+            const workerCompiler = createControlledWorkerCompiler(
+              root,
+              { ...process.env, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+              process.versions.bun ? "bun" : "node",
+            );
             fs.writeFileSync(
               builder,
               `import fs from 'node:fs';
@@ -346,7 +352,7 @@ syncFixtureBuiltinExports();\n`,
               ["--import", preload, path.resolve(script), ...args],
               {
                 cwd: _name === "single" ? path.resolve("extensions/qa-lab") : process.cwd(),
-                env: { ...process.env, OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
+                env: workerCompiler.env,
                 stdio: ["pipe", "pipe", "pipe"],
               },
             );
@@ -383,6 +389,12 @@ syncFixtureBuiltinExports();\n`,
                 `outcome=${outcome}`,
               ).toHaveLength(1);
               await waitForDead(buildPid, 5_000);
+              if (_name === "root config" && outcome === 0) {
+                const compilations = workerCompiler.read();
+                expect(compilations).toHaveLength(1);
+                await waitForDead(compilations[0]!.pid, 5_000);
+                expect(fs.existsSync(compilations[0]!.directory)).toBe(false);
+              }
             } finally {
               if (child.exitCode === null && child.signalCode === null) {
                 child.kill("SIGKILL");

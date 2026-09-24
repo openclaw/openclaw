@@ -297,6 +297,8 @@ when inline extraction is bounded. OpenClaw adds the paths to the admitted nativ
 input without changing its canonical attachment references or transcript text.
 If the path note cannot fit the native input budget, OpenClaw omits it and retains
 the original request and inline attachment context.
+JSON escapes keep mention characters in attachment metadata from selecting skills
+or plugins while preserving the decoded filenames and paths.
 Codex retains that input in its own native conversation history. The path note
 identifies a file; later turns still use the existing execution and tool-policy
 admission. This does not expand workspace-only policies or expose Gateway paths

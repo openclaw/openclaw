@@ -107,7 +107,14 @@ export async function prepareLocalWorkspaceAttachments(params: {
   const note = files.length
     ? [
         "For file tools, use the verified attachment paths below. Media references identify attachments; they are not filesystem paths.",
-        wrapExternalContent(JSON.stringify(files), { source: "unknown", includeWarning: false }),
+        // Keep metadata from requesting skills/plugins while preserving decoded file identities.
+        wrapExternalContent(
+          JSON.stringify(files).replaceAll("$", "\\u0024").replaceAll("@", "\\u0040"),
+          {
+            source: "unknown",
+            includeWarning: false,
+          },
+        ),
       ].join("\n")
     : undefined;
   if (metadataChars > maxChars || (note && note.length > maxChars)) {

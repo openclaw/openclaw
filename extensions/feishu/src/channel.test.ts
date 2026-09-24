@@ -3602,6 +3602,7 @@ describe("feishuPlugin actions", () => {
         } as OpenClawConfig,
       } as never),
     ).rejects.toThrow("Feishu read target is not allowed.");
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
     expect(getChatInfoMock).not.toHaveBeenCalled();
     expect(getMessageFeishuMock).not.toHaveBeenCalled();
     expect(listReactionsFeishuMock).not.toHaveBeenCalled();
@@ -3611,42 +3612,6 @@ describe("feishuPlugin actions", () => {
     expect(createPinFeishuMock).not.toHaveBeenCalled();
     expect(removePinFeishuMock).not.toHaveBeenCalled();
   });
-
-  it.each([
-    ["message reads", "read", { messageId: "om_unknown", chatId: "oc_unknown" }],
-    ["pin lookup", "list-pins", { chatId: "oc_unknown" }],
-    ["channel info", "channel-info", { chatId: "oc_unknown" }],
-    ["member info", "member-info", { chatId: "oc_unknown", memberId: "ou_unknown" }],
-  ])(
-    "does not expose failed metadata lookup details for ambiguous Feishu %s",
-    async (_name, action, params) => {
-      getChatInfoMock.mockRejectedValueOnce(new Error("chat not found"));
-
-      await expect(
-        feishuPlugin.actions?.handleAction?.({
-          action,
-          params,
-          cfg: {
-            channels: {
-              feishu: {
-                appId: "cli_main",
-                appSecret: "secret_main",
-                groupPolicy: "open",
-                dmPolicy: "pairing",
-              },
-            },
-          } as OpenClawConfig,
-        } as never),
-      ).rejects.toThrow("Feishu read target is not allowed.");
-
-      expect(getChatInfoMock).toHaveBeenCalledOnce();
-      expect(getMessageFeishuMock).not.toHaveBeenCalled();
-      expect(listPinsFeishuMock).not.toHaveBeenCalled();
-      expect(getChatMembersMock).not.toHaveBeenCalled();
-      expect(assertFeishuChatMemberMock).not.toHaveBeenCalled();
-      expect(getFeishuMemberInfoMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects a Feishu message returned from a different chat than the authorized target", async () => {
     getMessageFeishuMock.mockResolvedValueOnce(

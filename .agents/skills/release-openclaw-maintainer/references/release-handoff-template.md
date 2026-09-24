@@ -22,6 +22,7 @@ operator steering. Do not preserve superseded scope.
 - tag: `v<version>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
+- tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`
 - publication selection: `<normal/prepared route, npm dist-tag, package roster>`
 - publication inventory: `<exact surfaces>`
 - already-published plugin skips: `<none or package@version with metadata-only delta>`
@@ -39,8 +40,13 @@ operator steering. Do not preserve superseded scope.
 - candidate acceptance: `<green untagged-SHA evidence | pending>`
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
+- publish parent dispatch count + failure classes: `<n dispatches; per run: stale child / approval / completion verify / ...>`
+- children approved (ids): `<npm child run ids approved via pending_deployments; ClawHub never manual>`
+- beta sync run: `<openclaw-npm-dist-tags sync_beta_to_stable run id or pending>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
 - GitHub Release: `<public URL / non-Latest readback or none>`
+- GitHub release flipped at: `<UTC timestamp | by parent | by hand>`
+- macOS preflight/publish run ids: `<preflight run/attempt, publish run/attempt, appcast PR or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
