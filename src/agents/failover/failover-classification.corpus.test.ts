@@ -9,7 +9,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 // and compiled payload probes cover the real provider boundary.
 vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
-import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
   isAuthErrorMessage,
@@ -21,6 +20,7 @@ import {
 } from "./classify.js";
 import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
+import { resolveReplyFailoverFacts } from "./request-error-facts.js";
 import type { FailoverSignal } from "./signal.js";
 
 afterEach(() => {
