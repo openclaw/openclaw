@@ -385,8 +385,8 @@ SQLite's completion result; they do not turn a completed checkpoint into a failu
 
 Shared-state maintenance waits up to 350 ms for lifecycle coordination. A refused
 periodic attempt retries once after one second, then waits for the next interval.
-Contention is recorded as blocked and logs once per five consecutive refusals;
-a completed checkpoint resets that count and immediately clears the history
+Contention is recorded as blocked. Status and Doctor warn after two consecutive
+refusals; maintenance logs once per five. A completed checkpoint resets that count and clears the history
 eviction gate. On Linux, `blockingOwner` includes the observed kernel lock holder's
 PID, process start time (boot ticks), command, and coordinator family when procfs
 is available. This best-effort snapshot is diagnostic only; the SQLite lock still

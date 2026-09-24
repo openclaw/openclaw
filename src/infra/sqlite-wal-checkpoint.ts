@@ -160,7 +160,7 @@ export function createSqliteWalCheckpoint(
       observedAtMs: Date.now(),
       state: contention ? "blocked" : "error",
       consecutiveBlocked,
-      warning: !contention || consecutiveBlocked >= 5,
+      warning: !contention || consecutiveBlocked >= 2,
       ...(contention ? { blockingOwner: error.blockingOwner ?? ("unknown" as const) } : {}),
       error: formatErrorMessage(error),
     };

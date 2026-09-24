@@ -24,7 +24,7 @@ import { StateDatabaseCoordinatorContentionError } from "./state-database-coordi
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("backs off once per interval and warns once per five coordinator refusals until recovery", async () => {
+  it("backs off once per interval, warns in health early, and throttles contention logs", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(
       tempDirs.make("openclaw-wal-coordinator-retry-"),
@@ -54,6 +54,12 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(runMaintenance).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(runMaintenance).toHaveBeenCalledTimes(2);
+      expect(maintenance.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 2,
+        warning: true,
+      });
+      expect(onCheckpointError).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(interval);
       expect(runMaintenance).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(interval - 1_000);
