@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -458,7 +459,8 @@ function createSharedStateWorkerOwner() {
       }
       if (!entry) {
         const openingAdmission: Entry["openingAdmission"] = { assertCurrent };
-        const assertOpeningAdmission = () => {
+        // The actor detaches its lifetime; live caller guards still need their captured scope.
+        const assertOpeningAdmission = AsyncLocalStorage.bind(() => {
           admission.assertCurrent();
           try {
             assertCurrent?.();
@@ -466,7 +468,7 @@ function createSharedStateWorkerOwner() {
             openingAdmission.refusal = { error };
             throw error;
           }
-        };
+        });
         const admitted: Entry = {
           source,
           context,
