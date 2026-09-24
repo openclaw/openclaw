@@ -63,7 +63,7 @@ function buildRowStatusBadges(params: {
 }) {
   const badges = buildCatalogBadgeLabels(params.section, params.tool);
   if (params.activeEntry) {
-    badges.unshift(t("agentTools.liveNow"));
+    badges.unshift(t("agentTools.inPreview"));
   }
   return badges;
 }
@@ -109,19 +109,6 @@ function formatToolAccessSummary(params: {
     return t("agentTools.overrideOn");
   }
   return t("agentTools.profileOff");
-}
-
-function formatToolRuntimeSummary(params: {
-  activeEntry: ToolsEffectiveEntry | null;
-  runtimeSessionMatchesSelectedAgent: boolean;
-}) {
-  if (params.activeEntry) {
-    return t("agentTools.liveNow");
-  }
-  if (params.runtimeSessionMatchesSelectedAgent) {
-    return t("agentTools.notLive");
-  }
-  return t("agentTools.otherAgent");
 }
 
 function toToolAnchorId(toolId: string) {
@@ -199,8 +186,8 @@ function renderEffectiveToolBadge(tool: {
 }) {
   if (tool.source === "plugin") {
     return tool.pluginId
-      ? t("agentTools.connectedSource", { id: tool.pluginId })
-      : t("agentTools.connected");
+      ? t("agentTools.plugin", { id: tool.pluginId })
+      : t("agentTools.pluginSource");
   }
   if (tool.source === "channel") {
     return tool.channelId
@@ -278,10 +265,17 @@ export function renderAgentTools(params: {
     };
   };
   const enabledCount = toolIds.filter((toolId) => resolveAllowed(toolId).allowed).length;
-  const effectiveTools =
-    params.runtimeSessionMatchesSelectedAgent && !params.toolsEffectiveError
-      ? flattenEffectiveTools(params.toolsEffectiveResult?.groups)
-      : [];
+  const previewStatus = !params.runtimeSessionMatchesSelectedAgent
+    ? t("agentTools.otherAgent")
+    : params.toolsEffectiveLoading
+      ? t("agentTools.previewLoading")
+      : params.toolsEffectiveError
+        ? t("agentTools.previewUnavailable")
+        : !params.toolsEffectiveResult
+          ? t("agentTools.previewNotLoaded")
+          : null;
+  const previewResult = previewStatus ? null : params.toolsEffectiveResult;
+  const effectiveTools = flattenEffectiveTools(previewResult?.groups);
   const uniqueEffectiveTools = Array.from(
     new Map(effectiveTools.map((tool) => [normalizeToolPolicyName(tool.id), tool])).values(),
   );
@@ -290,7 +284,6 @@ export function renderAgentTools(params: {
     0,
     uniqueEffectiveTools.length - visibleEffectiveTools.length,
   );
-  const liveToolCount = uniqueEffectiveTools.length;
   const activeToolMap = new Map(
     effectiveTools.map((tool) => [normalizeToolPolicyName(tool.id), tool] as const),
   );
@@ -334,49 +327,51 @@ export function renderAgentTools(params: {
 
   const runtimeAvailability = !params.runtimeSessionMatchesSelectedAgent
     ? renderSettingsEmpty(t("agentTools.switchAgent"))
-    : params.toolsEffectiveLoading && !params.toolsEffectiveResult && !params.toolsEffectiveError
-      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingAvailable"), rows: 2 })
+    : params.toolsEffectiveLoading
+      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingPreview"), rows: 2 })
       : params.toolsEffectiveError
-        ? renderSettingsEmpty(t("agentTools.availableError"))
-        : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
-          ? renderSettingsEmpty(t("agentTools.noAvailable"))
-          : html`
-              <div class="agents-panel-body">
-                <div class="agent-tools-runtime">
-                  ${visibleEffectiveTools.map((tool) => {
-                    const anchorId = toToolAnchorId(tool.id);
-                    return html`
-                      <a
-                        class="agent-tools-runtime-chip"
-                        href="#${anchorId}"
-                        @click=${(event: Event) => handleRuntimeToolJump(event, anchorId)}
-                      >
-                        <span class="mono" translate="no">${tool.label}</span>
-                        <span class="agent-tools-runtime-chip__meta"
-                          >${renderEffectiveToolBadge(tool)}</span
+        ? renderSettingsEmpty(t("agentTools.previewError"))
+        : !previewResult
+          ? renderSettingsEmpty(t("agentTools.previewNotLoaded"))
+          : uniqueEffectiveTools.length === 0
+            ? renderSettingsEmpty(t("agentTools.emptyPreview"))
+            : html`
+                <div class="agents-panel-body">
+                  <div class="agent-tools-runtime">
+                    ${visibleEffectiveTools.map((tool) => {
+                      const anchorId = toToolAnchorId(tool.id);
+                      return html`
+                        <a
+                          class="agent-tools-runtime-chip"
+                          href="#${anchorId}"
+                          @click=${(event: Event) => handleRuntimeToolJump(event, anchorId)}
                         >
-                      </a>
-                    `;
-                  })}
-                  ${
-                    hiddenEffectiveToolCount > 0
-                      ? html`
-                          <span
-                            class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-                            title=${t("agentTools.moreLiveTitle", {
-                              count: String(hiddenEffectiveToolCount),
-                            })}
+                          <span class="mono" translate="no">${tool.label}</span>
+                          <span class="agent-tools-runtime-chip__meta"
+                            >${renderEffectiveToolBadge(tool)}</span
                           >
-                            ${t("agentTools.moreLive", {
-                              count: String(hiddenEffectiveToolCount),
-                            })}
-                          </span>
-                        `
-                      : nothing
-                  }
+                        </a>
+                      `;
+                    })}
+                    ${
+                      hiddenEffectiveToolCount > 0
+                        ? html`
+                            <span
+                              class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
+                              title=${t("agentTools.morePreviewTitle", {
+                                count: String(hiddenEffectiveToolCount),
+                              })}
+                            >
+                              ${t("agentTools.morePreview", {
+                                count: String(hiddenEffectiveToolCount),
+                              })}
+                            </span>
+                          `
+                        : nothing
+                    }
+                  </div>
                 </div>
-              </div>
-            `;
+              `;
 
   return html`
     ${
@@ -448,8 +443,8 @@ export function renderAgentTools(params: {
           <dd>${profileSource}</dd>
           <dt>${t("agentTools.enabled")}</dt>
           <dd><code>${enabledCount}/${toolIds.length}</code></dd>
-          <dt>${t("agentTools.live")}</dt>
-          <dd><code>${liveToolCount}</code></dd>
+          <dt>${t("agentTools.listed")}</dt>
+          <dd><code>${previewStatus ?? uniqueEffectiveTools.length}</code></dd>
           <dt>${t("agentTools.status")}</dt>
           <dd>
             ${
@@ -491,11 +486,11 @@ export function renderAgentTools(params: {
     )}
     ${renderSettingsSection(
       {
-        title: t("agentTools.availableNow"),
-        description: html`${t("agentTools.availableNowSubtitle")}
+        title: t("agentTools.previewTitle"),
+        description: html`${t("agentTools.previewSubtitle")}
           <span class="mono">${params.runtimeSessionKey || t("agentTools.noSession")}</span>`,
       },
-      html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
+      html`${renderEffectiveToolNotices(previewResult)}${runtimeAvailability}`,
     )}
     ${renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
     ${renderSettingsSection(
@@ -579,8 +574,8 @@ export function renderAgentTools(params: {
                         ? html`<span
                             >${t(
                               activeSectionCount === 1
-                                ? "agentTools.liveToolsOne"
-                                : "agentTools.liveTools",
+                                ? "agentTools.listedToolsOne"
+                                : "agentTools.listedTools",
                               { count: String(activeSectionCount) },
                             )}</span
                           >`
@@ -600,10 +595,9 @@ export function renderAgentTools(params: {
                       activeEntry,
                     });
                     const accessSummary = formatToolAccessSummary(resolved);
-                    const runtimeSummary = formatToolRuntimeSummary({
-                      activeEntry,
-                      runtimeSessionMatchesSelectedAgent: params.runtimeSessionMatchesSelectedAgent,
-                    });
+                    const runtimeSummary =
+                      previewStatus ??
+                      (activeEntry ? t("agentTools.inPreview") : t("agentTools.notListed"));
                     return html`
                       <details class="agent-tool-card" id=${anchorId}>
                         <summary class="agent-tool-summary">
@@ -621,7 +615,7 @@ export function renderAgentTools(params: {
                               <dd>${accessSummary}</dd>
                             </div>
                             <div class="agent-tool-summary__fact">
-                              <dt class="label">${t("agentTools.session")}</dt>
+                              <dt class="label">${t("agentTools.previewTitle")}</dt>
                               <dd>${runtimeSummary}</dd>
                             </div>
                           </dl>
@@ -674,16 +668,14 @@ export function renderAgentTools(params: {
                                 : nothing
                             }
                             <div class="agent-tool-detail agent-tool-detail--inline">
-                              <div class="label">${t("agentTools.session")}</div>
+                              <div class="label">${t("agentTools.previewTitle")}</div>
                               <div>
                                 ${
                                   activeEntry
-                                    ? t("agentTools.availableVia", {
+                                    ? t("agentTools.previewVia", {
                                         source: renderEffectiveToolBadge(activeEntry),
                                       })
-                                    : params.runtimeSessionMatchesSelectedAgent
-                                      ? t("agentTools.unavailableSession")
-                                      : t("agentTools.inspectAgent")
+                                    : runtimeSummary
                                 }
                               </div>
                             </div>
