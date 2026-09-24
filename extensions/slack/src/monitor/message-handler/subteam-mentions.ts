@@ -7,6 +7,10 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
+// Same mention envelope as the inbound owner's SLACK_USER_MENTION_RE in
+// message-handler/prepare.ts — ids are matched case-insensitively after
+// normalization, so the character class stays permissive.
+const USER_MENTION_RE = /<@([^>|]+)(?:\|[^>]*)?>/gi;
 const SUBTEAM_MEMBER_CACHE_TTL_MS = 5 * 60 * 1000;
 
 type CacheEntry = {
@@ -18,6 +22,24 @@ const subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
 export function normalizeSlackId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
+}
+
+/** True when the text carries an explicit `<@USER>` mention of the given user. */
+export function slackTextMentionsUser(
+  text: string | undefined | null,
+  userId?: string | null,
+): boolean {
+  const target = normalizeSlackId(userId);
+  if (!text || !target) {
+    return false;
+  }
+  const mentionRe = new RegExp(USER_MENTION_RE.source, "gi");
+  for (const match of text.matchAll(mentionRe)) {
+    if (normalizeSlackId(match[1]) === target) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function extractSlackSubteamMentionIds(text?: string | null): string[] {

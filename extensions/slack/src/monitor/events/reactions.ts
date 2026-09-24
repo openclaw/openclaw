@@ -1,10 +1,18 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
+import { resolveSlackAccount } from "../../accounts.js";
 import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
+import { resolveSlackChannelConfig } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
+import { resolveSeededSlackRoomThreadId } from "../message-handler/prepare-routing.js";
+import {
+  isSlackSubteamMentionForBot,
+  slackTextMentionsUser,
+} from "../message-handler/subteam-mentions.js";
 import { getSlackThreadTsResolver } from "../thread-resolution.js";
 import type { SlackReactionEvent } from "../types.js";
 import {
@@ -72,29 +80,8 @@ export function registerSlackReactionEvents(params: {
       }
       trackEvent?.();
 
-      const reactionClient = eventScope?.client ?? runtimeContext.app.client;
-      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx: runtimeContext,
-        senderId: event.user,
-        channelId: item.channel,
-        eventKind: "reaction",
-        eventScope,
-        // A reaction payload names the reacted message but not its thread, so the
-        // route would otherwise fall back to the parent channel session.
-        ...(reactionClient
-          ? {
-              resolveThreadTs: async () =>
-                await getSlackThreadTsResolver(reactionClient).resolveThreadTs({
-                  channelId: item.channel,
-                  messageTs: item.ts,
-                }),
-            }
-          : {}),
-      });
-      if (!ingressContext) {
-        return;
-      }
-
+      // Reaction-specific admission runs before sender authorization so a rejected
+      // reaction never triggers the thread lookup's Slack reads below.
       const actorInfoPromise: Promise<{ name?: string } | undefined> = event.user
         ? resolveUserName(event.user, eventScope)
         : Promise.resolve(undefined);
@@ -110,6 +97,74 @@ export function registerSlackReactionEvents(params: {
           actorName: actorInfo?.name,
         })
       ) {
+        return;
+      }
+
+      const reactionClient = eventScope?.client ?? runtimeContext.app.client;
+      const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+        ctx: runtimeContext,
+        senderId: event.user,
+        channelId: item.channel,
+        eventKind: "reaction",
+        eventScope,
+        // A reaction payload names the reacted message but not its thread, so the
+        // route would otherwise fall back to the parent channel session.
+        ...(reactionClient
+          ? {
+              resolveThreadTs: async ({ channelType, channelName }) => {
+                const isRoom = channelType === "channel" || channelType === "group";
+                const account = resolveSlackAccount({
+                  cfg: runtimeContext.cfg ?? {},
+                  accountId: runtimeContext.accountId,
+                });
+                const channelConfig = isRoom
+                  ? resolveSlackChannelConfig({
+                      teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                      allowUnscoped: runtimeContext.installationIdentity?.kind !== "enterprise",
+                      channelId: item.channel,
+                      channelName,
+                      channels: runtimeContext.channelsConfig,
+                      channelKeys: runtimeContext.channelsConfigKeys,
+                      defaultRequireMention: runtimeContext.defaultRequireMention,
+                      allowNameMatching: runtimeContext.allowNameMatching,
+                    })
+                  : null;
+                const replyToMode =
+                  channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, "channel");
+                const requireMention =
+                  channelConfig?.requireMention ?? runtimeContext.defaultRequireMention ?? true;
+                return await getSlackThreadTsResolver(reactionClient).resolveThreadTs({
+                  channelId: item.channel,
+                  messageTs: item.ts,
+                  // Root session ownership mirrors the inbound seeding decision: a
+                  // mentioned or implicitly threaded root owns :thread:<root>; an
+                  // unseeded root keeps the parent channel session even when Slack
+                  // stamps thread_ts === ts on it.
+                  resolveSeededRootThreadId: async (root) => {
+                    const explicitlyMentioned =
+                      slackTextMentionsUser(root.text, runtimeContext.botUserId) ||
+                      (await isSlackSubteamMentionForBot({
+                        client: reactionClient,
+                        text: root.text,
+                        botUserId: runtimeContext.botUserId,
+                        teamId: eventScope?.teamId ?? runtimeContext.teamId,
+                        log: logVerbose,
+                      }));
+                    return resolveSeededSlackRoomThreadId({
+                      isThreadReply: false,
+                      isRoom,
+                      seedTopLevelRoomThread:
+                        explicitlyMentioned || (isRoom && !requireMention && replyToMode !== "off"),
+                      replyToMode,
+                      candidateThreadId: root.threadTs ?? root.ts,
+                    });
+                  },
+                });
+              },
+            }
+          : {}),
+      });
+      if (!ingressContext) {
         return;
       }
       const actorLabel = actorInfo?.name ?? event.user;

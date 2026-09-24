@@ -435,14 +435,25 @@ describe("registerSlackReactionEvents", () => {
       history: (args: unknown) => Promise<unknown>;
       replies?: (args: unknown) => Promise<unknown>;
       channelType?: "channel" | "im";
+      replyToMode?: "off" | "first" | "all" | "batched";
+      defaultRequireMention?: boolean;
+      reactionMode?: "off" | "own" | "all" | "allowlist";
+      reactionAllowlist?: Array<string | number>;
     }) {
       const harness = createSlackSystemEventTestHarness({
         dmPolicy: "open",
         channelType: params.channelType ?? "channel",
+        reactionMode: params.reactionMode,
+        reactionAllowlist: params.reactionAllowlist,
       });
-      harness.ctx.cfg = { channels: { slack: { enabled: true } } };
+      harness.ctx.cfg = {
+        channels: { slack: { enabled: true, replyToMode: params.replyToMode } },
+      };
       harness.ctx.accountId = "default";
       harness.ctx.channelsConfigKeys = [];
+      if (params.defaultRequireMention !== undefined) {
+        harness.ctx.defaultRequireMention = params.defaultRequireMention;
+      }
       harness.ctx.resolveSlackSystemEventRoute = createSlackSystemEventRouteResolver({
         cfg: harness.ctx.cfg,
         accountId: harness.ctx.accountId,
@@ -599,13 +610,16 @@ describe("registerSlackReactionEvents", () => {
     });
 
     // Slack stamps a replied channel root with thread_ts === ts, and inbound routing
-    // seeds such roots (mentions, implicit threading) into :thread:<root> alongside
-    // their replies, so the reaction belongs to the root's own thread session.
+    // seeds an actionable (mentioned) root into :thread:<root> alongside its replies,
+    // so the reaction belongs to the root's own thread session.
     it("routes a reaction on a seeded channel root to the root's thread session", async () => {
       const history = vi.fn().mockResolvedValue({
-        messages: [{ ts: "123.456", thread_ts: "123.456" }],
+        messages: [{ ts: "123.456", thread_ts: "123.456", text: "<@U_BOT> review this" }],
       });
-      const { harness, replies, handler } = createThreadRoutingHarness({ history });
+      const { harness, replies, handler } = createThreadRoutingHarness({
+        history,
+        replyToMode: "all",
+      });
 
       await handler({
         event: buildReactionEvent({ channel: "C1" }),
@@ -630,6 +644,123 @@ describe("registerSlackReactionEvents", () => {
         sessionKey: threadSessionKey,
         contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-self-thread",
       });
+    });
+
+    // A mentioned root owns :thread:<root> from the moment it is seeded — before any
+    // reply exists Slack has not stamped thread_ts on it yet, so the seed decision
+    // alone must place the reaction on the root's session.
+    it("routes a reaction on a mentioned root without thread_ts to the seeded session", async () => {
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", text: "<@U_BOT> take a look" }],
+      });
+      const { harness, replies, handler } = createThreadRoutingHarness({
+        history,
+        replyToMode: "all",
+      });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-mentioned-root" },
+      });
+
+      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+        threadTs: "123.456",
+      }).sessionKey;
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: threadSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-mentioned-root",
+      });
+      expect(replies).not.toHaveBeenCalled();
+    });
+
+    // Channels with requireMention off and a non-off replyToMode seed every top-level
+    // root, so a reaction follows even without a mention in the root text.
+    it("routes a reaction on an implicitly threaded root to its thread session", async () => {
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", thread_ts: "123.456", text: "no mention here" }],
+      });
+      const { harness, handler } = createThreadRoutingHarness({
+        history,
+        replyToMode: "all",
+        defaultRequireMention: false,
+      });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-implicit-root" },
+      });
+
+      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+        channelId: "C1",
+        channelType: "channel",
+        senderId: "U1",
+        threadTs: "123.456",
+      }).sessionKey;
+      expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: threadSessionKey,
+        contextKey: "slack:reaction:added:C1:123.456:U1:thumbsup:Ev-implicit-root",
+      });
+    });
+
+    // Inbound keeps an unseeded self-threaded root on the channel session (pinned by
+    // prepare.thread-session-key.test.ts), so its reaction must stay there too even
+    // though Slack stamps thread_ts === ts.
+    it.each([
+      { label: "replyToMode off", replyToMode: "off" as const },
+      { label: "requireMention without a mention", replyToMode: "all" as const },
+    ])(
+      "keeps an unseeded channel root on the parent channel session ($label)",
+      async ({ replyToMode }) => {
+        const history = vi.fn().mockResolvedValue({
+          messages: [{ ts: "123.456", thread_ts: "123.456", text: "just a root" }],
+        });
+        const { harness, replies, handler } = createThreadRoutingHarness({
+          history,
+          replyToMode,
+        });
+
+        await handler({
+          event: buildReactionEvent({ channel: "C1" }),
+          body: { event_id: `Ev-unseeded-${replyToMode}` },
+        });
+
+        const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+          channelId: "C1",
+          channelType: "channel",
+          senderId: "U1",
+        }).sessionKey;
+        expect(history).toHaveBeenCalledTimes(1);
+        expect(replies).not.toHaveBeenCalled();
+        expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+          sessionKey: parentSessionKey,
+          contextKey: `slack:reaction:added:C1:123.456:U1:thumbsup:Ev-unseeded-${replyToMode}`,
+        });
+      },
+    );
+
+    // The reaction allowlist runs before the thread lookup, so a rejected reaction
+    // must not spend Slack reads on history or replies.
+    it("makes no lookup for a reaction rejected by the allowlist", async () => {
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ ts: "123.456", thread_ts: "111.222" }],
+      });
+      const { replies, handler } = createThreadRoutingHarness({
+        history,
+        reactionMode: "allowlist",
+        reactionAllowlist: ["U_SOMEONE_ELSE"],
+      });
+
+      await handler({
+        event: buildReactionEvent({ channel: "C1" }),
+        body: { event_id: "Ev-allowlist-reject" },
+      });
+
+      expect(history).not.toHaveBeenCalled();
+      expect(replies).not.toHaveBeenCalled();
+      expect(reactionQueueMock).not.toHaveBeenCalled();
     });
 
     it("does not look up a thread for direct-message reactions", async () => {

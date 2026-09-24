@@ -18,9 +18,13 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   threadTs?: string;
   /**
    * Resolves the target message's thread root for events that carry none (reactions,
-   * pins). Runs after sender authorization, and only for non-DM events.
+   * pins). Runs after sender authorization, and only for non-DM events; receives the
+   * authorized channel type and name so the caller can mirror routing config.
    */
-  resolveThreadTs?: () => Promise<string | undefined>;
+  resolveThreadTs?: (context: {
+    channelType?: string | null;
+    channelName?: string;
+  }) => Promise<string | undefined>;
   eventKind: string;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
@@ -49,7 +53,13 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   const threadTs =
     auth.channelType === "im"
       ? undefined
-      : (params.threadTs ?? (params.resolveThreadTs ? await params.resolveThreadTs() : undefined));
+      : (params.threadTs ??
+        (params.resolveThreadTs
+          ? await params.resolveThreadTs({
+              channelType: auth.channelType,
+              channelName: auth.channelName,
+            })
+          : undefined));
   const route = ctx.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,

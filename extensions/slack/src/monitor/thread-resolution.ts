@@ -25,6 +25,10 @@ import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
+  /** True when the provider located the message, including a threadless root. */
+  found: boolean;
+  /** Root message text, retained so a cache hit can re-run the seed decision. */
+  rootText?: string;
   expiresAt: number;
 };
 
@@ -69,11 +73,23 @@ export function isTransientSlackThreadLookupError(error: unknown): boolean {
   );
 }
 
-async function resolveThreadTsFromSlack(params: {
+type SlackThreadLookup = { threadTs?: string; text?: string };
+
+const readThreadIdentity = (
+  entry: { thread_ts?: string; text?: string } | undefined,
+): SlackThreadLookup | undefined =>
+  entry
+    ? {
+        threadTs: normalizeThreadTs(entry.thread_ts),
+        text: typeof entry.text === "string" ? entry.text : undefined,
+      }
+    : undefined;
+
+async function resolveThreadFromSlack(params: {
   client: SlackWebClient;
   channelId: string;
   messageTs: string;
-}) {
+}): Promise<SlackThreadLookup | undefined> {
   const history = await params.client.conversations.history({
     channel: params.channelId,
     latest: params.messageTs,
@@ -84,7 +100,7 @@ async function resolveThreadTsFromSlack(params: {
   const fromHistory =
     history.messages?.find((entry) => entry.ts === params.messageTs) ?? history.messages?.[0];
   if (fromHistory) {
-    return normalizeThreadTs(fromHistory.thread_ts);
+    return readThreadIdentity(fromHistory);
   }
   // conversations.history never returns thread replies, so a missed target is read
   // through the thread API; conversations.replies accepts the ts of any message in
@@ -97,8 +113,7 @@ async function resolveThreadTsFromSlack(params: {
     inclusive: true,
     limit: 1,
   });
-  const fromReplies = replies.messages?.find((entry) => entry.ts === params.messageTs);
-  return normalizeThreadTs(fromReplies?.thread_ts);
+  return readThreadIdentity(replies.messages?.find((entry) => entry.ts === params.messageTs));
 }
 
 export function createSlackThreadTsResolver(params: {
@@ -109,7 +124,7 @@ export function createSlackThreadTsResolver(params: {
   const ttlMs = Math.max(0, parseFiniteNumber(params.cacheTtlMs) ?? DEFAULT_THREAD_TS_CACHE_TTL_MS);
   const maxSize = Math.max(0, parseFiniteNumber(params.maxSize) ?? DEFAULT_THREAD_TS_CACHE_MAX);
   const cache = new Map<string, ThreadTsCacheEntry>();
-  const inflight = new Map<string, Promise<string | undefined>>();
+  const inflight = new Map<string, Promise<SlackThreadLookup | undefined>>();
 
   const getCached = (key: string, now: number) => {
     const entry = cache.get(key);
@@ -119,7 +134,7 @@ export function createSlackThreadTsResolver(params: {
     if (entry.expiresAt === 0) {
       cache.delete(key);
       cache.set(key, entry);
-      return entry.threadTs;
+      return entry;
     }
     const normalizedNow = asDateTimestampMs(now);
     if (
@@ -132,36 +147,47 @@ export function createSlackThreadTsResolver(params: {
     }
     cache.delete(key);
     cache.set(key, entry);
-    return entry.threadTs;
+    return entry;
   };
 
-  const setCached = (key: string, threadTs: string | null, now: number) => {
+  const setCached = (key: string, value: Omit<ThreadTsCacheEntry, "expiresAt">, now: number) => {
     const expiresAt = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) : 0;
     if (expiresAt === undefined) {
       cache.delete(key);
       return;
     }
     cache.delete(key);
-    cache.set(key, { threadTs, expiresAt });
+    cache.set(key, { ...value, expiresAt });
     pruneMapToMaxSize(cache, maxSize);
   };
 
-  // One bounded lookup owns (channel, message) -> thread_ts. Every caller shares it so
-  // a repeated question lands in the same cache and in-flight dedupe; only an answer
-  // the provider stands behind is cached.
+  // One bounded lookup owns (channel, message) -> thread identity. Every caller shares
+  // it so a repeated question lands in the same cache and in-flight dedupe; only an
+  // answer the provider stands behind is cached.
   const lookupThreadTs = async (request: {
     channelId: string;
     messageTs: string;
-  }): Promise<{ threadTs: string | undefined; fromCache: boolean; error?: unknown }> => {
+  }): Promise<{
+    threadTs: string | undefined;
+    found: boolean;
+    rootText: string | undefined;
+    fromCache: boolean;
+    error?: unknown;
+  }> => {
     const cacheKey = `${request.channelId}:${request.messageTs}`;
     const cached = getCached(cacheKey, Date.now());
     if (cached !== undefined) {
-      return { threadTs: cached ?? undefined, fromCache: true };
+      return {
+        threadTs: cached.threadTs ?? undefined,
+        found: cached.found,
+        rootText: cached.rootText,
+        fromCache: true,
+      };
     }
 
     let pending = inflight.get(cacheKey);
     if (!pending) {
-      pending = resolveThreadTsFromSlack({
+      pending = resolveThreadFromSlack({
         client: params.client,
         channelId: request.channelId,
         messageTs: request.messageTs,
@@ -171,16 +197,31 @@ export function createSlackThreadTsResolver(params: {
 
     try {
       const resolved = await pending;
-      setCached(cacheKey, resolved ?? null, Date.now());
-      return { threadTs: resolved, fromCache: false };
+      const isRoot =
+        resolved !== undefined && (!resolved.threadTs || resolved.threadTs === request.messageTs);
+      setCached(
+        cacheKey,
+        {
+          threadTs: resolved?.threadTs ?? null,
+          found: resolved !== undefined,
+          rootText: isRoot ? resolved?.text : undefined,
+        },
+        Date.now(),
+      );
+      return {
+        threadTs: resolved?.threadTs,
+        found: resolved !== undefined,
+        rootText: isRoot ? resolved?.text : undefined,
+        fromCache: false,
+      };
     } catch (error) {
       // A definitive failure (unknown message, denied read, malformed response) is
       // cached like an unresolved lookup; a transient one stays uncached so the next
       // caller may retry instead of inheriting a poisoned answer.
       if (!isTransientSlackThreadLookupError(error)) {
-        setCached(cacheKey, null, Date.now());
+        setCached(cacheKey, { threadTs: null, found: false }, Date.now());
       }
-      return { threadTs: undefined, fromCache: false, error };
+      return { threadTs: undefined, found: false, rootText: undefined, fromCache: false, error };
     } finally {
       inflight.delete(cacheKey);
     }
@@ -194,21 +235,46 @@ export function createSlackThreadTsResolver(params: {
     resolveThreadTs: async (request: {
       channelId: string;
       messageTs: string;
+      /**
+       * Decides the owning session when the target turns out to be a top-level
+       * thread root. Inbound routing seeds only eligible roots (mentions, implicit
+       * threading) into :thread:<root> and keeps the rest on the channel session,
+       * so the caller mirrors that decision from channel config and the root's
+       * text. When omitted, every root keeps the parent channel session.
+       */
+      resolveSeededRootThreadId?: (root: {
+        ts: string;
+        threadTs?: string;
+        text?: string;
+      }) => Promise<string | undefined> | string | undefined;
     }): Promise<string | undefined> => {
-      const { threadTs, error } = await lookupThreadTs(request);
+      const { threadTs, found, rootText, error } = await lookupThreadTs(request);
       if (error !== undefined && shouldLogVerbose()) {
         logVerbose(
           `slack: failed to resolve thread_ts for system event channel=${request.channelId} ts=${request.messageTs}: ${formatSlackError(error)}`,
         );
       }
-      // Trust the provider's thread identity here instead of re-deriving reply
-      // identity through the threading owner: Slack stamps a replied channel root
-      // with thread_ts === ts, and the inbound route owner places every non-DM
-      // thread reply in :thread:<root> regardless of replyToMode, so that thread
-      // session owns the conversation around the root. Direct messages never reach
-      // this lookup — the system-event context skips it for im channels, keeping
-      // flat DM sessions (and assistant DM roots) untouched.
-      return threadTs;
+      if (!found) {
+        return undefined;
+      }
+      // A genuine reply always belongs to its thread's session: the inbound route
+      // owner places every non-DM thread reply in :thread:<root> regardless of
+      // replyToMode.
+      if (threadTs && threadTs !== request.messageTs) {
+        return threadTs;
+      }
+      // The target is a top-level root (Slack stamps a replied root with
+      // thread_ts === ts). Root session ownership is a seeding decision, not a
+      // provider fact, so defer to the caller's routing mirror. Direct messages
+      // never reach this lookup — the system-event context skips it for im
+      // channels, keeping flat DM sessions (and assistant DM roots) untouched.
+      return (
+        (await request.resolveSeededRootThreadId?.({
+          ts: request.messageTs,
+          threadTs,
+          text: rootText,
+        })) ?? undefined
+      );
     },
     resolve: async (request: {
       message: SlackMessageEvent;

@@ -121,11 +121,11 @@ describe("createSlackThreadTsResolver", () => {
     });
   });
 
-  // Slack stamps a replied channel root with thread_ts === ts; such a root owns the
-  // thread session its replies already route to, so the resolver must not discard it.
-  it("resolves a self-threaded channel root to its own thread", async () => {
+  // Root session ownership is a seeding decision, not a provider fact: the resolver
+  // surfaces the root (with its text, cached) and the caller's routing mirror decides.
+  it("defers a self-threaded root to the caller's seeding decision, served from cache", async () => {
     const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "1" }],
+      messages: [{ ts: "1", thread_ts: "1", text: "<@U_BOT> root" }],
     });
     const repliesMock = vi.fn();
     const resolver = createSlackThreadTsResolver({
@@ -133,14 +133,64 @@ describe("createSlackThreadTsResolver", () => {
       cacheTtlMs: 60_000,
       maxSize: 5,
     });
+    const seeding = vi.fn((root: { ts: string; threadTs?: string; text?: string }) =>
+      root.text?.includes("<@U_BOT>") ? (root.threadTs ?? root.ts) : undefined,
+    );
 
-    const first = await resolver.resolveThreadTs({ channelId: "C1", messageTs: "1" });
-    const second = await resolver.resolveThreadTs({ channelId: "C1", messageTs: "1" });
+    const first = await resolver.resolveThreadTs({
+      channelId: "C1",
+      messageTs: "1",
+      resolveSeededRootThreadId: seeding,
+    });
+    const second = await resolver.resolveThreadTs({
+      channelId: "C1",
+      messageTs: "1",
+      resolveSeededRootThreadId: seeding,
+    });
 
     expect(first).toBe("1");
     expect(second).toBe("1");
     expect(historyMock).toHaveBeenCalledTimes(1);
+    expect(seeding).toHaveBeenCalledTimes(2);
+    expect(seeding).toHaveBeenCalledWith({ ts: "1", threadTs: "1", text: "<@U_BOT> root" });
     expect(repliesMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a self-threaded root on the parent session without a seeding decision", async () => {
+    const historyMock = vi.fn().mockResolvedValue({
+      messages: [{ ts: "1", thread_ts: "1", text: "just a root" }],
+    });
+    const resolver = createSlackThreadTsResolver({
+      client: createThreadClient(historyMock),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+
+    await expect(resolver.resolveThreadTs({ channelId: "C1", messageTs: "1" })).resolves.toBe(
+      undefined,
+    );
+  });
+
+  it("does not invoke the seeding decision when the message is gone from both reads", async () => {
+    const historyMock = vi.fn().mockResolvedValue({ messages: [] });
+    const repliesMock = vi
+      .fn()
+      .mockRejectedValue(new WebAPIPlatformError({ ok: false, error: "thread_not_found" }));
+    const resolver = createSlackThreadTsResolver({
+      client: createThreadClient(historyMock, repliesMock),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+    const seeding = vi.fn(() => "1");
+
+    await expect(
+      resolver.resolveThreadTs({
+        channelId: "C1",
+        messageTs: "1",
+        resolveSeededRootThreadId: seeding,
+      }),
+    ).resolves.toBe(undefined);
+    expect(seeding).not.toHaveBeenCalled();
   });
 
   it("caches a definitive thread_not_found from the replies fallback", async () => {

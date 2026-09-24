@@ -25,6 +25,30 @@ import {
   resolveSlackEnterpriseMainDmSessionKey,
 } from "../workspace-routing.js";
 
+type SlackReplyToMode = ReturnType<typeof resolveSlackReplyToMode>;
+
+/**
+ * Decides whether a top-level room message owns a `:thread:<root>` session. Inbound
+ * seeds a root when it is actionable (explicit mention) or when the channel
+ * implicitly threads every bot reply; the system-event reaction path reuses this so
+ * a reaction lands on the same session the root's own turn used.
+ */
+export function resolveSeededSlackRoomThreadId(params: {
+  isThreadReply: boolean;
+  isRoom: boolean;
+  seedTopLevelRoomThread: boolean;
+  replyToMode: SlackReplyToMode;
+  candidateThreadId?: string;
+}): string | undefined {
+  return !params.isThreadReply &&
+    params.isRoom &&
+    params.seedTopLevelRoomThread &&
+    params.replyToMode !== "off" &&
+    params.candidateThreadId
+    ? params.candidateThreadId
+    : undefined;
+}
+
 type SlackRoutingContextDeps = {
   cfg: OpenClawConfig;
   teamId: string;
@@ -147,14 +171,13 @@ export function resolveSlackRoutingContext(params: {
   // without returning to the old "every channel message is its own thread"
   // behavior (regression from #10686).
   const seedCandidateThreadId = threadContext.incomingThreadTs ?? threadContext.messageTs;
-  const seededRoomThreadId =
-    !isThreadReply &&
-    isRoom &&
-    seedTopLevelRoomThread &&
-    replyToMode !== "off" &&
-    seedCandidateThreadId
-      ? seedCandidateThreadId
-      : undefined;
+  const seededRoomThreadId = resolveSeededSlackRoomThreadId({
+    isThreadReply,
+    isRoom,
+    seedTopLevelRoomThread: Boolean(seedTopLevelRoomThread),
+    replyToMode,
+    candidateThreadId: seedCandidateThreadId,
+  });
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const directAgentThreadId = assistantThreadTs ?? agentViewThreadTs;
   // DM threads are a UI affordance, not a session boundary. Route all DM
