@@ -4,19 +4,20 @@ import fs from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import path from "node:path";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
+import { prepareSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import {
+  CONFIG_SNAPSHOT_SCOPE,
+  CONFIG_SNAPSHOT_KEY,
+  type ConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.kernel.js";
 import { resolveStateDir } from "./paths.js";
 
-const CONFIG_SNAPSHOT_SCOPE = "config-snapshot";
-const CONFIG_SNAPSHOT_KEY = "latest";
 const CONFIG_JOURNAL_FINGERPRINT_KEY_FILENAME = "config-journal-fingerprint.key";
 const CONFIG_JOURNAL_FINGERPRINT_KEY_BYTES = 32;
 const CONFIG_JOURNAL_REDACTION_MARKER = "***";
-
-type ConfigSnapshotAuditRecord = {
-  configPath: string;
-  rawHash: string;
-  fingerprintedAuthoredConfig: unknown;
-};
 
 type ConfigAuditStoreContext = {
   env?: NodeJS.ProcessEnv;
@@ -26,6 +27,13 @@ type ConfigAuditStoreContext = {
 type ResolvedConfigAuditStoreContext = {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
+};
+
+type ConfigSnapshotWrite = ConfigAuditStoreContext & {
+  configPath: string;
+  rawHash: string;
+  authoredConfig: unknown;
+  expectedSnapshot?: ConfigSnapshotAuditRecord | null;
 };
 
 const configJournalFingerprintKeys = new Map<string, Buffer>();
@@ -177,23 +185,11 @@ export function readLatestConfigSnapshotAuditRecord(
 }
 
 export function upsertConfigSnapshotAuditRecord(
-  params: ConfigAuditStoreContext & {
-    configPath: string;
-    rawHash: string;
-    authoredConfig: unknown;
-    expectedSnapshot?: ConfigSnapshotAuditRecord | null;
-  },
+  params: ConfigSnapshotWrite,
 ): ConfigSnapshotAuditRecord | null {
   try {
     const context = resolveConfigAuditStoreContext(params);
-    const snapshot: ConfigSnapshotAuditRecord = {
-      configPath: path.resolve(params.configPath),
-      rawHash: params.rawHash,
-      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(
-        params.authoredConfig,
-        context,
-      ),
-    };
+    const snapshot = prepareConfigSnapshotAuditRecord(params);
     // One bounded slot intentionally follows the latest config path in this state DB.
     // Keyed fingerprints reveal only per-install secret equality, not secret values.
     // Known limit: slot reads, record appends, and this upsert are separate steps,
@@ -210,6 +206,71 @@ export function upsertConfigSnapshotAuditRecord(
     return snapshot;
   } catch {
     // best-effort
+    return null;
+  }
+}
+
+function prepareConfigSnapshotAuditRecord(params: ConfigSnapshotWrite): ConfigSnapshotAuditRecord {
+  return {
+    configPath: path.resolve(params.configPath),
+    rawHash: params.rawHash,
+    fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(
+      params.authoredConfig,
+      params,
+    ),
+  };
+}
+
+export async function readLatestConfigSnapshotAuditRecordAsync(
+  params?: ConfigAuditStoreContext,
+  assertCurrent?: () => void,
+): Promise<ConfigSnapshotAuditRecord | null> {
+  assertCurrent?.();
+  try {
+    const env = resolveConfigAuditStoreEnv(resolveConfigAuditStoreContext(params));
+    const context = captureOpenClawStateWorkerContext({ env });
+    const result = await executeExistingOpenClawStateRead(
+      { env },
+      { type: "config.snapshot.read" },
+      { context, current: true },
+    );
+    context.admission.assertCurrent();
+    assertCurrent?.();
+    return result?.ok && result.type === "config.snapshot.read" ? result.snapshot : null;
+  } catch {
+    assertCurrent?.();
+    return null;
+  }
+}
+
+export async function upsertConfigSnapshotAuditRecordAsync(
+  params: ConfigSnapshotWrite,
+  assertCurrent?: () => void,
+): Promise<ConfigSnapshotAuditRecord | null> {
+  assertCurrent?.();
+  try {
+    const env = resolveConfigAuditStoreEnv(resolveConfigAuditStoreContext(params));
+    const context = captureOpenClawStateWorkerContext({ env });
+    const snapshot = prepareConfigSnapshotAuditRecord(params);
+    const input = {
+      record: prepareSqliteAuditRecord(CONFIG_SNAPSHOT_SCOPE, {
+        key: CONFIG_SNAPSHOT_KEY,
+        value: snapshot,
+        createdAt: Date.now(),
+      }),
+      expectedPayloadJson:
+        params.expectedSnapshot === null ? null : JSON.stringify(params.expectedSnapshot),
+    };
+    const written = await runOpenClawStateWorkerOperation(
+      context,
+      (store) => store.execute({ type: "config.snapshot.upsert", input }),
+      { assertCurrent },
+    );
+    context.admission.assertCurrent();
+    assertCurrent?.();
+    return written ? snapshot : null;
+  } catch {
+    assertCurrent?.();
     return null;
   }
 }

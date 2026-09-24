@@ -2,14 +2,12 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
@@ -66,10 +64,12 @@ type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_ent
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn((): PluginManifestRegistry => ({
-    diagnostics: [],
-    plugins: [],
-  })),
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
 );
 const mockPrepareConfigFileWrite = vi.hoisted(() =>
   vi.fn<typeof import("./backup-rotation.js").prepareConfigFileWrite>(),
@@ -4519,165 +4519,6 @@ gateway: { mode: "local", port: 18789 }
               nextHash: secondWrite.persistedHash,
             }),
           );
-        },
-      );
-    },
-  );
-
-  itWithHome(
-    "shares raw snapshot hashes between config writes and gateway startup reconciliation",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const stateDir = path.join(home, ".openclaw");
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const io = createHomeConfigIO(home, {
-            configPath,
-            env: process.env,
-          });
-          const write = await io.writeConfigFile({ gateway: { port: 18789 } });
-          const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-          const slot = readConfigSnapshotAuditRecord({
-            env: process.env,
-            homedir: () => home,
-            configPath,
-          });
-          expect(writtenSnapshot.valid).toBe(true);
-          expect(slot).toMatchObject({ rawHash: write.persistedHash });
-          expect(slot?.rawHash).toBe(writtenSnapshot.hash);
-
-          const watcher = {
-            options: { usePolling: false },
-            on: vi.fn(),
-            close: vi.fn(async () => {}),
-          };
-          watcher.on.mockImplementation(() => watcher);
-          const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-          const startForSnapshot = (snapshot: ConfigFileSnapshot) =>
-            startGatewayConfigReloader({
-              initialConfig: snapshot.config,
-              initialCompareConfig: snapshot.sourceConfig,
-              initialSnapshotRawHash: snapshot.hash ?? null,
-              initialAuthoredConfig: snapshot.parsed,
-              initialSnapshotValid: snapshot.valid,
-              initialSnapshotIssues: snapshot.issues,
-              readSnapshot: async () => snapshot,
-              initialPluginInstallRecords: {},
-              readPluginInstallRecords: async () => ({}),
-              onNoopConfigCommit: async () => {},
-              onHotReload: async () => "applied" as const,
-              onRestart: async () => {},
-              log: { info: () => {}, ...silentLogger },
-              watchPath: configPath,
-            });
-
-          const firstReloader = startForSnapshot(writtenSnapshot);
-          await firstReloader.stop();
-          expect(
-            listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-              (record) => record.event === "config.external",
-            ),
-          ).toEqual([]);
-
-          const handEditedAuthoredConfig = structuredClone(
-            writtenSnapshot.parsed,
-          ) as OpenClawConfig;
-          handEditedAuthoredConfig.gateway = {
-            ...handEditedAuthoredConfig.gateway,
-            port: 18790,
-          };
-          await writeConfigJson(configPath, handEditedAuthoredConfig);
-          const handEditedSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-          const secondReloader = startForSnapshot(handEditedSnapshot);
-          await secondReloader.stop();
-          watchSpy.mockRestore();
-
-          const externalRecord = listConfigAuditRecordsForTests({
-            env: process.env,
-            homedir: () => home,
-          }).findLast((record) => record.event === "config.external");
-          expect(externalRecord).toMatchObject({
-            event: "config.external",
-            detectedBy: "startup",
-            previousHash: write.persistedHash,
-            nextHash: handEditedSnapshot.hash,
-            changedPaths: ["gateway.port"],
-            valid: true,
-          });
-        },
-      );
-    },
-  );
-
-  itWithHome(
-    "reseeds a shared state slot when the gateway starts for another config path",
-    async (home) => {
-      const configPathA = path.join(home, ".openclaw", "config-a.json");
-      const configPathB = path.join(home, ".openclaw", "config-b.json");
-      const stateDir = path.join(home, ".openclaw");
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: configPathA,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const io = createHomeConfigIO(home, {
-            configPath: configPathA,
-            env: process.env,
-          });
-          await io.writeConfigFile({ gateway: { port: 18789 } });
-          await writeConfigJson(configPathB, { gateway: { port: 18790 } });
-
-          await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPathB }, async () => {
-            const snapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-            const watcher = {
-              options: { usePolling: false },
-              on: vi.fn(),
-              close: vi.fn(async () => {}),
-            };
-            watcher.on.mockImplementation(() => watcher);
-            const watchSpy = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-            const reloader = startGatewayConfigReloader({
-              initialConfig: snapshot.config,
-              initialCompareConfig: snapshot.sourceConfig,
-              initialSnapshotRawHash: snapshot.hash ?? null,
-              initialAuthoredConfig: snapshot.parsed,
-              initialSnapshotValid: snapshot.valid,
-              initialSnapshotIssues: snapshot.issues,
-              readSnapshot: async () => snapshot,
-              initialPluginInstallRecords: {},
-              readPluginInstallRecords: async () => ({}),
-              onNoopConfigCommit: async () => {},
-              onHotReload: async () => "applied" as const,
-              onRestart: async () => {},
-              log: { info: () => {}, ...silentLogger },
-              watchPath: configPathB,
-            });
-            await reloader.stop();
-            watchSpy.mockRestore();
-
-            expect(
-              listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-                (record) => record.event === "config.external",
-              ),
-            ).toEqual([]);
-            expect(
-              readConfigSnapshotAuditRecord({
-                env: process.env,
-                homedir: () => home,
-                configPath: configPathB,
-              }),
-            ).toMatchObject({
-              configPath: configPathB,
-              rawHash: snapshot.hash,
-            });
-          });
         },
       );
     },

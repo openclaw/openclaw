@@ -22,6 +22,7 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import {
   readGitHubPublicationRequest,
@@ -333,6 +334,14 @@ serveOwnedWorkerTasks(
                       env: input.context.environment,
                       path: input.databasePath,
                     }),
+                  };
+                }
+                if (command.type === "config.snapshot.read") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    snapshot: readConfigSnapshotAuditRecordInDatabase(db),
                   };
                 }
                 if (command.type === "pluginBlob.entries") {
