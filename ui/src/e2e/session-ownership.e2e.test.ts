@@ -188,9 +188,11 @@ suite.define(() => {
       ownerMenu.getByRole("option", { name: "Person", exact: true }),
     ).toBeVisible();
     await currentPage.keyboard.press("Escape");
+    await ownerMenu.locator("#sidebar-sessions-sort").click();
     await expectBrowser(
-      ownerMenu.getByRole("radio", { name: "Owners", exact: true }),
+      ownerMenu.getByRole("option", { name: "Owners", exact: true }),
     ).toBeVisible();
+    await currentPage.keyboard.press("Escape");
     const ownerSelect = ownerMenu.locator("#sidebar-sessions-owner");
     await ownerSelect.click();
     const ownerRows = ownerMenu.locator('[role="option"][data-value^="owner:"]');
@@ -224,14 +226,14 @@ suite.define(() => {
     await chooseSidebarMenuOption(sortableMenu.page(), "Sort by", "Owners");
     await closeSidebarMenu(currentPage);
     const peopleMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(
-      peopleMenu.getByRole("radio", { name: "Owners", exact: true }),
-    ).toBeChecked();
+    await expectBrowser(peopleMenu.locator("#sidebar-sessions-sort")).toHaveAccessibleName(
+      "Sort by: Owners",
+    );
     await captureUiProof(
       suite,
       peopleMenu.locator(".sidebar-session-filter-panel"),
       "01-people-sort-selected.png",
-      [peopleMenu.getByRole("radio", { name: "Owners", exact: true })],
+      [peopleMenu.locator("#sidebar-sessions-sort")],
     );
     const expectOwnerFilter = async (after: number) => {
       // The chat title survives a sidebar refresh; wait for the filtered row itself.
@@ -400,7 +402,9 @@ suite.define(() => {
     ).toBeVisible();
     expect(await ownerMenu.getByRole("option", { name: "Person", exact: true }).count()).toBe(0);
     await currentPage.keyboard.press("Escape");
-    expect(await ownerMenu.getByRole("radio", { name: "Owners", exact: true }).count()).toBe(0);
+    await ownerMenu.locator("#sidebar-sessions-sort").click();
+    expect(await ownerMenu.getByRole("option", { name: "Owners", exact: true }).count()).toBe(0);
+    await currentPage.keyboard.press("Escape");
     expect(await ownerMenu.locator("#sidebar-sessions-owner").count()).toBe(0);
     await captureUiProof(
       suite,

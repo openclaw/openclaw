@@ -16,9 +16,17 @@ export async function chooseSidebarMenuOption(
   option: string,
 ) {
   const menu = await openSidebarMenu(page);
-  if (label === "Owners" || label === "Group by") {
+  if (label !== "Status") {
     await menu
-      .locator(label === "Owners" ? "#sidebar-sessions-owner" : "#sidebar-sessions-group")
+      .locator(
+        label === "Owners"
+          ? "#sidebar-sessions-owner"
+          : label === "Group by"
+            ? "#sidebar-sessions-group"
+            : label === "Sort by"
+              ? "#sidebar-sessions-sort"
+              : "#sidebar-sessions-empty",
+      )
       .click();
     await menu.getByRole("option", { name: option, exact: true }).click();
     return;

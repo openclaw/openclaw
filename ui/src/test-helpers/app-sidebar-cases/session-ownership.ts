@@ -363,7 +363,7 @@ describe("AppSidebar session ownership", () => {
 
     let menu = await openSessionMenu(sidebar);
     expect(sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-checked")).toBe("true");
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
 
@@ -379,7 +379,7 @@ describe("AppSidebar session ownership", () => {
     gateway.publish({ hello: null });
     await sidebar.updateComplete;
     menu = await openSessionMenu(sidebar);
-    expect(sessionMenuChoice(menu, "sort:people")?.getAttribute("aria-checked")).toBe("true");
+    expect(sessionMenuChoice(menu, "sort:people")?.getAttribute("aria-selected")).toBe("true");
     expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
     sidebar.dismissTransientMenus();
     await sidebar.updateComplete;
@@ -395,7 +395,7 @@ describe("AppSidebar session ownership", () => {
 
     menu = await openSessionMenu(sidebar);
     expect(sessionMenuChoice(menu, "sort:people")).toBeNull();
-    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-checked")).toBe("true");
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
     sidebar.dismissTransientMenus();
     result.owners = [
       { type: "human", id: "profile-ada", label: "Ada" },
@@ -406,7 +406,7 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     menu = await openSessionMenu(sidebar);
     expect(sessionMenuChoice(menu, "sort:people")).not.toBeNull();
-    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-checked")).toBe("true");
+    expect(sessionMenuChoice(menu, "sort:created")?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("groups sessions by owner based on the live session-owner roster", async () => {

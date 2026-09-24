@@ -1,6 +1,6 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 
-type AnchoredOverlaySide = "top" | "bottom";
+type AnchoredOverlaySide = "top" | "bottom" | "left" | "right";
 type AnchoredOverlayOptions = {
   alignment?: "start" | "end";
   anchor?: Element;

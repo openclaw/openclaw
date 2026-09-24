@@ -777,7 +777,7 @@ suite.define(() => {
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSort.click();
-      await chooseSidebarMenuOption(page, "Sort by", "Updated");
+      await chooseSidebarMenuOption(page, "Sort by", "Last updated");
       await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 

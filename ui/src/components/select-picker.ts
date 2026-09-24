@@ -25,6 +25,7 @@ export type PickerParams<Option extends PickerOption> = {
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
+  variant?: "submenu";
   searchable?: boolean;
   showOptionTooltips?: boolean;
   showSelectedDescription?: boolean;
@@ -167,19 +168,37 @@ export class SelectPicker<
     }
   };
 
+  private get submenuSide() {
+    return getComputedStyle(this).direction === "rtl" ? "left" : "right";
+  }
+
   private configurePopup() {
     const element = this.querySelector<WaPopup>("wa-popup");
     if (!(element instanceof WaPopup) || !this.trigger) {
       return;
     }
-    configureAnchoredPopup(element, this.trigger, this.params.placement ?? "bottom");
-    element.sync = "width";
+    // A phone may have no room on either side; retain the same choice list
+    // above or below its row rather than letting a flyout leave the viewport.
+    element.flipFallbackPlacements =
+      this.params.variant === "submenu"
+        ? `${this.submenuSide === "right" ? "left" : "right"}-start bottom-start top-start`
+        : "";
+    configureAnchoredPopup(
+      element,
+      this.trigger,
+      this.params.variant === "submenu" ? this.submenuSide : (this.params.placement ?? "bottom"),
+    );
   }
 
   private readonly handleKeydown = (event: KeyboardEvent) => {
     const editing = event.target instanceof HTMLInputElement;
     const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
-    const opensMenu = ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key);
+    const submenu = this.params.variant === "submenu";
+    const forward = this.submenuSide === "right" ? "ArrowRight" : "ArrowLeft";
+    const back = forward === "ArrowRight" ? "ArrowLeft" : "ArrowRight";
+    const opensMenu =
+      ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key) ||
+      (submenu && event.key === forward);
     if (this.mode === "closed" && !opensMenu && !printable) {
       return;
     }
@@ -205,8 +224,12 @@ export class SelectPicker<
         return;
       }
     }
-    if (event.key === "Escape" || event.key === "Tab") {
-      if (event.key === "Escape") {
+    if (
+      event.key === "Escape" ||
+      event.key === "Tab" ||
+      (submenu && !editing && event.key === back)
+    ) {
+      if (event.key !== "Tab") {
         event.preventDefault();
       }
       this.closeMenu(true);
@@ -276,6 +299,7 @@ export class SelectPicker<
           ?disabled=${this.params.disabled}
           @click=${() => (open ? this.closeMenu() : this.openMenu())}
         >
+          ${this.params.variant === "submenu" ? html`<span class="picker-select__name">${this.params.label}</span>` : nothing}
           ${this.leading(selected)}
           <span class="picker-select__copy">
             <span class="picker-select__label">${selected?.label ?? this.params.label}</span>
@@ -285,9 +309,11 @@ export class SelectPicker<
                 : nothing
             }
           </span>
-          <span class="picker-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
+          <span class="picker-select__chevron" aria-hidden="true"
+            >${this.params.variant === "submenu" ? icons.chevronRight : icons.chevronDown}</span
+          >
         </button>
-        <wa-popup ?active=${open}>
+        <wa-popup ?active=${open} sync=${this.params.variant === "submenu" ? nothing : "width"}>
           <div class="picker-select__menu">
             ${
               this.mode === "search"
@@ -371,7 +397,7 @@ if (!customElements.get("openclaw-select-picker")) {
 
 export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
   return html`<openclaw-select-picker
-    class=${`settings-select picker-select ${params.className ?? ""}`}
+    class=${`settings-select picker-select ${params.variant === "submenu" ? "picker-select--submenu" : ""} ${params.className ?? ""}`}
     style="width:100%;min-width:min(138px,100%)"
     .params=${params}
   ></openclaw-select-picker>`;

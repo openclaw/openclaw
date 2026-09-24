@@ -671,8 +671,8 @@ suite.define(() => {
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
       await openSidebarMenu(page);
-      const showAutomationSessions = page.getByRole("checkbox", {
-        name: "Automation",
+      const showAutomationSessions = page.getByRole("switch", {
+        name: "Show automation sessions",
         exact: true,
       });
       await showAutomationSessions.click();

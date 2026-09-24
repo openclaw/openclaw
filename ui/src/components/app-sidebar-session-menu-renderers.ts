@@ -410,16 +410,16 @@ export function renderSidebarSessionSortMenu(params: {
     onChange: (checked: boolean) => void,
   ) => html`<button
     type="button"
-    role="checkbox"
+    role="switch"
     id=${id}
     aria-checked=${String(checked)}
     class="sidebar-session-menu-switch"
     @click=${() => onChange(!checked)}
   >
     <span>${label}</span
-    ><span inert aria-hidden="true"
-      ><wa-switch size="s" .checked=${checked} tabindex="-1"></wa-switch
-    ></span>
+    ><span inert aria-hidden="true">
+      <wa-switch size="s" .checked=${checked} tabindex="-1"></wa-switch>
+    </span>
   </button>`;
   return keyed(
     params.position,
@@ -481,6 +481,12 @@ export function renderSidebarSessionSortMenu(params: {
                     value: ownerValue,
                     searchable: true,
                     showOptionTooltips: false,
+                    renderLeading: (option) => {
+                      const owner = params.owners.find(
+                        (entry) => `owner:${entry.id}` === option.value,
+                      );
+                      return owner ? renderSessionOwnerAvatar(owner) : nothing;
+                    },
                     options: [
                       { value: "all", label: t("sessionsView.allOwners") },
                       { value: "involving-me", label: t("sessionsView.involvingMe") },
@@ -505,8 +511,8 @@ export function renderSidebarSessionSortMenu(params: {
                 </div>`
               : nothing
           }
-          ${switchItem("sidebar-sessions-cron", t("chat.sidebar.automationIncluded"), params.showCron, params.onShowCronChange)}
-          ${switchItem("sidebar-sessions-system", t("chat.sidebar.systemIncluded"), params.showSystem, params.onShowSystemChange)}
+          ${switchItem("sidebar-sessions-cron", t("sessionsView.showCronSessions"), params.showCron, params.onShowCronChange)}
+          ${switchItem("sidebar-sessions-system", t("sessionsView.showSystemSessions"), params.showSystem, params.onShowSystemChange)}
         </section>
         <section
           class="sidebar-session-menu-section"
@@ -518,51 +524,59 @@ export function renderSidebarSessionSortMenu(params: {
           ${
             params.rosterMode
               ? nothing
-              : html`<div class="sidebar-session-menu-row">
-                  <label for="sidebar-sessions-group">${t("sessionsView.groupBy")}</label>
-                  ${renderPicker({
-                    id: "sidebar-sessions-group",
-                    label: t("sessionsView.groupBy"),
-                    value: params.grouping,
-                    showOptionTooltips: false,
-                    options: [
-                      { value: "category", label: t("sessionsView.groupByCategory") },
-                      { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
-                      ...(params.peopleSortAvailable
-                        ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
-                        : []),
-                      { value: "none", label: t("sessionsView.groupByNone") },
-                    ],
-                    onChange: (value) => params.onGroupingChange(value as SidebarSessionsGrouping),
-                  })}
-                </div>`
+              : renderPicker({
+                  id: "sidebar-sessions-group",
+                  label: t("sessionsView.groupBy"),
+                  value: params.grouping,
+                  variant: "submenu",
+                  showOptionTooltips: false,
+                  options: [
+                    { value: "category", label: t("sessionsView.groupByCategory") },
+                    { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
+                    ...(params.peopleSortAvailable
+                      ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
+                      : []),
+                    { value: "none", label: t("sessionsView.groupByNone") },
+                  ],
+                  onChange: (value) => params.onGroupingChange(value as SidebarSessionsGrouping),
+                })
           }
-          ${segmented(
-            "sidebar-sessions-sort",
-            t("chat.sidebar.sortBy"),
-            params.sortMode,
-            SIDEBAR_SESSION_SORT_OPTIONS.filter(
+          ${renderPicker({
+            id: "sidebar-sessions-sort",
+            label: t("chat.sidebar.sortBy"),
+            value: params.sortMode,
+            variant: "submenu",
+            showOptionTooltips: false,
+            options: SIDEBAR_SESSION_SORT_OPTIONS.filter(
               (option) => option.mode !== "people" || params.peopleSortAvailable,
-            ).map((option) => ({
-              value: option.mode,
-              label: option.mode === "updated" ? t("sessionsView.updated") : t(option.labelKey),
-            })),
-            params.onSortModeChange,
-          )}
+            ).map((option) => ({ value: option.mode, label: t(option.labelKey) })),
+            onChange: (value) => {
+              const option = SIDEBAR_SESSION_SORT_OPTIONS.find((entry) => entry.mode === value);
+              if (option) {
+                params.onSortModeChange(option.mode);
+              }
+            },
+          })}
           ${
             params.rosterMode
               ? nothing
-              : segmented(
-                  "sidebar-sessions-empty",
-                  t("sessionsView.hideEmptyGroups"),
-                  params.emptyGroupsMode,
-                  EMPTY_GROUPS_OPTIONS.map((option) => ({
+              : renderPicker({
+                  id: "sidebar-sessions-empty",
+                  label: t("sessionsView.hideEmptyGroups"),
+                  value: params.emptyGroupsMode,
+                  variant: "submenu",
+                  showOptionTooltips: false,
+                  options: EMPTY_GROUPS_OPTIONS.map((option) => ({
                     value: option.mode,
                     label: t(option.labelKey),
                   })),
-                  params.onEmptyGroupsModeChange,
-                  t("chat.sidebar.hideEmpty"),
-                )
+                  onChange: (value) => {
+                    const option = EMPTY_GROUPS_OPTIONS.find((entry) => entry.mode === value);
+                    if (option) {
+                      params.onEmptyGroupsModeChange(option.mode);
+                    }
+                  },
+                })
           }
           ${switchItem("sidebar-sessions-preview", t("sessionsView.showSessionPreview"), params.showPreview, params.onShowPreviewChange)}
         </section>
