@@ -36,7 +36,7 @@ import {
 } from "./tui-session-projection.js";
 import * as submit from "./tui-submit-state.js";
 import { renderTuiHistoryToolResult } from "./tui-tool-activity.js";
-import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionContext = {
   client: TuiBackend;
@@ -240,38 +240,30 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
-    }
+    const copyEntryValue = <K extends keyof SessionInfo>(key: K) => {
+      const value = entry?.[key];
+      if (value !== undefined) {
+        next[key] = value;
+      }
+    };
+    (
+      [
+        "thinkingLevel",
+        "agentRuntime",
+        "fastMode",
+        "verboseLevel",
+        "traceLevel",
+        "reasoningLevel",
+        "responseUsage",
+        "effectiveResponseUsage",
+        "inputTokens",
+        "outputTokens",
+        "displayName",
+        "updatedAt",
+      ] as const
+    ).forEach(copyEntryValue);
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
-    }
-    if (entry?.agentRuntime !== undefined) {
-      next.agentRuntime = entry.agentRuntime;
-    }
-    if (entry?.fastMode !== undefined) {
-      next.fastMode = entry.fastMode;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.traceLevel !== undefined) {
-      next.traceLevel = entry.traceLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.effectiveResponseUsage !== undefined) {
-      next.effectiveResponseUsage = entry.effectiveResponseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
@@ -301,12 +293,6 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
-    }
-    if (entry?.displayName !== undefined) {
-      next.displayName = entry.displayName;
-    }
-    if (entry?.updatedAt !== undefined) {
-      next.updatedAt = entry.updatedAt;
     }
 
     const selection = resolveModelSelection(entry);

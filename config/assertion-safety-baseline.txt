@@ -2485,7 +2485,7 @@ src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
-src/daemon/schtasks-process.ts	2
+src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
 src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
@@ -3364,7 +3364,7 @@ src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
 src/tui/tui-event-handlers.ts	5
-src/tui/tui-formatters.ts	4
+src/tui/tui-formatters.ts	3
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2

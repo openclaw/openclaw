@@ -277,16 +277,6 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
   return appendReplyMediaFailures(text, failures) ?? "";
 }
 
-function resolveMessageRecord(
-  message: unknown,
-): { record: Record<string, unknown>; content: unknown } | undefined {
-  const record = asMessageRecord(message);
-  if (!record) {
-    return undefined;
-  }
-  return { record, content: record.content };
-}
-
 function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
   const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
   if (stopReason !== "error") {
@@ -296,22 +286,19 @@ function formatAssistantErrorFromRecord(record: Record<string, unknown>): string
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectBlockStrings(params: {
-  content: unknown;
-  blockType: "text" | "thinking";
-  valueKey: "text" | "thinking";
-}): string[] {
-  if (!Array.isArray(params.content)) {
+function collectBlockStrings(content: unknown, type: "text" | "thinking"): string[] {
+  if (!Array.isArray(content)) {
     return [];
   }
   const parts: string[] = [];
-  for (const block of params.content) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const rec = block as Record<string, unknown>;
-    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
-      parts.push(rec[params.valueKey] as string);
+    const value = rec[type];
+    if (rec.type === type && typeof value === "string") {
+      parts.push(value);
     }
   }
   return parts;
@@ -322,20 +309,7 @@ function collectBlockStrings(params: {
  * Model-agnostic: returns empty string if no thinking blocks exist.
  */
 export function extractThinkingFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
-    return "";
-  }
-  const { content } = resolved;
-  if (typeof content === "string") {
-    return "";
-  }
-  const parts = collectBlockStrings({
-    content,
-    blockType: "thinking",
-    valueKey: "thinking",
-  });
-  return parts.join("\n").trim();
+  return collectBlockStrings(asMessageRecord(message)?.content, "thinking").join("\n").trim();
 }
 
 /**
@@ -343,11 +317,11 @@ export function extractThinkingFromMessage(message: unknown): string {
  * Model-agnostic: works for any model with text content blocks.
  */
 export function extractContentFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
+  const record = asMessageRecord(message);
+  if (!record) {
     return "";
   }
-  const { record, content } = resolved;
+  const { content } = record;
 
   if (record.role === "assistant") {
     if (typeof content === "string") {
@@ -366,11 +340,7 @@ export function extractContentFromMessage(message: unknown): string {
     return sanitizeRenderableText(content).trim();
   }
 
-  const parts = collectBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  }).map(sanitizeRenderableText);
+  const parts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   if (parts.length > 0) {
     return parts.join("\n").trim();
   }
@@ -419,14 +389,10 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     return "";
   }
 
-  const textParts = collectBlockStrings({ content, blockType: "text", valueKey: "text" }).map(
-    sanitizeRenderableText,
-  );
+  const textParts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   const thinkingParts =
     opts?.includeThinking === true
-      ? collectBlockStrings({ content, blockType: "thinking", valueKey: "thinking" }).map(
-          sanitizeRenderableText,
-        )
+      ? collectBlockStrings(content, "thinking").map(sanitizeRenderableText)
       : [];
 
   return composeThinkingAndContent({
@@ -499,11 +465,7 @@ export function extractTextFromMessage(
     return extractUserAttachmentText(record);
   }
 
-  const errorText = formatAssistantErrorFromRecord(record);
-  if (!errorText) {
-    return "";
-  }
-  return errorText;
+  return formatAssistantErrorFromRecord(record);
 }
 
 /** Extract abort-visible text while keeping attachment-only aborts diagnostic-only. */
