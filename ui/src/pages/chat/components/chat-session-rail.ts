@@ -426,20 +426,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     `;
   }
 
-  private renderDigestDetails(digest: SessionObserverDigest | null) {
-    if (!digest) {
-      return nothing;
-    }
-    return html`
-      ${
-        digest.assessment
-          ? html`<p class="chat-session-rail__assessment">${digest.assessment}</p>`
-          : nothing
-      }
-      ${this.renderPullRequests()}
-    `;
-  }
-
   /**
    * The empty state is the only place the companion explains its scope, so it
    * shows openers it can actually answer from the transcript and the project
@@ -709,12 +695,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                 </div>
               </header>`
         }
-        ${
-          digest
-            ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
-            : nothing
-        }
-        ${this.renderThread(pending)}
+        ${digest ? this.renderPullRequests() : nothing} ${this.renderThread(pending)}
         ${
           !this.companion.turns.some((turn) => turn.status !== "failed")
             ? this.renderStarters()
