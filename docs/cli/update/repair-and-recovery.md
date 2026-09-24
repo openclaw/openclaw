@@ -77,6 +77,21 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+## Candidate Doctor stack overflow
+
+Chat-triggered updates to 2026.9.6 can fail with `authority-check-failed: Maximum
+call stack size exceeded`, sometimes preceded by `Update history reconciliation
+could not complete`. This is a candidate Doctor authority-check defect; it can
+happen on the first update, without migrated state or earlier failed runs.
+The corrective candidate can run through the installed updater with retained
+history intact. Running the older installation's standalone Doctor cannot fix
+code in the candidate package.
+
+There is no supported command to reset retained update history. `update repair`
+finishes interrupted finalization, and `update cleanup` retires eligible recovery
+originals; neither clears the run ledger. Keep history and backups rather than
+deleting database rows to work around this failure.
+
 ## `update repair`
 
 Rerun update finalization after the core package already changed but later
