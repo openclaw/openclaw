@@ -393,13 +393,10 @@ export async function loadPluginCliDescriptors(
 
 export async function loadPluginCliRegistrationEntriesWithDefaults(
   params: PluginCliPublicLoadParams,
+  mode: "runtime" | "metadata" = "runtime",
 ): Promise<PluginCliCommandGroupEntry[]> {
   const prepared = resolvePreparedPluginCliLoad(params);
-  const entries = await (prepared.entries ??= loadPluginCliCommandRegistryWithContext({
-    prepared,
-    primaryCommand: params.primaryCommand,
-    loaderOptions: params.loaderOptions,
-  }).then((registry) => {
+  const buildEntries = (registry: PluginRegistry) => {
     prepared.assertCurrent();
     return buildPluginCliCommandGroupEntries({
       ...prepared.context,
@@ -408,7 +405,21 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
       withCache: prepared.withCache,
       resources: prepared.resources,
     });
-  }));
+  };
+  const entries =
+    mode === "metadata"
+      ? buildEntries(
+          await loadPluginCliMetadataRegistryWithContext(
+            prepared,
+            { primaryCommand: params.primaryCommand },
+            params.loaderOptions,
+          ),
+        )
+      : await (prepared.entries ??= loadPluginCliCommandRegistryWithContext({
+          prepared,
+          primaryCommand: params.primaryCommand,
+          loaderOptions: params.loaderOptions,
+        }).then(buildEntries));
   prepared.assertCurrent();
   return entries;
 }
