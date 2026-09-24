@@ -254,7 +254,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   );
 }
 
-type CliSessionForkStoreParams = {
+export type CliSessionForkStoreParams = {
   agentId: string;
   provider: string;
   sessionKey: string;
@@ -338,7 +338,52 @@ export async function restoreCliSessionForkInStore(
   );
 }
 
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
+/**
+ * Wires a one-shot fork marker into a CLI run so the claim, restore, and
+ * successor persistence share one store transaction path across callers.
+ */
+export function buildCliSessionForkRunParams(
+  params: CliSessionForkStoreParams,
+  onEntryPatched: (entry: SessionEntry) => void,
+  restoreParams: CliSessionForkStoreParams = params,
+): {
+  claimCliSessionFork: () => Promise<boolean>;
+  restoreCliSessionFork: () => Promise<void>;
+  persistCliSessionForkSuccessor: (successorCliSessionId: string) => Promise<void>;
+} {
+  return {
+    claimCliSessionFork: async () => {
+      const claimed = await consumeCliSessionForkInStore(params);
+      if (claimed) {
+        onEntryPatched(claimed);
+      }
+      return Boolean(claimed);
+    },
+    restoreCliSessionFork: async () => {
+      const restored = await restoreCliSessionForkInStore(restoreParams);
+      if (restored) {
+        onEntryPatched(restored);
+      }
+    },
+    persistCliSessionForkSuccessor: async (successorCliSessionId) => {
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        ...params,
+        successorCliSessionId,
+      });
+      if (!persisted) {
+        throw new Error("CLI session fork successor could not be persisted");
+      }
+      onEntryPatched(persisted);
+    },
+  };
+}
+
+/**
+ * Rebinds a claimed fork to its successor before the rest of the CLI turn can fail.
+ * The source binding's fingerprints (and any existing `forceReuse`, as set by
+ * catalog adoption) carry over unchanged, so a later turn still validates the
+ * successor against the current auth profile, epoch, cwd, and MCP config.
+ */
 export async function persistCliSessionForkSuccessorInStore(
   params: CliSessionForkStoreParams & {
     successorCliSessionId: string;
@@ -350,7 +395,7 @@ export async function persistCliSessionForkSuccessorInStore(
   return await patchCliSessionForkBinding(params, (binding) =>
     binding.forkNextResume === true
       ? undefined
-      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
+      : { ...binding, sessionId: params.successorCliSessionId },
   );
 }
 

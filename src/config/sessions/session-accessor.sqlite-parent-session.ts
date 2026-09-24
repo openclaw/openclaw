@@ -8,6 +8,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetParams,
   ForkSessionEntryFromParentTargetResult,
@@ -279,6 +280,9 @@ export async function forkSessionEntryFromParentTarget(
           totalTokens: undefined,
           totalTokensFresh: false,
           totalTokensVersion: undefined,
+          cliSessionBindings: forkCliSessionBindings(freshParent),
+          cliSessionIds: undefined,
+          claudeCliSessionId: undefined,
         };
         const previousIdentity = readSessionIdentitySnapshot(writeDatabase, [
           sessionTarget.canonicalKey,

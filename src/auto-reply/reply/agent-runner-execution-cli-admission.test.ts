@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
@@ -170,6 +171,91 @@ describe("executeAgentTurn: CLI admission", () => {
       );
     } finally {
       uninstall();
+    }
+  });
+
+  it("honors a forked child's one-shot fork marker on its first native resume", async () => {
+    const sessionKey = "agent:main:cli-fork-child";
+    const storePath = makeTestSessionStorePath();
+    const parentBinding = {
+      sessionId: "parent-native-session",
+      resumeCheckpointId: "parent-checkpoint",
+      forkNextResume: true,
+    };
+    const successorBinding = { sessionId: "child-native-session" };
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": parentBinding },
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-sonnet-4-6";
+    state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolvePluginSetupRegistry: () => ({ cliBackends: [] }) as never,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude", forkArg: "--fork-session" },
+        },
+      ],
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-sonnet-4-6",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    const readBinding = () =>
+      loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.["claude-cli"];
+    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      // Mirror the CLI runtime: claim the marker, spawn with the fork flag, then
+      // rebind to the successor the CLI reports.
+      expect(params.forkCliSessionOnResume).toBe(true);
+      expect(await params.claimCliSessionFork?.()).toBe(true);
+      expect(readBinding()?.forkNextResume).toBeUndefined();
+      await params.persistCliSessionForkSuccessor?.(successorBinding.sessionId);
+      expect(readBinding()).toEqual({
+        sessionId: successorBinding.sessionId,
+        resumeCheckpointId: parentBinding.resumeCheckpointId,
+      });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: { sessionId: successorBinding.sessionId, cliSessionBinding: successorBinding },
+        },
+      };
+    });
+    const uninstall = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+      executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+    });
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        sessionKey,
+        storePath,
+        activeSessionStore: { [sessionKey]: entry },
+        getActiveSessionEntry: () => entry,
+      });
+      expect(result.kind).toBe("success");
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(readBinding()).toMatchObject({ sessionId: successorBinding.sessionId });
+      expect(readBinding()?.forkNextResume).toBeUndefined();
+    } finally {
+      uninstall();
+      cliBackendsTesting.resetDepsForTest();
     }
   });
 

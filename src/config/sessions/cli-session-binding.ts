@@ -1,6 +1,7 @@
 // CLI session binding lookup shared by session lifecycle and agent runtime code.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { cliBackendSupportsSessionFork } from "../../agents/cli-backends.js";
 import type { CliSessionBinding, CliSessionReseedReceipt, SessionEntry } from "./types.js";
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
@@ -96,6 +97,37 @@ export function getCliSessionBinding(
     return { sessionId: normalizedFromMap };
   }
   return undefined;
+}
+
+/**
+ * Carry a parent's native CLI sessions into a forked child. The child resumes
+ * each backend session once with its fork flag, so the native context branches
+ * instead of starting empty. The copied fingerprints are still validated on the
+ * child's first turn, so an account or environment change starts fresh instead
+ * of resuming under the wrong credential. Only bindings with a recorded
+ * checkpoint are copied: the runner pins the fork resume to it, so the branch
+ * point stays the parent's last committed turn even if the parent keeps going.
+ * Backends without a fork flag are skipped: resuming them would share the
+ * parent's native thread, so the child starts a fresh one as before. The
+ * parent's reseed receipt names the parent's local session, so it is dropped.
+ */
+export function forkCliSessionBindings(
+  parent: CliSessionBindingEntry | undefined,
+  supportsFork: (provider: string) => boolean = cliBackendSupportsSessionFork,
+): Record<string, CliSessionBinding> | undefined {
+  const providers = new Set([
+    ...Object.keys(parent?.cliSessionBindings ?? {}),
+    ...Object.keys(parent?.cliSessionIds ?? {}),
+  ]);
+  const forked: Record<string, CliSessionBinding> = {};
+  for (const provider of providers) {
+    const binding = getCliSessionBinding(parent, provider);
+    if (binding?.resumeCheckpointId && supportsFork(provider)) {
+      const { reseedReceipt: _reseedReceipt, forceReuse: _forceReuse, ...inherited } = binding;
+      forked[normalizeProviderId(provider)] = { ...inherited, forkNextResume: true };
+    }
+  }
+  return Object.keys(forked).length > 0 ? forked : undefined;
 }
 
 export function clearAllCliSessions(

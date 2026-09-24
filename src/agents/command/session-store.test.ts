@@ -14,6 +14,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   consumeCliSessionForkInStore,
@@ -3409,6 +3410,57 @@ describe("consumeCliSessionForkInStore", () => {
         authEpoch: "epoch-1",
         authEpochVersion: 3,
       });
+    });
+  });
+
+  it("keeps account checks on the fork successor when the source was not force-reused", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:cli-fork-child";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-parent-session",
+            resumeCheckpointId: "parent-checkpoint",
+            authProfileId: "claude:work",
+            authEpoch: "epoch-1",
+            authEpochVersion: 3,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-parent-session",
+        successorCliSessionId: "claude-fork-session",
+      });
+
+      const successor = {
+        sessionId: "claude-fork-session",
+        resumeCheckpointId: "parent-checkpoint",
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      };
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual(successor);
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
+      ).toEqual(successor);
+      // A credential change after the turn failed still invalidates the successor.
+      expect(
+        resolveCliSessionReuse({
+          binding: persisted?.cliSessionBindings?.["claude-cli"],
+          authProfileId: "claude:personal",
+          authEpoch: "epoch-2",
+          authEpochVersion: 3,
+        }),
+      ).toEqual({ mode: "invalidate", invalidatedReason: "auth-profile" });
     });
   });
 

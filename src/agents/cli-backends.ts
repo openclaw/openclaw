@@ -280,6 +280,11 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Whether the backend can branch a native session on resume (`forkArg`). */
+export function cliBackendSupportsSessionFork(provider: string, cfg?: OpenClawConfig): boolean {
+  return Boolean(resolveCliBackendConfig(provider, cfg)?.config.forkArg);
+}
+
 /** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,

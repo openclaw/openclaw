@@ -108,11 +108,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
-import {
-  consumeCliSessionForkInStore,
-  persistCliSessionForkSuccessorInStore,
-  restoreCliSessionForkInStore,
-} from "./session-store.js";
+import { buildCliSessionForkRunParams, restoreCliSessionForkInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
@@ -802,35 +798,14 @@ export function runAgentAttempt(params: {
                 : undefined,
             forkCliSessionOnResume,
             ...(forkStoreParams
-              ? {
-                  claimCliSessionFork: async () => {
-                    const claimed = await consumeCliSessionForkInStore(forkStoreParams);
-                    if (claimed) {
-                      params.sessionEntry = claimed;
-                    }
-                    return Boolean(claimed);
+              ? buildCliSessionForkRunParams(
+                  forkStoreParams,
+                  (entry) => {
+                    params.sessionEntry = entry;
                   },
-                  restoreCliSessionFork: async () => {
-                    // Restoring the fork is current-owner cleanup, including after cancellation.
-                    const restored = await restoreCliSessionForkInStore({
-                      ...forkStoreParams,
-                      assertCommitAllowed: assertSettlementCurrent,
-                    });
-                    if (restored) {
-                      params.sessionEntry = restored;
-                    }
-                  },
-                  persistCliSessionForkSuccessor: async (successorCliSessionId: string) => {
-                    const persisted = await persistCliSessionForkSuccessorInStore({
-                      ...forkStoreParams,
-                      successorCliSessionId,
-                    });
-                    if (!persisted) {
-                      throw new Error("CLI session fork successor could not be persisted");
-                    }
-                    params.sessionEntry = persisted;
-                  },
-                }
+                  // Restoring the fork is current-owner cleanup, including after cancellation.
+                  { ...forkStoreParams, assertCommitAllowed: assertSettlementCurrent },
+                )
               : {}),
             authProfileId: cliAuthProfileId,
             // Image discovery must use the original turn, before retry/history decoration.

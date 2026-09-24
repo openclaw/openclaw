@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
@@ -20,6 +21,17 @@ import {
 import { resolveSqliteStoreScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 const roots: string[] = [];
+
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} as unknown as ReturnType<
+  (typeof import("../../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
 
 async function makeRoot(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -72,6 +84,7 @@ function openForkedChildSession(storePath: string, sessionId: string): SessionMa
 }
 
 afterEach(async () => {
+  cliBackendsTesting.resetDepsForTest();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -1011,5 +1024,64 @@ describe("forkSessionFromParentTranscript", () => {
     expect(childEntry?.totalTokens).toBeUndefined();
     expect(childEntry?.totalTokensFresh).toBe(false);
     expect(childEntry?.totalTokensVersion).toBeUndefined();
+  });
+
+  it("branches the parent native CLI session into the forked child", async () => {
+    const root = await makeRoot("openclaw-parent-fork-cli-binding-");
+    const storePath = path.join(root, "sessions.json");
+    const parentKey = "agent:main:main";
+    const childKey = "agent:main:child";
+    const parentSessionId = "parent-cli-binding";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      {
+        sessionId: parentSessionId,
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
+          "codex-cli": { sessionId: "codex-parent", resumeCheckpointId: "codex-checkpoint" },
+        },
+      },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      { sessionId: "old-child", updatedAt: 1 },
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    await seedParentTranscript({
+      storePath,
+      parentSessionId,
+      events: [
+        { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
+        {
+          type: "message",
+          id: "parent-user",
+          parentId: null,
+          message: { role: "user", content: "fork me" },
+        },
+      ],
+    });
+
+    const result = await forkSessionEntryFromParentTarget({
+      storePath,
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+    });
+
+    expect(result.status).toBe("forked");
+    // Backends without a fork flag would share the parent thread, so they start fresh.
+    expect(loadSessionEntry({ sessionKey: childKey, storePath })?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "native-parent",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
+    });
+    expect(
+      loadSessionEntry({ sessionKey: parentKey, storePath })?.cliSessionBindings?.["claude-cli"],
+    ).toEqual({ sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" });
   });
 });

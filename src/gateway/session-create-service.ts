@@ -1344,6 +1344,7 @@ export async function createGatewaySession(
               sessionId: currentParentSessionEntry.sessionId,
             },
             existingEntry,
+            currentParentSessionEntry,
           ),
         };
       },

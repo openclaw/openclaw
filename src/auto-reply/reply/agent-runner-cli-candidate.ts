@@ -1,4 +1,5 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -13,6 +14,7 @@ import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
+import { buildCliSessionForkRunParams } from "../../agents/command/session-store.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -169,7 +171,7 @@ export async function runCliFallbackCandidate(
       async (assertSettlementCurrent) => {
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
-        const sessionEntry = sessionTarget
+        let sessionEntry = sessionTarget
           ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
           : turn.getActiveSessionEntry();
         if (
@@ -194,6 +196,40 @@ export async function runCliFallbackCandidate(
               config: params.runtimeConfig,
             }).authProfileId;
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
+        // A forked child carries the parent's binding with a one-shot fork marker;
+        // honor it here or the child resumes inside the parent's native thread.
+        const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
+        const supportsCliSessionFork = Boolean(
+          resolveCliBackendConfig(params.cliExecutionProvider, params.runtimeConfig, {
+            agentId: turn.followupRun.run.agentId,
+          })?.config.forkArg,
+        );
+        if (forkCliSessionOnResume && !supportsCliSessionFork) {
+          throw new Error(
+            `CLI backend "${params.cliExecutionProvider}" does not support session forks`,
+          );
+        }
+        const forkRunParams =
+          supportsCliSessionFork &&
+          cliSessionBinding?.sessionId &&
+          sessionKey &&
+          turn.activeSessionStore &&
+          turn.storePath
+            ? buildCliSessionForkRunParams(
+                {
+                  agentId: turn.followupRun.run.agentId,
+                  provider: params.cliExecutionProvider,
+                  expectedCliSessionId: cliSessionBinding.sessionId,
+                  sessionKey,
+                  sessionStore: turn.activeSessionStore,
+                  storePath: turn.storePath,
+                  assertCommitAllowed: assertSettlementCurrent,
+                },
+                (entry) => {
+                  sessionEntry = entry;
+                },
+              )
+            : undefined;
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
         const candidateResult = await runCliAgentWithLifecycle({
@@ -430,6 +466,8 @@ export async function runCliFallbackCandidate(
             ownerNumbers: turn.followupRun.run.ownerNumbers,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
+            forkCliSessionOnResume,
+            ...forkRunParams,
             authProfileId,
             bootstrapContextMode: turn.opts?.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,

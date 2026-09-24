@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest"
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
   applyDiscoveredContextWindows,
@@ -196,6 +197,17 @@ const {
 });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} as unknown as ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 
 async function closeIncognitoSessionDatabases() {
@@ -6567,6 +6579,11 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create forks the parent transcript into the new session", async () => {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
@@ -6582,6 +6599,9 @@ test("sessions.create forks the parent transcript into the new session", async (
         totalTokens: 123,
         totalTokensFresh: true,
         totalTokensVersion: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
+        },
       }),
     },
   });
@@ -6664,6 +6684,14 @@ test("sessions.create forks the parent transcript into the new session", async (
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,
+    },
+    // The native CLI context branches once alongside the transcript.
+    cliSessionBindings: {
+      "claude-cli": {
+        sessionId: "native-parent",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
     },
   });
   expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");

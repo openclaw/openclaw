@@ -1525,10 +1525,9 @@ describe("CLI attempt execution", () => {
         if (replacement) {
           expect(await runParams.claimCliSessionFork?.()).toBe(true);
           await runParams.persistCliSessionForkSuccessor?.(successorCliSessionId);
-          expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
-            sessionId: successorCliSessionId,
-            forceReuse: true,
-          });
+          const successor = readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"];
+          expect(successor).toMatchObject({ sessionId: successorCliSessionId });
+          expect(successor?.forceReuse).toBeUndefined();
         }
         controller.abort(
           new DOMException(reason, reason === "timeout" ? "TimeoutError" : "AbortError"),
