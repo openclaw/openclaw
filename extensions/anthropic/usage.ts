@@ -26,6 +26,7 @@ const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_repo
 const ANTHROPIC_MESSAGES_USAGE_URL =
   "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
+const ANTHROPIC_SETUP_USAGE_TOKEN_PREFIX = "openclaw:anthropic-setup-usage:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 
@@ -46,6 +47,14 @@ function encodeAdminToken(token: string): string {
 
 function decodeAdminToken(raw: string): string | undefined {
   return decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, raw);
+}
+
+function encodeSetupUsageToken(token: string): string {
+  return encodeProviderUsageAdminToken(ANTHROPIC_SETUP_USAGE_TOKEN_PREFIX, token);
+}
+
+function decodeSetupUsageToken(raw: string): string | undefined {
+  return decodeProviderUsageAdminToken(ANTHROPIC_SETUP_USAGE_TOKEN_PREFIX, raw);
 }
 
 function utcDay(value: string): string | undefined {
@@ -231,6 +240,14 @@ async function fetchAnthropicAdminUsage(params: {
   });
 }
 
+function hasClaudeWebUsageFallback(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    env.CLAUDE_AI_SESSION_KEY?.trim() ||
+    env.CLAUDE_WEB_SESSION_KEY?.trim() ||
+    env.CLAUDE_WEB_COOKIE?.trim(),
+  );
+}
+
 export async function resolveAnthropicUsageAuth(
   ctx: ProviderResolveUsageAuthContext,
 ): Promise<ProviderResolvedUsageAuth> {
@@ -249,10 +266,19 @@ export async function resolveAnthropicUsageAuth(
     return { token: encodeAdminToken(storedAdminKey) };
   }
 
+  // Resolve the selected OAuth/token profile first so configured profile order is
+  // preserved. Only a stored `token` profile is the Anthropic setup-token
+  // contract; OAuth login persists as `oauth` even when the access token uses
+  // the same `sk-ant-oat01-` shape. Token prefix alone must not suppress usage.
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
   if (oauthToken) {
+    if (oauthToken.profileType === "token") {
+      return hasClaudeWebUsageFallback(ctx.env)
+        ? { token: encodeSetupUsageToken(oauthToken.token) }
+        : { handled: true };
+    }
     return oauthToken;
   }
 
@@ -264,6 +290,9 @@ export async function resolveAnthropicUsageAuth(
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {
+      // Env/config/static keys have no stored setup-token profile. Keep the
+      // existing OAuth usage path so a working static credential that happens
+      // to share the setup-token prefix is not suppressed.
       return { token: apiKey };
     }
   }
@@ -302,7 +331,13 @@ export async function fetchAnthropicUsage(
       fetchFn: ctx.fetchFn,
     });
   }
-  const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+  const setupToken = decodeSetupUsageToken(ctx.token);
+  const snapshot = await fetchClaudeUsage(
+    setupToken ?? ctx.token,
+    ctx.timeoutMs,
+    ctx.fetchFn,
+    setupToken ? { useWebSession: true } : undefined,
+  );
   if (snapshot.error) {
     return snapshot;
   }

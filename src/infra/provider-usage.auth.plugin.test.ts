@@ -282,7 +282,7 @@ describe("resolveProviderAuths plugin boundary", () => {
     });
 
     await expect(resolveProviderAuthsForTest({ providers: ["anthropic"] })).resolves.toEqual([
-      { provider: "anthropic", token: "managed-access" },
+      { provider: "anthropic", token: "managed-access", profileType: "oauth" },
     ]);
     expect(resolveApiKeyForProfileMock).toHaveBeenCalledTimes(1);
     expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
@@ -521,10 +521,46 @@ describe("resolveProviderAuths plugin boundary", () => {
         providers: ["anthropic"],
         store: store as never,
       }),
-    ).resolves.toEqual([{ provider: "anthropic", token: "external-access" }]);
+    ).resolves.toEqual([{ provider: "anthropic", token: "external-access", profileType: "oauth" }]);
 
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("exposes stored token-profile type for Anthropic setup-token usage", async () => {
+    const store = {
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-oat01-setup-token-profile",
+        },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValue(store as never);
+    hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store as never);
+    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:default"]);
+    resolveApiKeyForProfileMock.mockResolvedValue({
+      apiKey: "sk-ant-oat01-setup-token-profile",
+      provider: "anthropic",
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          resolveOAuthToken: () => Promise<{ token: string; profileType?: string } | null>;
+        };
+      };
+      return params.context.resolveOAuthToken();
+    });
+
+    await expect(resolveProviderAuthsForTest({ providers: ["anthropic"] })).resolves.toEqual([
+      {
+        provider: "anthropic",
+        token: "sk-ant-oat01-setup-token-profile",
+        profileType: "token",
+      },
+    ]);
   });
 
   it("resolves a caller-provided lazy auth store once for credential gating", async () => {
@@ -557,7 +593,7 @@ describe("resolveProviderAuths plugin boundary", () => {
         providers: ["anthropic"],
         getStore,
       }),
-    ).resolves.toEqual([{ provider: "anthropic", token: "external-access" }]);
+    ).resolves.toEqual([{ provider: "anthropic", token: "external-access", profileType: "oauth" }]);
 
     expect(getStore).toHaveBeenCalledOnce();
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();

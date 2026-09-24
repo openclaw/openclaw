@@ -77,7 +77,7 @@ instead of sending a blank value.
 
 Subscription quota and API billing are different provider surfaces:
 
-- Anthropic subscription/setup credentials continue to show Claude quota windows and optional extra-usage budgets. Set `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` to show organization Usage and Cost API history instead. An Anthropic provider credential beginning with `sk-ant-admin` is detected automatically.
+- Anthropic OAuth and Admin API credentials continue to show Claude quota windows and optional extra-usage budgets. A stored Anthropic setup-token profile does not call the OAuth usage endpoint; if a claude.ai web session is configured, usage loads from that fallback, otherwise the profile is skipped. Set `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` to show organization Usage and Cost API history instead. An Anthropic provider credential beginning with `sk-ant-admin` is detected automatically.
 - OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
 
 Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.

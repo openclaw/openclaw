@@ -180,6 +180,12 @@ export type ProviderUsageAuthToken = {
   rateLimitTier?: string;
   /** Account email captured on the resolved credential, when known. */
   email?: string;
+  /**
+   * Stored auth-profile credential type when this token came from the auth
+   * store. Anthropic setup-token profiles persist as `token`; OAuth login
+   * persists as `oauth`. Token shape alone is not this contract.
+   */
+  profileType?: "oauth" | "token";
 };
 
 /**
