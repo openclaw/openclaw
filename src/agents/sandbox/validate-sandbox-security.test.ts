@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
-import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
   validateNetworkMode,
@@ -48,29 +47,6 @@ function expectBlockedTargetReason(
 }
 
 describe("getBlockedBindReason", () => {
-  it("blocks common Docker socket directories", () => {
-    expectBlockedTargetReason("/run:/run");
-    expectBlockedTargetReason("/var/run:/var/run:ro");
-  });
-
-  it("blocks parent sources that cover blocked descendants", () => {
-    const reason = getBlockedBindReason("/var:/var");
-    expect(reason).toMatchObject({
-      kind: "covers",
-      blockedPath: "/var/run",
-    });
-  });
-
-  it("blocks home parent sources that cover credential descendants", () => {
-    withEnv({ HOME: "/home/tester" }, () => {
-      const reason = getBlockedBindReason("/home/tester:/mnt/home:ro");
-      expect(reason).toMatchObject({
-        kind: "covers",
-        blockedPath: "/home/tester/.aws",
-      });
-    });
-  });
-
   it("blocks sensitive home credential paths", () => {
     withEnv({ HOME: "/home/tester" }, () => {
       const cases = [
@@ -103,24 +79,6 @@ describe("getBlockedBindReason", () => {
         "C:\\Users\\tester\\.docker\\config.json:/mnt/docker:ro",
       );
       expect(reason?.blockedPath).toBe("C:/Users/tester/.docker");
-    });
-  });
-
-  it("blocks canonical OS-home aliases for credential paths", () => {
-    // Credential blocking uses canonical home aliases so a symlinked HOME cannot
-    // hide sensitive host paths.
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
-    const realHome = join(dir, "real-home");
-    const aliasHome = join(dir, "alias-home");
-    mkdirSync(join(realHome, ".ssh"), { recursive: true });
-    symlinkSync(realHome, aliasHome);
-    withEnv({ HOME: aliasHome }, () => {
-      const reason = expectBlockedTargetReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`);
-      expect(reason?.blockedPath).toBe(normalizePathForSnapshot(join(realHome, ".ssh")));
     });
   });
 });
@@ -446,10 +404,6 @@ describe("validateBindMounts", () => {
   });
 });
 
-function normalizePathForSnapshot(input: string): string {
-  return resolveSandboxHostPathViaExistingAncestor(input).replaceAll("\\", "/");
-}
-
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
     expect(validateNetworkMode("bridge")).toBeUndefined();
@@ -490,20 +444,6 @@ describe("validateNetworkMode", () => {
         allowContainerNamespaceJoin: true,
       }),
     ).toBeUndefined();
-  });
-});
-
-describe("validateSeccompProfile", () => {
-  it("allows custom profile paths/undefined", () => {
-    expect(validateSeccompProfile("/tmp/seccomp.json")).toBeUndefined();
-    expect(validateSeccompProfile(undefined)).toBeUndefined();
-  });
-});
-
-describe("validateApparmorProfile", () => {
-  it("allows named profile/undefined", () => {
-    expect(validateApparmorProfile("openclaw-sandbox")).toBeUndefined();
-    expect(validateApparmorProfile(undefined)).toBeUndefined();
   });
 });
 

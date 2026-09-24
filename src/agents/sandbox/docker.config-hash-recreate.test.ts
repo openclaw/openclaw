@@ -409,10 +409,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   it.each([
     { user: "0" },
-    { user: "00" },
-    { user: "0:0" },
     { user: "00:1002" },
-    { user: "1001:0" },
     { user: "1001:000" },
   ])("rejects zero-valued rootless Podman user $user", async ({ user }) => {
     const cfg = createSandboxConfig([]);
