@@ -195,15 +195,14 @@ export function installGatewaySessionsTestResources(
     options: Parameters<typeof withOpenClawTestState>[0],
     run: (state: OpenClawTestState) => Promise<T>,
   ): Promise<T> {
-    return await withOpenClawTestState(options, async (state) => {
-      try {
-        return await run(state);
-      } finally {
-        await disposeSessionReadContexts();
+    return await withOpenClawTestState(options, (state) =>
+      runQaGatewayFixture(
+        () => run(state),
+        disposeSessionReadContexts,
         // The suite projection also reads this state, but its store lives outside state.root.
-        await releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir());
-      }
-    });
+        () => releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir()),
+      ),
+    );
   }
   return { requireHarness, requireSharedSessionStoreDir, withSessionTestState };
 }
